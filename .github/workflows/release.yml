@@ -92,10 +92,18 @@ jobs:
         env:
           RELEASE_EVENT: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.dry_run != true }}
           PYPI: ${{ secrets.PYPI_API_TOKEN != '' || vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
-          NPM: ${{ secrets.NPM_TOKEN != '' }}
+          NPM_TOKEN_AVAILABLE: ${{ secrets.NPM_TOKEN != '' }}
+          NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+          TYPESCRIPT_PENDING: ${{ steps.plan.outputs.typescript != '[]' }}
           MAVEN: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.MAVEN_GPG_PRIVATE_KEY != '' && secrets.MAVEN_GPG_PASSPHRASE != '' }}
           NUGET: ${{ secrets.NUGET_API_KEY != '' }}
         run: |
+          NPM=false
+          if [ "$NPM_TOKEN_AVAILABLE" = true ] || [ "$NPM_TRUSTED_PUBLISHING" = true ]; then NPM=true; fi
+          if [ "$RELEASE_EVENT" = true ] && [ "$TYPESCRIPT_PENDING" = true ] && [ "$NPM" != true ]; then
+            echo "::error::npm releases are pending but neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING is configured. Complete the RELEASING.md checklist."
+            exit 1
+          fi
           for eco in python typescript java go nuget; do
             enabled=false
             case "$eco" in
@@ -155,7 +163,8 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: ${{ runner.temp }}/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          # First-time projects listed in config.json pypi_bootstrap_token upload with the bootstrap token; everything else uses trusted publishing.
+          password: ${{ matrix.pypi_bootstrap && secrets.PYPI_BOOTSTRAP_TOKEN || secrets.PYPI_API_TOKEN }}
           print-hash: true
       - name: Verify public registry availability
         run: |
@@ -188,6 +197,9 @@ jobs:
       !cancelled() && needs.python-build.result == 'success'
       && needs.plan.outputs.publish_python == 'true'
     runs-on: ubuntu-latest
+    # One environment per project: PyPI allows only one pending trusted publisher per
+    # (repository, workflow, environment), so first-time projects need distinct environments.
+    environment: pypi-${{ matrix.name }}
     timeout-minutes: 20
     permissions:
       contents: write
@@ -218,7 +230,8 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: ${{ runner.temp }}/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          # First-time projects listed in config.json pypi_bootstrap_token upload with the bootstrap token; everything else uses trusted publishing.
+          password: ${{ matrix.pypi_bootstrap && secrets.PYPI_BOOTSTRAP_TOKEN || secrets.PYPI_API_TOKEN }}
           print-hash: true
       - name: Verify public registry availability
         run: |

@@ -237,6 +237,8 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
                 out["skipped"].append({"name": p["name"], "reason": f"{p['version']} is already published"})
                 continue
             p = {**p, "first_release": have is None, "registry_published": published}
+            if p["ecosystem"] == "python":
+                p["pypi_bootstrap"] = have is None and p["name"] in set(config.get("pypi_bootstrap_token", []))
         out[p["ecosystem"]].append({k: v for k, v in p.items() if k not in ("declared", "ecosystem")})
     for eco in ECOSYSTEMS:
         out[eco].sort(key=lambda e: (not e["core"], e["name"].lower()))

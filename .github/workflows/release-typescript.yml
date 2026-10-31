@@ -64,6 +64,11 @@ jobs:
       - name: Not publishing
         if: inputs.publish != true
         run: echo "::notice::npm packages built and checked only (publishing is off or this is a dry run)"
+      - name: Use npm 11 (trusted publishing needs npm 11.5.1 or later)
+        if: inputs.publish
+        # npm tries OIDC trusted publishing first and falls back to NODE_AUTH_TOKEN, so this
+        # works with the token today and with trusted publishers once they are configured.
+        run: npm install -g npm@11.21.1 && npm --version
       - name: Publish, wait for public availability, then tag and release (dependency-first)
         if: inputs.publish
         env:
