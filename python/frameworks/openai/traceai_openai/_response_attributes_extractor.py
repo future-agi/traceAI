@@ -27,6 +27,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._attributes._responses_api import _ResponsesApiAttributes
+from traceai_openai._attributes._response_extensions import response_extension_attributes
 from traceai_openai._utils import _get_openai_version, _get_texts
 
 if TYPE_CHECKING:
@@ -112,6 +113,7 @@ class _ResponseAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield from _ResponsesApiAttributes._get_attributes_from_response(response)
+        yield from response_extension_attributes(response, self._config)
 
     def _get_attributes_from_chat_completion(
         self,

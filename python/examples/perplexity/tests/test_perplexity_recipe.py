@@ -20,10 +20,8 @@ import pytest
 import traceai_openai
 from traceai_openai import OpenAIInstrumentor
 
-# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
-# (future-agi/traceAI#249) use the vendor's name for its documented API host.
-# Accept both so this recipe passes on either version.
-PROVIDER_NAMES = ("openai", "perplexity")
+# Both the recipe's published 0.1.11 pin and source must attribute Perplexity.
+PROVIDER_NAMES = ("perplexity",)
 
 # Use distribution metadata: the 1.1.0 wheel's runtime version says 0.1.19.
 # Match the imported file too, so a stale installed wheel cannot relax source tests.
@@ -39,6 +37,10 @@ else:
 
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
+# Registry 0.1.11 lacks Responses extensions; source tests must require them.
+SOURCE_OPENAI = Path(traceai_openai.__file__).resolve() == (
+    RECIPE_DIR.parents[1] / "frameworks/openai/traceai_openai/__init__.py"
+).resolve()
 VENDOR_KEY = "placeholder-perplexity-key"
 FI_KEY = "placeholder-fi-key"
 FI_SECRET = "placeholder-fi-secret"
@@ -114,10 +116,8 @@ def _assert_export(
     assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     # A successful response overrides the request model, including on streams.
     assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
-    # The CI compatibility cell pins core 1.1.0, before hide_inputs also hid
-    # invocation parameters. Require the sentinel on the repaired core; only
-    # that historical release retains the JSON contract in masked cases.
-    if hide_inputs and not LEGACY_CORE:
+    # Source masks private invocation parameters even with older core releases.
+    if hide_inputs and (SOURCE_OPENAI or not LEGACY_CORE):
         assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
     else:
         parameters = json.loads(attrs["gen_ai.request.parameters"])
@@ -135,7 +135,11 @@ def _assert_export(
     # Positive controls: a real span and collector authentication were observed.
     assert VENDOR_KEY not in json.dumps(span)
     assert VENDOR_KEY not in json.dumps(export)
-    assert not any("citation" in key or "cost" in key for key in attrs)
+    assert not any("citation" in key for key in attrs)
+    if SOURCE_OPENAI and "gen_ai.usage.total_tokens" in attrs:
+        assert attrs["gen_ai.cost.total"] == fake.USAGE["cost"]["total_cost"]
+    else:
+        assert not any(key.startswith("gen_ai.cost.") for key in attrs)
     return span, attrs
 
 
@@ -285,8 +289,7 @@ def test_preset_fixture(tracing):
         assert len(requests) == 1
         _, attrs = _assert_export(receiver, provider, project, requested_model=None)
         _assert_usage(attrs)
-        assert json.loads(attrs["gen_ai.request.parameters"]) == {}
-        assert "preset" not in attrs["gen_ai.request.parameters"]
+        assert json.loads(attrs["gen_ai.request.parameters"]) == ({"preset": "low"} if SOURCE_OPENAI else {})
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
@@ -312,8 +315,8 @@ def test_responses_stream(tracing):
         assert attrs["output.value"] == fake.ANSWER
         _assert_usage(attrs)
         # The non-streamed test proves these markers exist in the provider fixture.
-        assert fake.SEARCH_URL not in json.dumps(attrs)
-        assert fake.SEARCH_SNIPPET not in json.dumps(attrs)
+        assert (fake.SEARCH_URL in json.dumps(attrs)) is SOURCE_OPENAI
+        assert (fake.SEARCH_SNIPPET in json.dumps(attrs)) is SOURCE_OPENAI
         assert fake.QUERY_MARKER not in json.dumps(attrs)
         assert fake.INSTRUCTIONS_MARKER not in json.dumps(attrs)
         assert json.loads(attrs["gen_ai.request.parameters"])["stream"] is True
@@ -363,7 +366,9 @@ def test_hide_outputs_with_control(tracing, monkeypatch, stream):
             span, attrs = _assert_export(receiver, provider, project)
             _assert_usage(attrs)
             assert (fake.ANSWER in json.dumps(span)) is (not hidden)
-            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET, fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
+            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET):
+                assert (marker in json.dumps(span)) is (not hidden and (SOURCE_OPENAI or not stream))
+            for marker in (fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
                 assert (marker in json.dumps(span)) is (not hidden and not stream)
 
 
@@ -385,12 +390,14 @@ def test_empty_text_stream_raw_fallback(tracing, monkeypatch, hidden):
             assert (marker in json.dumps(span)) is (not hidden)
 
 
-def test_cache_details_require_output_details(tracing):
+def test_cache_details_without_output_details(tracing):
     response = fake.response_fixture()
     response["usage"].pop("output_tokens_details")
     with tracing() as (receiver, provider, project):
         assert _call(lambda request: httpx.Response(200, json=response)) == fake.ANSWER
         _, attrs = _assert_export(receiver, provider, project)
+        if SOURCE_OPENAI:
+            assert int(attrs.pop("gen_ai.usage.input_tokens.cache_read")) == 9
         _assert_usage(attrs, details=False)
 
 
@@ -449,13 +456,13 @@ def test_subprocess_app(tmp_path, stream, cli_model):
         attrs = _attributes(span)
         assert span["name"] == "Response"
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
+        assert attrs["gen_ai.provider.name"] == "openai"  # Loopback host, not the vendor.
         assert attrs["gen_ai.request.model"] == fake.RESPONSE_MODEL
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == fake.REQUEST_MODEL
         _assert_usage(attrs)
         assert fake.ANSWER in attrs["output.value"]
-        assert (fake.SEARCH_URL in json.dumps(attrs)) is (not stream)
-        assert (fake.SEARCH_SNIPPET in json.dumps(attrs)) is (not stream)
+        assert (fake.SEARCH_URL in json.dumps(attrs)) is (SOURCE_OPENAI or not stream)
+        assert (fake.SEARCH_SNIPPET in json.dumps(attrs)) is (SOURCE_OPENAI or not stream)
         assert (fake.QUERY_MARKER in json.dumps(attrs)) is (not stream)
         assert (fake.INSTRUCTIONS_MARKER in json.dumps(attrs)) is (not stream)
         [export] = receiver.requests()
@@ -617,60 +624,44 @@ def test_main_requires_configuration_before_tracing(monkeypatch, capsys, variabl
 def test_readme_pins():
     readme = (RECIPE_DIR / "README.md").read_text()
     assert readme.startswith("# Perplexity Agent API (OpenAI SDK, Responses) with traceAI\n")
-    assert app.DEFAULT_BASE_URL in readme
-    assert "provider field is `openai`" in readme
-    assert "Sonar Chat Completions support ended on 27 September 2026" in readme
-    assert "https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview" in readme
-    assert "client.responses.create" in readme
-    assert "gen_ai.request.model" in readme
-    assert "on successful non-streamed and streamed calls records the model returned by the response" in readme
-    assert "Failed calls record the model you sent" in readme
-    assert "requested model remains in `gen_ai.request.parameters` on all three paths" in readme
-    assert "Search results are not traced as citations or retriever spans" in readme
-    assert "a completed response with no answer text falls back to the raw response" in readme
-    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "perplexity-agent-api"' in readme
-    assert 'export FI_PROJECT_NAME="${FI_PROJECT_NAME:-perplexity-agent-api}"' in readme
-    assert 'export PERPLEXITY_MODEL="openai/gpt-6-luna"' in readme
-    assert "https://docs.perplexity.ai/docs/agent-api/models" in readme
-    assert "gen_ai.usage.input_tokens.cache_read" in readme
-    assert "gen_ai.usage.output_tokens.reasoning" in readme
-    assert "input_tokens_details.cached_tokens" in readme
-    assert "requires `output_tokens_details` to be present as well" in readme
-    assert "The nested `usage.cost` object round-trips inside raw non-streamed output" in readme
-    assert 'presets through the OpenAI SDK with `extra_body={"preset": ...}`' in readme
-    assert "one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`" in readme
-    assert '- Preset requests (`extra_body={"preset": ...}`).' in readme
-    assert "With older SDKs such as `openai` 1.69.0, `responses.create` requires `model`" in readme
-    assert "`FI_HIDE_INPUTS` does not remove them, so set `FI_HIDE_OUTPUTS=true` as well" in readme
-    assert "Streamed fixture spans include neither the queries nor instructions" in readme
-    assert "Synchronous and streaming requests keep working because they are being reformulated as Agent API requests, rolling out by model; asynchronous Sonar requests are no longer supported." in readme
-    assert "set_global_tracer_provider=False, verbose=False" in readme
+    for required in (
+        app.DEFAULT_BASE_URL, "traceAI-openai==0.1.11", "client.responses.create",
+        "gen_ai.provider.name=perplexity", "gen_ai.request.model",
+        "pip install -r requirements.txt", "python src/app.py --stream",
+        "https://docs.perplexity.ai/docs/agent-api/models",
+        "https://docs.perplexity.ai/docs/agent-api/openai-compatibility",
+        "Hiding inputs alone does not remove those output fields",
+        "not the native `perplexity` SDK",
+    ):
+        assert required in readme
     for variable in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY",
-                     "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+                     "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
+                     "FI_HIDE_LLM_INVOCATION_PARAMETERS"):
         assert variable in readme
-    assert "pip install -r requirements.txt" in readme
-    assert "pip install traceAI-openai fi-instrumentation-otel openai" in readme
-    assert "python src/app.py --stream" in readme
-    command = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
-  PYTHONPATH="python/examples/perplexity/src:python:python/frameworks/openai:python/tests" \\
-  uv run --no-project --python 3.11 \\
-  --with 'openai==3.24.0' --with httpx --with 'wrapt<2' \\
-  --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-instrumentation \\
-  --with opentelemetry-exporter-otlp-proto-http --with requests --with protobuf \\
-  --with opentelemetry-proto --with pydantic --with jsonschema --with pytest \\
-  pytest python/examples/perplexity/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs"""
-    assert command in readme
-    assert 'PYTHONPATH="python/examples/perplexity/src:python/tests"' in readme
-    assert "--with 'traceAI-openai==0.1.10' --with 'fi-instrumentation-otel==1.1.0'" in readme
-    table = """| Python | `openai` | traceAI packages | Result |
-|---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |"""
-    assert table in readme
-    assert "TBD" not in readme
+    assert "MockTransport" not in readme and "fixture" not in readme
     assert not re.search(r"\b(?:sk-|pplx-)[A-Za-z0-9_-]{12,}", readme)
     requirements = (RECIPE_DIR / "requirements.txt").read_text().splitlines()
     assert [line for line in requirements if line and not line.startswith("#")] == [
-        "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0",
+        "openai==3.24.0", "traceAI-openai==0.1.11", "fi-instrumentation-otel==1.1.0",
     ]
+
+
+def test_readme_python_example_exports_a_span(monkeypatch, capsys):
+    readme = (RECIPE_DIR / "README.md").read_text()
+    [snippet] = re.findall(r"```python\n(.*?)\n```", readme, re.DOTALL)
+    original_init = openai.OpenAI.__init__
+
+    def init_with_offline_transport(self, *args, **kwargs):
+        kwargs["http_client"] = httpx.Client(transport=httpx.MockTransport(_handler))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(openai.OpenAI, "__init__", init_with_offline_transport)
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        try:
+            exec(compile(snippet, str(RECIPE_DIR / "README.md"), "exec"), {})  # noqa: S102 - repository example
+        finally:
+            OpenAIInstrumentor().uninstrument()
+        assert fake.ANSWER in capsys.readouterr().out
+        [span] = receiver.spans()
+        assert _attributes(span)["gen_ai.provider.name"] == "perplexity"

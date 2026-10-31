@@ -652,11 +652,7 @@ class _ResponsesApiAttributes:
         yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, obj.total_tokens
         yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, obj.input_tokens
         yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, obj.output_tokens
-        yield (
-            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING,
-            obj.output_tokens_details.reasoning_tokens,
-        )
-        yield (
-            SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ,
-            obj.input_tokens_details.cached_tokens,
-        )
+        if (reasoning := getattr(obj.output_tokens_details, "reasoning_tokens", None)) is not None:
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, reasoning
+        if (cached := getattr(obj.input_tokens_details, "cached_tokens", None)) is not None:
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, cached
