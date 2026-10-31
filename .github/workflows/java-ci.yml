@@ -22,6 +22,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  qdrant-compatibility:
+    name: Qdrant client ${{ matrix.qdrant-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        qdrant-version: ['1.16.2', '1.20.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Test async lifecycle and loopback gRPC to OTLP
+        working-directory: java
+        run: >-
+          mvn -B -ntp -pl traceai-java-qdrant -am
+          -Dqdrant.version=${{ matrix.qdrant-version }}
+          -Dtest=TracedQdrantClientTest,TracedQdrantWireTest
+          -Dsurefire.failIfNoSpecifiedTests=false test
+
   verify:
     name: Build, test, and validate Central artifacts
     runs-on: ubuntu-latest
