@@ -70,7 +70,12 @@ export class Spool {
       // In WAL mode EXCLUSIVE retains the OS lock between transactions. The
       // storage child is the sole connection and process death releases ownership;
       // no PID files, leases, stale-directory deletion, or second lock database.
-      if (exclusiveOwner) this.db.pragma("locking_mode=EXCLUSIVE");
+      if (exclusiveOwner) {
+        this.db.pragma("locking_mode=EXCLUSIVE");
+        // Acquire ownership before reading schema/header pragmas. Competing
+        // connections must not retain shared locks then race to upgrade them.
+        this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
+      }
       if (
         this.db.prepare("SELECT sqlite_version() v").get() &&
         (this.db.prepare("SELECT sqlite_version() v").get() as any).v !==
