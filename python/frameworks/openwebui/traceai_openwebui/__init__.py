@@ -36,11 +36,35 @@ def _secret() -> Any:
     )
 
 
+async def _check_connection(request: Any, user: Any, model_id: str) -> None:
+    from open_webui.routers.openai import get_all_models, get_openai_connection
+
+    models = request.app.state.OPENAI_MODELS
+    if not models or model_id not in models:
+        await get_all_models(request, user=user)
+        models = request.app.state.OPENAI_MODELS
+    model = models.get(model_id)
+    if model is None:
+        raise ValueError(
+            "The target model's OpenAI-compatible connection is unavailable"
+        )
+    # Use the host's resolver, including index/legacy URL configuration lookup.
+    # Never cache this check: an administrator can change the connection's API.
+    _, _, config = await get_openai_connection(model["urlIdx"])
+    if config.get("api_type") == "responses":
+        # The host discards status/error/incomplete_details when a Responses
+        # endpoint returns JSON. Even stream=True can receive that lossy result.
+        # Reject before inference/span creation rather than inventing success.
+        raise ValueError(
+            "Responses API connections are not supported; choose a Chat Completions connection"
+        )
+
+
 class Pipe:
     class Valves(BaseModel):
         target_model: str = Field(
             default="",
-            description="Native OpenAI-compatible model ID; not Ollama, another Pipe or Arena.",
+            description="Native Chat Completions model ID; not Responses API, Ollama, another Pipe or Arena.",
         )
         api_key: SecretStr = _secret()
         secret_key: SecretStr = _secret()
@@ -94,6 +118,7 @@ class Pipe:
         user = await Users.get_user_by_id(__user__.get("id"))
         if user is None:
             raise ValueError("Open WebUI user is unavailable")
+        await _check_connection(__request__, user, valves.target_model)
         payload = copy.deepcopy(body)
         payload["model"] = valves.target_model
         if __metadata__ is not None:
@@ -240,35 +265,26 @@ class Pipe:
                     data = json.loads(response.body)
                 except (ValueError, TypeError):
                     data = None
+            invalid = not isinstance(data, dict)
+            http_error = isinstance(response, Response) and response.status_code >= 400
             try:
                 observe("payload", data)
-                if (
-                    observation is not None
-                    and isinstance(response, Response)
-                    and (response.status_code >= 400 or not isinstance(data, dict))
-                ):
-                    observation.failed = True
             finally:
-                finish("completed")
-            # Both Pipe dispatch modes accept dicts, not ordinary Response
-            # objects. Preserve JSON payloads and normalize HTTP errors without
-            # an error envelope so the host cannot synthesize an empty success.
-            if isinstance(response, Response):
-                if response.status_code >= 400 and (
-                    not isinstance(data, dict) or not data.get("error")
-                ):
-                    return {
-                        "error": {
-                            "message": "model request failed",
-                            "code": response.status_code,
-                        }
+                finish("error" if invalid or http_error else "completed")
+            # The native router normally returns decoded JSON, not a Response.
+            # Validate both forms even with tracing disabled: the Pipe dispatcher
+            # would otherwise fabricate an empty completion or treat a raw string
+            # as generated model content.
+            if http_error and (invalid or not data.get("error")):
+                return {
+                    "error": {
+                        "message": "model request failed",
+                        "code": response.status_code,
                     }
-                return (
-                    data
-                    if isinstance(data, dict)
-                    else {"error": "model returned a non-streaming response"}
-                )
-            return response
+                }
+            if invalid:
+                return {"error": "model returned an invalid non-streaming response"}
+            return data
 
         if observation is not None and response.status_code >= 400:
             observation.failed = True

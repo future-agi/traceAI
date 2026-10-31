@@ -246,6 +246,32 @@ async def test_invalid_target_cannot_recurse(setup_pipe, target):
     assert not s.exporter.get_finished_spans()
 
 
+@pytest.mark.parametrize("found", [False, True])
+async def test_target_connection_refresh(setup_pipe, found):
+    s = setup_pipe
+    s.request.app.state.OPENAI_MODELS = {}
+    router = s.modules["open_webui.routers.openai"]
+
+    async def refresh(request, user):
+        assert request is s.request and user is s.user
+        if found:
+            request.app.state.OPENAI_MODELS = {
+                "synthetic": {"id": "synthetic", "urlIdx": 3}
+            }
+
+    router.get_all_models.side_effect = refresh
+    if found:
+        assert await invoke(s) is s.delegate.return_value
+        router.get_openai_connection.assert_awaited_once_with(3)
+    else:
+        with pytest.raises(ValueError, match="connection is unavailable"):
+            await invoke(s)
+        router.get_openai_connection.assert_not_awaited()
+        s.delegate.assert_not_awaited()
+        assert not s.exporter.get_finished_spans()
+    router.get_all_models.assert_awaited_once()
+
+
 async def test_two_calls_not_one_turn_aggregate(setup_pipe):
     s = setup_pipe
     await invoke(s)

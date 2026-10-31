@@ -4,7 +4,9 @@ Trace each model call made through an Open WebUI Pipe Function in Future AGI, wi
 
 ## Install
 
-Use Python 3.11 or 3.12 and Open WebUI 0.11.4–0.12.x. Configure an OpenAI-compatible connection model in Open WebUI first. Native Ollama connections are not supported: Open WebUI's conversion can hide failures and incomplete streams, so the Pipe rejects that route rather than recording misleading spans.
+Use Python 3.11 or 3.12 and Open WebUI 0.11.4–0.12.x. Configure an OpenAI-compatible **Chat Completions** connection model in Open WebUI first.
+
+Native Ollama and **Responses API** connections are not supported. Open WebUI's conversions can hide failures or incomplete responses, so the Pipe rejects these connections before making a model request or recording a span. Responses API connections are rejected even with streaming enabled: a provider can return a non-streaming response to a streaming request. Choose a connection configured for Chat Completions instead.
 
 Install the package in the same Python environment as Open WebUI, then generate its Function import file:
 
@@ -18,7 +20,7 @@ For a container deployment, install the package in your image and run the export
 ## Configure the Function
 
 1. In **Admin Panel → Functions**, import `traceai-openwebui.json`.
-2. Open the **Traced model** Function's valves. Set `target_model` to the exact model ID from your existing OpenAI-compatible connection. Native Ollama models, workspace model presets, other Pipes, and Arena models cannot be targets.
+2. Open the **Traced model** Function's valves. Set `target_model` to the exact model ID from your existing Chat Completions connection. Responses API connections, native Ollama models, workspace model presets, other Pipes, and Arena models cannot be targets.
 3. Set `api_key`, `secret_key`, and `project` to your Future AGI credentials and project name. The default endpoint is `https://api.futureagi.com`. For self-hosted Future AGI, set its HTTPS origin; `/tracer/v1/traces` is added automatically.
 4. Enable the Function, and select **Traced model** in a new chat. Access to the target model is still checked using the signed-in Open WebUI user.
 
@@ -51,7 +53,9 @@ Existing Function copies in Open WebUI's database do not change when this reposi
 
 **No spans:** Confirm you selected **Traced model**, supplied both Future AGI keys, and enabled the Function. Tracing configuration/export failures do not block the model response. Allow a few seconds for the batch exporter.
 
-**Target model rejected:** Use an OpenAI-compatible connection model ID, not a native Ollama model, workspace preset, Arena model, or another Pipe. The signed-in user must also have permission to use that target.
+**Target model rejected:** Use an OpenAI-compatible Chat Completions connection model ID, not a Responses API connection, native Ollama model, workspace preset, Arena model, or another Pipe. The signed-in user must also have permission to use that target.
+
+**Invalid non-streaming response:** The provider returned a scalar, array, or undecodable body instead of a completion object. Check the connection URL and API type; the Pipe returns an explicit error rather than presenting that body as generated text.
 
 **No token counts:** Enable Usage on the wrapper model and check that the provider returns usage. Cancelled calls may never receive a final usage snapshot.
 

@@ -29,6 +29,8 @@ def setup_pipe(monkeypatch):
         "open_webui",
         "open_webui.models",
         "open_webui.models.users",
+        "open_webui.routers",
+        "open_webui.routers.openai",
         "open_webui.utils",
         "open_webui.utils.chat",
     ):
@@ -49,6 +51,10 @@ def setup_pipe(monkeypatch):
         }
     )
     modules["open_webui.utils.chat"].generate_chat_completion = delegate
+    modules["open_webui.routers.openai"].get_all_models = AsyncMock()
+    modules["open_webui.routers.openai"].get_openai_connection = AsyncMock(
+        return_value=("http://127.0.0.1/v1", "synthetic-key", {})
+    )
     monkeypatch.setattr(traceai_openwebui, "version", lambda name: "0.12.5")
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -63,6 +69,7 @@ def setup_pipe(monkeypatch):
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
+                OPENAI_MODELS={"synthetic": {"id": "synthetic", "urlIdx": 0}},
                 MODELS={
                     "synthetic": {"id": "synthetic", "owned_by": "openai"},
                     "traceai_openwebui": {
@@ -70,7 +77,7 @@ def setup_pipe(monkeypatch):
                         "pipe": True,
                         "owned_by": "openai",
                     },
-                }
+                },
             )
         ),
         state=SimpleNamespace(),
