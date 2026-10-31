@@ -1,0 +1,57 @@
+name: Redis Python compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/redis-vector/**'
+      - '.github/workflows/redis-python-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/redis-vector/**'
+      - '.github/workflows/redis-python-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Redis ${{ matrix.redis }} / RedisVL ${{ matrix.redisvl }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # RedisVL 0.1.0 requires redis>=5, so 5.0.0 is the resolvable floor.
+          - python: '3.10'
+            redis: '5.0.0'
+            redisvl: '0.1.0'
+          - python: '3.11'
+            redis: '8.1.0'
+            redisvl: '0.29.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package and test dependencies
+        env:
+          REDIS_VERSION: ${{ matrix.redis }}
+          REDISVL_VERSION: ${{ matrix.redisvl }}
+        run: |
+          python -m pip install -e python/frameworks/redis-vector \
+            "redis==$REDIS_VERSION" "redisvl==$REDISVL_VERSION" \
+            pytest opentelemetry-exporter-otlp-proto-http opentelemetry-instrumentation-redis
+      - name: Test with only loopback networking
+        shell: bash
+        run: |
+          python_path="$(command -v python)"
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' _ \
+            "$python_path" -I -m pytest \
+            "$GITHUB_WORKSPACE/python/frameworks/redis-vector/tests" \
+            -q -p no:cacheprovider
