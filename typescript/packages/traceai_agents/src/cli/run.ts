@@ -26,13 +26,17 @@ export async function runAgent(
   adapter: Adapter,
   context: AdapterContext,
   args: readonly string[],
+  tracing = true,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (!adapter.launch) throw new AgentError("UNSUPPORTED_RUN", 5);
-  const launch = await adapter.launch(context);
+  const launch = await adapter.launch(context, { tracing });
   if (!launch.executable.startsWith("/"))
     throw new AgentError("ABSOLUTE_EXECUTABLE_REQUIRED", 5);
+  // Validate even when tracing is unavailable: fallback is not permission to
+  // bypass adapter destination/security preflight or accept an unsafe overlay.
+  const env = agentEnvironment(process.env, launch.env);
   const child = spawn(launch.executable, [...launch.args, ...args], {
-    env: agentEnvironment(process.env, launch.env),
+    env: tracing ? env : agentEnvironment(process.env, {}),
     stdio: "inherit",
     shell: false,
   });

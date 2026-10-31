@@ -4,7 +4,7 @@ import {
   type Server,
   type Socket,
 } from "node:net";
-import { chmodSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { frame } from "@traceai/agent-core/client";
 import { minimize } from "@traceai/agent-core";
@@ -20,9 +20,11 @@ export class Runtime {
   private server: Server | undefined;
   private config: Config = { schema_version: 1, profiles: {}, routes: {} };
   private timer: NodeJS.Timeout | undefined;
-  private exporting: Promise<void> | undefined;
+  private exporting: Promise<boolean> | undefined;
+  private nextRoute = 0;
   private controller: AbortController | undefined;
   private stopped = false;
+  private stopping: Promise<void> | undefined;
   private sockets = new Set<Socket>();
   private ingressBytes = 0;
   private lastDurableAck: number | null = null;
@@ -38,17 +40,33 @@ export class Runtime {
     protectedDirectory(this.paths.state, true);
     if (Buffer.byteLength(this.paths.socket) > 100)
       throw new AgentError("SOCKET_PATH_TOO_LONG");
-    try {
-      mkdirSync(join(this.paths.state, "owner.lock"), { mode: 0o700 });
-    } catch {
-      throw new AgentError("RUNTIME_OWNERSHIP_CONFLICT", 6);
-    }
-    this.storage = new StorageClient(this.childEntry);
+    this.storage = new StorageClient(this.childEntry, () => {
+      // Loss of the crash-released storage lock also revokes this sender.
+      this.stopped = true;
+      this.controller?.abort();
+      this.server?.close();
+      if (this.timer) clearInterval(this.timer);
+      for (const socket of this.sockets) socket.destroy();
+    });
     try {
       await this.storage.call("init", {
         root: join(this.paths.state, "spool"),
         version: this.version,
       });
+      // Only the exclusive SQLite owner may remove a socket left by a crash.
+      // Never remove a regular file, symlink, or another user's socket.
+      try {
+        const s = lstatSync(this.paths.socket);
+        if (!s.isSocket() || s.uid !== process.getuid?.() || s.mode & 0o077)
+          throw new AgentError("UNSAFE_RUNTIME_SOCKET", 6);
+        // A storage-child death can release its lock before its live parent has
+        // closed ingress. A connectable (even unresponsive) listener is not stale.
+        if (await socketIsLive(this.paths.socket))
+          throw new AgentError("RUNTIME_OWNERSHIP_CONFLICT", 6);
+        unlinkSync(this.paths.socket);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      }
       await this.refresh();
       this.server = createServer((socket) => this.connection(socket));
       this.server.maxConnections = 32;
@@ -61,20 +79,12 @@ export class Runtime {
       });
       this.timer = setInterval(() => {
         if (!this.exporting && !this.stopped) {
-          this.exporting = this.drain()
-            .catch(() => undefined)
-            .finally(() => {
-              this.exporting = undefined;
-            });
+          this.startDrain(10_000);
         }
       }, 1000);
     } catch (e) {
+      this.server?.close();
       await this.storage.close().catch(() => undefined);
-      try {
-        rmdirSync(join(this.paths.state, "owner.lock"));
-      } catch {
-        /* absent */
-      }
       throw e;
     }
   }
@@ -82,8 +92,10 @@ export class Runtime {
     const config = loadConfig(this.paths);
     for (const route of Object.values(config.routes)) {
       this.registry.get(route.agent, route.surface);
-      await this.storage.call("route", route.route);
+      await this.storage.call("validateRoute", route.route);
     }
+    for (const route of Object.values(config.routes))
+      await this.storage.call("route", route.route);
     this.config = config;
   }
   private connection(socket: Socket): void {
@@ -118,13 +130,14 @@ export class Runtime {
       if (bytes.length < size + 4) return;
       handled = true;
       socket.pause();
-      void this.dispatch(bytes.subarray(4, size + 4))
+      void this.dispatch(bytes.subarray(4, size + 4), socket)
         .then((result) => socket.end(frame(result)))
         .catch((e) =>
           socket.end(
             frame({
               protocol_version: 1,
               durable: false,
+              code: e instanceof AgentError ? e.exitCode : 7,
               reason_code:
                 e instanceof AgentError ? e.code : "LOCAL_UNAVAILABLE",
             }),
@@ -136,7 +149,7 @@ export class Runtime {
     this.controller?.abort();
     await this.exporting;
   }
-  private async dispatch(bytes: Buffer): Promise<unknown> {
+  private async dispatch(bytes: Buffer, socket: Socket): Promise<unknown> {
     let m: any;
     try {
       m = JSON.parse(bytes.toString());
@@ -144,6 +157,9 @@ export class Runtime {
       throw new AgentError("INVALID_FRAME", 2);
     }
     if (m.protocol_version !== 1) throw new AgentError("INVALID_PROTOCOL", 2);
+    // The short timer bounds incomplete ingress, not a complete administrative
+    // operation. Flush replaces this bound with its validated caller deadline.
+    socket.setTimeout(15_000);
     if (m.operation === "observe-source") {
       const route = this.config.routes[m.route_ref];
       if (
@@ -160,6 +176,7 @@ export class Runtime {
         adapter.capability.observerSchema !== m.source_schema
       )
         throw new AgentError("UNKNOWN_SOURCE_SCHEMA", 5);
+      const epoch = route.route.epoch;
       const profile = this.config.profiles[route.profile];
       if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
       const secrets =
@@ -168,6 +185,18 @@ export class Runtime {
           : new OSSecretStore();
       const secret = await secrets.get(profile.credentialRef);
       if (!secret) throw new AgentError("HELD_IDENTITY_KEY", 3);
+      // Secret-store access yields. Disable/purge, auth removal or a route refresh
+      // must fence this in-flight source event before it can enter a later epoch.
+      if (
+        this.stopped ||
+        this.admissionPaused ||
+        this.config.routes[m.route_ref] !== route ||
+        this.config.profiles[route.profile] !== profile ||
+        profile.removed ||
+        !route.route.enabled ||
+        route.route.epoch !== epoch
+      )
+        throw new AgentError("STALE_CAPTURE_EPOCH", 3);
       const facts = adapter.normalize(m.event, {
         identityKey: Buffer.from(secret.identity_key, "hex"),
         policyRevision: route.route.policy.revision,
@@ -180,8 +209,12 @@ export class Runtime {
         route: m.route_ref,
         fact: minimize(facts[0], route.route.policy),
         observed: true,
+        expectedEpoch: epoch,
       });
-      this.sourceReceipts.set(m.route_ref, route.route.epoch);
+      // A durable ACK belongs to the admitted epoch, not whichever epoch is active
+      // when its reply arrives. Status compares this frozen receipt to the route.
+      if (epoch > (this.sourceReceipts.get(m.route_ref) ?? -1))
+        this.sourceReceipts.set(m.route_ref, epoch);
       this.lastDurableAck = Date.now();
       return {
         protocol_version: 1,
@@ -208,6 +241,7 @@ export class Runtime {
       const result = await this.storage.call("admit", {
         route: m.route_ref,
         fact: minimize(m.fact, route.route.policy),
+        expectedEpoch: route.route.epoch,
       });
       this.lastDurableAck = Date.now();
       return {
@@ -270,6 +304,19 @@ export class Runtime {
         this.admissionPaused = false;
       }
     }
+    if (m.operation === "route-state") {
+      try {
+        return { route: await this.storage.call("getRoute", m.route), code: 0 };
+      } catch (e) {
+        if (e instanceof AgentError && e.code === "UNKNOWN_ROUTE")
+          return { route: null, code: 0 };
+        throw e;
+      }
+    }
+    if (m.operation === "validate-route") {
+      await this.storage.call("validateRoute", m.route);
+      return { state: "validated", code: 0 };
+    }
     if (m.operation === "disable") {
       const r = this.config.routes[m.route];
       if (!r) throw new AgentError("UNKNOWN_ROUTE", 3);
@@ -277,6 +324,7 @@ export class Runtime {
       this.sourceReceipts.delete(m.route);
       await this.fence();
       await this.storage.call("disable", m.route);
+      r.route.epoch = (await this.storage.call("getRoute", m.route)).epoch;
       if (m.purge) {
         while ((await this.storage.call("purge", m.route)) > 0) {
           /* bounded child transactions */
@@ -288,21 +336,25 @@ export class Runtime {
       const deadline = Number(m.deadlineMs ?? 5000);
       if (!Number.isFinite(deadline) || deadline < 1 || deadline > 60_000)
         throw new AgentError("INVALID_DEADLINE", 2);
-      // Track the same sender promise as the background loop so disable can fence it.
-      if (!this.exporting)
-        this.exporting = this.drain()
-          .catch(() => undefined)
-          .finally(() => {
-            this.exporting = undefined;
-          });
+      socket.setTimeout(deadline + 500);
+      const until = Date.now() + deadline;
       let timer: NodeJS.Timeout | undefined;
-      await Promise.race([
-        this.exporting,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, deadline);
-        }),
-      ]);
-      if (timer) clearTimeout(timer);
+      const expired = new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), deadline);
+      });
+      try {
+        // Join the existing sender; never create parallel leases. A bounded batch
+        // may leave eligible rows, so continue fair batches within this deadline.
+        while (Date.now() < until && !this.stopped && !this.admissionPaused) {
+          const more = await Promise.race([
+            this.exporting ?? this.startDrain(until - Date.now()),
+            expired,
+          ]);
+          if (!more) break;
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       return {
         schema_version: 1,
         state: "pending",
@@ -318,73 +370,124 @@ export class Runtime {
     }
     throw new AgentError("UNKNOWN_COMMAND", 2);
   }
-  private async drain(): Promise<void> {
-    for (const [id, route] of Object.entries(this.config.routes)) {
-      if (this.stopped || !route.route.enabled) continue;
-      const profile = this.config.profiles[route.profile];
-      if (
-        !profile ||
-        profile.removed ||
-        profile.binding.id !== route.route.binding.id ||
-        profile.binding.endpoint !== route.route.binding.endpoint ||
-        profile.binding.project !== route.route.binding.project ||
-        profile.binding.approvedOrigin !== route.route.binding.approvedOrigin ||
-        profile.binding.backendContract !== "immutable-agent-v1"
-      )
-        continue;
-      const row = await this.storage.call("next", { route: id });
-      if (!row) continue;
-      const store =
-        profile.storage === "file"
-          ? new FileSecretStore(this.paths.credentials)
-          : new OSSecretStore();
-      let credentials;
-      try {
-        credentials = await store.get(profile.credentialRef);
-      } catch {
-        continue;
-      }
-      if (!credentials) continue;
-      this.controller = new AbortController();
-      const result = await exportBytes(
-        profile.binding,
-        Buffer.from(row.bytes),
-        credentials,
-        this.controller.signal,
-      );
-      this.controller = undefined;
-      if (!route.route.enabled || this.stopped) continue;
-      await this.storage.call("complete", {
-        id: row.id,
-        epoch: row.epoch,
-        result: {
-          ...result,
-          nextAt: Date.now() + retryDelay(row.attempts, result.retryAfterMs),
-        },
+  private startDrain(deadlineMs: number): Promise<boolean> {
+    this.exporting = this.drain(deadlineMs)
+      .catch(() => false)
+      .finally(() => {
+        this.exporting = undefined;
       });
-    }
-    await this.storage.call("expire");
-    this.statusCache = await this.storage.call("status");
+    return this.exporting;
   }
-  async stop(): Promise<void> {
+  private async drain(deadlineMs: number): Promise<boolean> {
+    const controller = new AbortController();
+    this.controller = controller;
+    const until = Date.now() + deadlineMs;
+    const timer = setTimeout(() => controller.abort(), Math.max(1, deadlineMs));
+    const routes = Object.entries(this.config.routes);
+    const deferred = new Set<string>();
+    let sent = 0,
+      idle = 0;
+    const active = () =>
+      !this.stopped &&
+      !this.admissionPaused &&
+      !controller.signal.aborted &&
+      Date.now() < until;
+    try {
+      // Round-robin one row at a time; keep the cursor across batches so a busy
+      // or slow first route cannot monopolize subsequent background/flush work.
+      while (routes.length && idle < routes.length && sent < 128 && active()) {
+        const [id, route] = routes[this.nextRoute++ % routes.length];
+        this.nextRoute %= routes.length;
+        idle++;
+        if (!route.route.enabled || deferred.has(id)) continue;
+        const profile = this.config.profiles[route.profile];
+        if (
+          !profile ||
+          profile.removed ||
+          profile.binding.id !== route.route.binding.id ||
+          profile.binding.endpoint !== route.route.binding.endpoint ||
+          profile.binding.project !== route.route.binding.project ||
+          profile.binding.approvedOrigin !==
+            route.route.binding.approvedOrigin ||
+          profile.binding.backendContract !== "immutable-agent-v1"
+        )
+          continue;
+        const row = await this.storage.call("next", { route: id });
+        if (!row) continue;
+        const store =
+          profile.storage === "file"
+            ? new FileSecretStore(this.paths.credentials)
+            : new OSSecretStore();
+        let credentials;
+        try {
+          credentials = await store.get(profile.credentialRef);
+        } catch {
+          deferred.add(id);
+          continue;
+        }
+        if (!credentials || !active() || !route.route.enabled) continue;
+        const result = await exportBytes(
+          profile.binding,
+          Buffer.from(row.bytes),
+          credentials,
+          controller.signal,
+        );
+        sent++;
+        idle = 0;
+        if (!active() || !route.route.enabled) break;
+        await this.storage.call("complete", {
+          id: row.id,
+          epoch: row.epoch,
+          result: {
+            ...result,
+            nextAt: Date.now() + retryDelay(row.attempts, result.retryAfterMs),
+          },
+        });
+        // Do not turn a flush into a retry loop or keep sending to an unhealthy
+        // destination; next_at and persistent destination holds still apply.
+        if (result.state !== "accepted") deferred.add(id);
+      }
+      await this.storage.call("expire");
+      this.statusCache = await this.storage.call("status");
+      return idle < routes.length && (sent >= 128 || Date.now() >= until);
+    } finally {
+      clearTimeout(timer);
+      if (this.controller === controller) this.controller = undefined;
+    }
+  }
+  stop(): Promise<void> {
+    return (this.stopping ??= this.shutdown());
+  }
+  private async shutdown(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.controller?.abort();
-    this.server?.close();
+    const closed = this.server?.listening
+      ? new Promise<void>((resolve) => this.server!.close(() => resolve()))
+      : Promise.resolve();
     for (const s of this.sockets) s.destroy();
+    await closed;
     await this.exporting?.catch(() => undefined);
+    // server.close removes our socket before releasing storage ownership.
+    // Never unlink after close: a successor may already own the pathname.
     await this.storage.close().catch(() => undefined);
-    try {
-      unlinkSync(this.paths.socket);
-    } catch {
-      /* absent */
-    }
-    try {
-      rmdirSync(join(this.paths.state, "owner.lock"));
-    } catch {
-      /* absent */
-    }
   }
+}
+async function socketIsLive(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection(path);
+    const finish = (live: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(live);
+    };
+    // Unknown errors/timeouts are conflicts, never authority to unlink.
+    const timer = setTimeout(() => finish(true), 500);
+    socket.once("connect", () => finish(true));
+    socket.once("error", (e: NodeJS.ErrnoException) =>
+      finish(e.code !== "ECONNREFUSED" && e.code !== "ENOENT"),
+    );
+  });
 }
 export async function runtimeRequest(
   path: string,
@@ -422,7 +525,16 @@ export async function runtimeRequest(
       try {
         const result = JSON.parse(data.subarray(4).toString());
         if (result.durable === false)
-          return finish(new AgentError(result.reason_code));
+          return finish(
+            new AgentError(
+              result.reason_code,
+              Number.isInteger(result.code) &&
+              result.code >= 2 &&
+              result.code <= 7
+                ? result.code
+                : 7,
+            ),
+          );
         finish(undefined, result);
       } catch {
         finish(new AgentError("INVALID_RESPONSE"));

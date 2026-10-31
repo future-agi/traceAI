@@ -40,39 +40,48 @@ export class Spool {
   constructor(
     private readonly root: string,
     private readonly runtimeVersion: string,
+    exclusiveOwner = false,
   ) {
     process.umask(0o077);
     reserve(root);
     preflight(root);
-    this.db = new Database(join(root, "spool.db"), { timeout: 10 });
-    chmodSync(join(root, "spool.db"), 0o600);
-    if (
-      this.db.prepare("SELECT sqlite_version() v").get() &&
-      (this.db.prepare("SELECT sqlite_version() v").get() as any).v !== "3.50.4"
-    ) {
-      this.db.close();
-      throw new AgentError("UNQUALIFIED_SQLITE");
-    }
-    this.db.pragma("page_size=4096");
-    if (this.db.pragma("page_size", { simple: true }) !== 4096)
-      throw new AgentError("UNQUALIFIED_PAGE_SIZE");
-    this.db.pragma("max_page_count=16384");
-    if (this.db.pragma("max_page_count", { simple: true }) !== 16384)
-      throw new AgentError("UNQUALIFIED_PAGE_LIMIT");
-    this.db.pragma("journal_mode=WAL");
-    this.db.pragma("synchronous=FULL");
-    this.db.pragma("wal_autocheckpoint=0");
-    this.db.pragma("journal_size_limit=0");
-    this.db.pragma("cache_spill=OFF");
-    this.db.pragma("cache_size=16384");
-    this.db.pragma("mmap_size=0");
-    this.db.pragma("temp_store=MEMORY");
-    this.db.pragma("busy_timeout=10");
-    const existingVersion = this.db.pragma("user_version", { simple: true });
-    if (existingVersion !== 0 && existingVersion !== 1)
-      throw new AgentError("HELD_STORAGE_SCHEMA");
-    this.write(() =>
-      this.db.exec(`
+    this.db = new Database(join(root, "spool.db"), {
+      timeout: exclusiveOwner ? 500 : 10,
+    });
+    try {
+      chmodSync(join(root, "spool.db"), 0o600);
+      // In WAL mode EXCLUSIVE retains the OS lock between transactions. The
+      // storage child is the sole connection and process death releases ownership;
+      // no PID files, leases, stale-directory deletion, or second lock database.
+      if (exclusiveOwner) this.db.pragma("locking_mode=EXCLUSIVE");
+      if (
+        this.db.prepare("SELECT sqlite_version() v").get() &&
+        (this.db.prepare("SELECT sqlite_version() v").get() as any).v !==
+          "3.50.4"
+      ) {
+        throw new AgentError("UNQUALIFIED_SQLITE");
+      }
+      this.db.pragma("page_size=4096");
+      if (this.db.pragma("page_size", { simple: true }) !== 4096)
+        throw new AgentError("UNQUALIFIED_PAGE_SIZE");
+      this.db.pragma("max_page_count=16384");
+      if (this.db.pragma("max_page_count", { simple: true }) !== 16384)
+        throw new AgentError("UNQUALIFIED_PAGE_LIMIT");
+      this.db.pragma("journal_mode=WAL");
+      if (exclusiveOwner) this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
+      this.db.pragma("synchronous=FULL");
+      this.db.pragma("wal_autocheckpoint=0");
+      this.db.pragma("journal_size_limit=0");
+      this.db.pragma("cache_spill=OFF");
+      this.db.pragma("cache_size=16384");
+      this.db.pragma("mmap_size=0");
+      this.db.pragma("temp_store=MEMORY");
+      this.db.pragma("busy_timeout=10");
+      const existingVersion = this.db.pragma("user_version", { simple: true });
+      if (existingVersion !== 0 && existingVersion !== 1)
+        throw new AgentError("HELD_STORAGE_SCHEMA");
+      this.write(() =>
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS routes (id TEXT PRIMARY KEY,config TEXT NOT NULL,enabled INTEGER NOT NULL,epoch INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS plans (binding TEXT NOT NULL,id TEXT NOT NULL,choice TEXT NOT NULL,PRIMARY KEY(binding,id));
@@ -84,17 +93,23 @@ export class Spool {
       CREATE INDEX IF NOT EXISTS pending ON records(route,state,next_at,id);
       CREATE TABLE IF NOT EXISTS cursors (route TEXT NOT NULL,stream TEXT NOT NULL,coordinate TEXT NOT NULL,PRIMARY KEY(route,stream));
     `),
-    );
-    const version = this.db
-      .prepare("SELECT value FROM meta WHERE key=?")
-      .get("schema") as any;
-    if (version && version.value !== "1")
-      throw new AgentError("HELD_STORAGE_SCHEMA");
-    if (!version)
-      this.write(() => {
-        this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "1");
-        this.db.pragma("user_version=1");
-      });
+      );
+      const version = this.db
+        .prepare("SELECT value FROM meta WHERE key=?")
+        .get("schema") as any;
+      if (version && version.value !== "1")
+        throw new AgentError("HELD_STORAGE_SCHEMA");
+      if (!version)
+        this.write(() => {
+          this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "1");
+          this.db.pragma("user_version=1");
+        });
+    } catch (e) {
+      this.db.close();
+      if (exclusiveOwner && (e as { code?: string }).code === "SQLITE_BUSY")
+        throw new AgentError("RUNTIME_OWNERSHIP_CONFLICT", 6);
+      throw e;
+    }
   }
   private checkpoint(): void {
     const row = (this.db.pragma("wal_checkpoint(TRUNCATE)") as any[])[0];
@@ -123,7 +138,7 @@ export class Spool {
     }
     return value;
   }
-  route(route: Route): void {
+  validateRoute(route: Route): void {
     if (
       !token(route.id) ||
       !Number.isSafeInteger(route.epoch) ||
@@ -134,18 +149,24 @@ export class Spool {
     // Content capture remains held until per-policy protected-key qualification.
     if (route.policy.categories.length || route.policy.ceiling.length)
       throw new AgentError("HELD_CONTENT_QUALIFICATION", 3);
-    this.write(() => {
-      const old = this.db
-        .prepare("SELECT config,epoch FROM routes WHERE id=?")
-        .get(route.id) as any;
-      if (
-        old &&
-        JSON.stringify(JSON.parse(old.config).binding) !==
-          JSON.stringify(route.binding)
-      )
+    const old = this.db
+      .prepare("SELECT config,enabled,epoch FROM routes WHERE id=?")
+      .get(route.id) as any;
+    if (old) {
+      const prior = JSON.parse(old.config);
+      if (JSON.stringify(prior.binding) !== JSON.stringify(route.binding))
         throw new AgentError("HELD_DESTINATION_CHANGED", 3);
-      if (old && route.epoch < old.epoch)
+      if (
+        route.epoch < old.epoch ||
+        (route.epoch === old.epoch &&
+          JSON.stringify(prior.policy) !== JSON.stringify(route.policy))
+      )
         throw new AgentError("HELD_POLICY", 3);
+    }
+  }
+  route(route: Route): void {
+    this.validateRoute(route);
+    this.write(() => {
       this.db
         .prepare(
           "INSERT INTO routes VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config,enabled=excluded.enabled,epoch=excluded.epoch",
@@ -174,9 +195,12 @@ export class Spool {
     input: CanonicalFact,
     cursor?: { stream: string; coordinate: string },
     observed = false,
+    expectedEpoch?: number,
   ): { receipt_id: string; duplicate: boolean } {
     const route = this.getRoute(routeId);
     if (!route.enabled) throw new AgentError("HELD_DISABLED", 3);
+    if (expectedEpoch !== undefined && expectedEpoch !== route.epoch)
+      throw new AgentError("STALE_CAPTURE_EPOCH", 3);
     const fact = minimize(input, route.policy);
     if (observed) {
       // Hooks without wall timestamps have an estimated callback interval. Freeze its
@@ -371,7 +395,9 @@ export class Spool {
   disable(routeId: string): void {
     this.write(() =>
       this.db
-        .prepare("UPDATE routes SET enabled=0,epoch=epoch+1 WHERE id=?")
+        .prepare(
+          "UPDATE routes SET enabled=0,epoch=epoch+1 WHERE id=? AND enabled=1",
+        )
         .run(routeId),
     );
   }

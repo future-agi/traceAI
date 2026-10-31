@@ -174,6 +174,22 @@ test("surface/version-qualified observer minimizes before IPC and never fabricat
   );
 });
 
+test("documented numeric durations preserve fractional milliseconds and reject invalid bounds", () => {
+  const normalize = (duration) =>
+    normalizeCursorHook(
+      { ...hook(), duration, tool_name: "Delete" },
+      "ide",
+      context,
+    )[0];
+  assert.equal(normalize(40.125).endNs, "40125000");
+  assert.equal(normalize(40.125).timing, "estimated");
+  assert.equal(normalize(40.125).tool, "Delete");
+  assert.equal(normalize(0).endNs, "0");
+  assert.equal(normalize(86_400_000).endNs, "86400000000000");
+  for (const duration of [-1, NaN, Infinity, 86_400_001, "40", null])
+    assert.throws(() => normalize(duration), /INVALID_CURSOR_DURATION/);
+});
+
 test("tool failure, permission denial, cancellation and terminal outcomes stay distinct", () => {
   const normalize = (e) => normalizeCursorHook(e, "ide", context)[0];
   assert.equal(

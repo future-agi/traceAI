@@ -22,6 +22,7 @@ export const TOOLS = [
   "Grep",
   "Glob",
   "Task",
+  "Delete",
   "custom",
 ] as const;
 type Data = Record<string, unknown>;
@@ -42,7 +43,7 @@ function duration(value: unknown): number {
   if (value === undefined) return 0;
   if (
     typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
+    !Number.isFinite(value) ||
     value < 0 ||
     value > 86_400_000
   )
@@ -183,7 +184,9 @@ export function normalizeCursorHook(
             ? "permission_denied"
             : "error";
     // Reported duration ends at our callback receipt, not a provider/source timestamp.
-    f.endNs = (BigInt(e.duration ?? 0) * 1_000_000n).toString();
+    // The documented millisecond field is a number, not necessarily an integer.
+    // The bounded duration remains safely representable at nanosecond resolution.
+    f.endNs = BigInt(Math.round((e.duration ?? 0) * 1_000_000)).toString();
     f.timing = e.duration ? "estimated" : "unknown";
   }
   return [f];
