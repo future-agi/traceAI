@@ -1,15 +1,16 @@
 import logging
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
-    MessageAttributes,
     RerankerAttributes,
     SpanAttributes,
 )
 from opentelemetry.util.types import AttributeValue
+
+from traceai_cohere._utils import _message_attributes
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -24,7 +25,6 @@ class _ChatRequestAttributesExtractor:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "command-r-plus")
         yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
@@ -35,7 +35,10 @@ class _ChatRequestAttributesExtractor:
         # Invocation parameters
         invocation_params = self._extract_invocation_parameters(request_parameters)
         if invocation_params:
-            yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
+            yield (
+                SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+                safe_json_dumps(invocation_params),
+            )
 
     def get_extra_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
@@ -45,25 +48,31 @@ class _ChatRequestAttributesExtractor:
         # indices. Canonical input-message keys also honor FI_HIDE_INPUTS.
         messages = []
         if "preamble" in request_parameters:
-            messages.append({"role": "system", "message": request_parameters["preamble"]})
-        messages.extend(request_parameters.get("chat_history", []))
+            messages.append(
+                {"role": "system", "message": request_parameters["preamble"]}
+            )
+        messages.extend((request_parameters.get("chat_history") or []))
         if "message" in request_parameters:
             message = request_parameters.get("message", "")
             messages.append({"role": "user", "message": message})
             yield SpanAttributes.INPUT_VALUE, message
 
+        if "messages" in request_parameters:
+            messages = request_parameters.get("messages") or []
+            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
         for i, msg in enumerate(messages):
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role", "")
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", msg.get("message", "")
+            yield from _message_attributes(
+                msg, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+            )
 
         # Documents for RAG
         if "documents" in request_parameters:
-            docs = request_parameters.get("documents", [])
+            docs = request_parameters.get("documents") or []
             yield "cohere.documents_count", len(docs)
 
         # Tools
         if "tools" in request_parameters:
-            tools = request_parameters.get("tools", [])
+            tools = request_parameters.get("tools") or []
             yield "cohere.tools_count", len(tools)
 
     def _extract_invocation_parameters(
@@ -72,8 +81,14 @@ class _ChatRequestAttributesExtractor:
         """Extract model invocation parameters."""
         params = {}
         param_keys = [
-            "temperature", "max_tokens", "k", "p", "stop_sequences",
-            "frequency_penalty", "presence_penalty", "seed"
+            "temperature",
+            "max_tokens",
+            "k",
+            "p",
+            "stop_sequences",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
         ]
         for key in param_keys:
             if key in request_parameters:
@@ -90,7 +105,6 @@ class _EmbedRequestAttributesExtractor:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.EMBEDDING.value
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "embed-english-v3.0")
         yield SpanAttributes.EMBEDDING_MODEL_NAME, model
@@ -104,7 +118,10 @@ class _EmbedRequestAttributesExtractor:
 
         # Embedding types
         if "embedding_types" in request_parameters:
-            yield "cohere.embedding_types", safe_json_dumps(request_parameters.get("embedding_types"))
+            yield (
+                "cohere.embedding_types",
+                safe_json_dumps(request_parameters.get("embedding_types")),
+            )
 
     def get_extra_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
@@ -130,7 +147,6 @@ class _RerankRequestAttributesExtractor:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.RERANKER.value
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "rerank-english-v3.0")
         yield RerankerAttributes.RERANKER_MODEL_NAME, model
@@ -153,5 +169,5 @@ class _RerankRequestAttributesExtractor:
             yield RerankerAttributes.RERANKER_QUERY, masked_query
         yield SpanAttributes.INPUT_VALUE, query
 
-        documents = request_parameters.get("documents", [])
+        documents = request_parameters.get("documents") or []
         yield "cohere.documents_count", len(documents)

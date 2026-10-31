@@ -1,315 +1,150 @@
-# TraceAI Cohere Instrumentation
+# Cohere tracing
 
-OpenTelemetry instrumentation for [Cohere](https://cohere.com/) - embeddings, chat, and rerank APIs.
+Trace Cohere chat, streaming chat, embeddings, and reranking with OpenTelemetry.
 
-## Installation
+## Install
 
 ```bash
 pip install traceai-cohere
 ```
 
-## Features
+The instrumentor supports `cohere>=5.0.0`. It instruments `Client` and
+`AsyncClient`, plus `ClientV2` and `AsyncClientV2` when those classes are available
+in your installed Cohere SDK. Use one Cohere instrumentor per application; do not
+also enable another library's Cohere instrumentation.
 
-- Automatic tracing of Cohere API calls
-- Support for chat, embed, and rerank endpoints
-- Streaming response support
-- Token usage tracking
-- Rerank relevance scores
-- Full OpenTelemetry semantic conventions compliance
+## Configure tracing
 
-## Usage
+Pass your application's OpenTelemetry tracer provider to the instrumentor. This
+example prints spans locally; use your configured OTLP provider to export traces
+to [Future AGI](https://docs.futureagi.com/docs/tracing).
 
-### Basic Setup
+Set `CO_API_KEY` to your Cohere API key and `COHERE_MODEL` to a chat model available
+to your account before running the example. Keep both outside your source code.
 
 ```python
+import os
+
 import cohere
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
-
 from traceai_cohere import CohereInstrumentor
 
-# Set up tracing
 provider = TracerProvider()
 provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
-trace.set_tracer_provider(provider)
-
-# Instrument Cohere
 CohereInstrumentor().instrument(tracer_provider=provider)
 
-# Use Cohere
-client = cohere.Client(api_key="your-api-key")
-response = client.chat(message="Hello!")
-print(response.text)
-```
-
-### Chat
-
-```python
-import cohere
-
-client = cohere.Client()
-
-# Simple chat
+client = cohere.ClientV2(api_key=os.environ["CO_API_KEY"])
 response = client.chat(
-    model="command-r-plus",
-    message="What is machine learning?"
+    model=os.environ["COHERE_MODEL"],
+    messages=[{"role": "user", "content": "Explain semantic search in one sentence."}],
 )
-print(response.text)
-
-# With chat history
-response = client.chat(
-    model="command-r-plus",
-    message="What's my name?",
-    chat_history=[
-        {"role": "USER", "message": "My name is Alice"},
-        {"role": "CHATBOT", "message": "Hello Alice!"}
-    ]
-)
-
-# With preamble (system prompt)
-response = client.chat(
-    model="command-r-plus",
-    message="Write a poem",
-    preamble="You are a creative poet who writes in haiku format."
-)
+for content in response.message.content or []:
+    if content.type == "text":
+        print(content.text)
+provider.force_flush()
 ```
 
-### Streaming Chat
+Existing v1 calls such as `client.chat(message="Hello", model=...)` continue to
+work with the same `CohereInstrumentor().instrument(...)` setup.
+
+## Stream responses
+
+The stream span finishes when you exhaust or close the iterator. Close a stream
+explicitly if you stop reading early.
 
 ```python
-import cohere
-
-client = cohere.Client()
-
-# Streaming
-for event in client.chat_stream(
-    model="command-r-plus",
-    message="Tell me a story"
-):
-    if event.event_type == "text-generation":
-        print(event.text, end="", flush=True)
+stream = client.chat_stream(
+    model=os.environ["COHERE_MODEL"],
+    messages=[{"role": "user", "content": "Give three tips for semantic search."}],
+)
+try:
+    for event in stream:
+        if event.type == "content-delta" and event.delta.message.content.text:
+            print(event.delta.message.content.text, end="", flush=True)
+finally:
+    stream.close()
 ```
 
-### Embeddings
+For async applications, use `AsyncClientV2` and iterate directly over
+`chat_stream(...)`; do not await the stream itself.
 
 ```python
-import cohere
+import asyncio
 
-client = cohere.Client()
+async def main():
+    client = cohere.AsyncClientV2(api_key=os.environ["CO_API_KEY"])
+    stream = client.chat_stream(
+        model=os.environ["COHERE_MODEL"],
+        messages=[{"role": "user", "content": "Explain reranking in one sentence."}],
+    )
+    try:
+        async for event in stream:
+            if event.type == "content-delta" and event.delta.message.content.text:
+                print(event.delta.message.content.text, end="", flush=True)
+    finally:
+        await stream.aclose()
 
-# Generate embeddings
-response = client.embed(
-    model="embed-english-v3.0",
-    texts=["Hello world", "Machine learning is great"],
-    input_type="search_document"
-)
-print(f"Generated {len(response.embeddings)} embeddings")
-print(f"Dimensions: {len(response.embeddings[0])}")
+asyncio.run(main())
+provider.force_flush()
 ```
 
-### Rerank (for RAG)
+## Embed and rerank
+
+Both operations use the same instrumentor setup, for sync and async clients.
 
 ```python
-import cohere
-
-client = cohere.Client()
-
-# Rerank documents for a query
-query = "What is the capital of France?"
-documents = [
-    "Paris is the capital of France.",
-    "London is the capital of England.",
-    "The Eiffel Tower is in Paris.",
-    "France is a country in Europe."
-]
-
-response = client.rerank(
-    model="rerank-english-v3.0",
-    query=query,
-    documents=documents,
-    top_n=3
+embedding = client.embed(
+    model="embed-v4.0",
+    texts=["Paris is the capital of France."],
+    input_type="search_document",
+    embedding_types=["float"],
 )
+print(len(embedding.embeddings.float[0]))
 
-for result in response.results:
-    print(f"Index: {result.index}, Score: {result.relevance_score:.4f}")
-    print(f"  {documents[result.index]}")
+ranking = client.rerank(
+    model="rerank-v3.5",
+    query="What is the capital of France?",
+    documents=["Paris is the capital of France.", "London is the capital of England."],
+    top_n=1,
+)
+print(ranking.results[0].index)
 ```
 
-### RAG with Cohere
+## Control content capture
 
-```python
-import cohere
-
-client = cohere.Client()
-
-# Documents for context
-documents = [
-    {"title": "Paris", "text": "Paris is the capital of France."},
-    {"title": "London", "text": "London is the capital of England."},
-]
-
-response = client.chat(
-    model="command-r-plus",
-    message="What is the capital of France?",
-    documents=documents
-)
-
-print(response.text)
-if response.citations:
-    print("\nCitations:")
-    for citation in response.citations:
-        print(f"  - {citation}")
-```
-
-### Tool Use
-
-```python
-import cohere
-
-client = cohere.Client()
-
-tools = [
-    {
-        "name": "get_weather",
-        "description": "Get the weather for a location",
-        "parameter_definitions": {
-            "location": {
-                "type": "str",
-                "description": "The city name",
-                "required": True
-            }
-        }
-    }
-]
-
-response = client.chat(
-    model="command-r-plus",
-    message="What's the weather in Paris?",
-    tools=tools
-)
-
-if response.tool_calls:
-    for tool_call in response.tool_calls:
-        print(f"Tool: {tool_call.name}")
-        print(f"Parameters: {tool_call.parameters}")
-```
-
-## Configuration Options
-
-### TraceConfig
+By default, chat spans include prompts, responses, and tool-call arguments.
+Configure privacy before instrumenting if you do not want that content exported.
+Replace the earlier `instrument(...)` call with this one:
 
 ```python
 from fi_instrumentation import TraceConfig
-from traceai_cohere import CohereInstrumentor
-
-config = TraceConfig(
-    hide_inputs=False,
-    hide_outputs=False,
-)
 
 CohereInstrumentor().instrument(
     tracer_provider=provider,
-    config=config
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
 )
 ```
 
-## Captured Attributes
+You can also set `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` in your environment.
+Explicit `TraceConfig` settings take precedence. Hiding content retains model,
+usage, counts, and rerank scores.
 
-### Chat Attributes
+## Span attributes
 
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.span.kind` | "LLM" |
-| `gen_ai.provider.name` | "cohere" |
-| `gen_ai.request.model` | Model name (command-r-plus, etc.) |
-| `gen_ai.usage.input_tokens` | Input token count |
-| `gen_ai.usage.output_tokens` | Output token count |
-| `cohere.finish_reason` | Response finish reason |
-| `cohere.citations_count` | Number of citations |
-| `cohere.tool_calls_count` | Number of tool calls |
+| Operation | Span name | Captured metadata |
+| --- | --- | --- |
+| Chat | `cohere.chat` | Model, input/output messages, tool calls, token usage, finish reason |
+| Streaming chat | `cohere.chat_stream` | Accumulated text and tool-call arguments, final usage and finish reason |
+| Embedding | `cohere.embed` | Model, text count, embedding count and dimensions |
+| Rerank | `cohere.rerank` | Model, query, result count, relevance scores |
 
-### Embed Attributes
+Token usage prefers actual token counts when the response provides them, falling
+back to billed units otherwise. A stream closed early may not have final usage.
+Tool calls use canonical `gen_ai.input.messages` and `gen_ai.output.messages`
+attributes so content privacy settings also apply to their arguments.
 
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.span.kind` | "EMBEDDING" |
-| `embedding.model_name` | Embedding model name |
-| `cohere.texts_count` | Number of texts embedded |
-| `cohere.embedding_dimensions` | Vector dimensions |
-
-### Rerank Attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.span.kind` | "RERANKER" |
-| `reranker.model_name` | Rerank model name |
-| `reranker.query` | Search query |
-| `reranker.top_k` | Top N results requested |
-| `cohere.results_count` | Number of results |
-| `cohere.rerank.scores` | Relevance scores |
-
-## Available Models
-
-| Category | Models |
-|----------|--------|
-| Chat | `command-r-plus`, `command-r`, `command` |
-| Embed | `embed-english-v3.0`, `embed-multilingual-v3.0` |
-| Rerank | `rerank-english-v3.0`, `rerank-multilingual-v3.0` |
-
-## Real-World Use Cases
-
-### Semantic Search
-
-```python
-import cohere
-
-client = cohere.Client()
-
-# Index documents
-documents = ["doc1", "doc2", "doc3"]
-doc_embeddings = client.embed(
-    model="embed-english-v3.0",
-    texts=documents,
-    input_type="search_document"
-).embeddings
-
-# Search query
-query_embedding = client.embed(
-    model="embed-english-v3.0",
-    texts=["search query"],
-    input_type="search_query"
-).embeddings[0]
-
-# Compute similarity (not shown: use vector DB)
-```
-
-### Two-Stage RAG
-
-```python
-import cohere
-
-client = cohere.Client()
-
-# Stage 1: Semantic search (not shown)
-initial_results = ["doc1", "doc2", "doc3", "doc4", "doc5"]
-
-# Stage 2: Rerank for precision
-reranked = client.rerank(
-    model="rerank-english-v3.0",
-    query="user question",
-    documents=initial_results,
-    top_n=3
-)
-
-# Stage 3: Generate with top results
-top_docs = [initial_results[r.index] for r in reranked.results]
-response = client.chat(
-    model="command-r-plus",
-    message="user question",
-    documents=[{"text": d} for d in top_docs]
-)
-```
+To remove the patches, call `CohereInstrumentor().uninstrument()`.
 
 ## License
 
