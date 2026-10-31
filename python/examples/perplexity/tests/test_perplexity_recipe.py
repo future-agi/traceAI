@@ -3,6 +3,7 @@
 import ast
 from contextlib import contextmanager
 import importlib.util
+from importlib.metadata import PackageNotFoundError, distribution
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,18 @@ from traceai_openai import OpenAIInstrumentor
 # (future-agi/traceAI#249) use the vendor's name for its documented API host.
 # Accept both so this recipe passes on either version.
 PROVIDER_NAMES = ("openai", "perplexity")
+
+# Use distribution metadata: the 1.1.0 wheel's runtime version says 0.1.19.
+# Match the imported file too, so a stale installed wheel cannot relax source tests.
+try:
+    CORE_DISTRIBUTION = distribution("fi-instrumentation-otel")
+except PackageNotFoundError:
+    LEGACY_CORE = False
+else:
+    LEGACY_CORE = CORE_DISTRIBUTION.version == "1.1.0" and (
+        Path(fi_instrumentation.__file__).resolve()
+        == Path(CORE_DISTRIBUTION.locate_file("fi_instrumentation/__init__.py")).resolve()
+    )
 
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
@@ -101,7 +114,10 @@ def _assert_export(
     assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     # A successful response overrides the request model, including on streams.
     assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
-    if hide_inputs:
+    # The CI compatibility cell pins core 1.1.0, before hide_inputs also hid
+    # invocation parameters. Require the sentinel on the repaired core; only
+    # that historical release retains the JSON contract in masked cases.
+    if hide_inputs and not LEGACY_CORE:
         assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
     else:
         parameters = json.loads(attrs["gen_ai.request.parameters"])

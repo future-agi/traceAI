@@ -1,6 +1,7 @@
 """Recipe contracts: mocked vendor traffic and guarded loopback subprocesses."""
 
 import json
+from importlib.metadata import PackageNotFoundError, distribution
 import os
 import re
 import socket
@@ -40,6 +41,18 @@ from _fake_openai import (
 # They also omit gen_ai.request.model on streamed and failed calls, where later
 # versions record the requested model. Accept both so this recipe passes on either version.
 PROVIDER_NAMES = ("openai", "anannas")
+
+# Use distribution metadata: the 1.1.0 wheel's runtime version says 0.1.19.
+# Match the imported file too, so a stale installed wheel cannot relax source tests.
+try:
+    CORE_DISTRIBUTION = distribution("fi-instrumentation-otel")
+except PackageNotFoundError:
+    LEGACY_CORE = False
+else:
+    LEGACY_CORE = CORE_DISTRIBUTION.version == "1.1.0" and (
+        Path(fi_instrumentation.__file__).resolve()
+        == Path(CORE_DISTRIBUTION.locate_file("fi_instrumentation/__init__.py")).resolve()
+    )
 
 RECIPE = Path(__file__).resolve().parents[1]
 VENDOR_KEY = "placeholder-anannas-key"
@@ -146,7 +159,10 @@ def assert_export(receiver, project):
 
 
 def assert_parameters(attrs, *, stream=False, hide_inputs=False):
-    if hide_inputs:
+    # The CI compatibility cell pins core 1.1.0, before hide_inputs also hid
+    # invocation parameters. Require the sentinel on the repaired core; only
+    # that historical release retains the JSON contract in masked cases.
+    if hide_inputs and not LEGACY_CORE:
         assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
     else:
         params = json.loads(attrs["gen_ai.request.parameters"])
