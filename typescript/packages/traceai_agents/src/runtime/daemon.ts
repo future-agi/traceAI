@@ -9,7 +9,7 @@ import { randomInt } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { frame } from "@traceai/agent-core/client";
-import { minimize } from "@traceai/agent-core";
+import { minimize, type CanonicalFact } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
 import { loadConfig, type Paths, type Config } from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
@@ -20,6 +20,7 @@ import {
 } from "../security/credentials.js";
 import { exportBytes, retryDelay } from "../export/http.js";
 import { StorageClient } from "./storage-client.js";
+import { NativeSessions } from "./native.js";
 export class Runtime {
   private storage!: StorageClient;
   private admissionPaused = false;
@@ -35,6 +36,11 @@ export class Runtime {
   private ingressBytes = 0;
   private lastDurableAck: number | null = null;
   private statusCache: unknown = { state: "unknown", persistence: "unknown" };
+  private readonly native = new NativeSessions((id) => this.nativeSource(id));
+  private readonly nativeAcks = new Map<
+    string,
+    { epoch: number; at: number }
+  >();
   constructor(
     private readonly paths: Paths,
     private readonly childEntry: string,
@@ -51,6 +57,7 @@ export class Runtime {
     this.storage = new StorageClient(this.childEntry, () => {
       // Loss of the crash-released storage lock also revokes this sender.
       this.stopped = true;
+      void this.native.revoke();
       this.controller?.abort();
       this.server?.close();
       if (this.timer) clearInterval(this.timer);
@@ -124,6 +131,16 @@ export class Runtime {
       this.registry.get(route.agent, route.surface);
       await this.storage.call("validateRoute", route.route);
     }
+    for (const id of Object.keys(this.config.routes)) {
+      // A change to one route cannot kill another route's live producer.
+      if (
+        this.nativeSignature(this.config, id) !==
+        this.nativeSignature(config, id)
+      ) {
+        await this.native.revoke(id);
+        this.nativeAcks.delete(id);
+      }
+    }
     for (const route of Object.values(config.routes))
       await this.storage.call("route", route.route);
     this.config = config;
@@ -175,6 +192,88 @@ export class Runtime {
         );
     });
   }
+  private captureRoute(id: string, epoch?: number) {
+    const route = this.config.routes[id];
+    if (
+      !route?.route.enabled ||
+      this.stopped ||
+      this.controlOnly ||
+      this.admissionPaused ||
+      (epoch !== undefined && route.route.epoch !== epoch)
+    )
+      throw new AgentError("HELD_DISABLED", 3);
+    return route;
+  }
+  private async admit(id: string, fact: CanonicalFact) {
+    const route = this.captureRoute(id);
+    enforceCapability(
+      fact,
+      this.registry.get(route.agent, route.surface).capability,
+    );
+    const result = await this.storage.call("admit", {
+      route: id,
+      fact: minimize(fact, route.route.policy),
+    });
+    this.lastDurableAck = Date.now();
+    return {
+      protocol_version: 1,
+      durable: true,
+      reason_code: result.duplicate ? "DUPLICATE" : "COMMITTED",
+      receipt_id: result.receipt_id,
+    };
+  }
+  private nativeSignature(config: Config, id: string): string {
+    const route = config.routes[id];
+    return JSON.stringify([route, route && config.profiles[route.profile]]);
+  }
+  private async nativeSource(id: string) {
+    const route = this.captureRoute(id);
+    const signature = this.nativeSignature(this.config, id);
+    const adapter = this.registry.get(route.agent, route.surface);
+    // The control socket is not an escape hatch around CLI qualification holds.
+    if (adapter.activationHolds?.length)
+      throw new AgentError(adapter.activationHolds[0], 5);
+    if (!adapter.capability.native || adapter.capability.schemas.length !== 1)
+      throw new AgentError("UNSUPPORTED_NATIVE_PROFILE", 5);
+    const profile = this.config.profiles[route.profile];
+    if (
+      !profile ||
+      profile.removed ||
+      JSON.stringify(profile.binding) !== JSON.stringify(route.route.binding)
+    )
+      throw new AgentError("HELD_AUTH", 3);
+    const store =
+      profile.storage === "file"
+        ? new FileSecretStore(this.paths.credentials)
+        : new OSSecretStore();
+    // Local capture needs only the binding identity key. Upstream-auth holds
+    // affect export, as for socket observations, not admission.
+    const identityKey = (await store.get(profile.credentialRef))?.identity_key;
+    if (!identityKey || !/^[a-f0-9]{64}$/.test(identityKey))
+      throw new AgentError("HELD_IDENTITY_KEY", 3);
+    const epoch = route.route.epoch;
+    this.captureRoute(id, epoch);
+    return {
+      adapter,
+      context: {
+        identityKey: Buffer.from(identityKey, "hex"),
+        policyRevision: route.route.policy.revision,
+        sourceSchema: adapter.capability.schemas[0],
+      },
+      check: () => {
+        this.captureRoute(id, epoch);
+        if (signature !== this.nativeSignature(this.config, id))
+          throw new AgentError("HELD_NATIVE_SESSION", 3);
+      },
+      admit: async (fact: CanonicalFact) => {
+        this.captureRoute(id, epoch);
+        const result = await this.admit(id, fact);
+        // Receipt means a real source event was durably admitted, never installed=activated.
+        this.nativeAcks.set(id, { epoch, at: Date.now() });
+        return result;
+      },
+    };
+  }
   private async fence(): Promise<void> {
     this.controller?.abort();
     await this.exporting;
@@ -190,31 +289,15 @@ export class Runtime {
     // The short timer bounds incomplete ingress, not a complete administrative
     // operation. Flush replaces this bound with its validated caller deadline.
     socket.setTimeout(15_000);
-    if (m.operation === "observe") {
-      const route = this.config.routes[m.route_ref];
-      if (
-        !route ||
-        !route.route.enabled ||
-        this.stopped ||
-        this.controlOnly ||
-        this.admissionPaused
-      )
-        throw new AgentError("HELD_DISABLED", 3);
-      enforceCapability(
-        m.fact,
-        this.registry.get(route.agent, route.surface).capability,
-      );
-      const result = await this.storage.call("admit", {
-        route: m.route_ref,
-        fact: minimize(m.fact, route.route.policy),
-      });
-      this.lastDurableAck = Date.now();
-      return {
-        protocol_version: 1,
-        durable: true,
-        reason_code: result.duplicate ? "DUPLICATE" : "COMMITTED",
-        receipt_id: result.receipt_id,
-      };
+    if (m.operation === "observe") return this.admit(m.route_ref, m.fact);
+    if (m.operation === "native-open") return this.native.open(m.route);
+    if (m.operation === "native-renew") {
+      this.native.renew(m.id);
+      return { code: 0 };
+    }
+    if (m.operation === "native-close") {
+      await this.native.close(m.id);
+      return { code: 0 };
     }
     if (m.operation === "status")
       return {
@@ -230,7 +313,16 @@ export class Runtime {
           agent: r.agent,
           surface: r.surface,
           enabled: r.route.enabled,
-          activation: r.activation,
+          activation: {
+            ...r.activation,
+            activated:
+              r.activation.activated ||
+              this.nativeAcks.get(r.route.id)?.epoch === r.route.epoch,
+          },
+          native: {
+            active_sessions: this.native.count(r.route.id),
+            last_durable_ack: this.nativeAcks.get(r.route.id)?.at ?? null,
+          },
           policy: r.route.policy.revision,
           export:
             r.route.binding.backendContract === "immutable-agent-v1"
@@ -283,6 +375,7 @@ export class Runtime {
       const r = this.config.routes[m.route];
       if (!r) throw new AgentError("UNKNOWN_ROUTE", 3);
       r.route.enabled = false;
+      await this.native.revoke(m.route);
       await this.fence();
       await this.storage.call("disable", m.route);
       r.route.epoch = (await this.storage.call("getRoute", m.route)).epoch;
@@ -432,6 +525,7 @@ export class Runtime {
   }
   private async shutdown(): Promise<void> {
     this.stopped = true;
+    await this.native.revoke();
     if (this.timer) clearInterval(this.timer);
     this.controller?.abort();
     const closed = this.server?.listening

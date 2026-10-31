@@ -354,7 +354,11 @@ for (const type of ["application/json", "application/x-protobuf"])
         token: "synthetic-loopback-only",
         normalize: (_span, envelope) => normalizeCopilotCli(envelope, context),
         admit: async (f) => {
-          if (reject) throw new Error("synthetic rejection");
+          if (reject)
+            throw new (require("../dist/src/security/files.js").AgentError)(
+              "HELD_IMMUTABLE_CONFLICT",
+              3,
+            );
           received.push(f);
         },
       });

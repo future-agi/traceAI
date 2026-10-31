@@ -278,8 +278,9 @@ const inactive = {
 };
 export const copilotCliAdapter: Adapter = {
   capability,
-  // CLI 1.0.98 documents one endpoint for traces AND metrics. The foundation
-  // accepts traces only; we must not redirect/drop another signal or vendor.
+  // CLI 1.0.98 supports distinct trace and metric endpoints. Routing alone is
+  // not qualification of managed-policy/header precedence or a safe launch.
+  // Keep public activation held; the common leased receiver is not that proof.
   activationHolds: [
     "COPILOT_SIGNAL_ISOLATION_UNQUALIFIED",
     "COPILOT_EFFECTIVE_MANAGED_SETTINGS_UNQUALIFIED",

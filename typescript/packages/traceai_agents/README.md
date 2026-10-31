@@ -46,6 +46,12 @@ Disabling a route stops admission and holds queued records instead of silently d
 
 An unowned native destination is a conflict by default. Do not replace a generic logs/metrics/traces endpoint with a traces-only receiver. External collector fan-out requires an independently validated configuration; this runtime does not relay another vendor's credentials or claim delivery to that vendor.
 
+For a qualified native adapter, `run` asks the runtime for a short-lived loopback traces receiver. The receiver runs inside the runtime process, never receives Future AGI credentials, and admits only the adapter's fixed source schema. Disable, configuration refresh and runtime stop revoke these receivers; a killed launcher's lease expires. A native source event counts as activation only after it is durably committed locally.
+
+The per-launch capability is passed to the agent in a trace-specific header variable. Tools and subprocesses started by that agent inherit it. It grants access only to that loopback lease, but it is not a sandbox against other same-user processes.
+
+If the local runtime is unavailable or holds the route, `run` starts the agent without managed trace variables and returns the agent's own exit status or signal. Routes that are not enabled, unsupported profiles and destination conflicts refuse before launch. Bundled Copilot CLI and VS Code profiles remain qualification-only and cannot use this path yet.
+
 ## Compatibility
 
 Node 22.16–22.x and 24.x are supported runtime lines. Windows activation is held. The SQLite binding is pinned; an unqualified SQLite engine is refused rather than substituted.

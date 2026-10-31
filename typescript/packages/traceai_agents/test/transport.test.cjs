@@ -5,6 +5,7 @@ const { exportBytes, retryDelay } = require("../dist/src/export/http.js");
 const { validateBinding } = require("../dist/src/export/endpoint.js");
 const {
   encodeResponse,
+  decodeNativeId,
   decodeTraces,
   encodeFacts,
 } = require("../dist/src/export/otlp.js");
@@ -225,10 +226,10 @@ for (const type of ["application/json", "application/x-protobuf"])
       const s = await startReceiver({
         coexistence: { state: "owned-or-none" },
         singleUserApproved: true,
-        normalize: (span) =>
+        normalize: (span, envelope) =>
           facts.find(
             (f) =>
-              Buffer.from(span.spanId, "base64").toString("hex") === f.spanId,
+              decodeNativeId(span.spanId, 8, envelope.idEncoding) === f.spanId,
           ),
         admit: async (f) => {
           if (fail && f.sourceWorkId === second.sourceWorkId) {
@@ -241,14 +242,18 @@ for (const type of ["application/json", "application/x-protobuf"])
       });
       t.after(() => new Promise((r) => s.close(r)));
       const wire = encodeFacts(facts, binding(s), "0.1.0");
+      const json = decodeTraces(wire);
+      for (const resource of json.resourceSpans)
+        for (const scope of resource.scopeSpans)
+          for (const span of scope.spans)
+            for (const key of ["traceId", "spanId", "parentSpanId"])
+              if (span[key])
+                span[key] = Buffer.from(span[key], "base64").toString("hex");
       const send = () =>
         fetch(binding(s).endpoint, {
           method: "POST",
           headers: { "content-type": type },
-          body:
-            type === "application/json"
-              ? JSON.stringify(decodeTraces(wire))
-              : wire,
+          body: type === "application/json" ? JSON.stringify(json) : wire,
         });
       const first = await send();
       assert.equal(first.status, 503);

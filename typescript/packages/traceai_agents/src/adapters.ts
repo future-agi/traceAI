@@ -49,6 +49,9 @@ export interface Adapter {
     executable: string;
     env: Record<string, string>;
     args: readonly string[];
+    /** Request a runtime-owned per-launch receiver after effective native policy
+     * and trace-specific headers/endpoints are qualified. Not an activation bypass. */
+    native?: boolean;
   }>;
   import?(bytes: Buffer, context: NormalizeContext): readonly CanonicalFact[];
 }

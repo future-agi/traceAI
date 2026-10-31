@@ -12,7 +12,15 @@
       "COPILOT_SIGNAL_ISOLATION_UNQUALIFIED",
       "COPILOT_EFFECTIVE_MANAGED_SETTINGS_UNQUALIFIED"
     ],
-    "transport": "Native file-exporter fixture converted to OTLP JSON; HTTP JSON and protobuf tested with synthetic sends, not a real CLI run",
+    "transport": "CLI 1.0.98 real loopback-only synthetic turns establish separate trace/metric endpoint routing; OTEL_METRICS_EXPORTER=none does not disable metrics. JSON/protobuf normalization and local replay are tested. Effective enterprise telemetry policy and authentication precedence remain unqualified; this is not installed managed capture.",
+    "runtime_lifecycle": "Runtime-owned short-lived trace receivers, same-UID scoped local header capabilities, durable activation receipts, bounded lease renewal/expiry and disable/stop revocation are implemented. The common managed launcher preserves coding status and strips FI credentials. The public Copilot adapter remains held pending source-specific launch/policy qualification.",
+    "remaining_activation_gap": [
+      "No Copilot launch() is shipped. CLI 1.0.98 activates OTel only through COPILOT_OTEL_ENABLED=true, OTEL_EXPORTER_OTLP_ENDPOINT or COPILOT_OTEL_FILE_EXPORTER_PATH; a traces endpoint alone is not a documented activator, and COPILOT_OTEL_ENABLED is deliberately not in the generic trace-only overlay allowlist.",
+      "Activation also enables metrics. OTEL_METRICS_EXPORTER=none still emitted metrics in real 1.0.98 runs, and there is no tested source setting that disables them; without an approved destination they would fall back to the default OTLP endpoint. This is the signal-isolation hold.",
+      "Effective-destination preflight must also cover COPILOT_OTEL_FILE_EXPORTER_PATH, COPILOT_OTEL_EXPORTER_TYPE, generic/per-signal headers and certificates, not only the generic and traces endpoint variables.",
+      "Built-in help says enterprise managed telemetry settings can enable OTel, but documents neither their location nor precedence over environment variables. This is the managed-settings hold."
+    ],
+    "local_capability_scope": "The per-launch bearer is delivered in OTEL_EXPORTER_OTLP_TRACES_HEADERS and is inherited by shell, MCP and other processes Copilot starts. It authorizes only that loopback lease; same-user processes are outside this boundary and it is not an upstream key or sandbox.",
     "service_name": "github-copilot",
     "scope_name": "github.copilot",
     "summary_operations": ["invoke_agent"],
@@ -47,7 +55,7 @@
   "backend": {
     "required_contract": "immutable-agent-v1",
     "related_pr": "https://github.com/future-agi/future-agi/pull/3689",
-    "inspected_head": "07cc82a32b24ebff8c43b5cedd427703aca0687b",
+    "inspected_head": "10d3ce08f7d20543e6f77c0fb9725cd423ccd2b6",
     "compatible_aggregation_rules": [
       "Only native chat spans own additive request usage",
       "invoke_agent including subagents/wrappers has contribution=none, no standard usage or cost and no request count",
@@ -55,7 +63,7 @@
       "Summary and multiplier fields never feed fallback pricing or usage reducers",
       "Unknown cost is absent, never explicit zero"
     ],
-    "release_hold": "PR 3689 intentionally rejects reserved immutable identity/plan fields with FI_IMMUTABLE_ADMISSION_UNAVAILABLE. It also holds unsupported cache/reasoning pricing with FI_COST_COVERAGE_UNAVAILABLE when no complete reported cost exists. The new runtime profile cannot be exported to that backend yet. Do not remove identity fields or approve a fabricated capability manifest to bypass the hold.",
+    "release_hold": "PR 3689 intentionally rejects additive contribution and reserved immutable identity/plan fields with FI_IMMUTABLE_ADMISSION_UNAVAILABLE. Its newer head removed the standalone detailed-cost ingestion hold, not the immutable-admission hold. The new runtime profile cannot be exported to that backend yet. Do not remove identity fields or approve a fabricated capability manifest to bypass the hold.",
     "remaining_acceptance": "Immutable admission, immediate unique reads across all reducers/exports, cache-aware pricing, real staging persistence and UI verification"
   },
   "sources": [
