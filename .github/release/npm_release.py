@@ -102,6 +102,9 @@ def verify(root: Path, packages: list[dict], dist: Path, smoke: Path, *, offline
                        cwd=directory, env=env, check=True)
         subprocess.run(["node", "--input-type=module", "-e", "import(process.env.NAME).then(m => console.log('import ok:', Object.keys(m).length, 'exports'))"],
                        cwd=directory, env=env, check=True)
+        if package["name"] in {"@traceai/agent-core", "@traceai/agents"}:
+            subprocess.run(["node", str(root / ".github/release/agent_smoke.cjs"), str(directory), package["name"]],
+                           cwd=directory, env=env, check=True)
 
 
 def wait_until_served(name: str, version: str) -> None:

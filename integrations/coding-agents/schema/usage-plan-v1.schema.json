@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Usage plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "turn_work_id",
+    "plan_id",
+    "choice"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "turn_work_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "choice": {
+      "enum": [
+        "request",
+        "attempt",
+        "turn",
+        "unknown"
+      ]
+    }
+  }
+}

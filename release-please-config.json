@@ -890,6 +890,16 @@
           "section": "Documentation"
         }
       ]
+    },
+    "typescript/packages/traceai_agent_core": {
+      "release-type": "node",
+      "component": "traceai-agent-core",
+      "package-name": "@traceai/agent-core"
+    },
+    "typescript/packages/traceai_agents": {
+      "release-type": "node",
+      "component": "traceai-agents",
+      "package-name": "@traceai/agents"
     }
   }
 }
