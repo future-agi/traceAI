@@ -1,79 +1,83 @@
-"""
-TraceAI MongoDB Instrumentation
-
-Provides OpenTelemetry instrumentation for MongoDB Atlas Vector Search operations.
-"""
+"""MongoDB command tracing with metadata-only Atlas Vector Search enrichment."""
 
 import logging
 from typing import Any, Collection
 
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from wrapt import wrap_function_wrapper
+# Upstream marks the entire instrumentor module with a mypy ignore.
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore[attr-defined]
+from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+from opentelemetry.trace import Status, StatusCode
 
-from traceai_mongodb.version import __version__
+from traceai_mongodb._attributes import request_hook, response_hook, failed_hook
 from traceai_mongodb.package import _instruments
-from traceai_mongodb._wrappers import (
-    AggregateWrapper,
-    InsertOneWrapper,
-    InsertManyWrapper,
-    UpdateOneWrapper,
-    UpdateManyWrapper,
-    DeleteOneWrapper,
-    DeleteManyWrapper,
-    FindWrapper,
-    FindOneWrapper,
-)
+from traceai_mongodb.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
 class MongoDBInstrumentor(BaseInstrumentor):
-    """OpenTelemetry instrumentor for MongoDB Atlas Vector Search."""
+    """Delegate command lifetimes to OpenTelemetry's maintained PyMongo listener.
 
-    __slots__ = ("_originals",)
+    Instrument before constructing sync or async clients. No Collection methods
+    are patched and no cursors, pipelines or document iterables are consumed.
+    Query payloads and server error messages are not recorded.
+    """
+
+    _owns_native = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
+        native = PymongoInstrumentor()
+        if native.is_instrumented_by_opentelemetry:
+            self._owns_native = False
+            logger.warning(
+                "PyMongo tracing is already enabled; retaining its configuration "
+                "without traceAI vector enrichment. Enable only one instrumentor."
+            )
+            return
 
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
-
-        self._originals = {}
-
-        try:
-            from pymongo.collection import Collection as MongoCollection
-
-            self._originals["aggregate"] = MongoCollection.aggregate
-            self._originals["insert_one"] = MongoCollection.insert_one
-            self._originals["insert_many"] = MongoCollection.insert_many
-            self._originals["update_one"] = MongoCollection.update_one
-            self._originals["update_many"] = MongoCollection.update_many
-            self._originals["delete_one"] = MongoCollection.delete_one
-            self._originals["delete_many"] = MongoCollection.delete_many
-            self._originals["find"] = MongoCollection.find
-            self._originals["find_one"] = MongoCollection.find_one
-
-            wrap_function_wrapper("pymongo.collection", "Collection.aggregate", AggregateWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.insert_one", InsertOneWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.insert_many", InsertManyWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.update_one", UpdateOneWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.update_many", UpdateManyWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.delete_one", DeleteOneWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.delete_many", DeleteManyWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.find", FindWrapper(tracer))
-            wrap_function_wrapper("pymongo.collection", "Collection.find_one", FindOneWrapper(tracer))
-
-            logger.debug("MongoDB instrumentation enabled")
-        except ImportError as e:
-            logger.warning(f"Could not instrument MongoDB: {e}")
+        provider = kwargs.get("tracer_provider")
+        native.instrument(
+            tracer_provider=provider,
+            request_hook=request_hook,
+            response_hook=response_hook,
+            failed_hook=failed_hook,
+            capture_statement=False,
+        )
+        # PyMongo has no unregister API. Upstream reuses its listener on enable,
+        # but ignores new providers/hooks. Rebind that SAME listener so existing
+        # clients work after reconfiguration without registering duplicate spans.
+        # These upstream lifecycle internals are covered at our dependency floor
+        # and current version; all command tracking remains upstream-owned.
+        listener = native._commandtracer_instance
+        if listener is None or not native.is_instrumented_by_opentelemetry:
+            raise RuntimeError("OpenTelemetry PyMongo instrumentation could not be enabled")
+        listener._tracer = trace_api.get_tracer(__name__, __version__, provider)
+        listener.start_hook = request_hook
+        listener.success_hook = response_hook
+        listener.failed_hook = failed_hook
+        listener.capture_statement = False
+        self._owns_native = True
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        pass
+        if not self._owns_native:
+            return
+        native = PymongoInstrumentor()
+        native.uninstrument()
+        listener = native._commandtracer_instance
+        # Disabled upstream listeners ignore completion events. End outstanding
+        # commands once rather than retaining spans across a later enable cycle.
+        if listener is not None:
+            pending = list(listener._span_dict.values())
+            listener._span_dict.clear()
+            for span in pending:
+                span.set_status(Status(StatusCode.ERROR, "Instrumentation disabled before command completed"))
+                span.end()
+        self._owns_native = False
 
 
 __all__ = ["MongoDBInstrumentor", "__version__"]

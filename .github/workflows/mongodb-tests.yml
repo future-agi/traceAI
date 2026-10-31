@@ -1,0 +1,70 @@
+name: MongoDB compatibility
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/mongodb-vector/**'
+      - '.github/workflows/mongodb-tests.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/mongodb-vector/**'
+      - '.github/workflows/mongodb-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compatibility:
+    name: PyMongo ${{ matrix.pymongo }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.9'
+            pymongo: '4.6.0'
+            instrumentation: '0.59b0'
+            otel: '1.38.0'
+          - python: '3.10'
+            pymongo: '4.6.0'
+            instrumentation: '0.66b2'
+            otel: '1.45.2'
+          - python: '3.13'
+            pymongo: '4.19.0'
+            instrumentation: '0.66b2'
+            otel: '1.45.2'
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install ./python/frameworks/mongodb-vector \
+            'pymongo==${{ matrix.pymongo }}' \
+            'opentelemetry-instrumentation-pymongo==${{ matrix.instrumentation }}' \
+            'opentelemetry-sdk==${{ matrix.otel }}' \
+            'opentelemetry-exporter-otlp-proto-http==${{ matrix.otel }}' \
+            'pytest>=8,<9' 'mockupdb==1.8.1' 'mypy>=1.11,<2' build
+      - name: Check package types
+        run: python -m mypy --follow-imports=silent --ignore-missing-imports python/frameworks/mongodb-vector/traceai_mongodb
+      - name: Test with outbound networking disabled
+        run: |
+          sudo unshare --net bash -c '
+            ip link set lo up
+            exec "$1" -I -m pytest "$2" -q
+          ' _ "$(command -v python)" "$GITHUB_WORKSPACE/python/frameworks/mongodb-vector/tests"
+      - name: Build wheel and sdist
+        run: python -m build python/frameworks/mongodb-vector
