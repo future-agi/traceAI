@@ -143,6 +143,7 @@ def _assert_vendor_request(request, streamed=False, prompt=None, requested_model
     assert str(request.url) == app.DEFAULT_BASE_URL + "/responses"
     assert request.method == "POST"
     assert request.headers["authorization"] == f"Bearer {VENDOR_KEY}"
+    assert request.headers.get_list("x-pplx-integration") == ["traceai"]
     assert "x-api-key" not in request.headers
     assert "x-secret-key" not in request.headers
     assert FI_KEY not in json.dumps(dict(request.headers))
@@ -215,6 +216,7 @@ def test_make_client_overrides_and_missing_key(monkeypatch):
     with app.make_client() as client:
         assert str(client.base_url) == "http://127.0.0.1:1234/v1/"
         assert client.api_key == VENDOR_KEY
+        assert "x-pplx-integration" not in {key.lower() for key in client.default_headers}
     with app.make_client(base_url=app.DEFAULT_BASE_URL, api_key="placeholder-explicit-key") as client:
         assert str(client.base_url) == app.DEFAULT_BASE_URL + "/"
         assert client.api_key == "placeholder-explicit-key"
