@@ -371,8 +371,9 @@ TraceConfig config = TraceConfig.builder()
     .apiKey("your-api-key")
     .projectName("my-project")
     .serviceName("my-service")
-    .hideInputs(false)        // Set to true to hide input values
-    .hideOutputs(false)       // Set to true to hide output values
+    .hideInputs(false)        // Hide input values, raw input and input messages
+    .hideOutputs(false)       // Hide output values, raw output and output messages
+    .hideErrorDetails(false)  // Hide error messages, stack traces and status descriptions
     .enableConsoleExporter(false)  // Set to true for local debugging
     .batchSize(512)           // Span batch size
     .exportIntervalMs(5000)   // Export interval in ms
@@ -381,14 +382,40 @@ TraceConfig config = TraceConfig.builder()
 TraceAI.init(config);
 ```
 
+### Privacy controls
+
+To suppress input/output content and exception details recorded by `FITracer`, configure all three controls:
+
+```java
+TraceConfig config = TraceConfig.builder()
+    .hideInputs(true)
+    .hideOutputs(true)
+    .hideErrorDetails(true)
+    .build();
+```
+
+- `hideInputs` suppresses input values, raw input and input messages. In Cohere it also suppresses the preamble and rerank query.
+- `hideOutputs` suppresses output values, raw output and output messages. In Cohere it also suppresses generated tool-call names and arguments.
+- `hideInputMessages` and `hideOutputMessages` suppress only message attributes (including Cohere's preamble and tool calls respectively). They do not suppress values or raw payloads, which can contain the same content. Setting a message flag to `false` cannot override `hideInputs(true)` or `hideOutputs(true)`.
+- `hideErrorDetails` suppresses `error.message`, exception messages, exception stack traces and ERROR status descriptions written by `FITracer.setError`, including errors from Cohere chat, embed and rerank. ERROR status, `error.type` and an exception event containing `exception.type` remain available.
+
+Error-detail hiding is opt-in in Java: it defaults to `false`, independently of the input/output flags. Set `FI_HIDE_ERROR_DETAILS=true` to enable it through the environment; an explicit `.hideErrorDetails(true)` or `.hideErrorDetails(false)` overrides the environment. As with Python's `FI_HIDE_ERROR_DETAILS`, enabling it removes message/stack-trace details while preserving error types; Java does not derive this option from the content flags.
+
+These controls govern the tracing helpers and the Cohere content fields described above, not arbitrary attributes or events written directly to an OpenTelemetry span by your application or another instrumentor. Do not attach sensitive content directly to spans.
+
 ### Environment Variables
 
 ```bash
-export TRACEAI_BASE_URL=https://api.futureagi.com
-export TRACEAI_API_KEY=your-api-key
-export TRACEAI_PROJECT_NAME=my-project
+export FI_BASE_URL=https://api.futureagi.com
+export FI_API_KEY=your-api-key
+export FI_SECRET_KEY=your-secret-key
+export FI_PROJECT_NAME=my-project
+export FI_HIDE_ERROR_DETAILS=true
+```
 
-# Then in code:
+Then initialize in Java:
+
+```java
 TraceAI.initFromEnvironment();
 ```
 

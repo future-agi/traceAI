@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced streaming support
 - Performance optimizations
 
+### Java privacy controls
+- `hideInputs` and `hideOutputs` now also suppress their corresponding messages recorded by `FITracer`, even when the separate message flags are false.
+- Add opt-in `hideErrorDetails` / `FI_HIDE_ERROR_DETAILS` (default off) to omit error messages, exception stack traces and ERROR status descriptions while retaining error types and a sanitized exception event.
+- Cohere tracing honors input/output privacy controls for preambles, rerank queries and generated tool calls, and uses the core error-detail policy for chat, embed and rerank failures.
+
 ---
 
 ## [2026-10-18]
