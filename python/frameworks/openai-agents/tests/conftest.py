@@ -2,7 +2,7 @@ from typing import Iterator
 
 import pytest
 from traceai_openai_agents import OpenAIAgentsInstrumentor
-from traceai_openai import OpenAIInstrumentor
+from agents import set_trace_processors, set_tracing_disabled
 
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
@@ -30,8 +30,12 @@ def instrument(
     tracer_provider: trace_api.TracerProvider,
     in_memory_span_exporter: InMemorySpanExporter,
 ) -> Iterator[None]:
-    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+    set_tracing_disabled(False)
     OpenAIAgentsInstrumentor().instrument(tracer_provider=tracer_provider)
-    yield
-    OpenAIInstrumentor().uninstrument()
-    OpenAIAgentsInstrumentor().uninstrument()
+    try:
+        yield
+    finally:
+        # The SDK processor list is global. Never leave a vendor exporter or our
+        # processor installed after an offline test.
+        set_trace_processors([])
+        OpenAIAgentsInstrumentor().uninstrument()

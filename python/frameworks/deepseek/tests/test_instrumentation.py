@@ -35,9 +35,9 @@ class TestChatCompletionRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "deepseek"
-        assert attributes["llm.model"] == "deepseek-chat"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "deepseek"
+        assert attributes["gen_ai.request.model"] == "deepseek-chat"
 
     def test_extract_chat_with_system_message(self):
         """Test extracting chat with system message."""
@@ -55,7 +55,7 @@ class TestChatCompletionRequestAttributesExtractor:
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
         # Should have messages
-        assert any("input_messages" in k for k in extra_attrs.keys())
+        assert any("gen_ai.input.messages" in k for k in extra_attrs.keys())
 
     def test_extract_tools(self):
         """Test extracting tools from request."""
@@ -98,8 +98,8 @@ class TestChatCompletionRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert "llm.invocation_parameters" in attributes
-        params = json.loads(attributes["llm.invocation_parameters"])
+        assert "gen_ai.request.parameters" in attributes
+        params = json.loads(attributes["gen_ai.request.parameters"])
         assert params["temperature"] == 0.7
         assert params["max_tokens"] == 1024
 
@@ -126,8 +126,8 @@ class TestChatCompletionResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.prompt") == 10
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.input_tokens") == 10
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
     def test_extract_response_content(self):
         """Test extracting response content."""
@@ -142,7 +142,11 @@ class TestChatCompletionResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert extra_attrs.get("output.value") == "Paris is the capital."
+        # output.value is the serialized provider response; message text is
+        # also retained separately for display and content-level masking.
+        assert json.loads(extra_attrs["output.value"]) == response
+        assert extra_attrs["gen_ai.output.messages.0.message.content"] == "Paris is the capital."
+        assert extra_attrs["gen_ai.output.messages.0.message.role"] == "assistant"
 
     def test_extract_tool_calls(self):
         """Test extracting tool calls from response."""
@@ -186,9 +190,10 @@ class TestChatCompletionResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        # Cache metrics may be in raw output or specific keys
-        raw_output = extra_attrs.get("raw.output", "")
-        assert "prompt_cache_hit_tokens" in raw_output or any("cache" in k for k in extra_attrs.keys())
+        attributes = dict(extractor.get_attributes(response))
+        assert attributes["deepseek.prompt_cache_hit_tokens"] == 80
+        assert attributes["deepseek.prompt_cache_miss_tokens"] == 20
+        assert json.loads(extra_attrs["output.value"]) == response
 
     def test_extract_reasoning_content_r1(self):
         """Test extracting reasoning content for R1 models."""
@@ -216,10 +221,10 @@ class TestChatCompletionResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        # Reasoning content may be in raw output or specific keys
-        raw_output = extra_attrs.get("raw.output", "")
-        assert extra_attrs.get("deepseek.reasoning_content") == "15% of 240 = 0.15 * 240 = 36" or "reasoning_content" in raw_output
-        assert extra_attrs.get("deepseek.reasoning_tokens") == 30 or "reasoning_tokens" in raw_output
+        attributes = dict(extractor.get_attributes(response))
+        assert extra_attrs["deepseek.reasoning_content"] == "15% of 240 = 0.15 * 240 = 36"
+        assert attributes["deepseek.reasoning_tokens"] == 30
+        assert json.loads(extra_attrs["output.value"]) == response
 
 
 class TestUtils:
@@ -293,9 +298,10 @@ class TestRealWorldScenarios:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Should have 4 messages
-        message_keys = [k for k in extra_attrs.keys() if "input_messages" in k]
-        assert len(message_keys) >= 4
+        for index, message in enumerate(request_params["messages"]):
+            prefix = f"gen_ai.input.messages.{index}"
+            assert extra_attrs[f"{prefix}.message.role"] == message["role"]
+            assert extra_attrs[f"{prefix}.message.content"] == message["content"]
 
     def test_deepseek_reasoner_attributes(self):
         """Test attributes for DeepSeek Reasoner (R1) model."""
@@ -311,7 +317,7 @@ class TestRealWorldScenarios:
             ],
         }
         req_attrs = dict(req_extractor.get_attributes_from_request(request_params))
-        assert req_attrs["llm.model"] == "deepseek-reasoner"
+        assert req_attrs["gen_ai.request.model"] == "deepseek-reasoner"
 
         # Response with reasoning
         resp_extractor = _ChatCompletionResponseAttributesExtractor()
@@ -338,10 +344,9 @@ class TestRealWorldScenarios:
         resp_attrs = dict(resp_extractor.get_attributes(response))
         extra_attrs = dict(resp_extractor.get_extra_attributes(response, {}))
 
-        # Reasoning content may be in raw output or specific keys
-        raw_output = extra_attrs.get("raw.output", "")
-        assert extra_attrs.get("deepseek.reasoning_content") is not None or "reasoning_content" in raw_output
-        assert extra_attrs.get("deepseek.reasoning_tokens") == 40 or "reasoning_tokens" in raw_output
+        assert extra_attrs["deepseek.reasoning_content"] == response["choices"][0]["message"]["reasoning_content"]
+        assert resp_attrs["deepseek.reasoning_tokens"] == 40
+        assert json.loads(extra_attrs["output.value"]) == response
 
     def test_function_calling_flow(self):
         """Test function calling flow attributes."""
@@ -417,9 +422,9 @@ class TestRealWorldScenarios:
             },
         }
         attrs1 = dict(extractor.get_extra_attributes(response1, {}))
-        raw_output1 = attrs1.get("raw.output", "")
-        assert attrs1.get("deepseek.prompt_cache_miss_tokens") == 100 or "prompt_cache_miss_tokens" in raw_output1
-        assert attrs1.get("deepseek.prompt_cache_hit_tokens") == 0 or "prompt_cache_hit_tokens" in raw_output1
+        raw_output1 = json.loads(attrs1["output.value"])
+        assert raw_output1["usage"]["prompt_cache_miss_tokens"] == 100
+        assert raw_output1["usage"]["prompt_cache_hit_tokens"] == 0
 
         # Second request - cache hit
         response2 = {
@@ -432,6 +437,6 @@ class TestRealWorldScenarios:
             },
         }
         attrs2 = dict(extractor.get_extra_attributes(response2, {}))
-        raw_output2 = attrs2.get("raw.output", "")
-        assert attrs2.get("deepseek.prompt_cache_hit_tokens") == 90 or "prompt_cache_hit_tokens" in raw_output2
-        assert attrs2.get("deepseek.prompt_cache_miss_tokens") == 10 or "prompt_cache_miss_tokens" in raw_output2
+        raw_output2 = json.loads(attrs2["output.value"])
+        assert raw_output2["usage"]["prompt_cache_hit_tokens"] == 90
+        assert raw_output2["usage"]["prompt_cache_miss_tokens"] == 10

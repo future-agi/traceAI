@@ -32,6 +32,8 @@ class _RequestAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
+        if model := request_parameters.get("model"):
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         try:
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters)
 

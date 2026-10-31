@@ -11,7 +11,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>ai.traceai.examples</groupId>
+    <groupId>com.futureagi.examples</groupId>
     <artifactId>arconia-example</artifactId>
     <version>1.0.0</version>
     <name>TraceAI Arconia Example</name>
