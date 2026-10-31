@@ -11,7 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { frame } from "@traceai/agent-core/client";
 import { minimize, type CanonicalFact } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
-import { loadConfig, type Paths, type Config } from "../config.js";
+import { configTransaction, loadConfig, type Paths, type Config } from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
 import {
   FileSecretStore,
@@ -126,7 +126,28 @@ export class Runtime {
     throw new AgentError("RUNTIME_UNAVAILABLE");
   }
   private async refresh(): Promise<void> {
-    const config = loadConfig(this.paths);
+    let config = loadConfig(this.paths);
+    // A crash between the durable disable fence and config commit must never
+    // revive admission, nor prevent the runtime from starting for other routes.
+    for (const [id, installed] of Object.entries(config.routes)) {
+      let durable;
+      try {
+        durable = await this.storage.call("getRoute", id);
+      } catch (e) {
+        if (e instanceof AgentError && e.code === "UNKNOWN_ROUTE") continue;
+        throw e;
+      }
+      if (!durable.enabled && durable.epoch > installed.route.epoch) {
+        await configTransaction(this.paths, async (current) => {
+          const route = current.routes[id];
+          if (route && route.route.epoch < durable.epoch) {
+            route.route.enabled = false;
+            route.route.epoch = durable.epoch;
+          }
+        });
+        config = loadConfig(this.paths);
+      }
+    }
     for (const route of Object.values(config.routes)) {
       this.registry.get(route.agent, route.surface);
       await this.storage.call("validateRoute", route.route);
