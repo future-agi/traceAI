@@ -1,6 +1,14 @@
 # @traceai/anthropic
 
-OpenTelemetry instrumentation for Anthropic's Claude API. This package provides automatic tracing and monitoring for your Anthropic applications.
+OpenTelemetry instrumentation for Anthropic SDKs without built-in tracing. The supported peer dependency is `@anthropic-ai/sdk@^0.27.3`.
+
+## SDKs with native OpenTelemetry
+
+Do not add this legacy instrumentor to SDKs with built-in OpenTelemetry, such as `@anthropic-ai/sdk@1.3.0`. Those SDKs already own their request spans, promise helpers and stream lifecycle. `manuallyInstrument()` leaves them unmodified and logs a diagnostic warning. It does not enable native tracing if you have disabled it.
+
+Configure native SDK tracing through the SDK's `openTelemetry` option and your OpenTelemetry tracer provider. The legacy instrumentor's `traceConfig` and `FI_HIDE_*` controls do **not** apply to native SDK spans. Use the SDK's content controls and your export pipeline's privacy policy instead. See [Anthropic's SDK tracing configuration](https://www.npmjs.com/package/@anthropic-ai/sdk/v/1.3.0#opentelemetry).
+
+The setup below is for the legacy SDK peer dependency only.
 
 ## Installation
 
