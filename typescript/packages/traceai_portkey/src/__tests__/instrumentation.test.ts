@@ -1,221 +1,114 @@
-/**
- * Tests for Portkey instrumentation.
- */
+import { PortkeyInstrumentation, isPatched, _resetPatchedStateForTesting } from '../instrumentation';
+import { VERSION } from '../version';
+import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { context, trace } from '@opentelemetry/api';
+import { isTracingSuppressed, suppressTracing } from '@opentelemetry/core';
 
-import { PortkeyInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
-import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+const exporter = new InMemorySpanExporter();
+const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+provider.register();
+let inst: PortkeyInstrumentation;
+const req = { model: 'test', messages: [] };
+const setup = (create: Function) => {
+  const client = { chat: { completions: { create } } };
+  inst.manuallyInstrument(client);
+  return client.chat.completions;
+};
+beforeEach(() => {
+  exporter.reset();
+  inst = new PortkeyInstrumentation();
+  inst.setTracerProvider(provider);
+});
+afterEach(() => { inst.disable(); _resetPatchedStateForTesting(); });
+afterAll(async () => { await provider.shutdown(); });
 
-describe("PortkeyInstrumentation", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  const instrumentation = new PortkeyInstrumentation();
-  instrumentation.disable();
-  instrumentation.setTracerProvider(tracerProvider);
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  afterAll(() => {
-    instrumentation.disable();
-  });
-
-  describe("VERSION", () => {
-    it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
-    });
-  });
-
-  describe("PortkeyInstrumentation", () => {
-    it("should create instrumentation instance", () => {
-      const inst = new PortkeyInstrumentation();
-      expect(inst).toBeInstanceOf(PortkeyInstrumentation);
-    });
-
-    it("should accept configuration options", () => {
-      const inst = new PortkeyInstrumentation({
-        traceConfig: {
-          hideInputs: true,
-          hideOutputs: true,
-        },
-      });
-      expect(inst).toBeInstanceOf(PortkeyInstrumentation);
-    });
-
-    it("should have instrumentationName", () => {
-      const inst = new PortkeyInstrumentation();
-      expect(inst.instrumentationName).toBe("@traceai/fi-instrumentation-portkey");
-    });
-
-    it("should have instrumentationVersion", () => {
-      const inst = new PortkeyInstrumentation();
-      expect(inst.instrumentationVersion).toBe(VERSION);
-    });
-  });
-
-  describe("isPatched", () => {
-    it("should return false when not patched", () => {
-      instrumentation.disable();
-      expect(isPatched()).toBe(false);
-    });
-  });
-
-  describe("manuallyInstrument", () => {
-    it("should handle null module", () => {
-      const inst = new PortkeyInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      // Should not throw
-      inst.manuallyInstrument(null);
-      expect(true).toBe(true);
-    });
-
-    it("should mark module as patched after manual instrumentation", () => {
-      const inst = new PortkeyInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      const mockModule = { Portkey: {} };
-      inst.manuallyInstrument(mockModule);
-      expect(mockModule).toHaveProperty("_fiPatched", true);
-    });
-  });
-
-  describe("enable/disable", () => {
-    it("should enable instrumentation", () => {
-      const inst = new PortkeyInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-
-    it("should disable instrumentation", () => {
-      const inst = new PortkeyInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      inst.disable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-  });
+it('keeps public instrumentation metadata and rejects empty modules without claiming a patch', () => {
+  expect(inst.instrumentationVersion).toBe(VERSION);
+  expect(inst.instrumentationName).toBe('@traceai/fi-instrumentation-portkey');
+  inst.manuallyInstrument(null);
+  inst.manuallyInstrument({ Portkey: {} });
+  expect(isPatched()).toBe(false);
 });
 
-describe("Portkey Patching", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
+it('preserves synchronous throws and their identity', () => {
+  const error = new Error('synthetic');
+  const resource = setup(() => { throw error; });
+  expect(() => resource.create(req)).toThrow(error);
+  expect(exporter.getFinishedSpans()[0].status.code).toBe(2);
+});
+
+it('keeps parent context, suppresses nested provider instrumentation, and honors suppression', async () => {
+  const parent = provider.getTracer('test').startSpan('parent');
+  let activeId: string | undefined;
+  let suppressed = false;
+  const resource = setup(async () => {
+    await Promise.resolve();
+    activeId = trace.getSpan(context.active())?.spanContext().spanId;
+    suppressed = isTracingSuppressed(context.active());
+    return {};
   });
-  tracerProvider.register();
+  await context.with(trace.setSpan(context.active(), parent), () => resource.create(req));
+  const [span] = exporter.getFinishedSpans();
+  expect(span.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
+  expect(activeId).toBe(span.spanContext().spanId);
+  expect(suppressed).toBe(true);
+  await context.with(suppressTracing(context.active()), () => resource.create(req));
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+  parent.end();
+});
 
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should wrap chat.completions.create when available", () => {
-    const inst = new PortkeyInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCreate = jest.fn().mockResolvedValue({
-      choices: [{ message: { role: "assistant", content: "Hello" } }],
-      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-    });
-
-    const mockModule = {
-      Portkey: {
-        prototype: {
-          chat: {
-            completions: {
-              create: originalCreate,
-            },
-          },
+it('preserves stream class methods, context, return before next and errors', async () => {
+  const error = new Error('stream-failure');
+  let activeId: string | undefined;
+  let closed = false;
+  class Stream {
+    marker() { return 'same-stream-api'; }
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<any>> {
+          activeId = trace.getSpan(context.active())?.spanContext().spanId;
+          throw error;
         },
-      },
-    };
+        async return() { closed = true; return { done: true, value: undefined }; },
+      };
+    }
+  }
+  const resource = setup(async () => new Stream());
+  const stream = await resource.create(req);
+  expect(stream).toBeInstanceOf(Stream);
+  expect(stream.marker()).toBe('same-stream-api');
+  await expect(stream[Symbol.asyncIterator]().next()).rejects.toBe(error);
+  const [span] = exporter.getFinishedSpans();
+  expect(span.status.code).toBe(2);
+  expect(activeId).toBe(span.spanContext().spanId);
+  const fresh = await resource.create(req);
+  await fresh[Symbol.asyncIterator]().return();
+  expect(closed).toBe(true);
+  expect(exporter.getFinishedSpans()).toHaveLength(2);
+});
 
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
+it('bounds streaming content without buffering all chunks', async () => {
+  const resource = setup(async () => (async function* () {
+    for (let i = 0; i < 100; i++) yield { choices: [{ delta: { content: 'x'.repeat(1024) } }] };
+  })());
+  let count = 0;
+  for await (const _ of await resource.create(req)) count++;
+  const [span] = exporter.getFinishedSpans();
+  expect(count).toBe(100);
+  expect(span.attributes['portkey.output_truncated']).toBe(true);
+  expect((span.attributes['output.value'] as string).length).toBe(65536);
+});
 
-  it("should wrap completions.create when available", () => {
-    const inst = new PortkeyInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCreate = jest.fn().mockResolvedValue({
-      choices: [{ text: "Hello world" }],
-    });
-
-    const mockModule = {
-      Portkey: {
-        prototype: {
-          completions: {
-            create: originalCreate,
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap embeddings.create when available", () => {
-    const inst = new PortkeyInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCreate = jest.fn().mockResolvedValue({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-      usage: { prompt_tokens: 5, total_tokens: 5 },
-    });
-
-    const mockModule = {
-      Portkey: {
-        prototype: {
-          embeddings: {
-            create: originalCreate,
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should not double-patch module", () => {
-    const inst = new PortkeyInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      _fiPatched: true,
-      Portkey: {
-        prototype: {
-          chat: {
-            completions: {
-              create: jest.fn(),
-            },
-          },
-        },
-      },
-    };
-
-    const original = mockModule.Portkey.prototype.chat.completions.create;
-    inst.manuallyInstrument(mockModule);
-
-    // Should not have changed
-    expect(mockModule.Portkey.prototype.chat.completions.create).toBe(original);
-  });
+it('does not duplicate spans with two instrumentors or independently loaded modules', async () => {
+  const second = new PortkeyInstrumentation();
+  second.setTracerProvider(provider);
+  try {
+    const a = setup(async () => ({}));
+    second.manuallyInstrument({ chat: { completions: a } });
+    const b = setup(async () => ({}));
+    await a.create(req);
+    await b.create(req);
+    expect(exporter.getFinishedSpans()).toHaveLength(2);
+  } finally { second.disable(); }
 });
