@@ -1,185 +1,79 @@
-# Pipecat OpenTelemetry Integration
+# Pipecat OpenTelemetry integration
 
-## Overview
-This integration provides support for using OpenTelemetry with Pipecat applications. It enables tracing and monitoring of voice applications built with Pipecat, with automatic attribute mapping to Future AGI conventions.
+Send Pipecat's native conversation, turn and service spans to Future AGI. Pipecat creates the spans; this package maps their input/output, tool, token and conversation attributes for **Observe** without adding a second span producer.
 
-## Installation
+## Install
 
-1. **Install traceAI Pipecat**
+Use an existing Pipecat bot with its services and transport configured. Keep the extras your bot needs in addition to `tracing`.
 
 ```bash
-pip install traceAI-pipecat
+pip install --upgrade traceAI-pipecat "fi-instrumentation-otel>=1.2.2" "pipecat-ai[tracing]"
 ```
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI and Pipecat.
+## Configure authentication
 
-```python
-import os
-
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+```bash
+export FI_API_KEY="your-futureagi-api-key"
+export FI_SECRET_KEY="your-futureagi-secret-key"
 ```
 
-## Quickstart
+For self-hosted Future AGI, also set `FI_BASE_URL` to your collector origin.
 
-This method automatically updates your existing span exporters to include Pipecat attribute mapping.
+**Content privacy:** Native Pipecat spans can contain transcripts, prompts, model output, synthesized text, tool arguments/results and error details. Mapping preserves native attributes; it is not a content filter. Do not rely on `FI_HIDE_INPUTS` or `FI_HIDE_OUTPUTS` to remove native Pipecat content. Leave native tracing disabled if exporting that content is incompatible with your data policy.
 
-#### Register Tracer Provider
-Set up the trace provider to establish the observability pipeline:
+## Configure one exporter
+
+Run this once at startup, before constructing your pipeline. Pass the mapped exporter directly to `register()` instead of inspecting or replacing a running provider's processors.
 
 ```python
-from fi_instrumentation.otel import register, Transport, ProjectType
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from fi_instrumentation.otel import HTTPSpanExporter
+from traceai_pipecat import MappedSpanExporter
 
+exporter = HTTPSpanExporter(timeout=10.0)
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="Pipecat Voice App",
+    span_exporter=MappedSpanExporter(exporter),
     set_global_tracer_provider=True,
+    verbose=False,
 )
 ```
 
-#### Install Attribute Mapping
-Install attribute mapping to convert Pipecat attributes to Future AGI conventions:
+`MappedSpanExporter` retains the configured exporter itself, including explicit headers, timeout, compression, TLS settings and custom session. It forwards export results, flushes and shutdown. Attach only the wrapper, not both exporters. When using the provider above, do not separately call Pipecat's `setup_tracing()` or install another exporter for the same destination.
+
+Enable Pipecat's native tracing and turn tracking in your existing pipeline worker, then run your bot normally. See the [Pipecat tracing guide](https://docs.pipecat.ai/server/utilities/opentelemetry) for the API matching your Pipecat version.
+
+After the runner stops and its conversation spans end, flush and shut down once:
 
 ```python
-from traceai_pipecat import enable_http_attribute_mapping
-
-# For HTTP transport
-success = enable_http_attribute_mapping()
-
-# For gRPC transport
-from traceai_pipecat import enable_grpc_attribute_mapping
-success = enable_grpc_attribute_mapping()
-
-# Or specify transport explicitly via enum
-from traceai_pipecat import enable_fi_attribute_mapping
-from fi_instrumentation.otel import Transport
-success = enable_fi_attribute_mapping(transport=Transport.HTTP)  # or Transport.GRPC
+trace_provider.force_flush()
+trace_provider.shutdown()
 ```
 
-## Features
+Open **Observe** and select **Pipecat Voice App**. Available service, model and usage fields depend on what your bot emits.
 
-### Automatic Attribute Mapping
-The integration automatically maps Pipecat-specific attributes to Future AGI conventions:
+### gRPC
 
-- **LLM Operations**: Maps `gen_ai.system`, `gen_ai.request.model` to `llm.provider`, `llm.model_name`
-- **Input/Output**: Maps `input`, `output`, `transcript` to structured Future AGI format
-- **Token Usage**: Maps `gen_ai.usage.*` to `llm.token_count.*`
-- **Tools**: Maps tool-related attributes to Future AGI tool conventions
-- **Session Data**: Maps conversation and session information
-- **Metadata**: Consolidates miscellaneous attributes into structured metadata
+Install `fi-instrumentation-otel[grpc]>=1.2.2`. Use `MappedSpanExporter(GRPCSpanExporter(...))` with the same setup, importing `GRPCSpanExporter` from `fi_instrumentation.otel`. Set `FI_GRPC_URL` for a self-hosted gRPC collector, or pass an explicit endpoint and TLS configuration to the exporter.
 
-### Transport Support
-- **HTTP**: Full support for HTTP transport with automatic endpoint detection
-- **gRPC**: Support for gRPC transport (requires `fi-instrumentation[grpc]`)
+### Existing applications
 
-### Span Kind Detection
-Automatically determines the appropriate `fi.span.kind` based on span attributes:
-- `LLM`: For LLM, STT, and TTS operations
-- `TOOL`: For tool calls and results
-- `AGENT`: For setup and configuration spans
-- `CHAIN`: For turn and conversation spans
+The `enable_http_attribute_mapping()`, `enable_grpc_attribute_mapping()` and `enable_fi_attribute_mapping(Transport.HTTP)` helpers remain supported. Call the appropriate helper after registering your global provider and **before** producing spans. They wrap existing FI exporters without reconstructing their options. Repeated calls do not stack wrappers; `True` also means a matching exporter was already mapped. `False` means no matching exporter could be mapped.
 
-## Examples
+These compatibility helpers inspect OpenTelemetry processor internals. Prefer explicit `MappedSpanExporter` composition for new applications.
 
-### Complete HTTP Integration Example
+## API reference
 
-```python
-from fi_instrumentation.otel import register, Transport, ProjectType
-from traceai_pipecat import enable_http_attribute_mapping
-
-# Initialize tracer provider
-trace_provider = register(
-    project_type=ProjectType.OBSERVE,
-    project_name="My Pipecat Voice App",
-    transport=Transport.HTTP,
-    set_global_tracer_provider=True,
-)
-
-# Install attribute mapping
-try:
-    enable_http_attribute_mapping()
-    print("✅ Successfully installed HTTP attribute mapping")
-except Exception as e:
-    print(f"❌ Error: {e}")
-
-# Your Pipecat application code here...
-```
-
-### Complete gRPC Integration Example
-
-```python
-from fi_instrumentation.otel import register, Transport, ProjectType
-from traceai_pipecat import enable_grpc_attribute_mapping
-
-# Initialize tracer provider
-trace_provider = register(
-    project_type=ProjectType.OBSERVE,
-    project_name="My Pipecat Voice App",
-    transport=Transport.GRPC,
-    set_global_tracer_provider=True,
-)
-
-# Install attribute mapping
-try:
-    enable_grpc_attribute_mapping()
-    print("✅ Successfully installed gRPC attribute mapping")
-except Exception as e:
-    print(f"❌ Error: {e}")
-
-# Your Pipecat application code here...
-```
-
-## API Reference
-
-### Integration Functions
-
-#### `enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool`
-Install attribute mapping by replacing existing span exporters.
-
-**Parameters:**
-- `transport`: Transport protocol enum (`Transport.HTTP` or `Transport.GRPC`)
-
-**Returns:**
-- `bool`: True if at least one exporter was replaced
-
-#### `enable_http_attribute_mapping() -> bool`
-Convenience function for HTTP transport.
-
-#### `enable_grpc_attribute_mapping() -> bool`
-Convenience function for gRPC transport.
-
-### Exporter Creation Functions
-
-#### `create_mapped_http_exporter(endpoint: Optional[str] = None, headers: Optional[dict] = None)`
-Create a new HTTP exporter with Pipecat attribute mapping.
-
-#### `create_mapped_grpc_exporter(endpoint: Optional[str] = None, headers: Optional[dict] = None)`
-Create a new gRPC exporter with Pipecat attribute mapping.
-
-### Exporter Classes
-
-#### `MappedHTTPSpanExporter`
-HTTP span exporter that maps Pipecat attributes to Future AGI conventions.
-
-#### `MappedGRPCSpanExporter`
-gRPC span exporter that maps Pipecat attributes to Future AGI conventions.
-
-#### `BaseMappedSpanExporter`
-Base class for mapped span exporters.
-
+- `MappedSpanExporter(exporter)`: wrap any configured OpenTelemetry `SpanExporter`; the wrapper owns its lifecycle through the processor. Do not shut down the delegate separately.
+- `create_mapped_http_exporter(endpoint=None, headers=None, **kwargs)`: create a mapped FI HTTP exporter; forward HTTP options such as `timeout`, `compression`, `session` and TLS settings unchanged.
+- `create_mapped_grpc_exporter(endpoint=None, headers=None, **kwargs)`: create a mapped FI gRPC exporter; forward options such as `timeout`, `insecure`, `credentials` and `compression` unchanged.
+- `MappedHTTPSpanExporter`, `MappedGRPCSpanExporter` and `BaseMappedSpanExporter`: existing exporter classes remain available.
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **No exporters found to replace**
-   - Ensure you've called `register()` before installing attribute mapping
-   - Check that the transport type matches your tracer provider configuration
-
-2. **Import errors for gRPC**
-   - Install gRPC dependencies: `pip install "fi-instrumentation[grpc]"`
-
-3. **Data not being sent to FutureAGI**
-   - Ensure that your you have set the `FI_API_KEY` and `FI_SECRET_KEY` environment variables
-   - Ensure that the `set_global_tracer_provider`  in the `register` function is set to `True`
+- **No spans:** enable native tracing in your pipeline and use one global provider. Mapping does not create spans itself.
+- **No matching exporter:** for compatibility helpers, call `register()` first with `set_global_tracer_provider=True` and choose the matching HTTP or gRPC helper.
+- **Last spans are missing:** let the runner finish, then flush and shut down the provider. Do not shut it down after each conversation in a shared process.
+- **Sensitive content appears:** disable native tracing if this data cannot leave your application. Attribute mapping alone does not redact it.
