@@ -16,6 +16,11 @@
         <dependencies>
             <dependency>
                 <groupId>com.futureagi</groupId>
+                <artifactId>traceai-java-koog</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
