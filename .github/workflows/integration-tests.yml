@@ -190,6 +190,9 @@ jobs:
           java-version: '21.0.8'
       - name: Install checksum-pinned Maven 3.9.9
         run: bash .github/integration-ci/install_maven.sh
+      - name: Install matching Java core for Arconia privacy
+        if: matrix.package.name == 'arconia'
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-core -am install
       - name: Build packaged application and run OTLP integration tests
         working-directory: ${{ matrix.package.dir }}
         run: |
