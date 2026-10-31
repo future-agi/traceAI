@@ -148,7 +148,7 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
         assert span["status"]["code"] == "STATUS_CODE_OK"
 
     values = _flatten_attributes(answer["attributes"])
-    assert values["gen_ai.span.kind"] == "RETRIEVER"
+    assert values["gen_ai.span.kind"] == "CHAIN"
     assert int(values["discoveryengine.result_count"]) == ANSWER_REFERENCES
     assert int(values["discoveryengine.answer.length"]) == len(ANSWER_TEXT)
     assert values["discoveryengine.answer.state"] == "SUCCEEDED"

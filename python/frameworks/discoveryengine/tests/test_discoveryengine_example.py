@@ -70,7 +70,8 @@ def test_example_exports_one_search_and_one_answer_span(monkeypatch, capsys):
         "discoveryengine.answer_query",
     ]
     search, answer = (_flatten_attributes(span["attributes"]) for span in spans)
-    assert search["gen_ai.span.kind"] == answer["gen_ai.span.kind"] == "RETRIEVER"
+    assert search["gen_ai.span.kind"] == "RETRIEVER"
+    assert answer["gen_ai.span.kind"] == "CHAIN"
     assert search["discoveryengine.serving_config"] == SERVING_CONFIG
     assert int(search["discoveryengine.result_count"]) == SEARCH_RESULTS
     assert answer["discoveryengine.answer.state"] == "SUCCEEDED"
