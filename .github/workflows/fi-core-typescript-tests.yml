@@ -1,0 +1,66 @@
+name: TypeScript core provider tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/tsconfig*'
+      - '.github/workflows/fi-core-typescript-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/tsconfig*'
+      - '.github/workflows/fi-core-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    name: Core provider OTel ${{ matrix.otel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        otel: ['2.0.1', '2.12.0']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install and build the workspace packages
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin" "$RUNNER_TEMP/tarballs"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          export PATH="$RUNNER_TEMP/corepack-bin:$PATH"
+          pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/fi-semantic-conventions run build
+          pnpm --filter @traceai/fi-core run build
+          pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/tarballs"
+          pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/tarballs"
+      - name: Install the packed packages with the selected SDK
+        env:
+          OTEL_TEST_VERSION: ${{ matrix.otel }}
+        run: |
+          node typescript/packages/fi-core/test/install-sdk-fixture.cjs "$OTEL_TEST_VERSION" "$RUNNER_TEMP/sdk-fixture" \
+            "$RUNNER_TEMP"/tarballs/traceai-fi-core-*.tgz "$RUNNER_TEMP"/tarballs/traceai-fi-semantic-conventions-*.tgz
+      - name: Run regression and unit tests with only loopback networking
+        run: |
+          NODE="$(command -v node)"
+          sudo unshare --net sh -c '
+            ip link set lo up
+            export FI_CORE_PACKAGE_JSON="$1/node_modules/@traceai/fi-core/package.json"
+            "$2" --test "$3/typescript/packages/fi-core/test/provider-lifecycle.test.cjs" &&
+            "$2" "$3/typescript/node_modules/jest/bin/jest.js" --config "$3/typescript/packages/fi-core/jest.config.js" --runInBand
+          ' sh "$RUNNER_TEMP/sdk-fixture" "$NODE" "$GITHUB_WORKSPACE"
