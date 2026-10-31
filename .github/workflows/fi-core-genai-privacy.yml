@@ -46,6 +46,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/corepack-bin" "$RUNNER_TEMP/packages"
           corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          export PATH="$RUNNER_TEMP/corepack-bin:$PATH"
           echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
           corepack pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
           corepack pnpm --filter @traceai/fi-core... run build
