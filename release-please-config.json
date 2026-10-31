@@ -590,6 +590,11 @@
       "component": "npm-traceai-anthropic",
       "package-name": "@traceai/anthropic"
     },
+    "typescript/packages/traceai_apollo_graphql": {
+      "release-type": "node",
+      "component": "npm-traceai-apollo-graphql",
+      "package-name": "@traceai/apollo-graphql"
+    },
     "typescript/packages/traceai_bedrock": {
       "release-type": "node",
       "component": "npm-traceai-bedrock",

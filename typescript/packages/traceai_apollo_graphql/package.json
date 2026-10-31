@@ -1,0 +1,46 @@
+{
+  "name": "@traceai/apollo-graphql",
+  "version": "0.1.0",
+  "description": "Privacy-safe Apollo Server tracing with maintained OpenTelemetry GraphQL and HTTP instrumentation",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.cjs",
+    "prepack": "npm run build"
+  },
+  "engines": { "node": ">=20.6.0" },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/core": "2.12.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.223.0",
+    "@opentelemetry/instrumentation-graphql": "0.71.0",
+    "@opentelemetry/instrumentation-http": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-node": "0.223.0",
+    "@opentelemetry/otlp-exporter-base": "0.223.0",
+    "@opentelemetry/sdk-trace": "2.12.0"
+  },
+  "peerDependencies": {
+    "@apollo/server": "^4.13.0 || ^5.0.0",
+    "graphql": ">=16.11.0 <17"
+  },
+  "devDependencies": {
+    "@apollo/server": "5.5.1",
+    "@types/node": "22.15.29",
+    "graphql": "16.14.2",
+    "typescript": "5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_apollo_graphql"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": { "access": "public" }
+}
