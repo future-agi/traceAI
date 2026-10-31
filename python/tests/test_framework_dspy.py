@@ -56,40 +56,30 @@ class TestDSPyInstrumentor:
         deps = self.instrumentor.instrumentation_dependencies()
         assert ("dspy >= 2.5.0",) == deps
 
-    @patch("traceai_dspy.trace_api.get_tracer_provider")
     @patch("traceai_dspy.trace_api.get_tracer")
-    @patch("traceai_dspy.wrap_object")
-    def test_instrument(self, mock_wrap_object, mock_get_tracer, mock_get_tracer_provider):
-        """Test instrumentation setup."""
-        mock_tracer_provider = Mock()
-        mock_tracer = Mock()
-        mock_get_tracer_provider.return_value = mock_tracer_provider
-        mock_get_tracer.return_value = mock_tracer
+    def test_instrument(self, mock_get_tracer):
+        """Keep the public entry point while using the supported lifecycle."""
+        import dspy
+        self.instrumentor._instrument()
+        try:
+            mock_get_tracer.assert_called_once()
+            if self.instrumentor._callback is not None:
+                assert self.instrumentor._callback in dspy.settings.callbacks
+            else:
+                assert self.instrumentor._patches
+        finally:
+            self.instrumentor._uninstrument()
 
-        # Mock dspy.Predict and its subclasses
-        with patch("dspy.Predict") as mock_predict:
-            mock_predict.__subclasses__ = Mock(return_value=[])
-            
-            self.instrumentor._instrument()
-
-        # Verify tracer setup
-        mock_get_tracer.assert_called_once()
-        
-        # Verify wrap_object was called multiple times
-        assert mock_wrap_object.call_count >= 6
-
-    @patch("dspy.Predict")
-    def test_uninstrument(self, mock_predict):
-        """Test uninstrumentation."""
-        # Mock wrapped forward method
-        mock_wrapped = Mock()
-        mock_predict.forward = Mock()
-        mock_predict.forward.__wrapped__ = mock_wrapped
-        
+    def test_uninstrument(self):
+        """Restore every supplemental/legacy method, not just Predict.forward."""
+        self.instrumentor._instrument()
+        patches = list(self.instrumentor._patches)
         self.instrumentor._uninstrument()
-        
-        # Should restore original method
-        assert mock_predict.forward == mock_wrapped
+        for cls, method, original, _, owned in patches:
+            if owned:
+                assert cls.__dict__[method] is original
+            else:
+                assert method not in cls.__dict__
 
 
 class TestLMCallWrapper:
