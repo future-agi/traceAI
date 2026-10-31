@@ -219,36 +219,35 @@ TogetherInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "together" |
-| `llm.provider` | "together" |
-| `llm.model` | Model name (e.g., meta-llama/Llama-3-8b-chat-hf) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
-| `llm.input_messages` | Input messages array |
-| `llm.output_messages` | Output messages array |
-| `llm.invocation_parameters` | Model parameters (temperature, max_tokens, etc.) |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "together" |
+| `gen_ai.request.model` | Model name (e.g., meta-llama/Llama-3-8b-chat-hf) |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
+| `gen_ai.usage.total_tokens` | Total token count |
+| `gen_ai.input.messages.{n}.message.*` | Indexed input message attributes |
+| `gen_ai.output.messages.{n}.message.*` | Indexed output message attributes |
+| `gen_ai.request.parameters` | Model parameters (temperature, max_tokens, etc.) |
 
 ### Completions Attributes
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "together" |
-| `llm.model` | Model name |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "together" |
+| `gen_ai.request.model` | Model name |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
 | `input.value` | Input prompt |
-| `output.value` | Generated text |
+| `output.value` | Serialized provider response (JSON) |
 
 ### Embeddings Attributes
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "EMBEDDING" |
-| `llm.system` | "together" |
-| `embedding.model` | Embedding model name |
+| `gen_ai.span.kind` | "EMBEDDING" |
+| `gen_ai.provider.name` | "together" |
+| `embedding.model_name` | Embedding model name |
 | `together.texts_count` | Number of texts embedded |
 | `together.embeddings_count` | Number of embeddings returned |
 | `together.embedding_dimensions` | Vector dimensions |

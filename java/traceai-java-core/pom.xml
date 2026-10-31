@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>ai.traceai</groupId>
+        <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
         <version>1.0.0</version>
     </parent>
@@ -13,6 +13,15 @@
     <artifactId>traceai-java-core</artifactId>
     <name>TraceAI Java Core</name>
     <description>Core library for TraceAI Java SDK</description>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+    </build>
 
     <dependencies>
         <!-- OpenTelemetry -->

@@ -15,6 +15,12 @@ fi-instrumentation-otel = ">=0.1.11"
 instructor = ">=1.0.0"
 
 
+[tool.poetry.group.dev.dependencies]
+# Newer Instructor releases make providers optional; offline contracts execute
+# the real OpenAI client and its in-process HTTP transport.
+openai = ">=1.0.0"
+httpx = ">=0.27.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

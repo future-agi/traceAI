@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -89,7 +90,10 @@ public class TracedAnthropicClient {
 
             // Extract temperature
             Object temperature = extractFieldObject(params, "temperature");
-            if (temperature != null) {
+            if (temperature instanceof Optional<?>) {
+                temperature = ((Optional<?>) temperature).orElse(null);
+            }
+            if (temperature instanceof Number) {
                 span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, ((Number) temperature).doubleValue());
             }
 

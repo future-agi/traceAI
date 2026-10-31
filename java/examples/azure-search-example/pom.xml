@@ -4,9 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ai.traceai.examples</groupId>
+    <parent>
+        <groupId>com.futureagi</groupId>
+        <artifactId>traceai-java-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
     <artifactId>azure-search-example</artifactId>
-    <version>1.0.0</version>
     <name>TraceAI Azure Search Example</name>
     <description>Example demonstrating TraceAI instrumentation with Azure AI Search</description>
 
@@ -19,9 +24,9 @@
     <dependencies>
         <!-- TraceAI Azure Search instrumentation -->
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-azure-search</artifactId>
-            <version>1.0.0</version>
+            <version>${project.version}</version>
         </dependency>
 
         <!-- Azure Search Documents SDK -->

@@ -35,9 +35,9 @@ class TestRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "ollama"
-        assert attributes["llm.model"] == "llama3.2"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "ollama"
+        assert attributes["gen_ai.request.model"] == "llama3.2"
 
     def test_extract_embed_attributes(self):
         """Test extracting embed request attributes."""
@@ -52,8 +52,8 @@ class TestRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "EMBEDDING"
-        assert attributes["llm.system"] == "ollama"
+        assert attributes["gen_ai.span.kind"] == "EMBEDDING"
+        assert attributes["gen_ai.provider.name"] == "ollama"
 
     def test_extract_messages(self):
         """Test extracting message attributes."""
@@ -70,7 +70,7 @@ class TestRequestAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        assert "llm.input_messages.0.message.role" in extra_attrs or any(
+        assert "gen_ai.input.messages.0.message.role" in extra_attrs or any(
             "message.role" in k for k in extra_attrs.keys()
         )
 
@@ -92,8 +92,8 @@ class TestResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.prompt") == 10
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.input_tokens") == 10
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
     def test_extract_generate_response(self):
         """Test extracting generate response attributes."""
@@ -108,7 +108,11 @@ class TestResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert extra_attrs.get("output.value") == "The quick brown fox"
+        # output.value is the serialized provider response; message text is
+        # also retained separately for display and content-level masking.
+        assert json.loads(extra_attrs["output.value"]) == response
+        assert extra_attrs["gen_ai.output.messages.0.message.content"] == "The quick brown fox"
+        assert extra_attrs["gen_ai.output.messages.0.message.role"] == "assistant"
 
     def test_extract_embed_response(self):
         """Test extracting embed response attributes."""
@@ -121,7 +125,10 @@ class TestResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert "5 dimensions" in extra_attrs.get("output.value", "")
+        assert json.loads(extra_attrs["output.value"]) == response
+        vector = json.loads(extra_attrs["embedding.embeddings.0.embedding.vector"])
+        assert vector == response["embedding"]
+        assert len(vector) == 5
 
 
 class TestUtils:
@@ -199,9 +206,10 @@ class TestRealWorldScenarios:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Should have 4 messages
-        message_keys = [k for k in extra_attrs.keys() if "input_messages" in k]
-        assert len(message_keys) >= 4
+        for index, message in enumerate(request_params["messages"]):
+            prefix = f"gen_ai.input.messages.{index}"
+            assert extra_attrs[f"{prefix}.message.role"] == message["role"]
+            assert extra_attrs[f"{prefix}.message.content"] == message["content"]
 
     def test_model_parameters_extraction(self):
         """Test extraction of model parameters."""
@@ -221,8 +229,8 @@ class TestRealWorldScenarios:
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
         # Should have invocation parameters
-        assert "llm.invocation_parameters" in attributes
-        params = json.loads(attributes["llm.invocation_parameters"])
+        assert "gen_ai.request.parameters" in attributes
+        params = json.loads(attributes["gen_ai.request.parameters"])
         assert params["temperature"] == 0.7
         assert params["top_p"] == 0.9
 

@@ -5,7 +5,7 @@ actual API calls, using mocks to verify correct instrumentation behavior.
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import NonCallableMock, MagicMock, AsyncMock, patch
 import asyncio
 
 
@@ -46,7 +46,7 @@ class TestChatbotScenario:
         ]
 
         mock_result = MagicMock()
-        mock_result.usage = MagicMock(
+        mock_result.usage = NonCallableMock(
             request_tokens=50,
             response_tokens=30,
             total_tokens=80,
@@ -409,7 +409,7 @@ class TestCostTrackingScenario:
         exporter, provider = memory_exporter
         tracer = provider.get_tracer("test")
 
-        mock_usage = MagicMock()
+        mock_usage = NonCallableMock()
         mock_usage.request_tokens = 150
         mock_usage.response_tokens = 75
         mock_usage.total_tokens = 225
@@ -450,7 +450,7 @@ class TestCostTrackingScenario:
             nonlocal call_num
             call_num += 1
 
-            mock_usage = MagicMock()
+            mock_usage = NonCallableMock()
             mock_usage.request_tokens = 100 * call_num
             mock_usage.response_tokens = 50 * call_num
             mock_usage.total_tokens = 150 * call_num

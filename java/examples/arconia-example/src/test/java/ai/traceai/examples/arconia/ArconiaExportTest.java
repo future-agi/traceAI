@@ -86,7 +86,7 @@ class ArconiaExportTest {
         assertEquals("application/x-protobuf", post.headers().get("Content-Type"));
         assertEquals(KEY, post.headers().get("X-Api-Key"));
         assertEquals(SECRET, post.headers().get("X-Secret-Key"));
-        assertFalse(post.headers().containsKey("Content-Encoding"), "Future AGI rejects gzip bodies");
+        assertFalse(post.headers().containsKey("Content-Encoding"), "the recipe sends uncompressed bodies (compression: none)");
 
         Map<String, String> resource = resourceAttributes(post);
         assertEquals("arconia-test", resource.get("project_name"));
@@ -119,7 +119,7 @@ class ArconiaExportTest {
     }
 
     @Test
-    void arconiaDefaultCompressionIsGzipSoTheRecipeMustSetNone() throws Exception {
+    void arconiaDefaultCompressionIsGzipSoTheRecipeSetsNoneExplicitly() throws Exception {
         // Remove the override by blanking it; Arconia falls back to its own default.
         List<OtlpRecorder.Post> posts = run(Map.of("arconia.otel.traces.exporter.otlp.compression", "gzip"), "/hello");
         assertEquals("gzip", posts.get(0).headers().get("Content-Encoding"));

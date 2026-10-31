@@ -64,9 +64,8 @@ class TestMCPInstrumentor:
         instrumentor = MCPInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
         
-        assert isinstance(dependencies, tuple)
-        assert "mcp >= 0.1.0" in dependencies
-        assert len(dependencies) >= 2
+        # fi-instrumentation is a package dependency, not a separately patched SDK.
+        assert dependencies == ("mcp >= 0.1.0",)
 
     def test_instrument_registers_post_import_hooks(self):
         """Test that instrumentation registers all necessary post-import hooks."""

@@ -13,7 +13,9 @@ from typing import (
 )
 
 from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
+from fi_instrumentation.fi_types import (
+    FiMimeTypeValues, MessageAttributes, SpanAttributes, ToolCallAttributes,
+)
 from groq.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
@@ -78,12 +80,16 @@ def _finish_tracing(
     extra_attributes: Iterable[Tuple[str, AttributeValue]],
     status: Optional[trace_api.Status] = None,
 ) -> None:
+    attributes_dict = {}
+    extra_attributes_dict = {}
     try:
-        attributes_dict = dict(attributes)
+        for key, value in attributes:
+            attributes_dict[key] = value
     except Exception:
         logger.exception("Failed to get attributes")
     try:
-        extra_attributes_dict = dict(extra_attributes)
+        for key, value in extra_attributes:
+            extra_attributes_dict[key] = value
     except Exception:
         logger.exception("Failed to get extra attributes")
     try:
@@ -107,9 +113,6 @@ def _extract_eval_input(
             and isinstance(message["content"], str)
         ):
             eval_input.append(message["content"])
-
-    if eval_input and len(eval_input) > 0:
-        yield SpanAttributes.INPUT_VALUE, eval_input[0]
 
     eval_input = "\n".join(eval_input)
     yield SpanAttributes.INPUT_VALUE, eval_input
@@ -161,39 +164,66 @@ def _as_raw_output(raw_output: Any) -> Iterator[Tuple[str, AttributeValue]]:
 
 
 def _as_streaming_output(chunks: List[ChatCompletionChunk]):
-    processed_chunks = [chunk.to_dict() for chunk in chunks]
-    output_value = ""
-    for chunk in processed_chunks:
-        if "choices" in chunk and chunk["choices"]:
-            delta = chunk["choices"][0].get("delta", {})
-            if "content" in delta:
-                output_value += delta["content"]
+    """Assemble SDK deltas by choice/tool index without exporting raw payloads."""
+    messages = {}
+    usage = {}
+    model = None
+    for item in chunks:
+        chunk = _to_dict(item)
+        if not isinstance(chunk, dict):
+            continue
+        model = chunk.get("model") or model
+        # SDK versions expose usage either directly or in Groq's extension.
+        chunk_usage = chunk.get("usage") or (chunk.get("x_groq") or {}).get("usage")
+        if chunk_usage:
+            usage.update({key: value for key, value in chunk_usage.items() if value is not None})
+        for choice in chunk.get("choices") or []:
+            index = choice.get("index", 0)
+            message = messages.setdefault(index, {"role": "assistant", "content": "", "tools": {}})
+            delta = choice.get("delta") or {}
+            message["role"] = delta.get("role") or message["role"]
+            # Role-only, tool-only and terminal chunks commonly have null content.
+            if isinstance(delta.get("content"), str):
+                message["content"] += delta["content"]
+            for tool_delta in delta.get("tool_calls") or []:
+                tool = message["tools"].setdefault(
+                    tool_delta.get("index", 0), {"id": "", "name": "", "arguments": ""}
+                )
+                if tool_delta.get("id"):
+                    tool["id"] += tool_delta["id"]
+                function = tool_delta.get("function") or {}
+                for field in ("name", "arguments"):
+                    if isinstance(function.get(field), str):
+                        tool[field] += function[field]
 
-    # Only check the last chunk for token information
-    if processed_chunks:
-        last_chunk = processed_chunks[-1]
-        x_groq = last_chunk.get("x_groq", {})
-        model = last_chunk.get("model", "")
-        if x_groq:
-            usage = x_groq.get("usage", {})
-            if usage:
-                total_tokens = usage.get("total_tokens")
-                if total_tokens is not None:
-                    yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
+    if model:
+        yield SpanAttributes.GEN_AI_RESPONSE_MODEL, model
+    for field, attribute in (
+        ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+        ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+        ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+    ):
+        if usage.get(field) is not None:
+            yield attribute, usage[field]
 
-                prompt_tokens = usage.get("prompt_tokens")
-                if prompt_tokens is not None:
-                    yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
+    for index, message in sorted(messages.items()):
+        prefix = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}"
+        yield f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", message["role"]
+        if message["content"]:
+            yield f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}", message["content"]
+        for tool_index, tool in sorted(message["tools"].items()):
+            tool_prefix = f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_index}"
+            for field, attribute in (
+                ("id", ToolCallAttributes.TOOL_CALL_ID),
+                ("name", ToolCallAttributes.TOOL_CALL_FUNCTION_NAME),
+                ("arguments", ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON),
+            ):
+                if tool[field]:
+                    yield f"{tool_prefix}.{attribute}", tool[field]
 
-                completion_tokens = usage.get("completion_tokens")
-                if completion_tokens is not None:
-                    yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
-
-        if model:
-            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
-
-    yield SpanAttributes.OUTPUT_VALUE, output_value
-    yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(processed_chunks)
+    # Preserve the text contract; tool payloads live in the privacy-controlled
+    # output-message attributes above, including tool-only completions.
+    yield SpanAttributes.OUTPUT_VALUE, messages.get(0, {}).get("content", "")
 
 
 def _to_dict(value: Any) -> Any:

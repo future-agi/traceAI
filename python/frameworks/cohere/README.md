@@ -220,11 +220,11 @@ CohereInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "cohere" |
-| `llm.model` | Model name (command-r-plus, etc.) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "cohere" |
+| `gen_ai.request.model` | Model name (command-r-plus, etc.) |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
 | `cohere.finish_reason` | Response finish reason |
 | `cohere.citations_count` | Number of citations |
 | `cohere.tool_calls_count` | Number of tool calls |
@@ -233,8 +233,8 @@ CohereInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "EMBEDDING" |
-| `embedding.model` | Embedding model name |
+| `gen_ai.span.kind` | "EMBEDDING" |
+| `embedding.model_name` | Embedding model name |
 | `cohere.texts_count` | Number of texts embedded |
 | `cohere.embedding_dimensions` | Vector dimensions |
 
@@ -242,8 +242,8 @@ CohereInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "RERANKER" |
-| `reranker.model` | Rerank model name |
+| `gen_ai.span.kind` | "RERANKER" |
+| `reranker.model_name` | Rerank model name |
 | `reranker.query` | Search query |
 | `reranker.top_k` | Top N results requested |
 | `cohere.results_count` | Number of results |
