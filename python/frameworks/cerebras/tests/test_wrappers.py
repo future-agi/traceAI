@@ -31,7 +31,6 @@ class TestGetInputAttributes:
 
         assert attrs[SpanAttributes.GEN_AI_SPAN_KIND] == FiSpanKindValues.LLM.value
         assert attrs[SpanAttributes.GEN_AI_PROVIDER_NAME] == "cerebras"
-        assert attrs[SpanAttributes.GEN_AI_PROVIDER_NAME] == "cerebras"
         assert attrs[SpanAttributes.GEN_AI_REQUEST_MODEL] == "llama3.1-8b"
 
     def test_message_attributes(self):
@@ -89,7 +88,7 @@ class TestGetOutputAttributes:
         """Should extract basic response attributes."""
         attrs = _get_output_attributes(mock_completion)
 
-        assert attrs[SpanAttributes.GEN_AI_REQUEST_MODEL] == "llama3.1-8b"
+        assert attrs[SpanAttributes.GEN_AI_RESPONSE_MODEL] == "llama3.1-8b"
 
     def test_message_content(self, mock_completion):
         """Should extract message content."""
@@ -141,7 +140,7 @@ class TestGetStreamOutputAttributes:
         """Should get model from last chunk."""
         attrs = _get_stream_output_attributes(mock_stream_chunks, "Hello!")
 
-        assert attrs[SpanAttributes.GEN_AI_REQUEST_MODEL] == "llama3.1-8b"
+        assert attrs[SpanAttributes.GEN_AI_RESPONSE_MODEL] == "llama3.1-8b"
 
     def test_usage_from_last_chunk(self, mock_stream_chunks):
         """Should get usage from last chunk."""
