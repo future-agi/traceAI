@@ -201,11 +201,34 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
   server.headersTimeout = 3000;
   server.timeout = 3000;
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
+    const failed = (error: NodeJS.ErrnoException) => {
+      server.removeListener("error", failed);
+      server.close();
+      // Classify only bind-time OS availability failures here. Policy/auth and
+      // ownership errors above must never turn into an untraced-launch bypass.
+      const unavailable = [
+        "EMFILE",
+        "ENFILE",
+        "ENOMEM",
+        "ENOBUFS",
+        "EADDRINUSE",
+        "EADDRNOTAVAIL",
+        "EACCES",
+        "EPERM",
+      ].includes(error.code ?? "");
+      reject(
+        unavailable ? new AgentError("NATIVE_LISTENER_UNAVAILABLE", 7) : error,
+      );
+    };
+    server.once("error", failed);
+    try {
+      server.listen(0, "127.0.0.1", () => {
+        server.removeListener("error", failed);
+        resolve();
+      });
+    } catch (error) {
+      failed(error as NodeJS.ErrnoException);
+    }
   });
   return server;
 }

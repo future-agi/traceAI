@@ -44,7 +44,8 @@ export type Outcome =
   | "cancelled"
   | "interrupted"
   | "permission_denied"
-  | "incomplete";
+  | "incomplete"
+  | "unknown";
 export interface Usage {
   scope: "request" | "turn" | "session";
   contribution: Contribution;
@@ -172,6 +173,7 @@ export function validateFact(f: CanonicalFact): void {
       "interrupted",
       "permission_denied",
       "incomplete",
+      "unknown",
     ].includes(f.outcome)
   )
     fail();

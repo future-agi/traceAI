@@ -164,6 +164,21 @@ test("nonadditive summaries drop billable keys and malformed native IDs are reje
   assert.throws(() => c.minimize({ ...f, spanId: "0".repeat(16) }));
   assert.throws(() => c.minimize({ ...f, startNs: "3", endNs: "2" }));
 });
+test("unknown execution outcome is independent of capture completeness in runtime and JSON schemas", () => {
+  const schema = require("../../../../integrations/coding-agents/schema/canonical-fact-v1.schema.json");
+  const unknown = { ...fact(), outcome: "unknown" };
+  assert.equal(c.minimize(unknown).outcome, "unknown");
+  assert.equal(c.minimize(unknown).incomplete, undefined);
+  assert.equal(c.minimize({ ...unknown, incomplete: true }).incomplete, true);
+  assert.ok(schema.properties.outcome.enum.includes("unknown"));
+  for (const outcome of schema.properties.outcome.enum)
+    assert.doesNotThrow(() => c.validateFact({ ...fact(), outcome }));
+  assert.throws(
+    () => c.validateFact({ ...unknown, outcome: "invented" }),
+    /INVALID_FACT/,
+  );
+});
+
 test("missing runtime is neutral without creating any fallback file", async () => {
   const ack = await observe("/nonexistent-fi-agent/socket", "fixture", fact());
   assert.equal(ack.durable, false);

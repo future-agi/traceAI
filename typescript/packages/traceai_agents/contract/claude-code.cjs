@@ -11,7 +11,9 @@ async function run({
   root,
   sandbox,
   packageRoot = path.resolve(__dirname, ".."),
+  scenario = "success",
 }) {
+  assert.ok(["success", "failure", "cancel"].includes(scenario));
   if (
     process.platform !== "darwin" ||
     ![binary, root, sandbox, packageRoot].every(path.isAbsolute)
@@ -33,6 +35,8 @@ async function run({
     { mode: 0o600 },
   );
   let calls = 0;
+  let cancelChild;
+  let cancellations = 0;
   const uploads = [];
   const server = http.createServer(async (req, res) => {
     let size = 0;
@@ -65,6 +69,29 @@ async function run({
     }
     const body = JSON.parse(bytes);
     calls++;
+    if (scenario === "failure") {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "PRIVACY_CANARY_ERROR",
+          },
+        }),
+      );
+      return;
+    }
+    if (scenario === "cancel") {
+      // Interrupt only after the real binary has begun its request. No model
+      // response is sent; the OS signal, not a synthetic error, ends the run.
+      assert.ok(cancelChild);
+      const cancel = cancelChild;
+      cancelChild = undefined;
+      cancellations++;
+      setImmediate(cancel);
+      return;
+    }
     const tool = calls === 1;
     const block = tool
       ? {
@@ -163,7 +190,7 @@ async function run({
     NO_PROXY: "127.0.0.1,localhost",
   };
   const cli = path.join(packageRoot, "bin/fi-agent.cjs");
-  async function exec(executable, args, input = "") {
+  async function exec(executable, args, input = "", interrupt = false) {
     return new Promise((resolve, reject) => {
       let stdout = "",
         count = 0;
@@ -172,6 +199,7 @@ async function run({
         ["-f", sandbox, executable, ...args],
         { cwd: home, env, stdio: ["pipe", "pipe", "pipe"], detached: true },
       );
+      if (interrupt) cancelChild = () => child.kill("SIGINT");
       const kill = () => {
         try {
           process.kill(-child.pid, "SIGKILL");
@@ -244,21 +272,41 @@ async function run({
     assert.equal(enable.state, "waiting-for-activation");
     const before = await action(["doctor", "claude-code", "--surface", "cli"]);
     assert.equal(before.activation.activated, false);
-    const result = await command([
-      "run",
-      "claude-code",
-      "--surface",
-      "cli",
-      "--",
+    const agentArgs = [
       "--print",
       "--model",
       "claude-opus-5-5",
       "--output-format",
       "json",
       "Read fixture.txt then say fixture-ok. PRIVACY_CANARY_PROMPT",
-    ]);
-    assert.equal(result.code, 0, result.stdout);
-    assert.ok(result.stdout.includes("fixture-ok"));
+    ];
+    // Measure the binary's untraced cancellation semantics, then require the
+    // launcher to preserve them. Do not presume a signal equals exit code 130.
+    const baseline =
+      scenario === "cancel"
+        ? await exec(binary, agentArgs, "", true)
+        : undefined;
+    if (baseline) {
+      assert.equal(cancellations, 1);
+      assert.notEqual(baseline.signal, "SIGKILL", "baseline timed out");
+      calls = 0;
+    }
+    const result = await exec(
+      process.execPath,
+      [cli, "run", "claude-code", "--surface", "cli", "--", ...agentArgs],
+      "",
+      scenario === "cancel",
+    );
+    if (baseline) {
+      assert.equal(cancellations, 2);
+      assert.equal(result.code, baseline.code);
+      assert.equal(result.signal, baseline.signal);
+    } else {
+      assert.equal(result.code, scenario === "success" ? 0 : 1);
+      assert.equal(result.signal, null);
+      if (scenario === "success")
+        assert.ok(result.stdout.includes("fixture-ok"));
+    }
     // Explicit drain, with a bounded wait; loopback transport acceptance is not backend persistence.
     const until = Date.now() + 8000;
     let spans = [];
@@ -277,7 +325,8 @@ async function run({
           s.attributes.some(
             (a) => a.key === "fi.span.kind" && a.value.stringValue === "LLM",
           ),
-        ).length === 2
+        ).length ===
+          (scenario === "success" ? 2 : scenario === "failure" ? 1 : 0)
       )
         break;
       await new Promise((r) => setTimeout(r, 100));
@@ -294,40 +343,64 @@ async function run({
       );
     const requests = spans.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
     const tools = spans.filter((s) => attrs(s)["fi.span.kind"] === "TOOL");
-    assert.equal(calls, 2);
-    assert.equal(requests.length, 2);
-    assert.equal(tools.length, 1);
-    assert.ok(spans.some((s) => attrs(s)["fi.span.kind"] === "AGENT"));
-    assert.ok(spans.some((s) => attrs(s)["fi.span.kind"] === "CHAIN"));
     const completed = spans.filter((s) =>
       ["AGENT", "TOOL"].includes(attrs(s)["fi.span.kind"]),
     );
-    assert.equal(completed.length, 2);
     for (const span of completed) {
-      assert.equal(attrs(span)["fi.agent.outcome"], "success");
+      assert.equal(attrs(span)["fi.agent.outcome"], "unknown");
+      assert.equal(span.status.code, 0);
       assert.notEqual(attrs(span)["fi.capture.partial"], true);
     }
-    assert.equal(
-      requests.reduce(
-        (n, s) => n + Number(attrs(s)["gen_ai.usage.input_tokens"]),
-        0,
-      ),
-      40,
-    );
-    assert.equal(
-      requests.reduce(
-        (n, s) => n + Number(attrs(s)["gen_ai.usage.output_tokens"]),
-        0,
-      ),
-      4,
-    );
+    if (scenario === "success") {
+      assert.equal(calls, 2);
+      assert.equal(requests.length, 2);
+      assert.equal(tools.length, 1);
+      assert.equal(completed.length, 2);
+      assert.ok(spans.some((s) => attrs(s)["fi.span.kind"] === "CHAIN"));
+      assert.ok(
+        requests.every((s) => attrs(s)["fi.agent.outcome"] === "success"),
+      );
+      assert.equal(
+        requests.reduce(
+          (n, s) => n + Number(attrs(s)["gen_ai.usage.input_tokens"]),
+          0,
+        ),
+        40,
+      );
+      assert.equal(
+        requests.reduce(
+          (n, s) => n + Number(attrs(s)["gen_ai.usage.output_tokens"]),
+          0,
+        ),
+        4,
+      );
+    } else if (scenario === "failure") {
+      assert.ok(calls >= 1);
+      assert.equal(
+        requests.length,
+        1,
+        "HTTP retries are one logical native request",
+      );
+      assert.equal(completed.length, 1);
+      assert.equal(tools.length, 0);
+      assert.equal(attrs(requests[0])["fi.agent.outcome"], "error");
+      assert.equal(requests[0].status.code, 2);
+    } else {
+      assert.equal(calls, 1);
+      assert.equal(tools.length, 0);
+      // This pinned SIGINT path completes the wrapper but omits the interrupted
+      // request span. Neither the exit code (0) nor the wrapper proves success.
+      assert.equal(completed.length, 1);
+      assert.equal(requests.length, 0);
+    }
     assert.ok(!JSON.stringify(uploads).includes("PRIVACY_CANARY"));
     assert.ok(!JSON.stringify(uploads).includes(home));
     assert.ok(spans.every((s) => attrs(s)["fi.capture.source"] === "native"));
     const ids = new Set(spans.map((s) => s.spanId));
-    assert.ok(requests.every((s) => ids.has(s.parentSpanId)));
+    if (scenario !== "cancel")
+      assert.ok(requests.every((s) => ids.has(s.parentSpanId)));
     const doctor = await action(["doctor", "claude-code", "--surface", "cli"]);
-    assert.equal(doctor.activation.activated, true);
+    assert.equal(doctor.activation.activated, spans.length > 0);
     assert.equal(doctor.persistence, "unknown");
     await action(["disable", "claude-code", "--surface", "cli"]);
     const disabled = await command([
@@ -352,17 +425,35 @@ async function run({
     }
     return {
       binaryVersion: "2.1.316",
+      scenario,
+      childExit: result.code,
+      childSignal: result.signal,
+      ...(baseline
+        ? {
+            baselineExit: baseline.code,
+            baselineSignal: baseline.signal,
+            cancellations,
+          }
+        : {}),
       surface: "cli-print",
       modelRequests: calls,
       nativeSpans: spans.length,
       requestSpans: requests.length,
       toolSpans: tools.length,
-      inputTokens: 40,
-      outputTokens: 4,
+      ...(scenario === "success" ? { inputTokens: 40, outputTokens: 4 } : {}),
       privacyBeforeSpool: true,
-      doctorActivation: true,
+      doctorActivation: doctor.activation.activated,
       disableHeld: true,
-      completedRootAndTool: true,
+      wrapperOutcomes: completed.map((s) => ({
+        name: s.name,
+        outcome: attrs(s)["fi.agent.outcome"],
+        status: s.status.code,
+      })),
+      requestOutcomes: requests.map((s) => ({
+        outcome: attrs(s)["fi.agent.outcome"],
+        status: s.status.code,
+      })),
+      terminalCapture: completed.length ? "observed" : "unavailable",
       modelNetwork: "loopback-only-sandbox",
       backendPersistence: "NOT_TESTED",
       packageRoot,
@@ -376,8 +467,8 @@ async function run({
 }
 module.exports = { run };
 if (require.main === module) {
-  const [binary, root, sandbox, packageRoot] = process.argv.slice(2);
-  run({ binary, root, sandbox, packageRoot }).then(
+  const [binary, root, sandbox, packageRoot, scenario] = process.argv.slice(2);
+  run({ binary, root, sandbox, packageRoot, scenario }).then(
     (result) => console.log(JSON.stringify(result)),
     (e) => {
       console.error(e.message);

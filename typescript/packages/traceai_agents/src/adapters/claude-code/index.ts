@@ -191,7 +191,10 @@ export const claudeCodeAdapter: Adapter = {
     }
     // fi-agent's own route is the registration. No persistent Claude settings/hook/plugin mutations.
     return {
-      commit: async () => ({ ...pending, installed: action !== "uninstall" }),
+      commit: async () => ({
+        ...pending,
+        installed: action !== "uninstall",
+      }),
       rollback: async () => undefined,
     };
   },
@@ -232,6 +235,7 @@ export const claudeCodeAdapter: Adapter = {
         ![
           "RUNTIME_UNAVAILABLE",
           "NATIVE_LISTENER_LIMIT",
+          "NATIVE_LISTENER_UNAVAILABLE",
           "NATIVE_ADMISSION_UNAVAILABLE",
           "STORAGE_UNAVAILABLE",
         ].includes(e.code)

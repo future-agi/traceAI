@@ -45,9 +45,11 @@ fi-agent doctor claude-code --surface cli
 fi-agent disable claude-code --surface cli
 ```
 
-This uses Claude's documented enhanced native OTel tracing, not detailed-beta request-body tracing. The managed runtime receives traces on an authenticated loopback endpoint, minimizes them before the shared spool, and preserves native trace/span/parent IDs. Model counters include cached input exactly once; tool, execution and permission spans never own model usage. Native request duration includes retries, not separate wire-attempt latencies. A source outcome that is not reported stays incomplete rather than becoming success.
+This uses Claude's documented enhanced native OTel tracing, not detailed-beta request-body tracing. The managed runtime receives traces on an authenticated loopback endpoint, minimizes them before the shared spool, and preserves native trace/span/parent IDs. Model counters include cached input exactly once; tool, execution and permission spans never own model usage. Native request duration includes retries, not separate wire-attempt latencies. A source outcome that is not reported stays `unknown`, independently of capture completeness. Completed turn and tool wrappers do not prove success. On cancellation, Claude may omit the interrupted request span; the runtime does not invent it or infer success from Claude's exit code.
 
 Only the CLI print surface has real-binary qualification. Interactive TTY, Desktop, remote hosts and managed-policy deployments are not qualified. Version/schema mismatches reject capture rather than silently reinterpreting usage. `doctor` reports activation only after a durable native ACK in the current runtime; it never treats installation or HTTP acceptance as backend persistence.
+
+If the local tracing listener is unavailable, the launcher warns and runs Claude without tracing, preserving its exit status. Destination, policy and ownership conflicts still block the launch; resolve those conflicts before retrying.
 
 No Claude settings files, credentials, model selection, base URLs, permission policies or hooks are modified. `fi-agent run` carries a short-lived local capability in the process-scoped traces header; agent tools may inherit it. This is a same-user boundary, not protection from other processes running as that user. It is not a Future AGI credential.
 

@@ -117,8 +117,14 @@ function secrets(f) {
   );
 }
 
-test("completed native interaction/tool wrappers are not partial; error/cancel/denial still take precedence", () => {
-  for (const operation of ["claude_code.interaction", "claude_code.tool"]) {
+test("completed native intervals without outcome evidence stay unknown, not success or partial", () => {
+  for (const operation of [
+    "claude_code.interaction",
+    "claude_code.tool",
+    "claude_code.llm_request",
+    "claude_code.tool.execution",
+    "claude_code.tool.blocked_on_user",
+  ]) {
     const span = source.span(operation);
     span.attributes = span.attributes.filter(
       (a) => !["success", "decision"].includes(a.key),
@@ -129,9 +135,34 @@ test("completed native interaction/tool wrappers are not partial; error/cancel/d
         sourceSchema: CLAUDE_SCHEMA,
         policyRevision: "1",
       });
-    assert.equal(normalize(span).outcome, "success");
-    assert.equal(normalize(span).incomplete, undefined);
+    const fact = normalize(span);
+    assert.equal(fact.outcome, "unknown");
+    assert.equal(fact.incomplete, undefined);
+    const wire = require("../dist/src/export/otlp.js").spanObject(fact);
+    assert.equal(wire.status.code, 0);
+    assert.equal(
+      wire.attributes.find((a) => a.key === "fi.agent.outcome").value
+        .stringValue,
+      "unknown",
+    );
+    assert.equal(
+      wire.attributes.find((a) => a.key === "fi.capture.partial"),
+      undefined,
+    );
     assert.equal(normalize({ ...span, status: { code: 2 } }).outcome, "error");
+    for (const status of [1, "STATUS_CODE_OK"])
+      assert.equal(
+        normalize({ ...span, status: { code: status } }).outcome,
+        "success",
+      );
+    for (const success of [true, false])
+      assert.equal(
+        normalize({
+          ...span,
+          attributes: [...span.attributes, ...source.kv({ success })],
+        }).outcome,
+        success ? "success" : "error",
+      );
     assert.equal(
       normalize({
         ...span,
@@ -218,6 +249,86 @@ test("listener exhaustion launches the synthetic child untraced with its own exi
   );
 });
 
+test("native listener OS failures traverse the real runtime and launch untraced without leaking leases", async (t) => {
+  const f = fixture(t);
+  await install(f);
+  await f.stop();
+  const runtime = new Runtime(
+    f.p,
+    settings.storageEntry,
+    settings.version,
+    settings.registry,
+  );
+  await runtime.start();
+  const { Server } = require("node:http");
+  const listen = Server.prototype.listen;
+  let injected = 0;
+  let failure;
+  Server.prototype.listen = function (...args) {
+    assert.equal(args[0], 0);
+    assert.equal(args[1], "127.0.0.1");
+    injected++;
+    const error = Object.assign(new Error("PRIVATE_LISTENER_CANARY"), {
+      code: failure,
+    });
+    // Both OS event errors and synchronous listen errors must retain their classification.
+    if (failure === "ENOMEM") throw error;
+    setImmediate(() => this.emit("error", error));
+    return this;
+  };
+  try {
+    const failures = [
+      "EMFILE",
+      "ENFILE",
+      "ENOMEM",
+      "ENOBUFS",
+      "EADDRINUSE",
+      "EADDRNOTAVAIL",
+      "EACCES",
+      "EPERM",
+      "EMFILE",
+    ];
+    for (failure of failures) {
+      await assert.rejects(
+        runtimeRequest(f.p.socket, { operation: "native-open", route }),
+        /NATIVE_LISTENER_UNAVAILABLE/,
+      );
+      const result = await f.cli(f.action("run", "--", "--print", "fixture"));
+      assert.equal(result.code, 17, result.stdout + result.stderr);
+      assert.match(result.stderr, /launching without tracing/);
+      assert.ok(
+        !(result.stdout + result.stderr).includes("PRIVATE_LISTENER_CANARY"),
+      );
+      const ran = JSON.parse(fs.readFileSync(path.join(f.root, "ran"), "utf8"));
+      assert.deepEqual(ran.args, ["--print", "fixture"]);
+      assert.equal(ran.telemetry, null);
+    }
+    assert.equal(injected, failures.length * 2);
+    failure = "UNCLASSIFIED_ERROR";
+    fs.unlinkSync(path.join(f.root, "ran"));
+    const unknown = await f.cli(f.action("run", "--", "--print", "fixture"));
+    assert.equal(unknown.code, 7);
+    assert.match(unknown.stdout, /LOCAL_UNAVAILABLE/);
+    assert.equal(fs.existsSync(path.join(f.root, "ran")), false);
+    assert.ok(
+      !(unknown.stdout + unknown.stderr).includes("PRIVATE_LISTENER_CANARY"),
+    );
+    Server.prototype.listen = listen;
+    const recovered = await runtimeRequest(f.p.socket, {
+      operation: "native-open",
+      route,
+    });
+    await runtimeRequest(f.p.socket, {
+      operation: "native-close",
+      route,
+      lease: recovered.lease,
+    });
+  } finally {
+    Server.prototype.listen = listen;
+    await runtime.stop();
+  }
+});
+
 test("native-open availability race falls back; explicit ownership and policy failures never do", async (t) => {
   const f = fixture(t);
   await auth(f);
@@ -231,7 +342,10 @@ test("native-open availability race falls back; explicit ownership and policy fa
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, previous);
   });
-  const context = { socketPath: path.join(f.root, "missing"), routeRef: route };
+  const context = {
+    socketPath: path.join(f.root, "missing"),
+    routeRef: route,
+  };
   const fallback = await adapter.launch(context, { tracing: true });
   assert.deepEqual(fallback.env, {});
   assert.equal(fallback.close, undefined);
@@ -257,6 +371,7 @@ test("native-open availability race falls back; explicit ownership and policy fa
       "HELD_DISABLED",
       "HELD_AUTH",
       "INVALID_RESPONSE",
+      "LOCAL_UNAVAILABLE",
     ]) {
       reason = code;
       await assert.rejects(

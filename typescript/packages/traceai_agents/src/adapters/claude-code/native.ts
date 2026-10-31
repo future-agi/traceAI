@@ -178,17 +178,15 @@ export function normalizeClaudeSpan(
         ? "cancelled"
         : a.decision === "reject"
           ? "permission_denied"
-          : // In this pinned profile interaction/tool wrappers export on completion,
-            // without request/execution success flags. Child failures stay on their
-            // own spans; absence of a wrapper flag is not a missing end event.
-            a.success === true ||
+          : a.success === true ||
               a.decision === "accept" ||
               span.status?.code === 1 ||
-              span.status?.code === "STATUS_CODE_OK" ||
-              unit === "turn" ||
-              unit === "tool"
+              span.status?.code === "STATUS_CODE_OK"
             ? "success"
-            : "incomplete",
+            : // A completed native interval is not evidence of successful work.
+              // In particular, turn/tool wrappers omit an outcome even on failure
+              // or cancellation. Do not infer it from child spans or capture state.
+              "unknown",
     inputCompleteness: "unavailable",
     outputCompleteness: "unavailable",
   };
@@ -212,7 +210,12 @@ export function normalizeClaudeSpan(
       input !== undefined && cacheRead !== undefined && cacheWrite !== undefined
         ? input + cacheRead + cacheWrite
         : undefined;
-    const counters = { input: inclusiveInput, output, cacheRead, cacheWrite };
+    const counters = {
+      input: inclusiveInput,
+      output,
+      cacheRead,
+      cacheWrite,
+    };
     const observed = Object.entries(counters).filter(
       ([, value]) => value !== undefined,
     );
@@ -243,7 +246,6 @@ export function normalizeClaudeSpan(
       traceId: nativeId(l.traceId, 16),
       spanId: nativeId(l.spanId, 8),
     }));
-  if (fact.outcome === "incomplete") fact.incomplete = true;
   return minimize(fact, {
     revision: context.policyRevision,
     categories: [],

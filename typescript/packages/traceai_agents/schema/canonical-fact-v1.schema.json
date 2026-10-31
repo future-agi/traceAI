@@ -141,7 +141,8 @@
         "cancelled",
         "interrupted",
         "permission_denied",
-        "incomplete"
+        "incomplete",
+        "unknown"
       ]
     },
     "inputCompleteness": {
