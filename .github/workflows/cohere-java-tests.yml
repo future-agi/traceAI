@@ -1,0 +1,54 @@
+name: Cohere Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-cohere/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/cohere-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-cohere/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/cohere-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Cohere ${{ matrix.sdk }} synthetic contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['1.9.3', '1.12.0']
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Resolve dependencies and compile
+        run: mvn -B -ntp -pl traceai-java-cohere -am -Dcohere-java.version=${{ matrix.sdk }} -DskipTests package
+      - name: Run synthetic SDK and OTLP contracts
+        run: >-
+          mvn -B -ntp -pl traceai-java-cohere -am
+          -Dcohere-java.version=${{ matrix.sdk }}
+          -Dtest=CohereSurfaceTest,CohereOtlpTest,TracedCohereTransportTest,TracedCohereStreamTest,TracedCohereClientPrivacyTest
+          -Dsurefire.failIfNoSpecifiedTests=false test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cohere-java-${{ matrix.sdk }}-reports
+          path: java/traceai-java-cohere/target/surefire-reports/
