@@ -36,6 +36,17 @@ from traceai_guardrails._wrap_guard_call import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_guardrails_hub_telemetry(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    from guardrails.settings import settings
+    from guardrails import Guard
+    if hasattr(settings, "rc"):
+        monkeypatch.setattr(settings.rc, "enable_metrics", False)
+        monkeypatch.setattr(Guard, "_load_rc", lambda self: None)
+
+
 class TestGuardrailsInstrumentor:
     """Exercise the real installed Guardrails hook targets without a provider call."""
 
@@ -69,11 +80,17 @@ class TestGuardrailsInstrumentor:
         provider = TracerProvider()
         try:
             self.instrumentor._instrument(tracer_provider=provider)
-            assert Runner.step.__wrapped__ is originals[0]
-            assert PromptCallableBase.__call__.__wrapped__ is originals[1]
-            assert ValidatorServiceBase.after_run_validator.__wrapped__ is originals[2]
-            assert isinstance(gd.guard.contextvars, _Contextvars)
-            assert isinstance(gd.async_guard.contextvars, _Contextvars)
+            from importlib.util import find_spec
+            if find_spec("guardrails.telemetry.guard_tracing") is not None:
+                assert (Runner.step, PromptCallableBase.__call__,
+                        ValidatorServiceBase.after_run_validator,
+                        gd.guard.contextvars, gd.async_guard.contextvars) == originals
+            else:
+                assert Runner.step.__wrapped__ is originals[0]
+                assert PromptCallableBase.__call__.__wrapped__ is originals[1]
+                assert ValidatorServiceBase.after_run_validator.__wrapped__ is originals[2]
+                assert isinstance(gd.guard.contextvars, _Contextvars)
+                assert isinstance(gd.async_guard.contextvars, _Contextvars)
         finally:
             self.instrumentor._uninstrument()
             provider.shutdown()
@@ -99,7 +116,11 @@ class TestGuardrailsInstrumentor:
                 gd.guard.contextvars, gd.async_guard.contextvars) == originals
 
     def test_instrument_exception_handling(self):
-        with patch("traceai_guardrails.import_module", side_effect=ImportError("Test error")):
+        from importlib.util import find_spec
+        target = ("traceai_guardrails.import_module"
+                  if find_spec("guardrails.telemetry.guard_tracing") is not None
+                  else "traceai_guardrails._legacy.import_module")
+        with patch(target, side_effect=ImportError("Test error")):
             with patch.object(self.instrumentor, '_uninstrument', wraps=self.instrumentor._uninstrument) as cleanup:
                 with pytest.raises(ImportError, match="Test error"):
                     self.instrumentor._instrument()
@@ -677,6 +698,11 @@ def test_prompt_wrapper_exported_attributes_and_privacy(hide_content):
 
 @pytest.fixture
 def installed_guardrails():
+    # These regressions assert the pre-native SDK's execution hooks. Modern
+    # Guardrails is covered by the package's native integration tests instead.
+    from importlib.util import find_spec
+    if find_spec("guardrails.telemetry.guard_tracing") is not None:
+        pytest.skip("Legacy execution hooks apply only to pre-native Guardrails")
     from guardrails.llm_providers import PromptCallableBase, AsyncPromptCallableBase
     originals = (PromptCallableBase.__call__, AsyncPromptCallableBase.__call__)
     from fi_instrumentation import TraceConfig
@@ -854,7 +880,7 @@ def test_iteration_output_projection_does_not_serialize_history_or_consume_strea
     for cls in (Iteration, Outputs, LLMResponse):
         monkeypatch.setattr(cls, "to_dict", forbidden_serializer)
     assert json.loads(_get_raw_output(iteration)) == {
-        "response": {"rawOutput": "", "guardedOutput": output},
+        "response": {"rawOutput": iteration.raw_output, "guardedOutput": output},
     }
     assert consumed == []
     assert iteration.inputs.metadata == {"secret": "private-history"}
