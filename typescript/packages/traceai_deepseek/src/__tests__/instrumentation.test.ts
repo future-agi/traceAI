@@ -21,6 +21,7 @@ describe("DeepSeekInstrumentation", () => {
   });
 
   afterEach(async () => {
+    instrumentation.disable();
     memoryExporter.reset();
     await provider.shutdown();
   });
@@ -51,7 +52,7 @@ describe("DeepSeekInstrumentation", () => {
       const isDeepSeekRequest = (instrumentation as unknown as { isDeepSeekRequest: (client: unknown) => boolean }).isDeepSeekRequest;
 
       expect(isDeepSeekRequest.call(instrumentation, { baseURL: "https://api.deepseek.com/v1" })).toBe(true);
-      expect(isDeepSeekRequest.call(instrumentation, { baseURL: "https://deepseek.example.com/v1" })).toBe(true);
+      expect(isDeepSeekRequest.call(instrumentation, { baseURL: "https://deepseek.example.com/v1" })).toBe(false);
       expect(isDeepSeekRequest.call(instrumentation, { baseURL: "https://api.openai.com/v1" })).toBe(false);
     });
   });

@@ -1,153 +1,117 @@
 # @traceai/deepseek
 
-OpenTelemetry instrumentation for DeepSeek - AI models with advanced reasoning capabilities.
+Trace DeepSeek Chat Completions made through the OpenAI JavaScript SDK, including streamed replies, reasoning content, tool calls and cache token counts.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/deepseek
+npm install @traceai/deepseek openai
 ```
 
-## Features
+Use your application's existing OpenTelemetry provider and exporter. For the standalone console example below, also install:
 
-- Automatic tracing of DeepSeek API calls through OpenAI-compatible interface
-- Support for chat completions with streaming
-- DeepSeek R1 reasoning content capture
-- Prompt cache hit/miss metrics
-- Tool/function calling support
-- Full OpenTelemetry semantic conventions compliance
+```bash
+npm install @opentelemetry/sdk-trace-node@^1.30.1 @opentelemetry/sdk-trace-base@^1.30.1
+```
 
-## Usage
+Set `DEEPSEEK_API_KEY` to your DeepSeek API key. The integration traces Chat Completions sent to `api.deepseek.com`; other hosts, including proxies and lookalike domain names, are left untouched. This package does not instrument the Responses API or DeepSeek Harness.
 
-### Basic Setup
+Register only one OpenAI-compatible instrumentor for a given OpenAI SDK module. Do not register both `DeepSeekInstrumentation` and `OpenAIInstrumentation` for that module.
+
+## Trace a request
 
 ```typescript
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 import { DeepSeekInstrumentation } from "@traceai/deepseek";
-import OpenAI from "openai";
+import * as openai from "openai";
 
-// Set up the tracer provider
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],
+});
 provider.register();
 
-// Create and enable the instrumentation
-const instrumentation = new DeepSeekInstrumentation();
+const instrumentation = new DeepSeekInstrumentation({
+  traceConfig: { hideInputs: true, hideOutputs: true },
+});
 instrumentation.setTracerProvider(provider);
-instrumentation.enable();
+// Explicit registration works with ESM and with an SDK imported before setup.
+instrumentation.manuallyInstrument(openai);
 
-// Manually instrument the OpenAI module
-const openaiModule = await import("openai");
-instrumentation.manuallyInstrument(openaiModule);
-
-// Create the DeepSeek client
-const client = new OpenAI({
+const client = new openai.OpenAI({
   baseURL: "https://api.deepseek.com/v1",
   apiKey: process.env.DEEPSEEK_API_KEY,
 });
 
-// Make requests - they will be automatically traced
-const response = await client.chat.completions.create({
-  model: "deepseek-chat",
-  messages: [
-    { role: "system", content: "You are a helpful assistant." },
-    { role: "user", content: "Hello!" },
-  ],
-});
+try {
+  const response = await client.chat.completions.create({
+    model: "deepseek-chat",
+    messages: [{ role: "user", content: "Explain prompt caching in one sentence." }],
+  });
+  console.log(response.choices[0]?.message.content);
+} finally {
+  instrumentation.disable();
+  await provider.shutdown();
+}
 ```
 
-### DeepSeek R1 Reasoning Models
+The console exporter prints a `DeepSeek Chat Completions` span. In an application already configured to export to Future AGI, pass its provider to `setTracerProvider` instead of creating another one. Open the request's trace to see its model, status and token counts.
 
-DeepSeek R1 models include reasoning content that shows the model's thought process:
+The example hides request and response content in telemetry. It does not change the response returned to your application or redact your application's own logs. Remove the hiding options only when you want to capture message content, tool schemas, tool arguments and reasoning.
 
-```typescript
-const response = await client.chat.completions.create({
-  model: "deepseek-reasoner",
-  messages: [
-    { role: "user", content: "What is 15 * 27? Show your reasoning." },
-  ],
-});
+## Stream a reply
 
-// The reasoning content is captured in span attributes as:
-// deepseek.reasoning_content: "15 * 27 = 15 * 20 + 15 * 7 = 300 + 105 = 405"
-```
-
-### Streaming Responses
+Use the same client and instrumentation. Consume the stream before shutting down the provider:
 
 ```typescript
 const stream = await client.chat.completions.create({
-  model: "deepseek-chat",
-  messages: [{ role: "user", content: "Count to 5." }],
+  model: "deepseek-reasoner",
+  messages: [{ role: "user", content: "What is 15 times 27?" }],
   stream: true,
 });
 
 for await (const chunk of stream) {
-  // For R1 models, reasoning_content streams separately
-  if (chunk.choices[0]?.delta?.reasoning_content) {
-    process.stdout.write(`[Thinking] ${chunk.choices[0].delta.reasoning_content}`);
-  }
-  if (chunk.choices[0]?.delta?.content) {
-    process.stdout.write(chunk.choices[0].delta.content);
-  }
+  const content = chunk.choices[0]?.delta?.content;
+  if (content) process.stdout.write(content);
 }
 ```
 
-### Tool Calling
+The span ends when you finish consuming the stream, break out of iteration, or cancel with `stream.controller.abort()`. The original SDK stream and its available helpers are preserved; instrumentation does not consume a second copy in the background. Cancel streams you decide not to consume.
 
-```typescript
-const response = await client.chat.completions.create({
-  model: "deepseek-chat",
-  messages: [
-    { role: "user", content: "What's the weather in Paris?" },
-  ],
-  tools: [
-    {
-      type: "function",
-      function: {
-        name: "get_weather",
-        description: "Get the current weather",
-        parameters: {
-          type: "object",
-          properties: {
-            location: { type: "string" },
-          },
-        },
-      },
-    },
-  ],
-});
-```
+The SDK's `withResponse()` and `asResponse()` helpers remain available. `asResponse()` leaves the raw response body to you, so a raw-only request records request metadata and status rather than parsed output or token usage.
 
-## Configuration Options
+## Control captured content
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `instrumentationConfig` | `InstrumentationConfig` | OpenTelemetry instrumentation config |
-| `traceConfig` | `TraceConfigOptions` | TraceAI config (hideInputs, hideOutputs, etc.) |
+Pass standard `TraceConfigOptions` through `traceConfig`:
 
-## Captured Attributes
+- `hideInputs`, `hideInputMessages`, `hideInputText` or `hideInputImages`: omit request content and its raw-body, tool-schema and invocation-parameter copies.
+- `hideOutputs`, `hideOutputMessages` or `hideOutputText`: omit response content, reasoning, tool arguments and raw response copies, including streamed content.
+- Input/output, text and message hiding also hide error details by default, because provider errors can quote your messages. Set `hideErrorDetails: true` explicitly when using only `hideInputImages`.
 
-| Attribute | Description |
-|-----------|-------------|
-| `fi.span.kind` | Always "LLM" |
-| `llm.system` | "deepseek" |
-| `llm.provider` | "deepseek" |
-| `llm.model` | Model name (deepseek-chat, deepseek-reasoner, etc.) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
-| `deepseek.reasoning_content` | R1 model reasoning (when available) |
-| `deepseek.prompt_cache_hit_tokens` | Cached tokens (when available) |
-| `deepseek.prompt_cache_miss_tokens` | Non-cached tokens (when available) |
+These options control telemetry, not the values your application receives. The corresponding `FI_HIDE_*` environment settings are also supported.
 
-## Available Models
+## Span attributes
 
-| Model | Description |
-|-------|-------------|
-| `deepseek-chat` | General chat model |
-| `deepseek-reasoner` | Advanced reasoning model (R1) |
-| `deepseek-coder` | Code-optimized model |
+| Attribute | Value |
+| --- | --- |
+| `fi.span.kind` | `LLM` |
+| `gen_ai.provider.name` | `deepseek` |
+| `gen_ai.request.model` | Model name |
+| `gen_ai.response.model` | Model returned by the provider |
+| `gen_ai.response.id` | Completion ID |
+| `gen_ai.usage.input_tokens` | Input token count, when returned |
+| `gen_ai.usage.output_tokens` | Output token count, when returned |
+| `gen_ai.usage.total_tokens` | Total token count, when returned |
+| `deepseek.reasoning_content` | Reasoning content, when returned and content capture is enabled |
+| `deepseek.prompt_cache_hit_tokens` | Cached prompt tokens, when returned |
+| `deepseek.prompt_cache_miss_tokens` | Uncached prompt tokens, when returned |
+
+## Troubleshoot missing spans
+
+- **ESM or an SDK imported before setup:** call `manuallyInstrument(openai)` with the same module used to construct the client.
+- **A different API host:** this instrumentor only selects `api.deepseek.com`. Use an integration for your actual provider or gateway.
+- **A stream remains open:** consume it or cancel its controller before flushing the provider.
+- **An already-instrumented warning:** remove the overlapping OpenAI-compatible instrumentor rather than stacking both.
 
 ## License
 
