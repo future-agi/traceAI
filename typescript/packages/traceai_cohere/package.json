@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_cohere#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -67,10 +67,14 @@
     "llm",
     "embeddings",
     "rerank",
-    "tracing"
+    "tracing",
+    "traceai",
+    "futureagi",
+    "observability"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

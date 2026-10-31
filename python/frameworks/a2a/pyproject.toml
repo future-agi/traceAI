@@ -5,16 +5,23 @@ description = "OpenTelemetry instrumentation for Google Agent-to-Agent (A2A) Pro
 authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "MIT"
 readme = "README.md"
-keywords = ["opentelemetry", "tracing", "a2a", "agents", "multi-agent", "futureagi", "llm"]
+keywords = ["opentelemetry", "tracing", "a2a", "agents", "multi-agent", "futureagi", "llm", "traceai", "observability"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
 ]
 packages = [{ include = "traceai_a2a" }]
 
@@ -34,6 +41,12 @@ pytest = ">=7.0"
 pytest-asyncio = ">=0.21"
 opentelemetry-sdk = ">=1.26.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/a2a"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/a2a/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

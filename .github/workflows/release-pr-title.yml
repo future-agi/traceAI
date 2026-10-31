@@ -1,0 +1,24 @@
+# No checkout and no execution of PR code: safe for forks on pull_request_target.
+name: Conventional PR title
+on:
+  pull_request_target:
+    branches: [dev, main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate Conventional Commits title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node <<'JS'
+          const title = process.env.PR_TITLE;
+          if (!/^(feat|fix|perf|refactor|docs|style|test|build|ci|chore|revert|deps)(\([^)\r\n]+\))?!?: \S[^\r\n]*$/.test(title)) {
+            console.error('Use a Conventional Commit title, for example fix(openai): preserve streaming token counts');
+            process.exit(1);
+          }
+          JS

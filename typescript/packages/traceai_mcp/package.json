@@ -1,6 +1,6 @@
 {
   "name": "@traceai/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for MCP",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_mcp#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/mcp",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -58,8 +58,19 @@
     "tsx": "^4.19.3",
     "zod": "^3.24.3"
   },
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "keywords": [
+    "traceai",
+    "futureagi",
+    "opentelemetry",
+    "instrumentation",
+    "observability",
+    "tracing",
+    "llm",
+    "mcp"
+  ],
+  "license": "Apache-2.0"
 }

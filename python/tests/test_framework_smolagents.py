@@ -3,6 +3,7 @@ Comprehensive test suite for Smolagents instrumentation framework.
 Tests the SmolagentsInstrumentor and related wrapper functionality.
 """
 
+import json
 import logging
 import unittest
 from unittest.mock import Mock, patch, MagicMock, ANY, call
@@ -154,8 +155,8 @@ class TestSmolagentsInstrumentor:
             original_tool_call = Mock()
             instrumentor._original_run_method = original_run
             instrumentor._original_tool_call_method = original_tool_call
-            instrumentor._original_step_methods = {Mock: Mock()}
-            instrumentor._original_model_call_methods = {Mock: Mock()}
+            instrumentor._original_step_methods = {(Mock, "__call__"): Mock()}
+            instrumentor._original_model_call_methods = {(Mock, "__call__"): Mock()}
             
             instrumentor._uninstrument()
             
@@ -432,7 +433,7 @@ class TestUtilityFunctions:
         result = dict(_llm_input_messages(messages))
         
         # Should contain message attributes
-        assert any("llm.input_messages" in key for key in result.keys())
+        assert any("gen_ai.input.messages" in key for key in result.keys())
 
     def test_llm_output_messages(self):
         """Test LLM output messages processing."""
@@ -443,8 +444,8 @@ class TestUtilityFunctions:
         
         result = dict(_llm_output_messages(output_message))
         
-        assert "llm.output_messages.0.message.role" in result
-        assert "llm.output_messages.0.message.content" in result
+        assert "gen_ai.output.messages.0.message.role" in result
+        assert "gen_ai.output.messages.0.message.content" in result
 
     def test_llm_output_messages_with_tool_calls(self):
         """Test LLM output messages with tool calls."""
@@ -462,8 +463,8 @@ class TestUtilityFunctions:
         
         result = dict(_llm_output_messages(output_message))
         
-        assert "llm.output_messages.0.message.tool_calls.0.tool_call.id" in result
-        assert "llm.output_messages.0.message.tool_calls.0.tool_call.function.name" in result
+        assert "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id" in result
+        assert "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name" in result
 
     def test_llm_invocation_parameters(self):
         """Test LLM invocation parameters extraction."""
@@ -474,7 +475,7 @@ class TestUtilityFunctions:
         
         result = dict(_llm_invocation_parameters(model, arguments))
         
-        assert "llm.invocation_parameters" in result
+        assert "gen_ai.request.parameters" in result
 
     def test_llm_tools(self):
         """Test LLM tools processing."""
@@ -495,9 +496,9 @@ class TestUtilityFunctions:
         
         result = dict(_tools(tool))
         
-        assert result["tool.name"] == "test_tool"
-        assert result["tool.description"] == "A test tool"
-        assert "tool.parameters" in result
+        assert result["gen_ai.tool.name"] == "test_tool"
+        assert result["gen_ai.tool.description"] == "A test tool"
+        assert json.loads(result["gen_ai.tool.parameters"]) == {"param": "value"}
 
     def test_input_value_and_mime_type(self):
         """Test input value and mime type extraction."""
@@ -543,7 +544,7 @@ class TestUtilityFunctions:
         
         result = dict(_get_raw_input(args, **kwargs))
         
-        assert "raw.input" in result
+        assert "input.value" in result
 
     def test_get_raw_output(self):
         """Test raw output extraction."""

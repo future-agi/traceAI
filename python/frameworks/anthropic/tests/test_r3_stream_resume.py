@@ -168,12 +168,14 @@ def test_native_thinking_tool_and_unknown_delta_parity(asynchronous):
         {'type': 'content_block_stop', 'index': 2},
     ]
     events = EVENTS[:4] + extra + EVENTS[4:]
+    # Compare native models, not model_dump(): SDK 0.57.1 accepts unknown
+    # deltas but its Pydantic serializer cannot dump their fallback model.
     async def run_async():
         c = make_client(events, True)
-        expected = [e.model_dump() async for e in await c.messages.create(**PARAMS)]
+        expected = [e async for e in await c.messages.create(**PARAMS)]
         p, x, i = setup()
         try:
-            assert [e.model_dump() async for e in await c.messages.create(**PARAMS)] == expected
+            assert [e async for e in await c.messages.create(**PARAMS)] == expected
             assert_span(x)
             assert 'lookup' in str(x.get_finished_spans()[0].attributes)
         finally:
@@ -181,10 +183,10 @@ def test_native_thinking_tool_and_unknown_delta_parity(asynchronous):
     if asynchronous:
         asyncio.run(run_async()); return
     c = make_client(events)
-    expected = [e.model_dump() for e in c.messages.create(**PARAMS)]
+    expected = list(c.messages.create(**PARAMS))
     p, x, i = setup()
     try:
-        assert [e.model_dump() for e in c.messages.create(**PARAMS)] == expected
+        assert list(c.messages.create(**PARAMS)) == expected
         assert_span(x)
         assert 'lookup' in str(x.get_finished_spans()[0].attributes)
     finally:

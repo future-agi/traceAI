@@ -4,14 +4,23 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ai.traceai</groupId>
+    <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-parent</artifactId>
     <version>1.0.0</version>
     <packaging>pom</packaging>
 
     <name>TraceAI Java SDK</name>
     <description>Enterprise-grade AI observability for Java applications</description>
-    <url>https://github.com/future-agi/traceai-java</url>
+    <url>https://github.com/future-agi/traceAI/tree/main/java</url>
+
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
+        <connection>scm:git:https://github.com/future-agi/traceAI.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/future-agi/traceAI.git</developerConnection>
+        <url>https://github.com/future-agi/traceAI</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <licenses>
         <license>
@@ -29,6 +38,9 @@
     </developers>
 
     <modules>
+        <!-- Version alignment for consumers -->
+        <module>traceai-bom</module>
+
         <!-- Core -->
         <module>traceai-java-core</module>
 
@@ -115,7 +127,7 @@
 
             <!-- Internal modules -->
             <dependency>
-                <groupId>ai.traceai</groupId>
+                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -132,36 +144,32 @@
                 <version>${slf4j.version}</version>
             </dependency>
 
-            <!-- Testing -->
+            <!-- Manage versions only. Actual reactor test dependencies declare
+                 scope=test themselves; scopes here would leak through the public BOM. -->
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
                 <version>${junit.version}</version>
-                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.assertj</groupId>
                 <artifactId>assertj-core</artifactId>
                 <version>${assertj.version}</version>
-                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
                 <version>${mockito.version}</version>
-                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-junit-jupiter</artifactId>
                 <version>${mockito.version}</version>
-                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>io.opentelemetry</groupId>
                 <artifactId>opentelemetry-sdk-testing</artifactId>
                 <version>${opentelemetry.version}</version>
-                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -184,8 +192,6 @@
                     <version>3.2.3</version>
                     <configuration>
                         <argLine>
-                            -XX:+EnableDynamicAgentLoading
-                            -javaagent:${user.home}/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.10/byte-buddy-agent-1.14.10.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
@@ -210,6 +216,110 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <!-- Opt-in only: normal builds neither sign artifacts nor contact Central. -->
+    <profiles>
+        <!-- JitPack remaps the root artifact to the repository name, but can leave
+             child parent references pointing at an unpublished parent artifactId.
+             Install self-contained consumer POMs only on this secondary route.
+             Central releases retain the original POMs and com.futureagi coordinates. -->
+        <profile>
+            <id>jitpack</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>flatten-maven-plugin</artifactId>
+                        <version>1.6.0</version>
+                        <configuration>
+                            <flattenMode>defaults</flattenMode>
+                            <outputDirectory>${project.build.directory}</outputDirectory>
+                            <flattenedPomFilename>jitpack-pom.xml</flattenedPomFilename>
+                            <updatePomFile>true</updatePomFile>
+                            <pomElements>
+                                <!-- The BOM must keep resolved version management,
+                                     without depending on its missing JitPack parent. -->
+                                <dependencyManagement>resolve</dependencyManagement>
+                            </pomElements>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>jitpack-consumer-pom</id>
+                                <phase>process-resources</phase>
+                                <goals><goal>flatten</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>release</id>
+            <properties>
+                <gpg.signer>bc</gpg.signer>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals><goal>jar-no-fork</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals><goal>jar</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <!-- BC reads an armored secret key directly from the environment;
+                                 no key file or persistent local GnuPG keyring is required. -->
+                            <signer>${gpg.signer}</signer>
+                            <keyEnvName>MAVEN_GPG_PRIVATE_KEY</keyEnvName>
+                            <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+                            <bestPractices>true</bestPractices>
+                            <!-- Also supports -Dgpg.signer=gpg with a pre-imported key. -->
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.12.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <repositories>
         <repository>

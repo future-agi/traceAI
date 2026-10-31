@@ -1,35 +1,52 @@
 [tool.poetry]
 name = "traceAI-pinecone"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for Pinecone vector database"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 packages = [
     { include = "traceai_pinecone" }
 ]
-keywords = ["opentelemetry", "pinecone", "vector-database", "tracing", "observability", "rag"]
+keywords = ["opentelemetry", "pinecone", "vector-database", "tracing", "observability", "rag", "traceai", "futureagi", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: System :: Monitoring",
 ]
+license = "Apache-2.0"
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
 fi-instrumentation-otel = ">=0.1.11"
-pinecone-client = ">=3.0.0"
+pinecone = ">=3.0.0"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
+# Exercise the exact historical floor in the normal Python 3.11 CI cell.
+# SDK 3.0.0 itself excludes Python 3.13; newer runtimes resolve a newer SDK.
+# This is test-only; the published package remains open to newer releases.
+pinecone = { version = "==3.0.0", python = "<3.13" }
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.21.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/pinecone"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/pinecone/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

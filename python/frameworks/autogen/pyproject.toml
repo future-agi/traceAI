@@ -1,12 +1,29 @@
 [tool.poetry]
 name = "traceAI-autogen"
 version = "0.2.1"
-description = "OpenTelemetry instrumentation for AutoGen v0.4+ (AgentChat)"
+description = "OpenTelemetry instrumentation for AutoGen AgentChat and legacy v0.2"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 
 packages = [
     { include = "traceai_autogen" },
+]
+license = "Apache-2.0"
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "autogen"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
 ]
 
 [tool.poetry.dependencies]
@@ -17,7 +34,15 @@ autogen-agentchat = ">=0.4.0"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0.0"
 pytest-asyncio = ">=0.23.0"
+# Microsoft's legacy SDK imports as autogen, but is distributed as pyautogen.
+pyautogen = { version = "0.2.35", python = "<3.13" }
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/integrations/traceai/autogen"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/autogen"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/autogen/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

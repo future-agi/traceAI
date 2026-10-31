@@ -1,14 +1,13 @@
 {
   "name": "@traceai/pgvector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for pgvector (PostgreSQL vector extension)",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -19,8 +18,19 @@
     "test": "jest",
     "lint": "eslint . --ext .ts"
   },
-  "keywords": ["traceai", "opentelemetry", "instrumentation", "pgvector", "postgresql", "vector-database"],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "keywords": [
+    "traceai",
+    "opentelemetry",
+    "instrumentation",
+    "pgvector",
+    "postgresql",
+    "vector-database",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
+  ],
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
@@ -44,8 +54,24 @@
     "pgvector": ">=0.1.0"
   },
   "peerDependenciesMeta": {
-    "pg": { "optional": true },
-    "pgvector": { "optional": true }
+    "pg": {
+      "optional": true
+    },
+    "pgvector": {
+      "optional": true
+    }
   },
-  "files": ["dist", "README.md"]
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_pgvector"
+  }
 }

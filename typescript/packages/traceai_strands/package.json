@@ -1,15 +1,13 @@
 {
   "name": "@traceai/strands",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for AWS Strands Agents SDK",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
-  "esnext": "./dist/esnext/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -29,13 +27,15 @@
     "bedrock",
     "agents",
     "llm",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/futureagi/traceai.git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_strands"
   },
   "dependencies": {
@@ -70,5 +70,9 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
   }
 }

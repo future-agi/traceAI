@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     MessageAttributes,
     SpanAttributes,
@@ -12,7 +12,24 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-class _ChatCompletionResponseAttributesExtractor:
+class _OutputAttributesExtractor:
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
+    def _output_alias(
+        self, key: str, value: AttributeValue
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        # Preserve reasoning/alias keys by default, but treat their payloads as
+        # output message text. Older cores do not recognize these text keys.
+        masked = self._config.mask(
+            f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
+            value,
+        )
+        if masked is not None:
+            yield key, masked
+
+
+class _ChatCompletionResponseAttributesExtractor(_OutputAttributesExtractor):
     """Extract span attributes from DeepSeek chat completion response."""
 
     def get_attributes(
@@ -42,7 +59,7 @@ class _ChatCompletionResponseAttributesExtractor:
 
             # DeepSeek R1 specific: reasoning tokens
             if "completion_tokens_details" in usage:
-                details = usage["completion_tokens_details"]
+                details = usage["completion_tokens_details"] or {}
                 if "reasoning_tokens" in details:
                     yield "deepseek.reasoning_tokens", details["reasoning_tokens"]
 
@@ -81,19 +98,22 @@ class _ChatCompletionResponseAttributesExtractor:
             # DeepSeek R1 specific: reasoning_content
             reasoning_content = message.get("reasoning_content", "")
             if reasoning_content:
-                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.reasoning_content", reasoning_content
-                yield "deepseek.reasoning_content", reasoning_content
+                yield from self._output_alias(
+                    f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.reasoning_content",
+                    reasoning_content,
+                )
+                yield from self._output_alias("deepseek.reasoning_content", reasoning_content)
 
             # Tool calls
             tool_calls = message.get("tool_calls", [])
             if tool_calls:
                 yield f"deepseek.tool_calls_count", len(tool_calls)
                 for j, tc in enumerate(tool_calls[:10]):  # Limit
-                    yield f"deepseek.tool_calls.{j}.id", tc.get("id", "")
-                    yield f"deepseek.tool_calls.{j}.type", tc.get("type", "function")
-                    if "function" in tc:
-                        yield f"deepseek.tool_calls.{j}.function.name", tc["function"].get("name", "")
-                        yield f"deepseek.tool_calls.{j}.function.arguments", tc["function"].get("arguments", "")
+                    yield from self._output_alias(f"deepseek.tool_calls.{j}.id", tc.get("id", ""))
+                    yield from self._output_alias(f"deepseek.tool_calls.{j}.type", tc.get("type", "function"))
+                    if tc.get("function"):
+                        yield from self._output_alias(f"deepseek.tool_calls.{j}.function.name", tc["function"].get("name", ""))
+                        yield from self._output_alias(f"deepseek.tool_calls.{j}.function.arguments", tc["function"].get("arguments", ""))
 
             # Finish reason
             finish_reason = choice.get("finish_reason", "")
@@ -115,16 +135,17 @@ class _ChatCompletionResponseAttributesExtractor:
             # If R1 model, also capture reasoning
             reasoning = message.get("reasoning_content", "")
             if reasoning:
-                yield "deepseek.output_reasoning", reasoning
+                yield from self._output_alias("deepseek.output_reasoning", reasoning)
 
         # Raw output
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)
 
 
-class _StreamingChatCompletionResponseExtractor:
+class _StreamingChatCompletionResponseExtractor(_OutputAttributesExtractor):
     """Extract attributes from streaming DeepSeek response chunks."""
 
-    def __init__(self):
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        super().__init__(config=config)
         self._content_parts = []
         self._reasoning_parts = []
         self._tool_calls = {}
@@ -158,7 +179,7 @@ class _StreamingChatCompletionResponseExtractor:
                 self._reasoning_parts.append(delta["reasoning_content"])
 
             # Tool calls
-            if "tool_calls" in delta:
+            if delta.get("tool_calls"):
                 for tc in delta["tool_calls"]:
                     idx = tc.get("index", 0)
                     if idx not in self._tool_calls:
@@ -169,10 +190,10 @@ class _StreamingChatCompletionResponseExtractor:
                         }
                     if "id" in tc and tc["id"]:
                         self._tool_calls[idx]["id"] = tc["id"]
-                    if "function" in tc:
+                    if tc.get("function"):
                         if "name" in tc["function"] and tc["function"]["name"]:
                             self._tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                        if "arguments" in tc["function"]:
+                        if tc["function"].get("arguments") is not None:
                             self._tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
 
             # Finish reason
@@ -198,7 +219,7 @@ class _StreamingChatCompletionResponseExtractor:
 
             # Reasoning tokens
             if "completion_tokens_details" in self._usage:
-                details = self._usage["completion_tokens_details"]
+                details = self._usage["completion_tokens_details"] or {}
                 if "reasoning_tokens" in details:
                     yield "deepseek.reasoning_tokens", details["reasoning_tokens"]
 
@@ -223,18 +244,20 @@ class _StreamingChatCompletionResponseExtractor:
 
         # Reasoning content (DeepSeek R1)
         if reasoning:
-            yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.reasoning_content", reasoning
-            yield "deepseek.reasoning_content", reasoning
-            yield "deepseek.output_reasoning", reasoning
+            yield from self._output_alias(
+                f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.reasoning_content", reasoning
+            )
+            yield from self._output_alias("deepseek.reasoning_content", reasoning)
+            yield from self._output_alias("deepseek.output_reasoning", reasoning)
 
         # Tool calls
         if self._tool_calls:
             yield "deepseek.tool_calls_count", len(self._tool_calls)
             for idx, tc in self._tool_calls.items():
-                yield f"deepseek.tool_calls.{idx}.id", tc["id"]
-                yield f"deepseek.tool_calls.{idx}.type", tc["type"]
-                yield f"deepseek.tool_calls.{idx}.function.name", tc["function"]["name"]
-                yield f"deepseek.tool_calls.{idx}.function.arguments", tc["function"]["arguments"]
+                yield from self._output_alias(f"deepseek.tool_calls.{idx}.id", tc["id"])
+                yield from self._output_alias(f"deepseek.tool_calls.{idx}.type", tc["type"])
+                yield from self._output_alias(f"deepseek.tool_calls.{idx}.function.name", tc["function"]["name"])
+                yield from self._output_alias(f"deepseek.tool_calls.{idx}.function.arguments", tc["function"]["arguments"])
 
         # Finish reason
         if self._finish_reason:

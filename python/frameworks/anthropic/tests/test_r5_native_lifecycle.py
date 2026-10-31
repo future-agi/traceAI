@@ -243,6 +243,7 @@ def test_ordinary_error_diagnostics_and_redaction(hidden, monkeypatch):
         i.uninstrument(); p.shutdown(); c.close()
 
 def test_failing_exporter_does_not_replace_native_error():
+    from opentelemetry import context as context_api
     from opentelemetry.sdk.trace.export import SpanExporter
     err = NonStringifiableError()
     class Wire(httpx.SyncByteStream):
@@ -256,10 +257,14 @@ def test_failing_exporter_does_not_replace_native_error():
     p=TracerProvider(); p.add_span_processor(SimpleSpanProcessor(BrokenExporter()))
     i=AnthropicInstrumentor(); i.instrument(tracer_provider=p)
     c=anthropic.Anthropic(api_key='local',http_client=httpx.Client(transport=httpx.MockTransport(lambda req:httpx.Response(200,headers={'content-type':'text/event-stream'},stream=Wire()))))
+    # Older OTel processors leave instrumentation suppressed if an exporter
+    # raises BaseException. Isolate this deliberate failure from later tests.
+    token = context_api.attach(context_api.get_current())
     try:
         s=c.messages.create(**PARAMS); assert next(s).type=='message_start'
         try: next(s)
         except BaseException as got: assert got is err
         else: pytest.fail('expected native error')
     finally:
+        context_api.detach(token)
         i.uninstrument(); c.close(); p.shutdown()

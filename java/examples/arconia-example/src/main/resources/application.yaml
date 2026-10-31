@@ -15,7 +15,7 @@ arconia:
           endpoint: ${FI_BASE_URL:https://api.futureagi.com}/tracer/v1/traces
           # protocol: leave unset. HTTP/protobuf is the default. Writing the documented value
           # "http-protobuf" silently disables the exporter on Arconia 0.30.0 and 0.31.0.
-          compression: none        # Arconia's default is gzip and Future AGI rejects gzip bodies
+          compression: none        # Optional. Arconia defaults to gzip, which Future AGI Cloud and v1.56.0+ accept; none also works with older self-hosted collectors
           headers:
             X-Api-Key: ${FI_API_KEY}
             X-Secret-Key: ${FI_SECRET_KEY}

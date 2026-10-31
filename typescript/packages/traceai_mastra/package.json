@@ -40,7 +40,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_mastra#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/mastra",
   "dependencies": {
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^",
@@ -63,12 +63,29 @@
     "@opentelemetry/semantic-conventions": "^1.34.0"
   },
   "peerDependenciesMeta": {
-    "@opentelemetry/api": { "optional": true },
-    "@opentelemetry/core": { "optional": true },
-    "@opentelemetry/semantic-conventions": { "optional": true }
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/core": {
+      "optional": true
+    },
+    "@opentelemetry/semantic-conventions": {
+      "optional": true
+    }
   },
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "keywords": [
+    "traceai",
+    "futureagi",
+    "opentelemetry",
+    "instrumentation",
+    "observability",
+    "tracing",
+    "llm",
+    "mastra"
+  ],
+  "license": "Apache-2.0"
 }

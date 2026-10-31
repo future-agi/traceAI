@@ -7,18 +7,22 @@ license = "Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/future-agi/traceAI"
 repository = "https://github.com/future-agi/traceAI"
-keywords = ["opentelemetry", "semantic-kernel", "tracing", "observability", "agents", "llm"]
+keywords = ["opentelemetry", "semantic-kernel", "tracing", "observability", "agents", "llm", "traceai", "futureagi"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Monitoring",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
 ]
 packages = [
     { include = "traceai_semantic_kernel" },
@@ -40,6 +44,12 @@ opentelemetry-sdk = ">=1.29.0"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/semantic-kernel"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/semantic-kernel/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
