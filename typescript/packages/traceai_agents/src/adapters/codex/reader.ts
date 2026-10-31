@@ -164,7 +164,7 @@ export class RolloutReader {
   }
   /** One <=1MiB slice. Complete records are minimized by the codec immediately;
    * the incomplete tail stays bounded in memory, never in runtime storage. */
-  read(): { changed: boolean; caughtUp: boolean; coordinate: string } {
+  read(): { changed: boolean; caughtUp: boolean; batchFull: boolean; coordinate: string } {
     const parents = this.parents();
     const fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
@@ -201,6 +201,7 @@ export class RolloutReader {
       this.offset += count;
       const pending = Buffer.concat([this.tail, buffer.subarray(0, count)]);
       let start = 0;
+      let batchFull = false;
       for (;;) {
         const end = pending.indexOf(10, start);
         if (end < 0) break;
@@ -216,6 +217,7 @@ export class RolloutReader {
           }
         }
         start = end + 1;
+        if (this.codec.needsDrain) { batchFull = true; break; }
       }
       this.tail = Buffer.from(pending.subarray(start));
       if (this.tail.length > 2_097_152)
@@ -223,6 +225,7 @@ export class RolloutReader {
       return {
         changed: count > 0,
         caughtUp: this.offset >= after.size && this.tail.length === 0,
+        batchFull,
         coordinate: String(this.offset - this.tail.length),
       };
     } finally {

@@ -134,6 +134,7 @@ export class CodexCodec {
   };
   private turns = new Map<string, Turn>();
   private observed = 0;
+  private finalized = 0;
   private retained = 0;
   private historyStart?: number;
   constructor(
@@ -475,6 +476,19 @@ export class CodexCodec {
         );
     }
   }
+  get needsDrain(): boolean {
+    return this.turns.size >= 48 && [...this.turns.values()].some((t) => t.terminal);
+  }
+  /** Call only after durable admission of every returned fact (or import collection). */
+  release(): void {
+    if (!this.meta) return;
+    for (const [native, t] of this.turns) {
+      if (!t.terminal || !this.graph.topology({session: this.meta.session, thread: this.meta.thread, turn: native})) continue;
+      this.retained -= t.facts.size + t.tools.size;
+      this.finalized++;
+      this.turns.delete(native);
+    }
+  }
   get pendingAncestry(): number {
     return [...this.turns.values()].filter(
       (t) =>
@@ -516,7 +530,7 @@ export class CodexCodec {
     return [...this.turns.values()].filter((t) => !t.terminal).length;
   }
   get summary(): { requests: number; turns: number } {
-    return { requests: this.observed, turns: this.turns.size };
+    return { requests: this.observed, turns: this.finalized + this.turns.size };
   }
 }
 export function importCodex(
@@ -528,6 +542,7 @@ export function importCodex(
   const graph = new CodexGraph(),
     codecs: CodexCodec[] = [];
   let codec: CodexCodec | undefined;
+  const collected: CanonicalFact[] = [];
   for (const line of bytes.toString("utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -540,6 +555,10 @@ export function importCodex(
       }
       if (!codec) throw new AgentError("HELD_IDENTITY", 3);
       codec.push(record);
+      if (codec.needsDrain && !codec.pendingAncestry) {
+        collected.push(...codec.facts());
+        codec.release();
+      }
     } catch (e) {
       if (e instanceof AgentError) throw e;
       throw new AgentError("UNKNOWN_SOURCE_SCHEMA", 5);
@@ -547,5 +566,5 @@ export function importCodex(
   }
   if (codecs.some((c) => c.pendingAncestry))
     throw new AgentError("HELD_SPAWN_CONTEXT", 3);
-  return codecs.flatMap((c) => c.facts());
+  return [...collected, ...codecs.flatMap((c) => c.facts())];
 }

@@ -247,6 +247,13 @@ export function preflightPlugin(
       // is deliberately a separate official `codex plugin remove` action.
       atomicProtected(file, JSON.stringify(expected));
       committed = true;
+      if (!expected.enabled) {
+        const receipt = join(directory, "announced-" + createHash("sha256").update(c.routeRef).digest("hex") + ".json");
+        if (existsSync(receipt)) {
+          readProtected(receipt, 65536); // Never follow an attacker-replaced symlink.
+          unlinkSync(receipt); // Logical deletion, not a claim of physical erasure.
+        }
+      }
       if (
         !expected.enabled ||
         !old?.enabled ||

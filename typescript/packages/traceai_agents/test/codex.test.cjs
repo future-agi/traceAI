@@ -670,3 +670,113 @@ test("bounded explicit directory import preserves spawn context and refuses syml
   assert.throws(() => readImportSnapshot(dir));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("65 completed Codex turns keep exact request cardinality and immutable identities", () => {
+  const rows = [meta()];
+  for (let n = 0; n < 70; n++) {
+    const turn_id = `turn${n}`;
+    rows.push(event("task_started", {turn_id}, n * 4 + 1));
+    rows.push({...usage(`response${n}`, n * 4 + 2), payload: {...usage(`response${n}`, n * 4 + 2).payload, turn_id}});
+    rows.push(event("task_complete", {turn_id}, n * 4 + 3));
+  }
+  const facts = decode(rows);
+  assert.equal(facts.filter((f) => f.unit === "turn").length, 70);
+  assert.equal(facts.filter((f) => f.unit === "request").length, 70);
+  assert.equal(new Set(facts.map((f) => f.sourceWorkId)).size, 140);
+  assert.equal(facts.reduce((sum, f) => sum + (f.usage?.total ?? 0), 0), 840);
+  const root = fs.mkdtempSync(path.join(base, "long-"));
+  const dir = path.join(root, "sessions/2026/10/31");
+  fs.mkdirSync(dir, {recursive:true, mode:0o755});
+  const file = path.join(dir,"rollout-long.jsonl");
+  fs.writeFileSync(file,bytes(rows),{mode:0o644});
+  const c = new CodexCodec(context,"thread"), reader = new RolloutReader(path.join(root,"sessions"),file,c);
+  const seen=[];
+  for (let n=0;n<100;n++) {
+    const read=reader.read();
+    if (read.batchFull || read.caughtUp) {seen.push(...c.facts()); c.release();}
+    if (read.caughtUp) break;
+  }
+  assert.deepEqual(seen,facts);
+});
+
+test("observer recovers terminal announced source after stop before quiet grace", async () => {
+  const {CodexObserver}=require("../dist/src/adapters/codex/observer.js");
+  const {registration}=require("../dist/src/adapters/codex/plugin.js");
+  const root=fs.mkdtempSync(path.join(base,"restart-"));
+  const c={routeRef:"codex.cli",socketPath:path.join(root,"runtime.sock"),surface:"cli",profile:"fixture",binding:{},transcriptConsent:true};
+  const old=process.env.CODEX_HOME;
+  process.env.CODEX_HOME=path.join(root,"home");
+  const entry=path.resolve(__dirname,"../bin/fi-agent-codex-hook.cjs");
+  let observer;
+  try {
+    await preflightPlugin("enable",c,entry,"0.1.0").commit();
+    const dir=path.join(process.env.CODEX_HOME,"sessions/2026/10/31");
+    fs.mkdirSync(dir,{recursive:true,mode:0o755});
+    const file=path.join(dir,"rollout-final.jsonl");
+    fs.writeFileSync(file,bytes(fixture()),{mode:0o644});
+    const callback={bundle:registration(c.socketPath).fingerprint,event:"SessionEnd",session:"thread",path:file};
+    const seen=[];
+    const services={normalize:context,admit:async(f)=>seen.push(f)};
+    observer=new CodexObserver(c,services);
+    observer.accept(callback);
+    await observer.tick();
+    assert.equal(seen.length,0);
+    await observer.stop();
+    observer=new CodexObserver(c,services);
+    await observer.tick();
+    for(const active of observer.active.values()) active.quietSince-=2100;
+    await observer.tick();
+    assert.equal(seen.length,5);
+    assert.equal(observer.status().active,0);
+  } finally {
+    await observer?.stop();
+    if(old===undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME=old;
+  }
+});
+
+test("closed observer drains all 70 turns, encrypts recovery path, and revocation deletes it", async () => {
+  const {CodexObserver}=require("../dist/src/adapters/codex/observer.js");
+  const {registration}=require("../dist/src/adapters/codex/plugin.js");
+  const root=fs.mkdtempSync(path.join(base,"many-observer-"));
+  const c={routeRef:"codex.cli",socketPath:path.join(root,"runtime.sock"),surface:"cli",profile:"fixture",binding:{},transcriptConsent:true};
+  const old=process.env.CODEX_HOME;
+  process.env.CODEX_HOME=path.join(root,"home");
+  const entry=path.resolve(__dirname,"../bin/fi-agent-codex-hook.cjs");
+  let observer;
+  try {
+    await preflightPlugin("enable",c,entry,"0.1.0").commit();
+    const dir=path.join(process.env.CODEX_HOME,"sessions/2026/10/31");
+    fs.mkdirSync(dir,{recursive:true,mode:0o755});
+    const file=path.join(dir,"rollout-canary.jsonl");
+    const rows=[meta()];
+    for(let n=0;n<70;n++) {
+      const turn_id=`t${n}`;
+      rows.push(event("task_started",{turn_id},n*4+1));
+      rows.push({...usage(`r${n}`,n*4+2),payload:{...usage(`r${n}`,n*4+2).payload,turn_id}});
+      rows.push(event("task_complete",{turn_id},n*4+3));
+    }
+    fs.writeFileSync(file,bytes(rows),{mode:0o644});
+    const seen=[];
+    observer=new CodexObserver(c,{normalize:context,admit:async(f)=>seen.push(f)});
+    observer.accept({bundle:registration(c.socketPath).fingerprint,event:"SessionEnd",session:"thread",path:file});
+    const receipts=fs.readdirSync(path.join(root,"codex")).filter((n)=>n.startsWith("announced-"));
+    assert.equal(receipts.length,1);
+    const receipt=path.join(root,"codex",receipts[0]);
+    assert.ok(!fs.readFileSync(receipt,"utf8").includes("rollout-canary"));
+    await observer.tick();
+    await observer.tick();
+    assert.equal(seen.length,0,"a full window cannot bypass terminal quiet grace");
+    for(let n=0;n<10 && observer.status().active;n++) {
+      for(const a of observer.active.values()) a.quietSince-=2100;
+      await observer.tick();
+    }
+    assert.equal(seen.length,140);
+    assert.equal(observer.status().active,0);
+    await observer.stop();
+    await preflightPlugin("disable",{...c,transcriptConsent:false},entry,"0.1.0").commit();
+    assert.equal(fs.existsSync(receipt),false);
+  } finally {
+    await observer?.stop();
+    if(old===undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME=old;
+  }
+});
