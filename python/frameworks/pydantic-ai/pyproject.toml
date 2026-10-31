@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "OpenTelemetry instrumentation for Pydantic AI"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.14"
 authors = [
     { name = "FutureAGI", email = "support@futureagi.com" }
 ]
@@ -21,19 +21,18 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Programming Language :: Python :: 3.15",
     "Framework :: OpenTelemetry",
     "Framework :: OpenTelemetry :: Instrumentations",
 ]
 keywords = ["pydantic-ai", "opentelemetry", "tracing", "observability", "llm", "agents", "traceai", "futureagi"]
 
 dependencies = [
+    "fi-instrumentation-otel>=1.2.2",
+    "pydantic-ai-slim>=1.0.0",
     "opentelemetry-api>=1.0.0",
     "opentelemetry-sdk>=1.0.0",
     "opentelemetry-instrumentation>=0.40b0",
@@ -43,7 +42,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "pydantic-ai>=0.1.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.0.0",
 ]
 
 [project.urls]

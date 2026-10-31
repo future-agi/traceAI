@@ -1,370 +1,113 @@
-"""Pydantic AI Instrumentor.
+"""Configure Pydantic AI's native spans without patching Agent or model methods."""
 
-Main instrumentor class that provides OpenTelemetry tracing for Pydantic AI.
-"""
+import inspect
+from collections.abc import Collection
+from dataclasses import replace
+from typing import Any
 
-import logging
-import sys
-from typing import Any, Collection, Optional
-
-from opentelemetry import trace as trace_api
+from fi_instrumentation.instrumentation import TraceConfig
+from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.metrics import NoOpMeterProvider
 
-from ._agent_wrapper import wrap_agent_run, wrap_tool_function, wrap_legacy_usage_incr
-from ._attributes import PydanticAIAttributes, PydanticAISpanKind
+from ._native import NativeTracerProvider
 
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
-
-_instruments = ("pydantic-ai >= 0.0.1",)
+_CONTENT_FLAGS = (
+    "hide_inputs",
+    "hide_outputs",
+    "hide_input_messages",
+    "hide_output_messages",
+    "hide_input_text",
+    "hide_output_text",
+    "hide_input_images",
+)
 
 
 class PydanticAIInstrumentor(BaseInstrumentor):
-    """OpenTelemetry Instrumentor for Pydantic AI.
+    """Enable native agent, model, and tool tracing on the supplied provider.
 
-    This instrumentor provides comprehensive tracing for Pydantic AI including:
-    - Agent run execution (run, run_sync, run_stream)
-    - Tool function calls
-    - Model requests with usage tracking
-    - Structured output validation
-    - Retry attempts
-
-    Usage:
-        from traceai_pydantic_ai import PydanticAIInstrumentor
-
-        # Initialize with tracer provider
-        PydanticAIInstrumentor().instrument(tracer_provider=provider)
-
-        # Or use default provider
-        PydanticAIInstrumentor().instrument()
-
-        # Use Pydantic AI as normal - traces are automatic
-        from pydantic_ai import Agent
-
-        agent = Agent('openai:gpt-4o', instructions='Be helpful.')
-        result = agent.run_sync('Hello!')
+    ``include_content=False`` is the default. A TraceConfig content-hide flag
+    disables all native content, since native message JSON mixes directions and
+    modalities. ``use_builtin`` remains accepted; both values use the native route.
+    Per-agent explicit ``instrument`` settings continue to take precedence.
     """
 
-    _instance: Optional["PydanticAIInstrumentor"] = None
-    _is_instrumented: bool = False
-
-    def __new__(cls) -> "PydanticAIInstrumentor":
-        """Singleton pattern to ensure single instrumentation."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        """Initialize the singleton once; retain originals for later teardown."""
-        if hasattr(self, "_original_methods"):
-            return
-        super().__init__()
-        self._tracer: Optional[trace_api.Tracer] = None
-        self._original_methods: dict = {}
-        self._legacy_usage_original = None
-        self._use_builtin: bool = False
-
     def instrumentation_dependencies(self) -> Collection[str]:
-        """Return the instrumentation dependencies."""
-        return _instruments
+        # Both the slim and the full distribution install this distribution.
+        return ("pydantic-ai-slim >= 1.0.0",)
 
     def _instrument(self, **kwargs: Any) -> None:
-        """Instrument Pydantic AI.
+        from pydantic_ai import Agent
+        from pydantic_ai.models.instrumented import InstrumentationSettings
 
-        Args:
-            **kwargs: Configuration options
-                - tracer_provider: OpenTelemetry tracer provider
-                - use_builtin: If True, use Pydantic AI's built-in instrumentation
-        """
-        if self._is_instrumented:
-            logger.warning("Pydantic AI is already instrumented")
-            return
-
-        # Get tracer provider
-        tracer_provider = kwargs.get("tracer_provider")
-        if not tracer_provider:
-            tracer_provider = trace_api.get_tracer_provider()
-
-        # Create tracer
-        self._tracer = trace_api.get_tracer(
-            __name__,
-            "0.1.0",
-            tracer_provider,
+        config = kwargs.get("config")
+        if config is None:
+            config = TraceConfig()
+        if not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        include_content = kwargs.get("include_content", False)
+        if not isinstance(include_content, bool):
+            raise TypeError("include_content must be a bool")
+        include_content = include_content and not any(
+            getattr(config, flag) for flag in _CONTENT_FLAGS
         )
+        if not include_content:
+            config = replace(config, _hide_error_details=True)
 
-        # Check if we should use built-in instrumentation
-        self._use_builtin = kwargs.get("use_builtin", False)
-
-        # Try to import and patch Pydantic AI
-        try:
-            self._patch_pydantic_ai()
-            self._is_instrumented = True
-            logger.info("Pydantic AI instrumentation enabled")
-        except ImportError as e:
-            logger.warning(
-                f"Pydantic AI not installed, instrumentation skipped: {e}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to instrument Pydantic AI: {e}")
-            raise
-
-    def _patch_pydantic_ai(self) -> None:
-        """Patch Pydantic AI classes and methods."""
-        try:
-            import pydantic_ai
-            from pydantic_ai import Agent
-        except ImportError:
-            raise ImportError("Could not import pydantic_ai")
-
-        if self._use_builtin:
-            # Use Pydantic AI's built-in instrumentation
-            self._enable_builtin_instrumentation()
-            return
-
-        # Before request-local usage lived on ModelResponse, the SDK updated
-        # Usage in place. Observe its increments in the logical run's context.
-        from pydantic_ai import usage as usage_module
-        if not hasattr(usage_module, "RequestUsage"):
-            usage_class = usage_module.Usage
-            self._legacy_usage_original = (usage_class, usage_class.incr)
-            usage_class.incr = wrap_legacy_usage_incr(usage_class.incr)
-
-        # Store original methods
-        self._original_methods = {
-            "run": Agent.run,
-            "run_sync": Agent.run_sync,
+        provider = kwargs.get("tracer_provider")
+        if provider is None:
+            provider = trace.get_tracer_provider()
+        adapter = NativeTracerProvider(provider, config, include_content)
+        options = {
+            "tracer_provider": adapter,
+            "meter_provider": NoOpMeterProvider(),
+            "include_content": include_content,
+            "include_binary_content": False,
         }
-
-        # Check for run_stream
-        if hasattr(Agent, "run_stream"):
-            self._original_methods["run_stream"] = Agent.run_stream
-
-        # Patch methods
-        capture_legacy = self._legacy_usage_original is not None
-        Agent.run = wrap_agent_run(Agent.run, self._tracer, "run", capture_legacy)
-        Agent.run_sync = wrap_agent_run(Agent.run_sync, self._tracer, "run_sync", capture_legacy)
-
-        if hasattr(Agent, "run_stream"):
-            Agent.run_stream = self._wrap_run_stream(Agent.run_stream)
-
-        # Also patch in any modules that have already imported Agent
-        for module in list(sys.modules.values()):
-            try:
-                if module and getattr(module, "Agent", None) is pydantic_ai.Agent:
-                    pass  # Already patched via class
-            except Exception:
-                continue
-
-        logger.debug("Patched Pydantic AI Agent")
-
-    def _enable_builtin_instrumentation(self) -> None:
-        """Enable Pydantic AI's built-in OpenTelemetry instrumentation."""
-        try:
-            from pydantic_ai import Agent
-
-            # Use Agent.instrument_all() if available
-            if hasattr(Agent, "instrument_all"):
-                Agent.instrument_all()
-                logger.debug("Enabled Pydantic AI built-in instrumentation via Agent.instrument_all()")
-            else:
-                logger.warning("Agent.instrument_all() not available")
-        except Exception as e:
-            logger.warning(f"Failed to enable built-in instrumentation: {e}")
-
-    def _wrap_run_stream(self, original_method):
-        """Wrap run_stream method for async context manager.
-
-        Args:
-            original_method: Original run_stream method
-
-        Returns:
-            Wrapped method
-        """
-        import functools
-        import time
-        import uuid
-
-        from ._agent_wrapper import (
-            extract_model_info,
-            safe_serialize,
-        )
-
-        tracer = self._tracer
-
-        @functools.wraps(original_method)
-        async def wrapper(self, *args, **kwargs):
-            from ._attributes import PydanticAIAttributes, PydanticAISpanKind
-
-            run_id = str(uuid.uuid4())
-
-            # Extract prompt
-            prompt = ""
-            if args:
-                prompt = safe_serialize(args[0])
-            elif "user_prompt" in kwargs:
-                prompt = safe_serialize(kwargs["user_prompt"])
-
-            # Get model info
-            model_info = extract_model_info(self)
-
-            attributes = {
-                PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.STREAM.value,
-                PydanticAIAttributes.RUN_ID: run_id,
-                PydanticAIAttributes.RUN_METHOD: "run_stream",
-                PydanticAIAttributes.RUN_PROMPT: prompt,
-            }
-
-            if model_info.get("model_name"):
-                attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-            if model_info.get("model_provider"):
-                attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
-
-            start_time = time.time()
-
-            # Create span for the entire stream
-            span = tracer.start_span(
-                "pydantic_ai.agent.run_stream",
-                kind=trace_api.SpanKind.CLIENT,
-                attributes=attributes,
-            )
-
-            try:
-                # Call original and return wrapped context manager
-                stream = await original_method(self, *args, **kwargs)
-
-                # Wrap the stream to track completion
-                return _TracedStream(stream, span, start_time, tracer)
-
-            except Exception as e:
-                duration_ms = (time.time() - start_time) * 1000
-                span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
-                span.set_attribute(PydanticAIAttributes.IS_ERROR, True)
-                span.set_attribute(PydanticAIAttributes.ERROR_MESSAGE, str(e))
-                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                span.end()
-                raise
-
-        return wrapper
+        # Native defaults select the supported span-message format, not logs.
+        # Older releases lack these switches; the adapter filters their payloads.
+        parameters = inspect.signature(InstrumentationSettings).parameters
+        if "include_model_request_parameters" in parameters:
+            options["include_model_request_parameters"] = False
+        if "use_aggregated_usage_attribute_names" in parameters:
+            options["use_aggregated_usage_attribute_names"] = True
+        settings = InstrumentationSettings(**options)
+        # Pydantic AI exposes a setter but no getter. Only restore our own value.
+        previous = Agent._instrument_default
+        Agent.instrument_all(settings)
+        self._settings = settings
+        self._previous = previous
+        self._adapter = adapter
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        """Remove Pydantic AI instrumentation."""
-        if not self._is_instrumented:
-            return
+        from pydantic_ai import Agent
 
-        try:
-            from pydantic_ai import Agent
-
-            # Restore original methods
-            for method_name, original in self._original_methods.items():
-                if hasattr(Agent, method_name):
-                    setattr(Agent, method_name, original)
-
-            self._original_methods.clear()
-            if self._legacy_usage_original is not None:
-                usage_class, original = self._legacy_usage_original
-                usage_class.incr = original
-                self._legacy_usage_original = None
-
-        except ImportError:
-            pass
-
-        self._is_instrumented = False
-        self._tracer = None
-
-        logger.info("Pydantic AI instrumentation disabled")
+        if Agent._instrument_default is self._settings:
+            Agent.instrument_all(self._previous)
+        # Cached native settings cannot start new spans after teardown. Spans
+        # already in flight still finish normally on their original provider.
+        self._adapter.enabled = False
+        self._settings = None
+        self._previous = None
 
     @property
     def is_instrumented(self) -> bool:
-        """Check if Pydantic AI is instrumented."""
-        return self._is_instrumented
+        return self.is_instrumented_by_opentelemetry
 
 
-class _TracedStream:
-    """Wrapper for streaming responses that tracks completion."""
-
-    def __init__(self, stream, span, start_time, tracer):
-        self._stream = stream
-        self._span = span
-        self._start_time = start_time
-        self._tracer = tracer
-        self._chunk_count = 0
-
-    async def __aenter__(self):
-        if hasattr(self._stream, "__aenter__"):
-            self._stream = await self._stream.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        import time
-
-        from ._attributes import PydanticAIAttributes
-
-        duration_ms = (time.time() - self._start_time) * 1000
-        self._span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
-        self._span.set_attribute(
-            PydanticAIAttributes.STREAM_CHUNK_COUNT,
-            self._chunk_count,
-        )
-
-        if exc_type:
-            self._span.set_attribute(PydanticAIAttributes.IS_ERROR, True)
-            self._span.set_attribute(PydanticAIAttributes.ERROR_MESSAGE, str(exc_val))
-            self._span.set_status(
-                trace_api.Status(trace_api.StatusCode.ERROR, str(exc_val))
-            )
-            if exc_val:
-                self._span.record_exception(exc_val)
-        else:
-            self._span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
-            self._span.set_status(trace_api.Status(trace_api.StatusCode.OK))
-
-        self._span.end()
-
-        if hasattr(self._stream, "__aexit__"):
-            await self._stream.__aexit__(exc_type, exc_val, exc_tb)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        chunk = await self._stream.__anext__()
-        self._chunk_count += 1
-        return chunk
-
-    # Forward other attributes to underlying stream
-    def __getattr__(self, name):
-        return getattr(self._stream, name)
-
-
-# Convenience function for simple initialization
 def instrument_pydantic_ai(
-    tracer_provider: Optional[Any] = None,
+    tracer_provider: trace.TracerProvider | None = None,
     use_builtin: bool = False,
+    *,
+    include_content: bool = False,
+    config: TraceConfig | None = None,
 ) -> PydanticAIInstrumentor:
-    """Convenience function to instrument Pydantic AI.
-
-    Args:
-        tracer_provider: Optional OpenTelemetry tracer provider
-        use_builtin: If True, use Pydantic AI's built-in instrumentation
-
-    Returns:
-        The instrumentor instance
-
-    Example:
-        from traceai_pydantic_ai import instrument_pydantic_ai
-
-        instrument_pydantic_ai()
-
-        # Now use Pydantic AI - tracing is automatic
-    """
+    """Enable native tracing; the legacy ``use_builtin`` argument is a no-op."""
     instrumentor = PydanticAIInstrumentor()
-
-    kwargs = {}
-    if tracer_provider:
-        kwargs["tracer_provider"] = tracer_provider
-    if use_builtin:
-        kwargs["use_builtin"] = use_builtin
-
-    instrumentor.instrument(**kwargs)
+    instrumentor.instrument(
+        tracer_provider=tracer_provider,
+        use_builtin=use_builtin,
+        include_content=include_content,
+        config=config,
+    )
     return instrumentor
