@@ -60,13 +60,22 @@ function setup(traceConfig = {}, withDefault = false) {
   instrumentation.manuallyInstrument(patched);
 }
 beforeEach(() => setup());
-afterEach(async () => {
+async function teardown() {
+  if (!instrumentation) return;
   for (const transport of transports) transport.close();
   // Manually patched modules are not tracked by the automatic loader; undo the test patch.
   instrumentation.unpatch(patched);
   instrumentation.disable();
   await provider.shutdown();
-});
+  instrumentation = undefined;
+}
+afterEach(teardown);
+async function skipUnsupportedAbort(t, result) {
+  await result.return();
+  // Node 22 does not run afterEach after a runtime t.skip().
+  await teardown();
+  t.skip('SDK 0.4 has no abort support');
+}
 
 let mode;
 function fakeFetch(url, options) {
@@ -198,7 +207,7 @@ for (const method of ['chat', 'generate']) {
   });
   test(`${method}: abort interrupts a pending read and ends once`, async t => {
     const result = await stream(method, 'pending');
-    if (!transports[0].signal) { await result.return(); return t.skip('SDK 0.4 has no abort support'); }
+    if (!transports[0].signal) return skipUnsupportedAbort(t, result);
     const iterator = result[Symbol.asyncIterator]();
     await iterator.next();
     const pending = iterator.next();
@@ -210,7 +219,7 @@ for (const method of ['chat', 'generate']) {
   });
   test(`${method}: client.abort finalizes an unconsumed native stream`, async t => {
     const result = await stream(method, 'pending');
-    if (typeof client.abort !== 'function') { await result.return(); return t.skip('SDK 0.4 has no abort support'); }
+    if (typeof client.abort !== 'function') return skipUnsupportedAbort(t, result);
     client.abort();
     assert.equal(transports[0].signal.aborted, true);
     await wireSpan(0);
@@ -232,7 +241,7 @@ for (const method of ['chat', 'generate']) {
   });
   test(`${method}: return interrupts a pending read`, async t => {
     const result = await stream(method, 'pending');
-    if (!transports[0].signal) { await result.return(); return t.skip('SDK 0.4 has no abort support'); }
+    if (!transports[0].signal) return skipUnsupportedAbort(t, result);
     const iterator = result[Symbol.asyncIterator]();
     await iterator.next();
     const pending = assert.rejects(iterator.next(), { name: 'AbortError' });
