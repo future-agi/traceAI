@@ -26,6 +26,29 @@ export const decodeTraces = (bytes: Uint8Array): any =>
 export function encodeTraceObject(value: object): Buffer {
   return Buffer.from(request.encode(request.fromObject(value)).finish());
 }
+export type NativeIdEncoding = "hex" | "base64";
+/** JSON uses hex IDs; protobufjs decodes bytes to base64. Never guess the codec. */
+export function decodeNativeId(
+  value: unknown,
+  bytes: 8 | 16,
+  encoding: NativeIdEncoding,
+): string {
+  if (typeof value !== "string") throw new Error("INVALID_NATIVE_ID");
+  let hex: string;
+  if (
+    encoding === "hex" &&
+    new RegExp(`^[a-fA-F0-9]{${bytes * 2}}$`).test(value)
+  )
+    hex = value.toLowerCase();
+  else if (encoding === "base64" && value.length === Math.ceil(bytes / 3) * 4) {
+    const decoded = Buffer.from(value, "base64");
+    if (decoded.length !== bytes || decoded.toString("base64") !== value)
+      throw new Error("INVALID_NATIVE_ID");
+    hex = decoded.toString("hex");
+  } else throw new Error("INVALID_NATIVE_ID");
+  if (/^0+$/.test(hex)) throw new Error("INVALID_NATIVE_ID");
+  return hex;
+}
 export function decodeRejections(bytes: Uint8Array): number {
   const value = response.toObject(response.decode(bytes), { longs: String });
   const count = Number(value.partialSuccess?.rejectedSpans ?? 0);

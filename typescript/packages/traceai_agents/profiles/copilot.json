@@ -24,7 +24,7 @@
     "expected_input_tokens": 42925,
     "expected_output_tokens": 146,
     "expected_model_calls": 3,
-    "identity": "HMAC of native trace/span IDs; no cross-source aliases or transcript imports. Per-trace plan, common to all native descendants.",
+    "identity": "HMAC of native trace/span IDs; no cross-source aliases or transcript imports. Per-trace plan, common to all native descendants. Decode JSON hex and protobuf byte IDs with an explicit codec; transport changes preserve native/work/fact/plan identity.",
     "missing_session": "hold; do not infer conversation from names, times or resources",
     "unregistered_labels": "omitted; never infer provider from model name",
     "billing": "github.copilot.cost retained as non-additive multiplier; github.copilot.nano_aiu retained as non-additive source billing units, never USD"
@@ -47,7 +47,7 @@
   "backend": {
     "required_contract": "immutable-agent-v1",
     "related_pr": "https://github.com/future-agi/future-agi/pull/3689",
-    "inspected_head": "9fa711f1bd80acea8bdf4c02089031bdfcf88d9e",
+    "inspected_head": "07cc82a32b24ebff8c43b5cedd427703aca0687b",
     "compatible_aggregation_rules": [
       "Only native chat spans own additive request usage",
       "invoke_agent including subagents/wrappers has contribution=none, no standard usage or cost and no request count",
@@ -55,7 +55,7 @@
       "Summary and multiplier fields never feed fallback pricing or usage reducers",
       "Unknown cost is absent, never explicit zero"
     ],
-    "release_hold": "PR 3689 intentionally rejects reserved immutable identity/plan fields with FI_IMMUTABLE_ADMISSION_UNAVAILABLE. The new runtime profile cannot be exported to that backend yet. Do not remove identity fields or approve a fabricated capability manifest to bypass the hold.",
+    "release_hold": "PR 3689 intentionally rejects reserved immutable identity/plan fields with FI_IMMUTABLE_ADMISSION_UNAVAILABLE. It also holds unsupported cache/reasoning pricing with FI_COST_COVERAGE_UNAVAILABLE when no complete reported cost exists. The new runtime profile cannot be exported to that backend yet. Do not remove identity fields or approve a fabricated capability manifest to bypass the hold.",
     "remaining_acceptance": "Immutable admission, immediate unique reads across all reducers/exports, cache-aware pricing, real staging persistence and UI verification"
   },
   "sources": [

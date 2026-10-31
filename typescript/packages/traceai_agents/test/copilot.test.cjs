@@ -50,6 +50,18 @@ function envelopes(data = structuredClone(fixture)) {
 function normalized(data) {
   return envelopes(data).map((e) => normalizeCopilotCli(e, context));
 }
+function protobufFixture(data) {
+  const wire = structuredClone(data);
+  for (const { span } of envelopes(wire)) {
+    for (const key of ["traceId", "spanId", "parentSpanId"])
+      if (span[key]) span[key] = Buffer.from(span[key], "hex");
+    for (const link of span.links ?? []) {
+      link.traceId = Buffer.from(link.traceId, "hex");
+      link.spanId = Buffer.from(link.spanId, "hex");
+    }
+  }
+  return encodeTraceObject(wire);
+}
 function attr(span, key) {
   return span.attributes.find((a) => a.key === key)?.value;
 }
@@ -358,7 +370,7 @@ for (const type of ["application/json", "application/x-protobuf"])
           body:
             type === "application/json"
               ? JSON.stringify(data)
-              : encodeTraceObject(data),
+              : protobufFixture(data),
         });
       const ack = await send(fixture);
       assert.equal(ack.status, 200);
@@ -372,6 +384,7 @@ for (const type of ["application/json", "application/x-protobuf"])
           0,
         );
       assert.deepEqual(totals(received), [42925, 146, 3]);
+      assert.deepEqual(received, normalized());
       reject = true;
       const partial = await send(fixture);
       assert.equal(partial.headers.get("content-type"), type);
@@ -392,6 +405,103 @@ for (const type of ["application/json", "application/x-protobuf"])
       assert.equal(received.length, 7);
     },
   );
+test("native codec is explicit: protobuf byte lengths cannot masquerade as JSON hex IDs", () => {
+  const encoded = decodeTraces(protobufFixture(fixture));
+  assert.deepEqual(
+    envelopes(encoded).map((e) =>
+      normalizeCopilotCli({ ...e, idEncoding: "base64" }, context),
+    ),
+    normalized(),
+  );
+  // protobufjs treats hex strings as base64, producing invalid 24/12-byte IDs.
+  const malformed = decodeTraces(encodeTraceObject(fixture));
+  for (const e of envelopes(malformed))
+    assert.throws(
+      () => normalizeCopilotCli({ ...e, idEncoding: "base64" }, context),
+      /INVALID_NATIVE_ID/,
+    );
+  for (const e of envelopes(encoded))
+    assert.throws(() => normalizeCopilotCli(e, context), /INVALID_NATIVE_ID/);
+  for (const field of ["traceId", "spanId", "parentSpanId"]) {
+    const e = envelopes(encoded)[0];
+    e.span[field] = envelopes()[0].span[field];
+    assert.throws(
+      () => normalizeCopilotCli({ ...e, idEncoding: "base64" }, context),
+      /INVALID_NATIVE_ID/,
+    );
+  }
+  const e = envelopes(encoded)[0];
+  e.span.links = [{ traceId: e.span.traceId, spanId: "0000000000000001" }];
+  assert.throws(
+    () => normalizeCopilotCli({ ...e, idEncoding: "base64" }, context),
+    /INVALID_NATIVE_ID/,
+  );
+});
+test("native JSON/protobuf replays share durable work identity; malformed bytes are not admitted", async (t) => {
+  const dir = fs.mkdtempSync(path.join(base, "test-"));
+  const spool = new Spool(path.join(dir, "spool"), "0.1.0");
+  let server;
+  t.after(async () => {
+    if (server) await new Promise((r) => server.close(r));
+    spool.close();
+    fs.rmSync(dir, { force: true, recursive: true });
+  });
+  const route = {
+    id: "copilot.cli",
+    binding,
+    policy: { revision: "1", categories: [], ceiling: [] },
+    enabled: true,
+    epoch: 1,
+  };
+  spool.route(route);
+  const admitted = [];
+  server = await startReceiver({
+    coexistence: { state: "owned-or-none" },
+    singleUserApproved: true,
+    normalize: (_span, envelope) => normalizeCopilotCli(envelope, context),
+    admit: async (f) => admitted.push(spool.admit(route.id, f)),
+  });
+  const send = (type, body) =>
+    fetch(`http://127.0.0.1:${server.address().port}/v1/traces`, {
+      method: "POST",
+      headers: { "content-type": type },
+      body,
+    });
+  for (const [type, body] of [
+    ["application/json", JSON.stringify(fixture)],
+    ["application/x-protobuf", protobufFixture(fixture)],
+  ]) {
+    const ack = await send(type, body);
+    assert.equal(ack.status, 200);
+    await ack.arrayBuffer();
+  }
+  assert.deepEqual(
+    admitted.map((a) => a.duplicate),
+    [...Array(7).fill(false), ...Array(7).fill(true)],
+  );
+  const bad = await send("application/x-protobuf", encodeTraceObject(fixture));
+  assert.equal(bad.status, 400);
+  await bad.arrayBuffer();
+  assert.equal(admitted.length, 14);
+  let input = 0,
+    output = 0,
+    calls = 0;
+  for (;;) {
+    const row = spool.next(route.id);
+    if (!row) break;
+    for (const { span } of envelopes(decodeTraces(row.bytes))) {
+      input += attr(span, "gen_ai.usage.input_tokens")?.doubleValue ?? 0;
+      output += attr(span, "gen_ai.usage.output_tokens")?.doubleValue ?? 0;
+      if (attr(span, "fi.usage.contribution")?.stringValue === "request")
+        calls++;
+    }
+    spool.complete(row.id, row.epoch, {
+      state: "accepted",
+      code: "HTTP_ACCEPTED",
+    });
+  }
+  assert.deepEqual([input, output, calls], [42925, 146, 3]);
+});
 test("durable spool replay preserves exact usage and discards raw private data before disk", (t) => {
   const dir = temp(t),
     spool = new Spool(path.join(dir, "spool"), "0.1.0");

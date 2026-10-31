@@ -214,13 +214,15 @@ for (const type of ["application/json", "application/x-protobuf"])
       });
       t.after(() => new Promise((r) => s.close(r)));
       const wire = encodeFacts([fact], binding(s), "0.1.0");
+      const json = decodeTraces(wire);
+      const span = json.resourceSpans[0].scopeSpans[0].spans[0];
+      for (const key of ["traceId", "spanId", "parentSpanId"])
+        if (span[key])
+          span[key] = Buffer.from(span[key], "base64").toString("hex");
       const response = await fetch(binding(s).endpoint, {
         method: "POST",
         headers: { "content-type": type },
-        body:
-          type === "application/json"
-            ? JSON.stringify(decodeTraces(wire))
-            : wire,
+        body: type === "application/json" ? JSON.stringify(json) : wire,
       });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("content-type"), type);

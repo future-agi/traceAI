@@ -9,6 +9,7 @@ import {
 } from "@traceai/agent-core";
 import type { Adapter, Capability, NormalizeContext } from "../adapters.js";
 import type { NativeSpanEnvelope } from "../runtime/receiver.js";
+import { decodeNativeId } from "../export/otlp.js";
 import { AgentError } from "../security/files.js";
 
 export const COPILOT_SCHEMA = "copilot-cli-1.0.98-otel";
@@ -97,20 +98,6 @@ function counters(a: Map<string, unknown>): SourceCounters {
     Object.entries(values).filter(([, v]) => v !== undefined),
   );
 }
-function id(value: unknown, bytes: number): string {
-  if (typeof value !== "string") throw new AgentError("INVALID_NATIVE_ID", 2);
-  const hex = new RegExp(`^[a-fA-F0-9]{${bytes * 2}}$`).test(value)
-    ? value.toLowerCase()
-    : Buffer.from(value, "base64").toString("hex");
-  if (
-    (!new RegExp(`^[a-fA-F0-9]{${bytes * 2}}$`).test(value) &&
-      Buffer.from(hex, "hex").toString("base64") !== value) ||
-    !new RegExp(`^[a-f0-9]{${bytes * 2}}$`).test(hex) ||
-    /^0+$/.test(hex)
-  )
-    throw new AgentError("INVALID_NATIVE_ID", 2);
-  return hex;
-}
 function known(
   value: string | undefined,
   allowed: readonly string[],
@@ -145,6 +132,8 @@ export function normalizeCopilotCli(
     throw new AgentError("UNKNOWN_SOURCE_OPERATION", 5);
   const conversation = string(a.get("gen_ai.conversation.id"));
   if (!conversation) throw new AgentError("HELD_NATIVE_SESSION_IDENTITY", 3);
+  const id = (value: unknown, bytes: 8 | 16): string =>
+    decodeNativeId(value, bytes, envelope.idEncoding ?? "hex");
   const trace = id(span.traceId, 16),
     sourceSpan = id(span.spanId, 8);
   const parent = span.parentSpanId ? id(span.parentSpanId, 8) : undefined;

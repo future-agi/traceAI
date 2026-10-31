@@ -1,6 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { decodeTraces, encodeResponse } from "../export/otlp.js";
+import {
+  decodeNativeId,
+  decodeTraces,
+  encodeResponse,
+  type NativeIdEncoding,
+} from "../export/otlp.js";
 import { AgentError } from "../security/files.js";
 import { minimize, type CanonicalFact } from "@traceai/agent-core";
 export type Coexistence =
@@ -26,6 +31,8 @@ export function preflightNative(mode: Coexistence): void {
 }
 /** In-memory source envelope. Raw resource/scope attributes must never enter storage. */
 export interface NativeSpanEnvelope {
+  /** Omitted only for direct callers supplying standard OTLP JSON (hex IDs). */
+  idEncoding?: NativeIdEncoding;
   span: {
     traceId: unknown;
     spanId: unknown;
@@ -137,6 +144,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
               span,
               resource: resource.resource,
               scope: scope.scope,
+              idEncoding: type === "application/json" ? "hex" : "base64",
             });
         }
       }
@@ -144,15 +152,8 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
       const facts = spans.map((envelope) => {
         const { span } = envelope;
         const fact = minimize(options.normalize(span, envelope));
-        const id = (value: unknown, length: number): string => {
-          if (typeof value !== "string") throw new Error("INVALID_NATIVE_ID");
-          const decoded = new RegExp(`^[a-fA-F0-9]{${length * 2}}$`).test(value)
-            ? value.toLowerCase()
-            : Buffer.from(value, "base64").toString("hex");
-          if (decoded.length !== length * 2 || /^0+$/.test(decoded))
-            throw new Error("INVALID_NATIVE_ID");
-          return decoded;
-        };
+        const id = (value: unknown, length: 8 | 16): string =>
+          decodeNativeId(value, length, envelope.idEncoding!);
         if (
           fact.source !== "native" ||
           fact.traceId !== id(span.traceId, 16) ||
