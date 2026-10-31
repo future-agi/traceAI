@@ -66,7 +66,11 @@ class _StreamLifecycle(ObjectProxy):
         self._self_extracting = set()
         self._self_pending = {}
         self._self_skipped = set()
+        # Telemetry drops are recorded under their own lock and reported only
+        # after the lifecycle lock is released (see _report_drops).
+        self._self_drop_lock = threading.Lock()
         self._self_dropped = False
+        self._self_drop_reports = []
 
     def _begin_operation(self):
         with self._self_lock:
@@ -82,7 +86,10 @@ class _StreamLifecycle(ObjectProxy):
                     self._self_extracting.add(ticket)
                 values = self._extract(item)
         finally:
-            self._settle(terminal, error, ticket, values)
+            try:
+                self._settle(terminal, error, ticket, values)
+            finally:
+                self._report_drops()
 
     def _extract(self, item):
         # SDK model methods and the values they return are external code, so read
@@ -107,13 +114,27 @@ class _StreamLifecycle(ObjectProxy):
 
     def _dropped(self, what, error=None):
         # The span is still exported, but without this event's content or usage.
-        # Report only the exception type: its message may carry model content.
+        # Keep only the exception type: its message may carry model content. This
+        # can run under the lifecycle lock, so it records the drop and logs nothing.
         detail = f"{what} ({type(error).__name__})" if error is not None else what
-        if self._self_dropped:
-            logger.debug("Anthropic stream telemetry %s; the span is incomplete.", detail)
-            return
-        self._self_dropped = True
-        logger.warning("Anthropic stream telemetry %s; the span is incomplete. Later drops on this stream log at DEBUG.", detail)
+        with self._self_drop_lock:
+            level = logging.DEBUG if self._self_dropped else logging.WARNING
+            self._self_dropped = True
+            self._self_drop_reports.append((level, detail))
+
+    def _report_drops(self):
+        # Application logging handlers run here, outside the lifecycle lock, and a
+        # failing handler must not replace the native stream result.
+        with self._self_drop_lock:
+            reports, self._self_drop_reports = self._self_drop_reports, []
+        for level, detail in reports:
+            try:
+                if level == logging.WARNING:
+                    logger.warning("Anthropic stream telemetry %s; the span is incomplete. Later drops on this stream log at DEBUG.", detail)
+                else:
+                    logger.debug("Anthropic stream telemetry %s; the span is incomplete.", detail)
+            except Exception:
+                pass
 
     def _drain(self, everything=False):
         # Merge settled items in ticket order, up to the earliest ticket still

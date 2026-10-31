@@ -1,4 +1,4 @@
-import json, logging
+import inspect, json, logging, sys, threading
 import anthropic, pytest
 try:
     import httpx2 as httpx
@@ -66,6 +66,70 @@ def test_stalled_extraction_is_reported(caplog):
         stream._self_pending[ticket]=None
     stream._self_active=1
     stream._settle(False,None,_stream._MAX_PENDING+2,None)
+    assert drops(caplog)==[], 'nothing is logged while the lifecycle lock may be held'
+    stream._report_drops()
     records=drops(caplog)
     assert len(records)==1 and records[0].levelno==logging.WARNING
     assert 'stopped waiting for 1 stalled stream event(s)' in records[0].getMessage()
+
+@pytest.mark.parametrize('stage',['extract','merge'])
+def test_failing_log_handler_cannot_replace_native_item(monkeypatch,stage):
+    class FailingHandler(logging.Handler):
+        def emit(self,record): raise RuntimeError('synthetic logging sink failure')
+    def fail(self,*args,**kwargs): raise ValueError(SECRET)
+    c=client(event(START)+event(BLOCK)+event(TEXT))
+    p,x,i=setup(); h=FailingHandler(); _stream.logger.addHandler(h); s=None
+    try:
+        monkeypatch.setattr(_stream._MessageResponseAccumulator,stage,fail)
+        s=c.messages.create(**PARAMS)
+        assert [e.type for e in s]==['message_start','content_block_start','content_block_delta']
+    finally:
+        _stream.logger.removeHandler(h); monkeypatch.undo()
+        if s is not None: s.close()
+        i.uninstrument(); p.shutdown(); c.close()
+
+def test_log_handler_runs_outside_the_lifecycle_lock(monkeypatch):
+    # A handler that waits for another thread to close the stream must not deadlock.
+    c=client(event(START)+event(BLOCK)+event(TEXT))
+    p,x,i=setup(); s=c.messages.create(**PARAMS)
+    closed=threading.Event(); waited=[]; threads=[]
+    native_close=s.__wrapped__.close
+    def close():
+        native_close(); closed.set()
+    monkeypatch.setattr(s.__wrapped__,'close',close)
+    def fail(self,*args,**kwargs): raise ValueError(SECRET)
+    monkeypatch.setattr(_stream._MessageResponseAccumulator,'merge',fail)
+    class CloseHandler(logging.Handler):
+        def emit(self,record):
+            if threads: return
+            t=threading.Thread(target=s.close,daemon=True); threads.append(t); t.start()
+            waited.append(closed.wait(2))
+    h=CloseHandler(); _stream.logger.addHandler(h)
+    try:
+        assert next(s).type=='message_start'
+        for t in threads: t.join(2)
+        assert waited==[True]
+    finally:
+        _stream.logger.removeHandler(h); monkeypatch.undo(); s.close()
+        i.uninstrument(); p.shutdown(); c.close()
+
+def test_warning_claim_is_atomic_between_threads():
+    # Pause one thread inside the claim; a second drop meanwhile must not also warn.
+    stream=_stream._StreamLifecycle(iter(()))
+    code=_stream._StreamLifecycle._dropped.__code__
+    lines,start=inspect.getsourcelines(_stream._StreamLifecycle._dropped)
+    line=start+next(n for n,text in enumerate(lines) if 'self._self_dropped = True' in text)
+    paused,resume=threading.Event(),threading.Event()
+    def trace(frame,event_name,arg):
+        if event_name=='line' and frame.f_code is code and frame.f_lineno==line and not paused.is_set():
+            paused.set(); resume.wait(2)
+        return trace
+    def first():
+        sys.settrace(trace)
+        try: stream._dropped('could not read a stream event',ValueError('synthetic'))
+        finally: sys.settrace(None)
+    a=threading.Thread(target=first); a.start(); assert paused.wait(2)
+    b=threading.Thread(target=stream._dropped,args=('could not record a stream event',ValueError('synthetic'))); b.start()
+    b.join(0.3)
+    resume.set(); a.join(2); b.join(2)
+    assert sorted(level for level,_ in stream._self_drop_reports)==[logging.DEBUG,logging.WARNING]
