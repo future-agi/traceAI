@@ -1,3 +1,6 @@
-# Note: Supports both psycopg2-binary and psycopg (v3)
-# At least one of them must be installed
-_instruments = ("pgvector >= 0.2.0",)
+# SQL-level pgvector use does not require the Python type-adapter package.
+# Each maintained instrumentor checks its own installed driver distribution.
+_instruments = (
+    "opentelemetry-instrumentation-psycopg2 >= 0.59b0, < 1",
+    "opentelemetry-instrumentation-psycopg >= 0.59b0, < 1",
+)

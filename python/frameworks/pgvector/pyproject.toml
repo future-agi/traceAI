@@ -30,9 +30,17 @@ fi-instrumentation-otel = ">=0.1.11"
 pgvector = ">=0.2.0"
 psycopg2-binary = ">=2.9.0"
 wrapt = ">=1.0.0"
+opentelemetry-instrumentation-psycopg2 = ">=0.59b0,<1"
+opentelemetry-instrumentation-psycopg = ">=0.59b0,<1"
+psycopg = { version = ">=3.1.0", extras = ["binary"], optional = true }
+
+[tool.poetry.extras]
+psycopg = ["psycopg"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+psycopg = { version = ">=3.1.0", extras = ["binary"] }
+opentelemetry-exporter-otlp-proto-http = ">=1.38.0"
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"
