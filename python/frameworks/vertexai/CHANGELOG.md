@@ -1,4 +1,6 @@
-## [Unreleased]
+
+
+## [0.1.11] - 2026-10-31
 ### Fixed
 - Bound legacy `google-cloud-aiplatform` support to `>=1.61.0,<=1.101.0`, retaining the generative AI modules and allowing the protobuf version required by the tracing dependencies.
 - Default the legacy example to `us-central1` and document replacing `global` with a supported region on older SDKs.

@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.1.11] - 2026-10-29
 ### Fixed
 - Attribute OpenAI-compatible calls to `api.together.ai` to `together`, including streamed and failed requests; unknown proxies and look-alike hosts still use `openai`.
 - Embeddings respect `hide_inputs` for indexed input text and `hide_outputs` for both raw and indexed vectors, including with older fi-core releases.

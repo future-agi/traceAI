@@ -1,0 +1,1731 @@
+{
+  "baseline": "35f2e3dc364676fa5bdab1e71ae500daf9efc00c",
+  "queried_at": "2026-10-29T14:05:42.114014+00:00",
+  "method": "First-parent package history after the last file upload of the baseline manifest version. Explicit one-time patch bumps; no historical replay.",
+  "summary": {
+    "python": {
+      "excluded": 2,
+      "unpublished_current_version": 25,
+      "unchanged_since_upload": 6,
+      "patch_required": 35
+    },
+    "typescript": {
+      "excluded": 0,
+      "unpublished_current_version": 12,
+      "unchanged_since_upload": 32,
+      "patch_required": 3
+    }
+  },
+  "packages": [
+    {
+      "ecosystem": "python",
+      "name": "traceAI-a2a",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/a2a/pyproject.toml",
+      "dir": "python/frameworks/a2a",
+      "release_path": "python/frameworks/a2a",
+      "registry_url": "https://pypi.org/pypi/traceAI-a2a/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-ag2-classic",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/ag2-classic/pyproject.toml",
+      "dir": "python/frameworks/ag2-classic",
+      "release_path": "python/frameworks/ag2-classic",
+      "registry_url": "https://pypi.org/pypi/traceAI-ag2-classic/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-ag2",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/ag2/pyproject.toml",
+      "dir": "python/frameworks/ag2",
+      "release_path": "python/frameworks/ag2",
+      "registry_url": "https://pypi.org/pypi/traceAI-ag2/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-agent-framework",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/agent-framework/pyproject.toml",
+      "dir": "python/frameworks/agent-framework",
+      "release_path": "python/frameworks/agent-framework",
+      "registry_url": "https://pypi.org/pypi/traceAI-agent-framework/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai-agno",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/agno/pyproject.toml",
+      "dir": "python/frameworks/agno",
+      "release_path": "python/frameworks/agno",
+      "registry_url": "https://pypi.org/pypi/traceai-agno/json",
+      "uploaded_at": "2026-03-10T13:50:16.723296Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-anthropic",
+      "version": "0.1.10",
+      "manifest": "python/frameworks/anthropic/pyproject.toml",
+      "dir": "python/frameworks/anthropic",
+      "release_path": "python/frameworks/anthropic",
+      "registry_url": "https://pypi.org/pypi/traceAI-anthropic/json",
+      "uploaded_at": "2026-03-10T13:53:52.839714Z",
+      "status": "patch_required",
+      "next_version": "0.1.11",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-autogen",
+      "version": "0.2.1",
+      "manifest": "python/frameworks/autogen/pyproject.toml",
+      "dir": "python/frameworks/autogen",
+      "release_path": "python/frameworks/autogen",
+      "registry_url": "https://pypi.org/pypi/traceAI-autogen/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-bedrock",
+      "version": "0.1.10",
+      "manifest": "python/frameworks/bedrock/pyproject.toml",
+      "dir": "python/frameworks/bedrock",
+      "release_path": "python/frameworks/bedrock",
+      "registry_url": "https://pypi.org/pypi/traceAI-bedrock/json",
+      "uploaded_at": "2026-03-10T13:53:56.543348Z",
+      "status": "patch_required",
+      "next_version": "0.1.11",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai-beeai",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/beeai/pyproject.toml",
+      "dir": "python/frameworks/beeai",
+      "release_path": "python/frameworks/beeai",
+      "registry_url": "https://pypi.org/pypi/traceai-beeai/json",
+      "uploaded_at": "2026-03-10T13:50:28.296746Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-cerebras",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/cerebras/pyproject.toml",
+      "dir": "python/frameworks/cerebras",
+      "release_path": "python/frameworks/cerebras",
+      "registry_url": "https://pypi.org/pypi/traceAI-cerebras/json",
+      "uploaded_at": "2026-03-10T13:50:34.107758Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-chromadb",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/chromadb/pyproject.toml",
+      "dir": "python/frameworks/chromadb",
+      "release_path": "python/frameworks/chromadb",
+      "registry_url": "https://pypi.org/pypi/traceAI-chromadb/json",
+      "uploaded_at": "2026-03-10T13:50:37.415013Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai-claude-agent-sdk",
+      "version": "0.1.1",
+      "manifest": "python/frameworks/claude-agent-sdk/pyproject.toml",
+      "dir": "python/frameworks/claude-agent-sdk",
+      "release_path": "python/frameworks/claude-agent-sdk",
+      "registry_url": "https://pypi.org/pypi/traceai-claude-agent-sdk/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-cohere",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/cohere/pyproject.toml",
+      "dir": "python/frameworks/cohere",
+      "release_path": "python/frameworks/cohere",
+      "registry_url": "https://pypi.org/pypi/traceAI-cohere/json",
+      "uploaded_at": "2026-03-10T13:50:45.021586Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-crewai",
+      "version": "0.1.9",
+      "manifest": "python/frameworks/crewai/pyproject.toml",
+      "dir": "python/frameworks/crewai",
+      "release_path": "python/frameworks/crewai",
+      "registry_url": "https://pypi.org/pypi/traceAI-crewai/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-deepseek",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/deepseek/pyproject.toml",
+      "dir": "python/frameworks/deepseek",
+      "release_path": "python/frameworks/deepseek",
+      "registry_url": "https://pypi.org/pypi/traceAI-deepseek/json",
+      "uploaded_at": "2026-03-10T13:50:51.178454Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-discoveryengine",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/discoveryengine/pyproject.toml",
+      "dir": "python/frameworks/discoveryengine",
+      "release_path": "python/frameworks/discoveryengine",
+      "registry_url": "https://pypi.org/pypi/traceAI-discoveryengine/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-DSPy",
+      "version": "0.1.8",
+      "manifest": "python/frameworks/dspy/pyproject.toml",
+      "dir": "python/frameworks/dspy",
+      "release_path": "python/frameworks/dspy",
+      "registry_url": "https://pypi.org/pypi/traceAI-DSPy/json",
+      "uploaded_at": "2026-03-10T13:54:03.150970Z",
+      "status": "patch_required",
+      "next_version": "0.1.9",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-elevenlabs-agents",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/elevenlabs-agents/pyproject.toml",
+      "dir": "python/frameworks/elevenlabs-agents",
+      "release_path": "python/frameworks/elevenlabs-agents",
+      "registry_url": "https://pypi.org/pypi/traceAI-elevenlabs-agents/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-exa",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/exa/pyproject.toml",
+      "dir": "python/frameworks/exa",
+      "release_path": "python/frameworks/exa",
+      "registry_url": "https://pypi.org/pypi/traceAI-exa/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-firecrawl",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/firecrawl/pyproject.toml",
+      "dir": "python/frameworks/firecrawl",
+      "release_path": "python/frameworks/firecrawl",
+      "registry_url": "https://pypi.org/pypi/traceAI-firecrawl/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-fireworks",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/fireworks/pyproject.toml",
+      "dir": "python/frameworks/fireworks",
+      "release_path": "python/frameworks/fireworks",
+      "registry_url": "https://pypi.org/pypi/traceAI-fireworks/json",
+      "uploaded_at": "2026-03-10T13:50:56.768726Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-google-adk",
+      "version": "0.1.5",
+      "manifest": "python/frameworks/google-adk/pyproject.toml",
+      "dir": "python/frameworks/google-adk",
+      "release_path": "python/frameworks/google-adk",
+      "registry_url": "https://pypi.org/pypi/traceAI-google-adk/json",
+      "uploaded_at": "2026-05-15T11:42:17.239594Z",
+      "status": "patch_required",
+      "next_version": "0.1.6",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-google-genai-live",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/google-genai-live/pyproject.toml",
+      "dir": "python/frameworks/google-genai-live",
+      "release_path": "python/frameworks/google-genai-live",
+      "registry_url": "https://pypi.org/pypi/traceAI-google-genai-live/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-google-genai",
+      "version": "0.1.2",
+      "manifest": "python/frameworks/google-genai/pyproject.toml",
+      "dir": "python/frameworks/google-genai",
+      "release_path": "python/frameworks/google-genai",
+      "registry_url": "https://pypi.org/pypi/traceAI-google-genai/json",
+      "uploaded_at": "2026-03-10T13:54:10.995231Z",
+      "status": "patch_required",
+      "next_version": "0.1.3",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-groq",
+      "version": "0.1.9",
+      "manifest": "python/frameworks/groq/pyproject.toml",
+      "dir": "python/frameworks/groq",
+      "release_path": "python/frameworks/groq",
+      "registry_url": "https://pypi.org/pypi/traceAI-groq/json",
+      "uploaded_at": "2026-03-10T13:54:14.486918Z",
+      "status": "patch_required",
+      "next_version": "0.1.10",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-guardrails",
+      "version": "0.2.0",
+      "manifest": "python/frameworks/guardrails/pyproject.toml",
+      "dir": "python/frameworks/guardrails",
+      "release_path": "python/frameworks/guardrails",
+      "registry_url": "https://pypi.org/pypi/traceAI-guardrails/json",
+      "uploaded_at": "2026-03-10T13:51:05.971848Z",
+      "status": "patch_required",
+      "next_version": "0.2.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-haystack",
+      "version": "0.1.9",
+      "manifest": "python/frameworks/haystack/pyproject.toml",
+      "dir": "python/frameworks/haystack",
+      "release_path": "python/frameworks/haystack",
+      "registry_url": "https://pypi.org/pypi/traceAI-haystack/json",
+      "uploaded_at": "2026-03-10T13:54:18.611982Z",
+      "status": "patch_required",
+      "next_version": "0.1.10",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "futureagi-hermes-plugin",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/hermes-agent/hermes-plugin/futureagi/pyproject.toml",
+      "dir": "python/frameworks/hermes-agent/hermes-plugin/futureagi",
+      "release_path": "python/frameworks/hermes-agent/hermes-plugin/futureagi",
+      "status": "excluded",
+      "reason": "Hermes plugin dependency manifest, explicitly not a buildable distribution"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-hermes-agent",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/hermes-agent/pyproject.toml",
+      "dir": "python/frameworks/hermes-agent",
+      "release_path": "python/frameworks/hermes-agent",
+      "registry_url": "https://pypi.org/pypi/traceAI-hermes-agent/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-huggingface",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/huggingface/pyproject.toml",
+      "dir": "python/frameworks/huggingface",
+      "release_path": "python/frameworks/huggingface",
+      "registry_url": "https://pypi.org/pypi/traceAI-huggingface/json",
+      "uploaded_at": "2026-03-10T13:51:11.384477Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-instructor",
+      "version": "0.2.0",
+      "manifest": "python/frameworks/instructor/pyproject.toml",
+      "dir": "python/frameworks/instructor",
+      "release_path": "python/frameworks/instructor",
+      "registry_url": "https://pypi.org/pypi/traceAI-instructor/json",
+      "uploaded_at": "2026-03-10T13:51:15.272666Z",
+      "status": "patch_required",
+      "next_version": "0.2.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-lancedb",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/lancedb/pyproject.toml",
+      "dir": "python/frameworks/lancedb",
+      "release_path": "python/frameworks/lancedb",
+      "registry_url": "https://pypi.org/pypi/traceAI-lancedb/json",
+      "uploaded_at": "2026-03-10T13:51:19.478967Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-langchain",
+      "version": "0.2.1",
+      "manifest": "python/frameworks/langchain/pyproject.toml",
+      "dir": "python/frameworks/langchain",
+      "release_path": "python/frameworks/langchain",
+      "registry_url": "https://pypi.org/pypi/traceAI-langchain/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-litellm",
+      "version": "0.1.10",
+      "manifest": "python/frameworks/litellm/pyproject.toml",
+      "dir": "python/frameworks/litellm",
+      "release_path": "python/frameworks/litellm",
+      "registry_url": "https://pypi.org/pypi/traceAI-litellm/json",
+      "uploaded_at": "2026-03-10T13:54:26.855364Z",
+      "status": "patch_required",
+      "next_version": "0.1.11",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-livekit",
+      "version": "0.1.2",
+      "manifest": "python/frameworks/livekit/pyproject.toml",
+      "dir": "python/frameworks/livekit",
+      "release_path": "python/frameworks/livekit",
+      "registry_url": "https://pypi.org/pypi/traceAI-livekit/json",
+      "uploaded_at": "2026-10-21T18:52:18.330496Z",
+      "status": "patch_required",
+      "next_version": "0.1.3",
+      "commits": [
+        {
+          "sha": "fab1e035d404f20a88e0f0c103a4de91a759f321",
+          "committed_at": "2026-10-25T19:19:58-07:00",
+          "subject": "Merge pull request #281 from future-agi/fix/TH-8727-register-keeps-exporter"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-llamaindex",
+      "version": "0.1.9",
+      "manifest": "python/frameworks/llama_index/pyproject.toml",
+      "dir": "python/frameworks/llama_index",
+      "release_path": "python/frameworks/llama_index",
+      "registry_url": "https://pypi.org/pypi/traceAI-llamaindex/json",
+      "uploaded_at": "2026-03-10T13:54:30.775309Z",
+      "status": "patch_required",
+      "next_version": "0.1.10",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-mcp-use",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/mcp-use/pyproject.toml",
+      "dir": "python/frameworks/mcp-use",
+      "release_path": "python/frameworks/mcp-use",
+      "registry_url": "https://pypi.org/pypi/traceAI-mcp-use/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-mcp",
+      "version": "0.1.2",
+      "manifest": "python/frameworks/mcp/pyproject.toml",
+      "dir": "python/frameworks/mcp",
+      "release_path": "python/frameworks/mcp",
+      "registry_url": "https://pypi.org/pypi/traceAI-mcp/json",
+      "uploaded_at": "2026-03-10T13:54:33.971105Z",
+      "status": "patch_required",
+      "next_version": "0.1.3",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-milvus",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/milvus/pyproject.toml",
+      "dir": "python/frameworks/milvus",
+      "release_path": "python/frameworks/milvus",
+      "registry_url": "https://pypi.org/pypi/traceAI-milvus/json",
+      "uploaded_at": "2026-03-10T13:51:32.184959Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-minimax",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/minimax/pyproject.toml",
+      "dir": "python/frameworks/minimax",
+      "release_path": "python/frameworks/minimax",
+      "registry_url": "https://pypi.org/pypi/traceAI-minimax/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-mistralai",
+      "version": "0.1.8",
+      "manifest": "python/frameworks/mistralai/pyproject.toml",
+      "dir": "python/frameworks/mistralai",
+      "release_path": "python/frameworks/mistralai",
+      "registry_url": "https://pypi.org/pypi/traceAI-mistralai/json",
+      "uploaded_at": "2026-03-10T13:54:37.381487Z",
+      "status": "patch_required",
+      "next_version": "0.1.9",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-mongodb",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/mongodb-vector/pyproject.toml",
+      "dir": "python/frameworks/mongodb-vector",
+      "release_path": "python/frameworks/mongodb-vector",
+      "registry_url": "https://pypi.org/pypi/traceAI-mongodb/json",
+      "uploaded_at": "2026-03-10T13:51:37.021751Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-ollama",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/ollama/pyproject.toml",
+      "dir": "python/frameworks/ollama",
+      "release_path": "python/frameworks/ollama",
+      "registry_url": "https://pypi.org/pypi/traceAI-ollama/json",
+      "uploaded_at": "2026-03-10T13:51:40.900357Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-openai-agents",
+      "version": "0.1.6",
+      "manifest": "python/frameworks/openai-agents/pyproject.toml",
+      "dir": "python/frameworks/openai-agents",
+      "release_path": "python/frameworks/openai-agents",
+      "registry_url": "https://pypi.org/pypi/traceAI-openai-agents/json",
+      "uploaded_at": "2026-03-10T13:54:45.128958Z",
+      "status": "patch_required",
+      "next_version": "0.1.7",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-openai-realtime",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/openai-realtime/pyproject.toml",
+      "dir": "python/frameworks/openai-realtime",
+      "release_path": "python/frameworks/openai-realtime",
+      "registry_url": "https://pypi.org/pypi/traceAI-openai-realtime/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-openai",
+      "version": "0.1.10",
+      "manifest": "python/frameworks/openai/pyproject.toml",
+      "dir": "python/frameworks/openai",
+      "release_path": "python/frameworks/openai",
+      "registry_url": "https://pypi.org/pypi/traceAI-openai/json",
+      "uploaded_at": "2026-03-10T13:54:41.234960Z",
+      "status": "patch_required",
+      "next_version": "0.1.11",
+      "commits": [
+        {
+          "sha": "b79e0dbd1e7b9cdc5bbe01ed62251ef74dd630a3",
+          "committed_at": "2026-10-27T22:09:34-07:00",
+          "subject": "Merge pull request #249 from future-agi/fix/th-8402-openai-compatible-provider-model"
+        },
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-parallel",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/parallel/pyproject.toml",
+      "dir": "python/frameworks/parallel",
+      "release_path": "python/frameworks/parallel",
+      "registry_url": "https://pypi.org/pypi/traceAI-parallel/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-pgvector",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/pgvector/pyproject.toml",
+      "dir": "python/frameworks/pgvector",
+      "release_path": "python/frameworks/pgvector",
+      "registry_url": "https://pypi.org/pypi/traceAI-pgvector/json",
+      "uploaded_at": "2026-03-10T13:51:48.045381Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-pinecone",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/pinecone/pyproject.toml",
+      "dir": "python/frameworks/pinecone",
+      "release_path": "python/frameworks/pinecone",
+      "registry_url": "https://pypi.org/pypi/traceAI-pinecone/json",
+      "uploaded_at": "2026-03-10T13:51:52.262637Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-pipecat",
+      "version": "0.1.1",
+      "manifest": "python/frameworks/pipecat/pyproject.toml",
+      "dir": "python/frameworks/pipecat",
+      "release_path": "python/frameworks/pipecat",
+      "registry_url": "https://pypi.org/pypi/traceAI-pipecat/json",
+      "uploaded_at": "2026-03-10T13:54:48.532098Z",
+      "status": "patch_required",
+      "next_version": "0.1.2",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-portkey",
+      "version": "0.1.2",
+      "manifest": "python/frameworks/portkey/pyproject.toml",
+      "dir": "python/frameworks/portkey",
+      "release_path": "python/frameworks/portkey",
+      "registry_url": "https://pypi.org/pypi/traceAI-portkey/json",
+      "uploaded_at": "2026-03-10T13:54:51.994641Z",
+      "status": "patch_required",
+      "next_version": "0.1.3",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai-pydantic-ai",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/pydantic-ai/pyproject.toml",
+      "dir": "python/frameworks/pydantic-ai",
+      "release_path": "python/frameworks/pydantic-ai",
+      "registry_url": "https://pypi.org/pypi/traceai-pydantic-ai/json",
+      "uploaded_at": "2026-03-10T13:51:59.642183Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-qdrant",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/qdrant/pyproject.toml",
+      "dir": "python/frameworks/qdrant",
+      "release_path": "python/frameworks/qdrant",
+      "registry_url": "https://pypi.org/pypi/traceAI-qdrant/json",
+      "uploaded_at": "2026-03-10T13:52:03.434056Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-redis",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/redis-vector/pyproject.toml",
+      "dir": "python/frameworks/redis-vector",
+      "release_path": "python/frameworks/redis-vector",
+      "registry_url": "https://pypi.org/pypi/traceAI-redis/json",
+      "uploaded_at": "2026-03-10T13:52:06.450780Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-replicate",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/replicate/pyproject.toml",
+      "dir": "python/frameworks/replicate",
+      "release_path": "python/frameworks/replicate",
+      "registry_url": "https://pypi.org/pypi/traceAI-replicate/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-semantic-kernel",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/semantic-kernel/pyproject.toml",
+      "dir": "python/frameworks/semantic-kernel",
+      "release_path": "python/frameworks/semantic-kernel",
+      "registry_url": "https://pypi.org/pypi/traceAI-semantic-kernel/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-smolagents",
+      "version": "0.1.5",
+      "manifest": "python/frameworks/smolagents/pyproject.toml",
+      "dir": "python/frameworks/smolagents",
+      "release_path": "python/frameworks/smolagents",
+      "registry_url": "https://pypi.org/pypi/traceAI-smolagents/json",
+      "uploaded_at": "2026-03-10T13:54:55.357292Z",
+      "status": "patch_required",
+      "next_version": "0.1.6",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai-strands",
+      "version": "0.1.1",
+      "manifest": "python/frameworks/strands/pyproject.toml",
+      "dir": "python/frameworks/strands",
+      "release_path": "python/frameworks/strands",
+      "registry_url": "https://pypi.org/pypi/traceai-strands/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-tavily",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/tavily/pyproject.toml",
+      "dir": "python/frameworks/tavily",
+      "release_path": "python/frameworks/tavily",
+      "registry_url": "https://pypi.org/pypi/traceAI-tavily/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-together",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/together/pyproject.toml",
+      "dir": "python/frameworks/together",
+      "release_path": "python/frameworks/together",
+      "registry_url": "https://pypi.org/pypi/traceAI-together/json",
+      "uploaded_at": "2026-03-10T13:52:15.837870Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-typesafe",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/typesafe/pyproject.toml",
+      "dir": "python/frameworks/typesafe",
+      "release_path": "python/frameworks/typesafe",
+      "registry_url": "https://pypi.org/pypi/traceAI-typesafe/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-vertexai",
+      "version": "0.1.10",
+      "manifest": "python/frameworks/vertexai/pyproject.toml",
+      "dir": "python/frameworks/vertexai",
+      "release_path": "python/frameworks/vertexai",
+      "registry_url": "https://pypi.org/pypi/traceAI-vertexai/json",
+      "uploaded_at": "2026-03-10T13:54:59.021874Z",
+      "status": "patch_required",
+      "next_version": "0.1.11",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        },
+        {
+          "sha": "0b0224e21d0e2c45cd878a159fcb0e5a9f3e18f3",
+          "committed_at": "2026-03-10T19:54:28+05:30",
+          "subject": "Merge pull request #136 from future-agi/version/bump-framework-versions"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-vllm",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/vllm/pyproject.toml",
+      "dir": "python/frameworks/vllm",
+      "release_path": "python/frameworks/vllm",
+      "registry_url": "https://pypi.org/pypi/traceAI-vllm/json",
+      "uploaded_at": "2026-03-11T08:07:15.657034Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-voyage",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/voyage/pyproject.toml",
+      "dir": "python/frameworks/voyage",
+      "release_path": "python/frameworks/voyage",
+      "registry_url": "https://pypi.org/pypi/traceAI-voyage/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-weaviate",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/weaviate/pyproject.toml",
+      "dir": "python/frameworks/weaviate",
+      "release_path": "python/frameworks/weaviate",
+      "registry_url": "https://pypi.org/pypi/traceAI-weaviate/json",
+      "uploaded_at": "2026-03-11T08:07:20.065220Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceAI-xai",
+      "version": "0.1.0",
+      "manifest": "python/frameworks/xai/pyproject.toml",
+      "dir": "python/frameworks/xai",
+      "release_path": "python/frameworks/xai",
+      "registry_url": "https://pypi.org/pypi/traceAI-xai/json",
+      "uploaded_at": "2026-03-11T08:07:23.434082Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "43d87a74df840d3c711230b4a749f4a9c607e51b",
+          "committed_at": "2026-10-19T22:37:02+05:30",
+          "subject": "Merge pull request #277 from future-agi/main"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "fi-instrumentation-otel",
+      "version": "1.2.1",
+      "manifest": "python/pyproject.toml",
+      "dir": "python",
+      "release_path": "python",
+      "registry_url": "https://pypi.org/pypi/fi-instrumentation-otel/json",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "python",
+      "name": "traceai",
+      "version": "0.1.0",
+      "manifest": "python/traceai/pyproject.toml",
+      "dir": "python/traceai",
+      "release_path": "python/traceai",
+      "status": "excluded",
+      "reason": "the PyPI name traceai belongs to another publisher; the package has no registry name yet"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-core",
+      "version": "1.1.0",
+      "manifest": "typescript/packages/fi-core/package.json",
+      "dir": "typescript/packages/fi-core",
+      "release_path": "typescript/packages/fi-core",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-core",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-semantic-conventions",
+      "version": "1.0.0",
+      "manifest": "typescript/packages/fi-semantic-conventions/package.json",
+      "dir": "typescript/packages/fi-semantic-conventions",
+      "release_path": "typescript/packages/fi-semantic-conventions",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-semantic-conventions",
+      "uploaded_at": "2026-03-10T14:06:26.792Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/anthropic",
+      "version": "0.1.3",
+      "manifest": "typescript/packages/traceai_anthropic/package.json",
+      "dir": "typescript/packages/traceai_anthropic",
+      "release_path": "typescript/packages/traceai_anthropic",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fanthropic",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/bedrock",
+      "version": "0.1.1",
+      "manifest": "typescript/packages/traceai_bedrock/package.json",
+      "dir": "typescript/packages/traceai_bedrock",
+      "release_path": "typescript/packages/traceai_bedrock",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fbedrock",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/beeai",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_beeai/package.json",
+      "dir": "typescript/packages/traceai_beeai",
+      "release_path": "typescript/packages/traceai_beeai",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fbeeai",
+      "uploaded_at": "2026-03-10T14:06:35.929Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/cerebras",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_cerebras/package.json",
+      "dir": "typescript/packages/traceai_cerebras",
+      "release_path": "typescript/packages/traceai_cerebras",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fcerebras",
+      "uploaded_at": "2026-03-10T14:06:37.965Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/chromadb",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_chromadb/package.json",
+      "dir": "typescript/packages/traceai_chromadb",
+      "release_path": "typescript/packages/traceai_chromadb",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fchromadb",
+      "uploaded_at": "2026-03-10T14:06:41.696Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/claude-agent-sdk",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_claude_agent_sdk/package.json",
+      "dir": "typescript/packages/traceai_claude_agent_sdk",
+      "release_path": "typescript/packages/traceai_claude_agent_sdk",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fclaude-agent-sdk",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/codex-sdk",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_codex_sdk/package.json",
+      "dir": "typescript/packages/traceai_codex_sdk",
+      "release_path": "typescript/packages/traceai_codex_sdk",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fcodex-sdk",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/cohere",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_cohere/package.json",
+      "dir": "typescript/packages/traceai_cohere",
+      "release_path": "typescript/packages/traceai_cohere",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fcohere",
+      "uploaded_at": "2026-03-10T14:06:46.183Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/cursor-sdk",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_cursor_sdk/package.json",
+      "dir": "typescript/packages/traceai_cursor_sdk",
+      "release_path": "typescript/packages/traceai_cursor_sdk",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fcursor-sdk",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/deepseek",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_deepseek/package.json",
+      "dir": "typescript/packages/traceai_deepseek",
+      "release_path": "typescript/packages/traceai_deepseek",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fdeepseek",
+      "uploaded_at": "2026-03-10T14:06:48.171Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fireworks",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_fireworks/package.json",
+      "dir": "typescript/packages/traceai_fireworks",
+      "release_path": "typescript/packages/traceai_fireworks",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffireworks",
+      "uploaded_at": "2026-03-10T14:06:50.191Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/genkit",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_genkit/package.json",
+      "dir": "typescript/packages/traceai_genkit",
+      "release_path": "typescript/packages/traceai_genkit",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fgenkit",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-instrumentation-google-adk",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_google_adk/package.json",
+      "dir": "typescript/packages/traceai_google_adk",
+      "release_path": "typescript/packages/traceai_google_adk",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-instrumentation-google-adk",
+      "uploaded_at": "2026-03-10T14:06:55.963Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/google-genai",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_google_genai/package.json",
+      "dir": "typescript/packages/traceai_google_genai",
+      "release_path": "typescript/packages/traceai_google_genai",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fgoogle-genai",
+      "uploaded_at": "2026-03-10T14:07:01.753Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/groq",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_groq/package.json",
+      "dir": "typescript/packages/traceai_groq",
+      "release_path": "typescript/packages/traceai_groq",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fgroq",
+      "uploaded_at": "2026-03-10T14:07:06.153Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/guardrails",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_guardrails/package.json",
+      "dir": "typescript/packages/traceai_guardrails",
+      "release_path": "typescript/packages/traceai_guardrails",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fguardrails",
+      "uploaded_at": "2026-03-10T14:07:10.582Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/huggingface",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_huggingface/package.json",
+      "dir": "typescript/packages/traceai_huggingface",
+      "release_path": "typescript/packages/traceai_huggingface",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fhuggingface",
+      "uploaded_at": "2026-03-10T14:07:12.927Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/instructor",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_instructor/package.json",
+      "dir": "typescript/packages/traceai_instructor",
+      "release_path": "typescript/packages/traceai_instructor",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Finstructor",
+      "uploaded_at": "2026-03-10T14:07:16.689Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/lancedb",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_lancedb/package.json",
+      "dir": "typescript/packages/traceai_lancedb",
+      "release_path": "typescript/packages/traceai_lancedb",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Flancedb",
+      "uploaded_at": "2026-03-10T14:07:18.813Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/langchain",
+      "version": "0.1.3",
+      "manifest": "typescript/packages/traceai_langchain/package.json",
+      "dir": "typescript/packages/traceai_langchain",
+      "release_path": "typescript/packages/traceai_langchain",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Flangchain",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-instrumentation-livekit",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_livekit/package.json",
+      "dir": "typescript/packages/traceai_livekit",
+      "release_path": "typescript/packages/traceai_livekit",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-instrumentation-livekit",
+      "uploaded_at": "2026-03-10T14:07:24.079Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/llamaindex",
+      "version": "0.1.1",
+      "manifest": "typescript/packages/traceai_llamaindex/package.json",
+      "dir": "typescript/packages/traceai_llamaindex",
+      "release_path": "typescript/packages/traceai_llamaindex",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fllamaindex",
+      "uploaded_at": "2025-08-28T10:04:10.503Z",
+      "status": "patch_required",
+      "next_version": "0.1.2",
+      "commits": [
+        {
+          "sha": "2cecd1b4f7f6dd70444fd1ad81f030f6a8678725",
+          "committed_at": "2026-03-03T12:21:33+05:30",
+          "subject": "Merge pull request #133 from future-agi/fix/e2e-tests"
+        },
+        {
+          "sha": "916e92b714c2819e033c4951731c3c44fe936a61",
+          "committed_at": "2026-02-24T12:54:56+05:30",
+          "subject": "Merge pull request #127 from future-agi/stack/1-csharp"
+        }
+      ]
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/mastra",
+      "version": "0.2.0",
+      "manifest": "typescript/packages/traceai_mastra/package.json",
+      "dir": "typescript/packages/traceai_mastra",
+      "release_path": "typescript/packages/traceai_mastra",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fmastra",
+      "uploaded_at": "2026-06-03T19:13:50.554Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/mcp",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_mcp/package.json",
+      "dir": "typescript/packages/traceai_mcp",
+      "release_path": "typescript/packages/traceai_mcp",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fmcp",
+      "uploaded_at": "2025-08-20T16:01:00.841Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "2cecd1b4f7f6dd70444fd1ad81f030f6a8678725",
+          "committed_at": "2026-03-03T12:21:33+05:30",
+          "subject": "Merge pull request #133 from future-agi/fix/e2e-tests"
+        },
+        {
+          "sha": "916e92b714c2819e033c4951731c3c44fe936a61",
+          "committed_at": "2026-02-24T12:54:56+05:30",
+          "subject": "Merge pull request #127 from future-agi/stack/1-csharp"
+        },
+        {
+          "sha": "4fa8e96f564fd4823e92c566e6efb2c476501917",
+          "committed_at": "2025-08-20T23:45:54+05:30",
+          "subject": "Merge pull request #105 from future-agi/bug/version-fix"
+        }
+      ]
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/milvus",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_milvus/package.json",
+      "dir": "typescript/packages/traceai_milvus",
+      "release_path": "typescript/packages/traceai_milvus",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fmilvus",
+      "uploaded_at": "2026-03-10T14:07:26.128Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/mistral",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_mistral/package.json",
+      "dir": "typescript/packages/traceai_mistral",
+      "release_path": "typescript/packages/traceai_mistral",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fmistral",
+      "uploaded_at": "2026-03-10T14:07:30.598Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/mongodb",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_mongodb/package.json",
+      "dir": "typescript/packages/traceai_mongodb",
+      "release_path": "typescript/packages/traceai_mongodb",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fmongodb",
+      "uploaded_at": "2026-03-10T14:07:32.906Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/ollama",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_ollama/package.json",
+      "dir": "typescript/packages/traceai_ollama",
+      "release_path": "typescript/packages/traceai_ollama",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Follama",
+      "uploaded_at": "2026-03-10T14:07:34.918Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/openai",
+      "version": "0.1.14",
+      "manifest": "typescript/packages/traceai_openai/package.json",
+      "dir": "typescript/packages/traceai_openai",
+      "release_path": "typescript/packages/traceai_openai",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fopenai",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/openai-agents",
+      "version": "0.2.1",
+      "manifest": "typescript/packages/traceai_openai_agents/package.json",
+      "dir": "typescript/packages/traceai_openai_agents",
+      "release_path": "typescript/packages/traceai_openai_agents",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fopenai-agents",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/pgvector",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_pgvector/package.json",
+      "dir": "typescript/packages/traceai_pgvector",
+      "release_path": "typescript/packages/traceai_pgvector",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fpgvector",
+      "uploaded_at": "2026-03-10T14:07:41.410Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/pi-coding-agent",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_pi_coding_agent/package.json",
+      "dir": "typescript/packages/traceai_pi_coding_agent",
+      "release_path": "typescript/packages/traceai_pi_coding_agent",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fpi-coding-agent",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/pinecone",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_pinecone/package.json",
+      "dir": "typescript/packages/traceai_pinecone",
+      "release_path": "typescript/packages/traceai_pinecone",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fpinecone",
+      "uploaded_at": "2026-03-10T14:07:45.506Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-instrumentation-pipecat",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_pipecat/package.json",
+      "dir": "typescript/packages/traceai_pipecat",
+      "release_path": "typescript/packages/traceai_pipecat",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-instrumentation-pipecat",
+      "uploaded_at": "2026-03-10T14:07:49.926Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/portkey",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_portkey/package.json",
+      "dir": "typescript/packages/traceai_portkey",
+      "release_path": "typescript/packages/traceai_portkey",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fportkey",
+      "uploaded_at": "2026-03-10T14:07:54.357Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/qdrant",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_qdrant/package.json",
+      "dir": "typescript/packages/traceai_qdrant",
+      "release_path": "typescript/packages/traceai_qdrant",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fqdrant",
+      "uploaded_at": "2026-03-10T14:07:57.908Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/redis",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_redis/package.json",
+      "dir": "typescript/packages/traceai_redis",
+      "release_path": "typescript/packages/traceai_redis",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fredis",
+      "uploaded_at": "2026-03-10T14:08:00.127Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/strands",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_strands/package.json",
+      "dir": "typescript/packages/traceai_strands",
+      "release_path": "typescript/packages/traceai_strands",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fstrands",
+      "uploaded_at": "2026-03-10T14:08:04.160Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/together",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_together/package.json",
+      "dir": "typescript/packages/traceai_together",
+      "release_path": "typescript/packages/traceai_together",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ftogether",
+      "uploaded_at": "2026-03-10T14:08:06.485Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/vercel",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_vercel/package.json",
+      "dir": "typescript/packages/traceai_vercel",
+      "release_path": "typescript/packages/traceai_vercel",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fvercel",
+      "uploaded_at": "2025-07-21T12:24:07.669Z",
+      "status": "patch_required",
+      "next_version": "0.1.1",
+      "commits": [
+        {
+          "sha": "2cecd1b4f7f6dd70444fd1ad81f030f6a8678725",
+          "committed_at": "2026-03-03T12:21:33+05:30",
+          "subject": "Merge pull request #133 from future-agi/fix/e2e-tests"
+        },
+        {
+          "sha": "916e92b714c2819e033c4951731c3c44fe936a61",
+          "committed_at": "2026-02-24T12:54:56+05:30",
+          "subject": "Merge pull request #127 from future-agi/stack/1-csharp"
+        }
+      ]
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/fi-instrumentation-vertexai",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_vertexai/package.json",
+      "dir": "typescript/packages/traceai_vertexai",
+      "release_path": "typescript/packages/traceai_vertexai",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Ffi-instrumentation-vertexai",
+      "uploaded_at": "2026-03-10T14:08:10.945Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/vllm",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_vllm/package.json",
+      "dir": "typescript/packages/traceai_vllm",
+      "release_path": "typescript/packages/traceai_vllm",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fvllm",
+      "uploaded_at": "2026-03-10T14:08:12.880Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/voltagent",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_voltagent/package.json",
+      "dir": "typescript/packages/traceai_voltagent",
+      "release_path": "typescript/packages/traceai_voltagent",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fvoltagent",
+      "uploaded_at": null,
+      "status": "unpublished_current_version"
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/weaviate",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_weaviate/package.json",
+      "dir": "typescript/packages/traceai_weaviate",
+      "release_path": "typescript/packages/traceai_weaviate",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fweaviate",
+      "uploaded_at": "2026-03-10T14:08:15.065Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    },
+    {
+      "ecosystem": "typescript",
+      "name": "@traceai/xai",
+      "version": "0.1.0",
+      "manifest": "typescript/packages/traceai_xai/package.json",
+      "dir": "typescript/packages/traceai_xai",
+      "release_path": "typescript/packages/traceai_xai",
+      "registry_url": "https://registry.npmjs.org/@traceai%2Fxai",
+      "uploaded_at": "2026-03-10T14:08:16.928Z",
+      "status": "unchanged_since_upload",
+      "commits": []
+    }
+  ]
+}

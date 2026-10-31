@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-together"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for Together AI - chat, completions, and embeddings"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

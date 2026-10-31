@@ -19,7 +19,7 @@ logger.addHandler(logging.NullHandler())
 
 _MODULE_V04_AGENTS = "autogen_agentchat.agents"
 _MODULE_V04_TEAMS = "autogen_agentchat.teams"
-__version__ = "0.2.1"
+__version__ = "0.2.1"  # x-release-please-version
 
 _instruments = ("autogen-agentchat>=0.4.0",)
 
