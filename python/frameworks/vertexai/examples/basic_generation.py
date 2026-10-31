@@ -1,48 +1,28 @@
+"""Legacy SDK example; use google_genai_vertex.py for new applications."""
+
 import os
 
-import vertexai
 from fi_instrumentation import register
-from fi_instrumentation.fi_types import (
-    EvalName,
-    EvalSpanKind,
-    EvalTag,
-    EvalTagType,
-    ProjectType,
-)
+from fi_instrumentation.fi_types import ProjectType
 from traceai_vertexai import VertexAIInstrumentor
-from vertexai.generative_models import GenerativeModel
 
-# Configure trace provider with custom evaluation tags
-eval_tags = [
-    EvalTag(
-        eval_name=EvalName.DETERMINISTIC_EVALS,
-        value=EvalSpanKind.TOOL,
-        type=EvalTagType.OBSERVATION_SPAN,
-        config={
-            "multi_choice": False,
-            "choices": ["Yes", "No"],
-            "rule_prompt": "Evaluate if the response is correct",
-        },
-        custom_eval_name="<custom_eval_name>",
-    )
-]
-
-# Configure trace provider with custom evaluation tags
 trace_provider = register(
-    project_type=ProjectType.EXPERIMENT,
-    eval_tags=eval_tags,
-    project_name="FUTURE_AGI",
-    project_version_name="v1",
+    project_type=ProjectType.OBSERVE,
+    project_name="vertexai_legacy_app",
 )
-
-# Initialize the VertexAI instrumentor
 VertexAIInstrumentor().instrument(tracer_provider=trace_provider)
 
-vertexai.init(
-    project=os.getenv("GOOGLE_CLOUD_PROJECT"),
-)
-model = GenerativeModel("gemini-1.5-flash")
+import vertexai
+from vertexai.generative_models import GenerativeModel
 
-if __name__ == "__main__":
-    response = model.generate_content("Write a haiku.")
-    print(response)
+vertexai.init(
+    project=os.environ["GOOGLE_CLOUD_PROJECT"],
+    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+)
+try:
+    response = GenerativeModel(os.environ["GOOGLE_GENAI_MODEL"]).generate_content(
+        "Write a haiku about a mountain trail."
+    )
+    print(response.text)
+finally:
+    trace_provider.force_flush()

@@ -1,3 +1,9 @@
+## [Unreleased]
+### Fixed
+- Bound legacy `google-cloud-aiplatform` support to `>=1.49.0,<=1.101.0`, retaining the generative AI modules used by this integration.
+- Replace the separate `vertexai` distribution in setup instructions and example requirements with `google-cloud-aiplatform`.
+- Direct new Vertex AI applications to `traceAI-google-genai` with a `vertexai=True` client, and document migration from the deprecated SDK.
+
 ## [0.1.8] - 2025-07-08
 ### Feature
 - Added support for Vertex AI's new modals
