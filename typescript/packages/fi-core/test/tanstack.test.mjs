@@ -232,9 +232,16 @@ test('export-transform failure drops the batch without forwarding private text',
 });
 
 test('bounded flush and shutdown tolerate collector failures', async () => {
-  await flushTraces({ forceFlush: async () => { throw new Error(secret); } });
-  await flushTraces({ forceFlush: () => new Promise(() => {}) }, { timeoutMs: 5 });
-  await shutdownTraces({ shutdown: async () => { throw new Error(secret); } });
+  // flushTraces unrefs its timer so it never holds a process open; keep this
+  // test's event loop alive while waiting on a collector that never answers.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await flushTraces({ forceFlush: async () => { throw new Error(secret); } });
+    const started = Date.now();
+    await flushTraces({ forceFlush: () => new Promise(() => {}) }, { timeoutMs: 5 });
+    assert.ok(Date.now() - started < 1000);
+    await shutdownTraces({ shutdown: async () => { throw new Error(secret); } });
+  } finally { clearInterval(keepAlive); }
 });
 
 async function server(handler) {

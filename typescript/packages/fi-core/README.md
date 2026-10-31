@@ -208,7 +208,7 @@ const stream = chat({
 ```
 
 - **Privacy.** Messages, tool arguments and results, error text and stack traces are not exported by default. `captureContent: true` exports content and error text through your `redact` function; a redactor that throws yields `[redaction_failed]`. Stack traces are never exported.
-- **Tokens are counted once.** TanStack also writes the sum of every model call's usage onto the chat span. In the Future AGI export only, that sum moves to `tanstack.ai.root_usage.*` when the model-call spans carry usage. Other exporters still receive TanStack's original spans.
+- **Tokens are counted once.** TanStack also writes the sum of every model call's usage onto the chat span. In the Future AGI export only, that sum moves to `tanstack.ai.root_usage.*` when the model-call spans carry usage. Other exporters on the same provider receive TanStack's spans with the Future AGI enrichment attributes, and the root keeps its usage there.
 - **Sessions.** `threadIdAsSession: true` exports the `threadId` you pass to `chat()` as `session.id`. Use an opaque id, never an email address or user name.
 - **Existing OpenTelemetry apps.** `registerTanStackTracing()` never replaces the global provider, and each chat starts a new trace unless you pass `joinActiveTrace: true`. To export through a provider you already own instead, wrap your exporter: `new TransformingSpanExporter(exporter, normalizeTanStackSpan)`.
 - **Serverless.** `await flushTraces(provider)` waits at most 2 seconds and never throws. In a long-lived server, call `shutdownTraces(provider)` when the process stops.
