@@ -1,14 +1,13 @@
 {
   "name": "@traceai/milvus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for Milvus vector database",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -19,8 +18,18 @@
     "test": "jest",
     "lint": "eslint . --ext .ts"
   },
-  "keywords": ["traceai", "opentelemetry", "instrumentation", "milvus", "vector-database"],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "keywords": [
+    "traceai",
+    "opentelemetry",
+    "instrumentation",
+    "milvus",
+    "vector-database",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
+  ],
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
@@ -42,7 +51,21 @@
     "@zilliz/milvus2-sdk-node": ">=2.0.0"
   },
   "peerDependenciesMeta": {
-    "@zilliz/milvus2-sdk-node": { "optional": true }
+    "@zilliz/milvus2-sdk-node": {
+      "optional": true
+    }
   },
-  "files": ["dist", "README.md"]
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_milvus"
+  }
 }

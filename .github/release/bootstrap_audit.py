@@ -110,7 +110,9 @@ def check(root: Path, audit: dict) -> list[str]:
     """Audit is a one-time floor, not a permanent pin on future releases."""
     versions = json.loads((root / ".release-please-manifest.json").read_text())
     errors = []
-    for package in audit["packages"]:
+    # Later explicit repairs also need a version floor, without rewriting the
+    # original bootstrap snapshot or its historical registry audit.
+    for package in [*audit["packages"], *audit.get("explicit_bumps", [])]:
         if package["status"] != "patch_required":
             continue
         file = root / package["manifest"]

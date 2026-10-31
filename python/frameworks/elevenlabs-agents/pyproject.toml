@@ -8,17 +8,22 @@ readme = "README.md"
 packages = [
     { include = "traceai_elevenlabs_agents" }
 ]
-keywords = ["opentelemetry", "elevenlabs", "voice", "agents", "webhook", "tracing", "observability"]
+keywords = ["opentelemetry", "elevenlabs", "voice", "agents", "webhook", "tracing", "observability", "traceai", "futureagi", "llm", "elevenlabs-agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: System :: Monitoring",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 [tool.poetry.dependencies]
@@ -38,6 +43,12 @@ elevenlabs = "2.73.0"
 [tool.poetry.scripts]
 traceai-elevenlabs-agents = "traceai_elevenlabs_agents.cli:main"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/elevenlabs-agents"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/elevenlabs-agents/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

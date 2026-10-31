@@ -17,7 +17,7 @@ describe("package.json", () => {
       directory: "typescript/packages/traceai_pi_coding_agent",
     });
     expect(ours.bugs).toEqual(sibling.bugs);
-    expect(ours.homepage).toBe((sibling.homepage as string).replace("traceai_anthropic", "traceai_pi_coding_agent"));
+    expect(ours.homepage).toBe("https://docs.futureagi.com/docs/tracing");
   });
 
   it("has no runtime dependency on the Pi SDK", () => {

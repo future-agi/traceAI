@@ -109,6 +109,25 @@ class BootstrapTests(unittest.TestCase):
                 (root / ".release-please-manifest.json").write_text(json.dumps({p["release_path"]: version}))
                 self.assertEqual(bootstrap_audit.check(root, {"packages": [p]}) == [], passes)
 
+    def test_explicit_npm_repairs_have_a_floor_and_matching_manifest(self):
+        p = {"ecosystem": "typescript", "name": "@traceai/beeai",
+             "manifest": "typescript/packages/traceai_beeai/package.json",
+             "release_path": "typescript/packages/traceai_beeai",
+             "status": "patch_required", "next_version": "0.1.1"}
+        audit = {"packages": [], "explicit_bumps": [p]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = root / p["manifest"]
+            file.parent.mkdir(parents=True)
+            for current, recorded, passes in (("0.1.0", "0.1.0", False),
+                                              ("0.1.1", "0.1.0", False),
+                                              ("0.1.1", "0.1.1", True),
+                                              ("0.1.2", "0.1.2", True)):
+                file.write_text(json.dumps({"version": current}))
+                (root / ".release-please-manifest.json").write_text(
+                    json.dumps({p["release_path"]: recorded}))
+                self.assertEqual(bootstrap_audit.check(root, audit) == [], passes)
+
     def test_manifest_inventory_reads_ref_without_importing_package_code(self):
         files = "python/pyproject.toml\ntypescript/packages/a/package.json\ntypescript/packages/private/package.json\nREADME.md\n"
         with patch.object(bootstrap_audit, "git", side_effect=[files, '[project]\nname="core"\nversion="1.0.0"', '{"name":"a","version":"0.1.0"}', '{"name":"private","version":"1.0.0","private":true}']):

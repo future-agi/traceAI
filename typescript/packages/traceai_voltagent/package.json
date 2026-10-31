@@ -37,7 +37,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_voltagent#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
@@ -68,10 +68,14 @@
     "instrumentation",
     "typescript",
     "voltagent",
-    "futureagi"
+    "futureagi",
+    "traceai",
+    "observability",
+    "tracing",
+    "llm"
   ],
   "license": "Apache-2.0",
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
   }

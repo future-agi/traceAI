@@ -13,7 +13,7 @@ import {
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 type MongoDBVectorOperation =
   | "aggregate"

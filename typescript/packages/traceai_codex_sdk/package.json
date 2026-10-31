@@ -30,9 +30,11 @@
     "codex-sdk",
     "agents",
     "llm",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -42,7 +44,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_codex_sdk#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "engines": {
     "node": ">=18.0.0"
   },

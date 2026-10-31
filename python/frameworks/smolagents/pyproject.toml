@@ -1,12 +1,29 @@
 [tool.poetry]
 name = "traceAI-smolagents"
 version = "0.1.6"
-description = "OpenTelemetry instrumentation for Smolagents"
+description = "OpenTelemetry instrumentation for smolagents"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 
 packages = [
     { include = "traceai_smolagents" },
+]
+license = "Apache-2.0"
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "smolagents"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
 ]
 
 [tool.poetry.dependencies]
@@ -14,6 +31,13 @@ python = ">3.10, <3.14"
 smolagents = ">=1.12.0"
 fi-instrumentation-otel = ">=0.1.11"
 
+
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/integrations/traceai/smol_agents"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/smolagents"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/smolagents/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8,<9"

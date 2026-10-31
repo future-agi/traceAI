@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_google_genai#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/google_genai",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -67,10 +67,15 @@
     "gemini",
     "generative-ai",
     "llm",
-    "tracing"
+    "tracing",
+    "traceai",
+    "futureagi",
+    "observability",
+    "google-genai"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

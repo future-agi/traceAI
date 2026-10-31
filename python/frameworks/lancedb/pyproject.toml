@@ -5,7 +5,24 @@ description = "OpenTelemetry instrumentation for LanceDB vector database"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 packages = [{ include = "traceai_lancedb" }]
-keywords = ["opentelemetry", "lancedb", "vector-database", "tracing", "observability", "rag"]
+keywords = ["opentelemetry", "lancedb", "vector-database", "tracing", "observability", "rag", "traceai", "futureagi", "llm"]
+license = "Apache-2.0"
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
@@ -16,6 +33,12 @@ wrapt = ">=1.0.0"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/lancedb"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/lancedb/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

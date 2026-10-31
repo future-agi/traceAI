@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "traceai-strands"
 version = "0.1.1"
-description = "TraceAI instrumentation for AWS Strands Agents"
+description = "OpenTelemetry instrumentation for AWS Strands Agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -15,25 +15,20 @@ authors = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Monitoring",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
 ]
-keywords = [
-    "traceai",
-    "strands",
-    "aws",
-    "agents",
-    "observability",
-    "opentelemetry",
-    "tracing",
-    "llm",
-    "ai",
-]
+keywords = ["traceai", "strands", "aws", "agents", "observability", "opentelemetry", "tracing", "llm", "ai", "futureagi"]
 
 dependencies = [
     "fi-instrumentation-otel>=0.1.11",
@@ -52,9 +47,11 @@ strands = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/futureagi/traceai"
-Documentation = "https://docs.futureagi.com/traceai"
-Repository = "https://github.com/futureagi/traceai"
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/strands"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/strands/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["traceai_strands"]

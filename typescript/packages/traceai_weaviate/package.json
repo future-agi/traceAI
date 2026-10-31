@@ -1,14 +1,13 @@
 {
   "name": "@traceai/weaviate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for Weaviate vector database",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -26,13 +25,17 @@
     "instrumentation",
     "weaviate",
     "vector-database",
-    "observability"
+    "observability",
+    "futureagi",
+    "tracing",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/future-agi/traceai"
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_weaviate"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
@@ -61,5 +64,9 @@
   "files": [
     "dist",
     "README.md"
-  ]
+  ],
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  }
 }
