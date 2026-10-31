@@ -4,6 +4,7 @@ TraceAI Qdrant Instrumentation
 Provides OpenTelemetry instrumentation for Qdrant vector database operations.
 """
 
+import inspect
 import logging
 from typing import Any, Collection
 
@@ -19,6 +20,7 @@ from traceai_qdrant._wrappers import (
     DeleteWrapper,
     RetrieveWrapper,
     ScrollWrapper,
+    RecommendWrapper,
     CountWrapper,
 )
 
@@ -26,10 +28,15 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 _MODULE = "qdrant_client"
+_QUERY_METHODS = (
+    "query_points", "query_batch_points", "query_points_groups",
+    "query", "query_batch", "search", "search_batch", "search_groups",
+)
+_RECOMMEND_METHODS = ("recommend", "recommend_batch", "recommend_groups")
 
 
 class QdrantInstrumentor(BaseInstrumentor):
-    """OpenTelemetry instrumentor for Qdrant vector database."""
+    """Instrument available synchronous and asynchronous Qdrant client APIs."""
 
     __slots__ = ("_original_methods",)
 
@@ -39,42 +46,43 @@ class QdrantInstrumentor(BaseInstrumentor):
     def _instrument(self, **kwargs: Any) -> None:
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
-
         tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
+        self._original_methods = {}
 
         try:
-            from qdrant_client import QdrantClient
+            import qdrant_client
         except ImportError:
-            logger.warning("Could not import QdrantClient")
+            logger.warning("Could not import qdrant_client")
             return
 
-        # Query APIs vary by SDK version (and the optional fastembed extra).
-        # In particular query_points replaced search, and query is not always
-        # present. Only patch methods the installed client actually exposes.
-        self._original_methods = {}
-        for name, wrapper in (
-            ("query_points", QueryPointsWrapper),
-            ("query", QueryPointsWrapper),
-            ("search", QueryPointsWrapper),
-            ("upsert", UpsertWrapper),
-            ("delete", DeleteWrapper),
-            ("retrieve", RetrieveWrapper),
-            ("scroll", ScrollWrapper),
-            ("count", CountWrapper),
-        ):
-            original = getattr(QdrantClient, name, None)
-            if original is not None:
-                self._original_methods[name] = original
-                query_kwargs = {"method_name": name} if wrapper is QueryPointsWrapper else {}
-                wrap_function_wrapper(_MODULE, f"QdrantClient.{name}", wrapper(tracer=tracer, **query_kwargs))
-
+        # The dependency floor predates AsyncQdrantClient; newer SDKs removed
+        # search/recommend and the optional text APIs. Never invent missing APIs.
+        for class_name in ("QdrantClient", "AsyncQdrantClient"):
+            client_class = getattr(qdrant_client, class_name, None)
+            if client_class is None:
+                continue
+            for name, wrapper_type in (
+                *((name, QueryPointsWrapper) for name in _QUERY_METHODS),
+                *((name, RecommendWrapper) for name in _RECOMMEND_METHODS),
+                ("upsert", UpsertWrapper),
+                ("delete", DeleteWrapper),
+                ("retrieve", RetrieveWrapper),
+                ("scroll", ScrollWrapper),
+                ("count", CountWrapper),
+            ):
+                original = getattr(client_class, name, None)
+                if original is None:
+                    continue
+                self._original_methods[(client_class, name)] = original
+                query_kwargs = {"method_name": name} if issubclass(wrapper_type, QueryPointsWrapper) else {}
+                wrapper = wrapper_type(tracer=tracer, **query_kwargs)
+                callback = wrapper.async_call if inspect.iscoroutinefunction(original) else wrapper
+                wrap_function_wrapper(_MODULE, f"{class_name}.{name}", callback)
         logger.debug("Qdrant instrumentation enabled")
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        from qdrant_client import QdrantClient
-
-        for name, original in self._original_methods.items():
-            setattr(QdrantClient, name, original)
+        for (client_class, name), original in self._original_methods.items():
+            setattr(client_class, name, original)
         self._original_methods.clear()
 
 
