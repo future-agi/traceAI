@@ -1,436 +1,122 @@
 # @traceai/cohere
 
-OpenTelemetry instrumentation for the [Cohere](https://cohere.com/) TypeScript/JavaScript SDK.
+Trace Cohere chat, streaming chat, embeddings and reranking in Future AGI with the maintained Cohere SDK instrumentor.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/cohere
-# or
-pnpm add @traceai/cohere
-# or
-yarn add @traceai/cohere
+npm install @traceai/cohere @traceai/fi-core cohere-ai
 ```
 
-## Features
+Use Node.js 18 or later and `cohere-ai` 7.x or 8.x. Use `cohere-ai` 8.3.0 for the v2 examples below. The 7.0.0 SDK only exposes the older v1 operations; streaming requires a version with `chatStream`.
 
-- Automatic instrumentation of Cohere API calls
-- Supports chat, embed, and rerank APIs
-- Captures request parameters, model information, and responses
-- Configurable input/output hiding for privacy
-- Compatible with OpenTelemetry ecosystem
+## Configure tracing
 
-## Usage
+Set `FI_API_KEY`, `FI_SECRET_KEY` and `COHERE_API_KEY` in your environment. Get your Future AGI credentials from your organization's settings.
 
-### Basic Setup
-
-```typescript
-import { CohereInstrumentation } from "@traceai/cohere";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-
-// Set up the tracer provider
-const provider = new NodeTracerProvider();
-provider.register();
-
-// Register the Cohere instrumentation
-registerInstrumentations({
-  instrumentations: [new CohereInstrumentation()],
-});
-
-// Now use the Cohere SDK as normal
-import { CohereClient } from "cohere-ai";
-
-const cohere = new CohereClient({
-  token: process.env.COHERE_API_KEY,
-});
-
-// Chat example
-const chatResponse = await cohere.chat({
-  message: "Hello, how are you?",
-  model: "command-r-08-2024",
-});
-
-// Embed example
-const embedResponse = await cohere.embed({
-  texts: ["hello", "goodbye"],
-  model: "embed-english-v3.0",
-  inputType: "search_document",
-});
-
-// Rerank example
-const rerankResponse = await cohere.rerank({
-  query: "What is the capital of France?",
-  documents: [
-    "Paris is the capital of France.",
-    "Berlin is the capital of Germany.",
-    "London is the capital of the United Kingdom.",
-  ],
-  model: "rerank-english-v3.0",
-});
-```
-
-### Manual Instrumentation
-
-If automatic instrumentation doesn't work (e.g., with bundlers), you can manually instrument:
-
-```typescript
-import { CohereInstrumentation } from "@traceai/cohere";
-import * as CohereModule from "cohere-ai";
-
-const instrumentation = new CohereInstrumentation();
-instrumentation.manuallyInstrument(CohereModule);
-```
-
-### Configuration Options
-
-```typescript
-const instrumentation = new CohereInstrumentation({
-  // OpenTelemetry instrumentation config
-  instrumentationConfig: {
-    enabled: true,
-  },
-  // TraceAI-specific config
-  traceConfig: {
-    hideInputs: false, // Set to true to hide input content in traces
-    hideOutputs: false, // Set to true to hide output content in traces
-  },
-});
-```
-
-### With TraceAI Core
+Initialize tracing **before constructing any Cohere clients**. Explicit module instrumentation works with both CommonJS and native ESM, without an import hook or copied tracing helpers.
 
 ```typescript
 import { register, ProjectType } from "@traceai/fi-core";
 import { CohereInstrumentation } from "@traceai/cohere";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import * as Cohere from "cohere-ai";
 
-// 1. Register TraceAI Core TracerProvider
-const tracerProvider = register({
-  projectName: "my-cohere-app",
+const provider = register({
+  projectName: "cohere-app",
   projectType: ProjectType.OBSERVE,
-  sessionName: "cohere-session-" + Date.now(),
 });
 
-// 2. Register instrumentation BEFORE importing Cohere SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider,
-  instrumentations: [new CohereInstrumentation()],
-});
-
-// 3. NOW import and use Cohere
-const { CohereClient } = await import("cohere-ai");
-const client = new CohereClient({ token: process.env.COHERE_API_KEY });
-
-// 4. Use normally - all calls are traced
-const response = await client.chat({
-  message: "Hello!",
-  model: "command-r-08-2024",
-});
-
-// 5. Shutdown when done
-await tracerProvider.shutdown();
-```
-
-## Real-World Use Cases
-
-### 1. Conversational AI with Chat History
-
-```typescript
-const { CohereClient } = await import("cohere-ai");
-const client = new CohereClient({ token: process.env.COHERE_API_KEY });
-
-async function chat(message: string, history: Array<{ role: string; message: string }>) {
-  const response = await client.chat({
-    message,
-    model: "command-r-08-2024",
-    chatHistory: history,
-    preamble: "You are a helpful customer support agent for an e-commerce platform.",
-  });
-
-  // Add to history
-  history.push({ role: "USER", message });
-  history.push({ role: "CHATBOT", message: response.text });
-
-  return response.text;
-}
-
-// Usage
-const history: Array<{ role: string; message: string }> = [];
-const answer1 = await chat("I have a problem with my order", history);
-const answer2 = await chat("Order ID is 12345", history);
-```
-
-### 2. Semantic Search with Embeddings
-
-```typescript
-async function semanticSearch(query: string, documents: string[]) {
-  // Get query embedding (use 'search_query' for queries)
-  const queryEmbedding = await client.embed({
-    texts: [query],
-    model: "embed-english-v3.0",
-    inputType: "search_query",
-  });
-
-  // Get document embeddings (use 'search_document' for documents)
-  const docEmbeddings = await client.embed({
-    texts: documents,
-    model: "embed-english-v3.0",
-    inputType: "search_document",
-  });
-
-  // Calculate cosine similarities
-  const queryVector = queryEmbedding.embeddings[0] as number[];
-  const similarities = (docEmbeddings.embeddings as number[][]).map((docVector, i) => ({
-    document: documents[i],
-    score: cosineSimilarity(queryVector, docVector),
-  }));
-
-  return similarities.sort((a, b) => b.score - a.score);
-}
-```
-
-### 3. Document Reranking for RAG
-
-```typescript
-async function rerankDocuments(query: string, documents: string[]) {
-  const response = await client.rerank({
-    query,
-    documents,
-    model: "rerank-english-v3.0",
-    topN: 5,
-    returnDocuments: true,
-  });
-
-  return response.results.map((result) => ({
-    document: result.document?.text,
-    score: result.relevanceScore,
-    originalIndex: result.index,
-  }));
-}
-
-// Usage in RAG pipeline
-const retrievedDocs = await vectorSearch(userQuery, 20); // Get top 20 from vector DB
-const rerankedDocs = await rerankDocuments(userQuery, retrievedDocs);
-const topDocs = rerankedDocs.slice(0, 3); // Use top 3 for context
-```
-
-### 4. Tool-Augmented Chatbot
-
-```typescript
-async function chatWithTools(message: string) {
-  const response = await client.chat({
-    message,
-    model: "command-r-08-2024",
-    tools: [
-      {
-        name: "search_database",
-        description: "Search the product database",
-        parameterDefinitions: {
-          query: { type: "str", description: "Search query", required: true },
-          category: { type: "str", description: "Product category", required: false },
-        },
-      },
-      {
-        name: "get_order_status",
-        description: "Get status of a customer order",
-        parameterDefinitions: {
-          orderId: { type: "str", description: "Order ID", required: true },
-        },
-      },
-    ],
-  });
-
-  if (response.toolCalls && response.toolCalls.length > 0) {
-    // Execute tool calls and continue conversation
-    for (const toolCall of response.toolCalls) {
-      console.log(`Tool: ${toolCall.name}, Args:`, toolCall.parameters);
-    }
-  }
-
-  return response;
-}
-```
-
-### 5. Multilingual Embeddings
-
-```typescript
-async function multilingualSearch(query: string, documents: string[]) {
-  // Use multilingual model for cross-language search
-  const queryEmbedding = await client.embed({
-    texts: [query],
-    model: "embed-multilingual-v3.0",
-    inputType: "search_query",
-  });
-
-  const docEmbeddings = await client.embed({
-    texts: documents,
-    model: "embed-multilingual-v3.0",
-    inputType: "search_document",
-  });
-
-  // Works across languages!
-  // Query in English can match documents in French, German, Spanish, etc.
-  return calculateSimilarities(queryEmbedding, docEmbeddings);
-}
-```
-
-### 6. Streaming Chat Responses
-
-```typescript
-async function streamChat(message: string) {
-  const stream = await client.chatStream({
-    message,
-    model: "command-r-08-2024",
-  });
-
-  let fullText = "";
-  for await (const event of stream) {
-    if (event.eventType === "text-generation") {
-      process.stdout.write(event.text);
-      fullText += event.text;
-    } else if (event.eventType === "stream-end") {
-      console.log("\n--- Stream complete ---");
-      console.log("Token usage:", event.response?.meta?.tokens);
-    }
-  }
-
-  return fullText;
-}
-```
-
-## Traced Operations
-
-### Chat API
-
-The instrumentation captures:
-
-- Model name
-- Input messages and chat history
-- Preamble and connectors
-- Temperature and other generation parameters
-- Response text and metadata
-- Token usage (prompt and completion tokens)
-
-### Embed API
-
-The instrumentation captures:
-
-- Model name
-- Input texts
-- Input type
-- Truncation settings
-- Output embeddings (unless hidden)
-- Token usage
-
-### Rerank API
-
-The instrumentation captures:
-
-- Model name
-- Query text
-- Documents to rerank
-- Top N parameter
-- Reranked results with relevance scores
-
-## Semantic Conventions
-
-This instrumentation follows OpenTelemetry semantic conventions and FutureAGI conventions for LLM observability:
-
-- Span names follow the pattern: `cohere.{operation}` (e.g., `cohere.chat`, `cohere.embed`, `cohere.rerank`)
-- Uses `LLM` span kind for chat operations
-- Uses `EMBEDDING` span kind for embed operations
-- Uses `RERANKER` span kind for rerank operations
-
-## Supported Models
-
-### Chat Models
-
-- command
-- command-r
-- command-r-08-2024
-- command-light
-- command-nightly
-
-### Embedding Models
-
-- embed-english-v3.0
-- embed-multilingual-v3.0
-- embed-english-light-v3.0
-- embed-multilingual-light-v3.0
-
-### Rerank Models
-
-- rerank-english-v3.0
-- rerank-multilingual-v3.0
-- rerank-english-v2.0
-- rerank-multilingual-v2.0
-
-## Requirements
-
-- Node.js >= 18
-- cohere-ai SDK
-
-## Running Examples
-
-The `examples/` directory contains real-world examples:
-
-```bash
-cd examples
-cp .env.example .env
-# Edit .env with your API keys
-
-pnpm install
-pnpm run example
-```
-
-## E2E Testing
-
-Run E2E tests with real API keys:
-
-```bash
-COHERE_API_KEY=your_key pnpm test -- --testPathPattern=e2e
-```
-
-## Integration with TraceAI Platform
-
-```typescript
-import { CohereInstrumentation } from "@traceai/cohere";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Resource } from "@opentelemetry/resources";
-
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    "service.name": "my-cohere-app",
-    "deployment.environment": "production",
-  }),
-});
-
-const exporter = new OTLPTraceExporter({
-  url: "https://api.traceai.com/v1/traces",
-  headers: {
-    Authorization: `Bearer ${process.env.TRACEAI_API_KEY}`,
+const instrumentation = new CohereInstrumentation({
+  traceConfig: {
+    hideInputs: true,
+    hideOutputs: true,
+    hideEmbeddingVectors: true,
   },
 });
+instrumentation.setTracerProvider(provider);
+instrumentation.manuallyInstrument(Cohere);
 
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
+const client = new Cohere.CohereClientV2({
+  token: process.env.COHERE_API_KEY,
+});
 
-const instrumentation = new CohereInstrumentation();
-instrumentation.manuallyInstrument(require("cohere-ai"));
+try {
+  const response = await client.chat({
+    model: "command-r-08-2024",
+    messages: [{ role: "user", content: "Explain semantic search in one sentence." }],
+  });
+  console.log(response.message);
+} finally {
+  instrumentation.disable();
+  await provider.shutdown();
+}
+```
+
+Open the **cohere-app** project in Future AGI to inspect the `Cohere Chat` span, model and token usage. This example hides request/response content, embedding vectors and error details. To inspect content in traces, explicitly turn off the corresponding hiding options only when it is safe for your application.
+
+If you already have an OpenTelemetry tracer provider, pass it to `setTracerProvider` instead of creating a second provider. For CommonJS auto-instrumentation, register `CohereInstrumentation` with OpenTelemetry before requiring `cohere-ai`; do not also install another Cohere instrumentor.
+
+## Stream a response
+
+With the same initialized client, replace the chat call with:
+
+```typescript
+const stream = await client.chatStream({
+  model: "command-r-08-2024",
+  messages: [{ role: "user", content: "Explain semantic search in one sentence." }],
+});
+
+for await (const event of stream) {
+  if (event.type === "content-delta") {
+    process.stdout.write(event.delta?.message?.content?.text ?? "");
+  }
+}
+```
+
+The span stays open while you consume the stream. It finishes at the terminal event, iterator completion, failure, early return or controller abort. A partial stream is marked `cohere.stream.cancelled`; token counts are only available if Cohere sends usage. Consume the stream or explicitly close/abort it rather than abandoning it. SDK stream controllers, events and `withRawResponse()` remain available.
+
+## Embed and rerank
+
+```typescript
+await client.embed({
+  model: "embed-english-v3.0",
+  texts: ["Paris is the capital of France."],
+  inputType: "search_document",
+  embeddingTypes: ["float"],
+});
+
+await client.rerank({
+  model: "rerank-v3.5",
+  query: "What is the capital of France?",
+  documents: ["Paris is the capital of France.", "Berlin is the capital of Germany."],
+  topN: 1,
+});
+```
+
+Embeddings use the `EMBEDDING` span kind; reranking uses `RERANKER`, including result indices and relevance scores. Chat uses `LLM`. The instrumentor reads the SDK's camelCase properties, including `chatHistory`, `toolCalls`, `inputTokens` and `relevanceScore`, and retains support for v1 payloads.
+
+## Existing v1 applications
+
+Keep using `CohereClient`, `CohereInstrumentation` and `manuallyInstrument` with the same setup. Calls through `CohereClient.v2` and `CohereClientV2` are also traced when available in your SDK. Disable/enable applies to subsequent calls, including already-bound v2 methods; in-flight calls finish their spans normally.
+
+This integration covers `chat`, `chatStream`, `embed` and `rerank`, not every endpoint on the Cohere SDK. It does not infer a default model when no model was supplied.
+
+## Troubleshooting
+
+- **No v2 spans:** initialize instrumentation before constructing the client. V2 binds its methods in the constructor; recreate clients constructed before setup.
+- **Duplicate spans:** use one Cohere instrumentor per application and remove overlapping instrumentation.
+- **A stream span never finishes:** consume the stream, break/return from its iterator, or abort its controller before shutting down the provider.
+- **Missing content or vectors:** check your `traceConfig` and `FI_HIDE_*` environment settings. Input/output hiding also applies to Cohere-specific fields and raw payloads; vector hiding excludes the raw embedding response.
+
+## Development
+
+From the TypeScript workspace, build shared packages and the instrumentor before running its offline suite:
+
+```bash
+pnpm --filter '@traceai/cohere...' --workspace-concurrency=1 run build
+pnpm --filter '@traceai/cohere' exec jest --runInBand
 ```
 
 ## License
 
 Apache-2.0
-
-## Related Packages
-
-- [@traceai/openai](../traceai_openai) - OpenAI instrumentation
-- [@traceai/anthropic](../traceai_anthropic) - Anthropic instrumentation
-- [@traceai/groq](../traceai_groq) - Groq instrumentation
-- [@traceai/mistral](../traceai_mistral) - Mistral instrumentation
-- [@traceai/google-genai](../traceai_google_genai) - Google GenAI instrumentation
-- [@traceai/fi-core](../fi-core) - Core tracing utilities

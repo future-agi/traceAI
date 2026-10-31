@@ -1,592 +1,180 @@
-import {
-  InstrumentationBase,
-  InstrumentationConfig,
-  InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
-} from "@opentelemetry/instrumentation";
-import {
-  diag,
-  context,
-  trace,
-  SpanKind,
-  Attributes,
-  SpanStatusCode,
-  Span,
-} from "@opentelemetry/api";
-import { VERSION } from "./version";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-  LLMSystem,
-  LLMProvider,
-} from "@traceai/fi-semantic-conventions";
+import { InstrumentationBase, InstrumentationConfig, InstrumentationNodeModuleDefinition } from "@opentelemetry/instrumentation";
+import { context, createContextKey, diag, trace, SpanKind, SpanStatusCode, Span } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
-import {
-  FITracer,
-  safelyJSONStringify,
-  TraceConfigOptions,
-} from "@traceai/fi-core";
-import { isString } from "./typeUtils";
+import { FITracer, generateTraceConfig, TraceConfigOptions } from "@traceai/fi-core";
+import { VERSION } from "./version";
+import { Data, Operation, object, inputAttributes, outputAttributes, hideOutput } from "./attributes";
+import { wrapStream } from "./stream";
 
-const MODULE_NAME = "cohere-ai";
+const OPERATIONS: Operation[] = ["chat", "chatStream", "embed", "rerank"];
+const IN_COHERE_CALL = createContextKey("traceai.cohere.call");
+type Method = (this: unknown, ...args: unknown[]) => unknown;
+type Patch = { target: Data; method: Operation; wrapped: Method; hadOwn: boolean };
+const owners = new WeakMap<object, Map<Operation, CohereInstrumentation>>();
+let patchCount = 0;
 
-/**
- * Flag to check if the Cohere module has been patched
- */
-let _isFIPatched = false;
+/** True when at least one SDK method is instrumented, across module copies. */
+export function isPatched(): boolean { return patchCount > 0; }
 
-/**
- * Function to check if instrumentation is enabled / disabled
- */
-export function isPatched() {
-  return _isFIPatched;
-}
-
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
-}
-
-// Type definitions for Cohere SDK
-interface CohereChatRequest {
-  model?: string;
-  message: string;
-  preamble?: string;
-  chat_history?: Array<{
-    role: string;
-    message: string;
-  }>;
-  temperature?: number;
-  max_tokens?: number;
-  p?: number;
-  k?: number;
-  tools?: Array<{
-    name: string;
-    description?: string;
-    parameterDefinitions?: Record<string, unknown>;
-  }>;
-  [key: string]: unknown;
-}
-
-interface CohereChatResponse {
-  text: string;
-  generation_id?: string;
-  chat_history?: Array<{
-    role: string;
-    message: string;
-  }>;
-  tool_calls?: Array<{
-    name: string;
-    parameters: Record<string, unknown>;
-  }>;
-  meta?: {
-    api_version?: { version: string };
-    billed_units?: {
-      input_tokens?: number;
-      output_tokens?: number;
-    };
-    tokens?: {
-      input_tokens?: number;
-      output_tokens?: number;
-    };
-  };
-}
-
-interface CohereEmbedRequest {
-  texts: string[];
-  model?: string;
-  input_type?: string;
-  embedding_types?: string[];
-  truncate?: string;
-}
-
-interface CohereEmbedResponse {
-  id: string;
-  embeddings: number[][] | { float?: number[][] };
-  texts: string[];
-  meta?: {
-    api_version?: { version: string };
-    billed_units?: {
-      input_tokens?: number;
-    };
-  };
-}
-
-interface CohereRerankRequest {
-  query: string;
-  documents: string[] | Array<{ text: string }>;
-  model?: string;
-  top_n?: number;
-  return_documents?: boolean;
-}
-
-interface CohereRerankResponse {
-  id: string;
-  results: Array<{
-    index: number;
-    relevance_score: number;
-    document?: { text: string };
-  }>;
-  meta?: {
-    api_version?: { version: string };
-    billed_units?: {
-      search_units?: number;
-    };
-  };
-}
-
-/**
- * @param instrumentationConfig The config for the instrumentation
- * @param traceConfig The FI trace configuration for masking sensitive information
- */
+/** Cohere v1/v2 instrumentation. Install before constructing SDK clients. */
 export class CohereInstrumentation extends InstrumentationBase {
-  private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  // InstrumentationBase may call enable/patch during super(), so initialize lazily.
+  private patches?: Patch[];
+  private manualModules?: Set<Data>;
   public readonly instrumentationName = "@traceai/cohere";
 
-  constructor({
-    instrumentationConfig,
-    traceConfig,
-  }: {
+  constructor({ instrumentationConfig, traceConfig }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/cohere",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
+    super("@traceai/cohere", VERSION, { ...instrumentationConfig });
     this._traceConfig = traceConfig;
+  }
+
+  protected init() {
+    return new InstrumentationNodeModuleDefinition("cohere-ai", [">=7.0.0 <9"], this.patch.bind(this), this.unpatch.bind(this));
   }
 
   public override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    for (const module of this.manualModules ?? []) this.patch(module);
   }
 
-  protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
-      "cohere-ai",
-      [">=7.0.0"],
-      this.patch.bind(this),
-      this.unpatch.bind(this),
-    );
+  public override disable(): void {
+    super.disable();
+    this.restorePatches();
+  }
+
+  manuallyInstrument(module: Data): void {
+    (this.manualModules ??= new Set()).add(module);
+    if (this.isEnabled()) this.patch(module);
+  }
+
+  private patch(module: Data): Data {
+    const Client = module.CohereClient as { prototype?: Data; new(options: { token: string }): { v2?: object } } | undefined;
+    const targets = [Client?.prototype];
+    // V2Client is not exported at the module root. The public client.v2 getter
+    // exposes the same generated class used by CohereClientV2's bound methods.
+    // Construction performs no I/O; an explicit inert token avoids env lookup.
+    if (typeof Client === "function" && Client.prototype && "v2" in Client.prototype) {
+      try {
+        const v2 = new Client({ token: "traceai-instrumentation-placeholder" }).v2;
+        if (v2) targets.push(Object.getPrototypeOf(v2) as Data);
+      } catch {
+        // Telemetry must not prevent module loading; v1 remains usable.
+        diag.warn("Cohere instrumentation could not discover the v2 client");
+      }
+    }
+    for (const target of targets) {
+      if (!target) continue;
+      for (const method of OPERATIONS) {
+        if (typeof target[method] !== "function" || owners.get(target)?.has(method)) continue;
+        const hadOwn = Object.prototype.hasOwnProperty.call(target, method);
+        this._wrap(target, method, (original) => this.wrapMethod(method, original as Method));
+        const wrapped = target[method] as Method;
+        (this.patches ??= []).push({ target, method, wrapped, hadOwn });
+        if (!owners.has(target)) owners.set(target, new Map());
+        owners.get(target)!.set(method, this);
+        patchCount++;
+      }
+    }
     return module;
   }
 
-  /**
-   * Manually instruments the Cohere module
-   */
-  manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
-  }
+  private unpatch(): void { this.restorePatches(); }
 
-  /**
-   * Patches the Cohere module
-   */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
-    }
-
-    const instrumentation: CohereInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch CohereClient class
-    const CohereClient = module.CohereClient as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
-    if (CohereClient?.prototype) {
-      // Patch chat method
-      if (typeof CohereClient.prototype.chat === 'function') {
-        this._wrap(
-          CohereClient.prototype,
-          "chat",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedChat(
-              this: unknown,
-              ...args: [CohereChatRequest]
-            ) {
-              const request = args[0];
-              const modelName = request.model || 'command';
-              const { message, chat_history, preamble, ...invocationParameters } = request;
-
-              const span = instrumentation.fiTracer.startSpan(
-                `Cohere Chat`,
-                {
-                  kind: SpanKind.INTERNAL,
-                  attributes: {
-                    [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-                    [SemanticConventions.LLM_MODEL_NAME]: modelName,
-                    [SemanticConventions.INPUT_VALUE]: request.message,
-                    [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-                    [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                      JSON.stringify(invocationParameters),
-                    [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
-                    [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-                    ...getChatInputMessagesAttributes(request),
-                    ...getChatToolsAttributes(request),
-                    [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                  },
-                },
-              );
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<CohereChatResponse>).then((result) => {
-                span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: result.text,
-                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-                  ...getChatOutputMessagesAttributes(result),
-                  ...getChatUsageAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
+  private restorePatches(): void {
+    for (const { target, method, wrapped, hadOwn } of this.patches ?? []) {
+      if (target[method] === wrapped) {
+        this._unwrap(target, method);
+        if (!hadOwn) delete target[method];
       }
-
-      // Patch embed method
-      if (typeof CohereClient.prototype.embed === 'function') {
-        this._wrap(
-          CohereClient.prototype,
-          "embed",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedEmbed(
-              this: unknown,
-              ...args: [CohereEmbedRequest]
-            ) {
-              const request = args[0];
-              const modelName = request.model || 'embed-english-v3.0';
-
-              const span = instrumentation.fiTracer.startSpan(`Cohere Embed`, {
-                kind: SpanKind.INTERNAL,
-                attributes: {
-                  [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-                  [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
-                  [SemanticConventions.INPUT_VALUE]: JSON.stringify(request.texts),
-                  [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
-                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-                  ...getEmbedTextAttributes(request),
-                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                },
-              });
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<CohereEmbedResponse>).then((result) => {
-                span.setAttributes({
-                  ...getEmbedVectorAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
-      }
-
-      // Patch rerank method
-      if (typeof CohereClient.prototype.rerank === 'function') {
-        this._wrap(
-          CohereClient.prototype,
-          "rerank",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedRerank(
-              this: unknown,
-              ...args: [CohereRerankRequest]
-            ) {
-              const request = args[0];
-              const modelName = request.model || 'rerank-english-v3.0';
-
-              const span = instrumentation.fiTracer.startSpan(`Cohere Rerank`, {
-                kind: SpanKind.INTERNAL,
-                attributes: {
-                  [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-                  [SemanticConventions.LLM_MODEL_NAME]: modelName,
-                  [SemanticConventions.INPUT_VALUE]: request.query,
-                  [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
-                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "rerank",
-                  "cohere.rerank.query": request.query,
-                  "cohere.rerank.documents_count": request.documents.length,
-                  "cohere.rerank.top_n": request.top_n,
-                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                },
-              });
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<CohereRerankResponse>).then((result) => {
-                span.setAttributes({
-                  "cohere.rerank.results_count": result.results.length,
-                  ...getRerankResultsAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
-      }
+      owners.get(target)?.delete(method);
+      patchCount--;
     }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
-    return module;
+    this.patches = [];
   }
 
-  /**
-   * Un-patches the Cohere module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const CohereClient = moduleExports.CohereClient as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
-    if (CohereClient?.prototype) {
-      if (CohereClient.prototype.chat) {
-        this._unwrap(CohereClient.prototype, "chat");
+  private wrapMethod(operation: Operation, original: Method): Method {
+    const instrumentation = this;
+    return function (this: unknown, ...args: unknown[]) {
+      const parent = context.active();
+      // Bound v2 methods can outlive unpatch. Respect disable even for those.
+      if (!instrumentation.isEnabled() || isTracingSuppressed(parent) || parent.getValue(IN_COHERE_CALL)) {
+        return original.apply(this, args);
       }
-      if (CohereClient.prototype.embed) {
-        this._unwrap(CohereClient.prototype, "embed");
+      const config = generateTraceConfig(instrumentation._traceConfig);
+      let span: Span;
+      try {
+        const tracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: config });
+        const name = operation === "chatStream" ? "Chat Stream" : operation[0].toUpperCase() + operation.slice(1);
+        span = tracer.startSpan(`Cohere ${name}`, { kind: SpanKind.INTERNAL, attributes: inputAttributes(operation, object(args[0]), config) }, parent);
+      } catch {
+        diag.warn("Cohere instrumentation could not start span");
+        return original.apply(this, args);
       }
-      if (CohereClient.prototype.rerank) {
-        this._unwrap(CohereClient.prototype, "rerank");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-  }
-}
-
-/**
- * Converts the chat request to LLM input messages
- */
-function getChatInputMessagesAttributes(request: CohereChatRequest): Attributes {
-  const messages: Record<string, unknown>[] = [];
-
-  if (request.preamble) {
-    messages.push({ role: 'system', content: request.preamble });
-  }
-
-  if (request.chat_history) {
-    request.chat_history.forEach((msg) => {
-      messages.push({ role: msg.role, content: msg.message });
-    });
-  }
-
-  messages.push({ role: 'user', content: request.message });
-
-  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" };
-}
-
-/**
- * Gets chat tools attributes
- */
-function getChatToolsAttributes(request: CohereChatRequest): Attributes {
-  if (!request.tools) {
-    return {};
-  }
-  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
-}
-
-/**
- * Gets chat output messages attributes
- */
-function getChatOutputMessagesAttributes(response: CohereChatResponse): Attributes {
-  const msg: Record<string, unknown> = { role: 'assistant', content: response.text };
-
-  if (response.tool_calls) {
-    msg.tool_calls = response.tool_calls.map((tc) => ({
-      function: { name: tc.name, arguments: JSON.stringify(tc.parameters) },
-    }));
-  }
-
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
-}
-
-/**
- * Gets chat usage attributes
- */
-function getChatUsageAttributes(response: CohereChatResponse): Attributes {
-  const meta = response.meta;
-  if (!meta) {
-    return {};
-  }
-
-  const billedUnits = meta.billed_units;
-  const tokens = meta.tokens;
-
-  if (billedUnits) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: billedUnits.input_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: billedUnits.output_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]:
-        (billedUnits.input_tokens || 0) + (billedUnits.output_tokens || 0),
+      const execContext = trace.setSpan(parent, span).setValue(IN_COHERE_CALL, true);
+      let ended = false;
+      const finish = (response: Data, error?: unknown, cancelled = false) => {
+        if (ended) return;
+        ended = true;
+        try {
+          span.setAttributes(outputAttributes(operation, response, config));
+          if (error !== undefined) {
+            span.recordException(error instanceof Error ? error : new Error(String(error)));
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+          } else if (cancelled) {
+            span.setAttribute("cohere.stream.cancelled", true);
+          } else {
+            span.setStatus({ code: SpanStatusCode.OK });
+          }
+        } catch {
+          diag.warn("Cohere instrumentation could not record response");
+        } finally {
+          span.end();
+        }
+      };
+      const streams = new WeakMap<object, object>();
+      const resolved = (result: unknown): unknown => {
+        if (operation === "chatStream" && result && typeof (result as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
+          if (!streams.has(result as object)) streams.set(result as object, wrapStream(result as object, execContext, !hideOutput(config), finish));
+          return streams.get(result as object);
+        }
+        finish(object(result));
+        return result;
+      };
+      const rejected = (error: unknown): never => {
+        finish({}, error ?? new Error("Cohere request failed"));
+        throw error;
+      };
+      let pending: unknown;
+      try {
+        pending = context.with(execContext, () => original.apply(this, args));
+      } catch (error) { return rejected(error); }
+      return observePromise(pending, resolved, rejected);
     };
   }
-
-  if (tokens) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: tokens.input_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: tokens.output_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]:
-        (tokens.input_tokens || 0) + (tokens.output_tokens || 0),
-    };
-  }
-
-  return {};
 }
 
-/**
- * Gets embed text attributes
- */
-function getEmbedTextAttributes(request: CohereEmbedRequest): Attributes {
-  return request.texts.reduce((acc, text, index) => {
-    acc[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.${SemanticConventions.EMBEDDING_TEXT}`] = text;
-    return acc;
-  }, {} as Attributes);
-}
-
-/**
- * Gets embed vector attributes
- */
-function getEmbedVectorAttributes(response: CohereEmbedResponse): Attributes {
-  const embeddings = Array.isArray(response.embeddings)
-    ? response.embeddings
-    : (response.embeddings as { float?: number[][] })?.float || [];
-
-  return embeddings.reduce((acc, embedding, index) => {
-    acc[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.${SemanticConventions.EMBEDDING_VECTOR}`] = embedding;
-    return acc;
-  }, {} as Attributes);
-}
-
-/**
- * Gets rerank results attributes
- */
-function getRerankResultsAttributes(response: CohereRerankResponse): Attributes {
-  const attributes: Attributes = {};
-
-  response.results.forEach((result, index) => {
-    attributes[`cohere.rerank.results.${index}.index`] = result.index;
-    attributes[`cohere.rerank.results.${index}.relevance_score`] = result.relevance_score;
-    if (result.document) {
-      attributes[`cohere.rerank.results.${index}.document`] = result.document.text;
-    }
+/** Keep SDK promise helpers (notably HttpResponsePromise.withRawResponse). */
+function observePromise(pending: unknown, resolved: (value: unknown) => unknown, rejected: (error: unknown) => never): unknown {
+  const promise = pending as Promise<unknown> & { withRawResponse?: () => Promise<{ data: unknown; rawResponse: unknown }> };
+  const observed = promise.then(resolved, rejected);
+  if (typeof promise.withRawResponse !== "function") return observed;
+  // A caller may exclusively use withRawResponse. Do not leave an unobserved
+  // rejected branch merely because telemetry also observes the normal promise.
+  void observed.catch(() => {});
+  return new Proxy(promise, {
+    get(target, key) {
+      if (key === "then") return observed.then.bind(observed);
+      if (key === "catch") return observed.catch.bind(observed);
+      if (key === "finally") return observed.finally.bind(observed);
+      if (key === "withRawResponse") return () => target.withRawResponse!().then(
+        (raw) => ({ ...raw, data: resolved(raw.data) }), rejected,
+      );
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
   });
-
-  return attributes;
 }
