@@ -102,6 +102,75 @@ test("auth uses explicit protected stdin and separate file store; never config o
     secret.identity_key,
   );
 });
+test("auth removal retains protected binding keys and re-provisioning preserves work IDs", async (t) => {
+  const root = fixture(t);
+  const add = [
+    "auth",
+    "add",
+    "--profile",
+    "work",
+    "--project",
+    "fixture",
+    "--stdin",
+    "--storage",
+    "file",
+  ];
+  assert.equal(
+    cli(
+      root,
+      add,
+      JSON.stringify({
+        api_key: "synthetic-api",
+        secret_key: "synthetic-secret",
+      }),
+    ).status,
+    0,
+  );
+  const configFile = path.join(root, "config/config.json");
+  const before = JSON.parse(fs.readFileSync(configFile, "utf8"));
+  const profile = before.profiles.work;
+  const store = new FileSecretStore(path.join(root, "config/credentials"));
+  const original = await store.get(profile.credentialRef);
+  const source = {
+    schema: "fixture-v1",
+    session: "s",
+    turn: "t",
+    id: "r",
+    unit: "request",
+  };
+  const work = (key) =>
+    reference.normalize(source, {
+      identityKey: Buffer.from(key, "hex"),
+      policyRevision: "1",
+    })[0].sourceWorkId;
+  const removed = cli(root, ["auth", "remove", "--profile", "work"]);
+  assert.equal(removed.status, 0, removed.stdout);
+  const retained = await store.get(profile.credentialRef);
+  assert.ok(retained, "auth removal must not destroy binding identity");
+  assert.equal(retained.api_key, undefined);
+  assert.equal(retained.secret_key, undefined);
+  assert.equal(retained.identity_key, original.identity_key);
+  assert.equal(retained.content_key, original.content_key);
+  assert.equal(
+    cli(
+      root,
+      add,
+      JSON.stringify({
+        api_key: "synthetic-rotated",
+        secret_key: "synthetic-new",
+      }),
+    ).status,
+    0,
+  );
+  const restored = await store.get(profile.credentialRef);
+  assert.equal(work(restored.identity_key), work(original.identity_key));
+  assert.equal(restored.content_key, original.content_key);
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(configFile, "utf8")).profiles.work.binding,
+    profile.binding,
+  );
+});
+
 test("auth rejects argv secrets, ambiguous input, unknown modes and unprotected files", (t) => {
   const root = fixture(t);
   for (const args of [["--api-key", "bad"], ["--stdin", "--tty"], ["--tty"]]) {

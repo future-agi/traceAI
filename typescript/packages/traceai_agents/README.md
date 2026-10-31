@@ -18,6 +18,8 @@ Credentials use the operating system's credential store. Linux requires Secret S
 
 `--stdin` accepts one bounded JSON object with `api_key` and `secret_key`. `--credential-file` accepts an explicit absolute, owner-only nonsymlink file. These input modes are mutually exclusive.
 
+`auth remove --profile work` removes upstream authentication and holds matching routes. Protected binding identity and content keys remain in the separate credential store so that `auth add` can restore authentication for the same destination without changing work IDs. Removing authentication does not remove owned agent registrations; `disable` and `uninstall` remain available without upstream credentials.
+
 ## Local state and delivery
 
 ```sh
@@ -32,7 +34,13 @@ Only structure-only capture is admitted by this foundation. Content persistence 
 
 A dedicated child process owns the single SQLite connection. The owned spool has a 256 MiB physical cap, including its database, WAL, shared-memory file and maintenance reserve. Capture pauses when checkpoint, filesystem headroom or quota checks fail. This cap does not include installed packages, original agent transcripts, filesystem snapshots or external files. Local receipt retention never authorizes inventing new IDs for previously observed work.
 
-Authenticated exports use the approved complete endpoint, verify TLS and never follow redirects, including same-origin redirects. A partial OTLP rejection is ambiguous, not wholesale success. Disabling a route stops admission and holds queued records instead of silently draining them.
+Authenticated exports use the approved complete endpoint, verify TLS and never follow redirects, including same-origin redirects. A partial OTLP rejection is ambiguous, not wholesale success. With the approved immutable backend contract, ambiguous deliveries retry the original bytes and IDs with backoff, subject to the same destination holds, policy fences and 24-hour queue expiry. Temporary native-receiver admission failures return a retryable HTTP status rather than a permanent partial rejection.
+
+Runtime-version-only replay is a duplicate, not a new span or an update to accepted wire bytes. Changed timing, parentage, usage or source facts remain immutable conflicts. Legacy wire-only receipts can be recovered from retained payloads or a proven exact digest for the original 0.1.0 format; receipts from unknown historical formats without retained payloads remain held.
+
+Disabling a route stops admission and holds queued records instead of silently draining them. If the daemon is stopped, `disable`, `uninstall` and authentication removal use a temporary control-only runtime that cannot admit or export data and closes when the command finishes.
+
+`run --profile` must match the installed route's profile and binding; it cannot redirect an installed route to another approved project. An explicit `--transcript off` overrides previous consent. Transcript-dependent activation or launch then refuses rather than reading transcripts; an omitted option retains the existing approval.
 
 ## Native telemetry coexistence
 

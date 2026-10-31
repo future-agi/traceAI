@@ -21,7 +21,8 @@ const {
 const { encodeResponse, decodeTraces } = require("../dist/src/export/otlp.js");
 const { settings } = require("./fixtures/cli.cjs");
 const reference = require("../contract/reference.cjs");
-const base = path.resolve(__dirname, "../../../../../");
+// Keep Unix socket names below the platform limit even in deeply nested clones.
+const base = fs.realpathSync(require("node:os").tmpdir());
 const fixtureEntry = path.resolve(__dirname, "fixtures/cli.cjs");
 const fact = (id) =>
   reference.normalize(
@@ -483,6 +484,169 @@ test("flush deadline stays bounded and disable cancels the active sender", async
   assert.equal(uploads, disabledUploads);
   assert.ok(pending.storage.logical_bytes > 0);
   await assert.rejects(submit(p, "disabled"), /HELD_DISABLED/);
+});
+
+test("run refuses a different approved profile before adapter launch or upload", async (t) => {
+  let uploads = 0,
+    launches = 0;
+  const a = await upstream(t, (req, res) => {
+    req.resume();
+    uploads++;
+    res.end();
+  });
+  const b = await upstream(t, (req, res) => {
+    req.resume();
+    uploads++;
+    res.end();
+  });
+  const { p, config } = fixture(t, a);
+  config.profiles.other = {
+    storage: "file",
+    credentialRef: "other",
+    binding: {
+      ...config.profiles.work.binding,
+      ...b,
+      id: "00000000-0000-4000-8000-000000000002",
+      project: "other",
+    },
+  };
+  saveConfig(p, config);
+  await credentials(p);
+  await start(t, p);
+  const { AdapterRegistry } = require("../dist/src/adapters.js");
+  const registry = new AdapterRegistry([
+    {
+      ...reference,
+      launch: async () => {
+        launches++;
+        await submit(p, "wrong-destination");
+        return { executable: process.execPath, args: [], env: {} };
+      },
+    },
+  ]);
+  const run = (profile) =>
+    main(
+      [
+        "run",
+        "reference",
+        "--surface",
+        "fixture",
+        "--profile",
+        profile,
+        "--",
+        "-e",
+        "process.exit(0)",
+      ],
+      { ...settings, registry },
+    );
+  assert.equal(await run("other"), 3);
+  assert.equal(launches, 0);
+  await flush(p);
+  assert.equal(uploads, 0);
+  // Even the same profile name cannot launch with a changed binding.
+  config.profiles.work.binding = {
+    ...config.profiles.work.binding,
+    project: "changed",
+  };
+  saveConfig(p, config);
+  assert.equal(await run("work"), 3);
+  assert.equal(launches, 0);
+});
+
+test("explicit transcript off refuses transcript-dependent re-enable and launch", async (t) => {
+  const { p } = fixture(t);
+  await start(t, p);
+  assert.equal(await command("disable"), 0);
+  const before = loadConfig(p);
+  assert.equal(await command("enable", "--transcript", "off"), 3);
+  assert.deepEqual(loadConfig(p), before);
+  assert.equal(await command("enable"), 0); // Omitted retains prior approval.
+  assert.equal(await command("enable", "--transcript", "off"), 3);
+  assert.equal(
+    await command("run", "--transcript", "off", "--", "-e", "process.exit(0)"),
+    3,
+  );
+});
+
+test("removed authentication still permits owned uninstall without restoring auth", async (t) => {
+  const { p } = fixture(t);
+  await credentials(p);
+  await start(t, p);
+  assert.equal(
+    await main(["auth", "remove", "--profile", "work"], settings),
+    0,
+  );
+  assert.equal(loadConfig(p).profiles.work.removed, true);
+  assert.equal(await command("run", "--", "-e", "process.exit(0)"), 3);
+  assert.equal(await command("uninstall"), 0);
+  assert.equal(loadConfig(p).routes[routeId], undefined);
+  assert.equal(loadConfig(p).profiles.work.removed, true);
+});
+
+for (const operation of ["disable", "uninstall", "auth-remove"])
+  test(`stopped-runtime ${operation} fences persistent admission without draining`, async (t) => {
+    let uploads = 0;
+    const binding = await upstream(t, (req, res) => {
+      req.resume();
+      uploads++;
+      res.end();
+    });
+    const { p } = fixture(t, binding);
+    const runtime = await start(t, p);
+    await submit(p, "offline-cleanup");
+    await runtime.stop();
+    await credentials(p);
+    // Clean up a daemon even if a regression leaves the control runtime running.
+    cleanup(t, async () => {
+      try {
+        await runtimeRequest(p.socket, { operation: "stop" });
+      } catch {}
+    });
+    const code =
+      operation === "auth-remove"
+        ? await main(["auth", "remove", "--profile", "work"], settings)
+        : await command(operation);
+    assert.equal(code, 0);
+    const installed = loadConfig(p).routes[routeId];
+    assert.ok(
+      operation === "uninstall"
+        ? installed === undefined
+        : installed.route.enabled === false,
+    );
+    await start(t, p);
+    await flush(p);
+    assert.equal(uploads, 0);
+    await assert.rejects(submit(p, "after-offline-cleanup"), /HELD_DISABLED/);
+  });
+
+test("ambiguous response retries identical bytes after backoff across restart", async (t) => {
+  const bodies = [];
+  const binding = await upstream(t, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(Buffer.concat(chunks));
+    res.setHeader("content-type", "application/x-protobuf");
+    res.end(encodeResponse(bodies.length === 1 ? 1 : 0));
+  });
+  const { p } = fixture(t, binding);
+  await credentials(p);
+  const runtime = await start(t, p);
+  await submit(p, "ambiguous");
+  const first = await flush(p);
+  assert.equal(
+    first.storage.counts.find((r) => r.state === "ambiguous").count,
+    1,
+  );
+  await flush(p);
+  assert.equal(bodies.length, 1);
+  await runtime.stop();
+  await start(t, p);
+  await new Promise((r) => setTimeout(r, 1100));
+  const recovered = await flush(p);
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[1], bodies[0]);
+  assert.equal(recovered.storage.logical_bytes, 0);
+  assert.equal(recovered.persistence, "unknown");
 });
 
 test("an existing live listener is never reclaimed even without a storage owner", async (t) => {

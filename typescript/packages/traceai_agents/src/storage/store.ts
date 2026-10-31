@@ -10,7 +10,11 @@ import {
   type Policy,
 } from "@traceai/agent-core";
 import { AgentError } from "../security/files.js";
-import { encodeFacts } from "../export/otlp.js";
+import {
+  decodeTraces,
+  encodeFacts,
+  encodeTraceObject,
+} from "../export/otlp.js";
 import { validateBinding, type Binding } from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
@@ -33,6 +37,19 @@ interface Row {
 }
 const digest = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
+/** Frozen comparison v1: runtime packaging is not source semantics. Keep all
+ * source timing, topology, usage, content and reconstruction fields comparable.
+ * This representation is only a receipt; the first wire bytes are never changed. */
+function semanticHash(bytes: Buffer): string {
+  const request = decodeTraces(bytes);
+  for (const resource of request.resourceSpans ?? []) {
+    resource.resource.attributes = resource.resource.attributes.filter(
+      (a: { key: string }) => a.key !== "service.version",
+    );
+    for (const scope of resource.scopeSpans ?? []) delete scope.scope.version;
+  }
+  return "semantic-v1:" + digest(encodeTraceObject(request));
+}
 /** Internal storage-child class. Runtime clients only use RPC; never share this connection. */
 export class Spool {
   private db: Database.Database;
@@ -200,7 +217,7 @@ export class Spool {
     const fact = minimize(input, route.policy);
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
-    const hash = digest(bytes);
+    const hash = semanticHash(bytes);
     if (
       cursor &&
       (!/^[a-f0-9]{64}$/.test(cursor.stream) ||
@@ -210,7 +227,7 @@ export class Spool {
     return this.write(() => {
       const old = this.db
         .prepare(
-          "SELECT id,hash,work FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
+          "SELECT id,hash,work,bytes FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
         )
         .get(
           route.binding.id,
@@ -218,8 +235,26 @@ export class Spool {
           fact.traceId,
           fact.spanId,
         ) as any;
-      if (old && (old.hash !== hash || old.work !== fact.sourceWorkId))
-        throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+      if (old) {
+        // Upgrade pre-release wire-only receipts lazily, in this transaction.
+        // For a deleted legacy payload, require an exact wire digest under either
+        // this runtime or the sole pre-semantic package version (0.1.0). This proves
+        // equality without recreating work or trusting unknown historical codecs.
+        const equal =
+          old.hash === hash ||
+          (/^[a-f0-9]{64}$/.test(old.hash) &&
+            (old.bytes
+              ? semanticHash(old.bytes) === hash
+              : old.hash === digest(bytes) ||
+                old.hash ===
+                  digest(encodeFacts([fact], route.binding, "0.1.0"))));
+        if (!equal || old.work !== fact.sourceWorkId)
+          throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+        if (old.hash !== hash)
+          this.db
+            .prepare("UPDATE records SET hash=? WHERE id=?")
+            .run(hash, old.id);
+      }
       let id = old?.id;
       if (!old) {
         const global = (
@@ -300,11 +335,11 @@ export class Spool {
       return undefined;
     return this.db
       .prepare(
-        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND state=? AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
+        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND (state='queued' OR (state='ambiguous' AND ?)) AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
       )
       .get(
         routeId,
-        "queued",
+        Number(route.binding.backendContract === "immutable-agent-v1"),
         route.epoch,
         Date.now(),
         Date.now() - 86_400_000,
@@ -321,7 +356,7 @@ export class Spool {
   ): void {
     this.write(() => {
       const row = this.db
-        .prepare("SELECT route,epoch FROM records WHERE id=?")
+        .prepare("SELECT route,epoch,state FROM records WHERE id=?")
         .get(id) as any;
       if (
         !row ||
@@ -337,7 +372,9 @@ export class Spool {
           result.code === "HELD_AUTH"
             ? "held-auth"
             : result.state === "retry"
-              ? "queued"
+              ? row.state === "ambiguous"
+                ? "ambiguous"
+                : "queued"
               : result.state,
           result.state === "accepted" ? 1 : 0,
           result.nextAt ?? 0,

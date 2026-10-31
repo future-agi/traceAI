@@ -11,7 +11,11 @@ import { minimize } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
 import { loadConfig, type Paths, type Config } from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
-import { FileSecretStore, OSSecretStore } from "../security/credentials.js";
+import {
+  FileSecretStore,
+  OSSecretStore,
+  hasAuth,
+} from "../security/credentials.js";
 import { exportBytes, retryDelay } from "../export/http.js";
 import { StorageClient } from "./storage-client.js";
 export class Runtime {
@@ -35,7 +39,10 @@ export class Runtime {
     private readonly version: string,
     private readonly registry = new AdapterRegistry(),
   ) {}
-  async start(): Promise<void> {
+  private controlOnly = false;
+  async start(controlOnly = false): Promise<void> {
+    // Offline administration must never admit or drain data as a side effect.
+    this.controlOnly = controlOnly;
     protectedDirectory(this.paths.state, true);
     if (Buffer.byteLength(this.paths.socket) > 100)
       throw new AgentError("SOCKET_PATH_TOO_LONG");
@@ -77,7 +84,7 @@ export class Runtime {
         });
       });
       this.timer = setInterval(() => {
-        if (!this.exporting && !this.stopped) {
+        if (!this.exporting && !this.stopped && !this.controlOnly) {
           this.startDrain(10_000);
         }
       }, 1000);
@@ -165,6 +172,7 @@ export class Runtime {
         !route ||
         !route.route.enabled ||
         this.stopped ||
+        this.controlOnly ||
         this.admissionPaused
       )
         throw new AgentError("HELD_DISABLED", 3);
@@ -188,6 +196,7 @@ export class Runtime {
       return {
         schema_version: 1,
         state: "running",
+        control_only: this.controlOnly,
         code: 0,
         storage: this.statusCache,
         last_durable_local_ack: this.lastDurableAck,
@@ -258,7 +267,11 @@ export class Runtime {
           /* bounded child transactions */
         }
       }
-      return { state: m.purge ? "purged" : "held", code: 0 };
+      return {
+        state: m.purge ? "purged" : "held",
+        code: 0,
+        epoch: r.route.epoch,
+      };
     }
     if (m.operation === "flush") {
       const deadline = Number(m.deadlineMs ?? 5000);
@@ -317,6 +330,7 @@ export class Runtime {
       idle = 0;
     const active = () =>
       !this.stopped &&
+      !this.controlOnly &&
       !this.admissionPaused &&
       !controller.signal.aborted &&
       Date.now() < until;
@@ -353,7 +367,13 @@ export class Runtime {
           deferred.add(id);
           continue;
         }
-        if (!credentials || !active() || !route.route.enabled) continue;
+        if (
+          !credentials ||
+          !hasAuth(credentials) ||
+          !active() ||
+          !route.route.enabled
+        )
+          continue;
         const result = await exportBytes(
           profile.binding,
           Buffer.from(row.bytes),
