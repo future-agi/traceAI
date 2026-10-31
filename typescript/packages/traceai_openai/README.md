@@ -105,8 +105,8 @@ continue to work.
 Chat, legacy completion and Responses spans record `server.address` separately
 from `gen_ai.provider.name`. For Cloudflare's REST and compatibility endpoints,
 explicit request prefixes identify the requested provider: `openai/`,
-`anthropic/`, `google/` or `google-ai-studio/`, and `xai/`. Workers AI's `@cf/`
-prefix identifies `cloudflare`, not the author of the hosted model.
+`anthropic/`, `google/` or `google-ai-studio/`, and `xai/` or `grok/`. Workers AI's
+`@cf/` or `workers-ai/` prefix identifies `cloudflare`, not the author of the hosted model.
 
 Dynamic routes, unrecognized prefixes and unprefixed aliases do not establish a
 provider, so the provider attribute is omitted. Response model names never

@@ -10,7 +10,9 @@ const CLOUDFLARE_PROVIDERS = new Map<string, string>([
   ["google", LLMProvider.GOOGLE],
   ["google-ai-studio", LLMProvider.GOOGLE],
   ["xai", LLMProvider.XAI],
+  ["grok", LLMProvider.XAI],
   ["@cf", "cloudflare"],
+  ["workers-ai", "cloudflare"],
 ]);
 
 /**
