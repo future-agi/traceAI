@@ -8,7 +8,7 @@ OpenTelemetry instrumentation for AWS Bedrock. Part of traceAI, Future AGI's Ope
 
 ```sh
 npm install @traceai/bedrock @traceai/fi-core @opentelemetry/instrumentation @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
-npm install @aws-sdk/client-bedrock-runtime@"^3.0.0"
+npm install @aws-sdk/client-bedrock-runtime@"^3.693.0"
 ```
 
 Install the AWS SDK in the application that makes Bedrock requests. Configure
@@ -47,11 +47,22 @@ instead of assuming import order alone enables automatic patching.
 
 ## Compatibility and privacy
 
-This instruments the SDK hooks implemented by this package, not every API offered
-by the provider. The install ranges above are intentionally limited to the module versions this
-instrumentor patches; its peer declarations may be broader.
-Traces can contain prompts, responses, and tool data; configure capture and
-redaction before sending production traffic.
+The instrumentor traces `InvokeModelCommand`, `InvokeModelWithResponseStreamCommand`,
+`ConverseCommand`, and `ConverseStreamCommand`. SDK request options, including
+`abortSignal` and timeouts, and both callback overloads are preserved. Other
+commands pass through without model spans.
+
+For streaming calls, the span remains open while you consume the response's
+`body` (InvokeModel) or `stream` (Converse). Consume the stream to capture final
+output and token usage. Breaking out of a `for await` loop closes the underlying
+iterator and ends the span with the output seen so far. The instrumentor does
+not read ahead or drain an unused stream in the background. Finish or close
+streams before shutting down the tracer provider.
+
+Traces can contain prompts, responses, and tool data. Configure capture and
+redaction before sending production traffic; for example,
+`new BedrockInstrumentation({ traceConfig: { hideInputs: true, hideOutputs: true } })`
+hides request and response content while retaining token counts.
 
 ## License
 
