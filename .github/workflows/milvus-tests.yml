@@ -1,0 +1,43 @@
+name: Milvus compatibility tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/milvus/**'
+      - '.github/workflows/milvus-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Milvus (pymilvus ${{ matrix.pymilvus }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        pymilvus: ['2.3.0', '3.0.2']
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install the SDK endpoint and published privacy core
+        env:
+          PYMILVUS: ${{ matrix.pymilvus }}
+        run: |
+          # PyMilvus 2.3.0 needs pkg_resources and environs 9's marshmallow API.
+          python -m pip install "pymilvus==$PYMILVUS" 'marshmallow<4' 'setuptools<81' \
+            'fi-instrumentation-otel==1.2.2' 'pytest==8.4.2' \
+            'opentelemetry-exporter-otlp-proto-http>=1.20.0' \
+            -e python/frameworks/milvus
+      - name: Offline SDK contracts and loopback OTLP
+        run: python -I -m pytest python/frameworks/milvus/tests -q -p no:cacheprovider
