@@ -12,7 +12,7 @@ process.on("message", (message: any) => {
       throw new AgentError("INVALID_RPC");
     if (message.op === "init") {
       if (store) throw new AgentError("ALREADY_INITIALIZED");
-      store = new Spool(message.args.root, message.args.version);
+      store = new Spool(message.args.root, message.args.version, true);
       result = { ready: true };
     } else {
       if (!store) throw new AgentError("STORAGE_UNAVAILABLE");
@@ -20,6 +20,9 @@ process.on("message", (message: any) => {
       switch (message.op) {
         case "route":
           result = store.route(a);
+          break;
+        case "validateRoute":
+          result = store.validateRoute(a);
           break;
         case "getRoute":
           result = store.getRoute(a);
@@ -63,6 +66,7 @@ process.on("message", (message: any) => {
       id: message?.id,
       ok: false,
       code: e instanceof AgentError ? e.code : "STORAGE_UNAVAILABLE",
+      exitCode: e instanceof AgentError ? e.exitCode : 7,
     });
   }
 });

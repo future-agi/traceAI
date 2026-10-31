@@ -198,3 +198,43 @@ test("native conflict refusal precedes listener creation; receiver rejects brows
     100,
   );
 });
+
+for (const type of ["application/json", "application/x-protobuf"])
+  for (const reject of [false, true])
+    test(`native ${type} responds in-kind for ${reject ? "partial rejection" : "acceptance"}`, async (t) => {
+      let admits = 0;
+      const s = await startReceiver({
+        coexistence: { state: "owned-or-none" },
+        singleUserApproved: true,
+        normalize: () => ({ ...fact, source: "native" }),
+        admit: async () => {
+          admits++;
+          if (reject) throw new Error("synthetic storage hold");
+        },
+      });
+      t.after(() => new Promise((r) => s.close(r)));
+      const wire = encodeFacts([fact], binding(s), "0.1.0");
+      const response = await fetch(binding(s).endpoint, {
+        method: "POST",
+        headers: { "content-type": type },
+        body:
+          type === "application/json"
+            ? JSON.stringify(decodeTraces(wire))
+            : wire,
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), type);
+      assert.equal(admits, 1);
+      if (type === "application/json")
+        assert.deepEqual(
+          await response.json(),
+          reject ? { partialSuccess: { rejectedSpans: "1" } } : {},
+        );
+      else
+        assert.equal(
+          require("../dist/src/export/otlp.js").decodeRejections(
+            Buffer.from(await response.arrayBuffer()),
+          ),
+          reject ? 1 : 0,
+        );
+    });

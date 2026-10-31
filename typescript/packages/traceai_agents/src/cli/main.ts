@@ -374,8 +374,18 @@ export async function main(
         process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
       )
         throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
-      await startRuntime(p, settings.entry);
-      const result = await runAgent(adapter, context, child);
+      let tracing = true;
+      try {
+        await startRuntime(p, settings.entry);
+      } catch (e) {
+        if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+          throw e;
+        tracing = false;
+        process.stderr.write(
+          "fi-agent: tracing unavailable; launching without tracing\n",
+        );
+      }
+      const result = await runAgent(adapter, context, child, tracing);
       if (result.signal) {
         process.kill(process.pid, result.signal);
         return 128;
@@ -477,34 +487,75 @@ export async function main(
         purge: options["purge-capture"] === true,
       });
     try {
-      await configTransaction(p, async (c) => {
-        const activation = await change.commit();
-        if (command === "uninstall") {
-          delete c.routes[routeId];
-          return;
-        }
-        c.routes[routeId] = {
-          route: {
+      await configTransaction(
+        p,
+        async (c) => {
+          if (
+            JSON.stringify(c.routes[routeId]) !== JSON.stringify(installed) ||
+            JSON.stringify(c.profiles[profileName]) !== JSON.stringify(profile)
+          )
+            throw new AgentError("CONFIGURATION_CONFLICT", 6);
+          if (command === "uninstall") {
+            await change.commit();
+            delete c.routes[routeId];
+            return;
+          }
+          // Uninstall intentionally retains storage identity and its capture fence.
+          // Recover that generation rather than resetting a fresh registration to 1.
+          const retained = (
+            await runtimeRequest(p.socket, {
+              operation: "route-state",
+              route: routeId,
+            })
+          ).route;
+          if (
+            command === "update" &&
+            (profileName !== installed.profile ||
+              context.transcriptConsent !== installed.transcriptConsent)
+          )
+            throw new AgentError("UPDATE_POLICY_CHANGE_REQUIRED", 3);
+          const route = {
             id: routeId,
             binding: profile.binding,
-            policy: STRUCTURE_POLICY,
+            policy:
+              command === "update" ? installed.route.policy : STRUCTURE_POLICY,
             enabled:
               command === "enable" ||
               (command === "update" && installed.route.enabled),
-            epoch: (installed?.route.epoch ?? 0) + 1,
-          },
-          agent,
-          surface,
-          profile: profileName,
-          transcriptConsent: context.transcriptConsent,
-          activation,
-        };
-      });
+            epoch:
+              command === "update"
+                ? installed.route.epoch
+                : command === "disable"
+                  ? retained.epoch
+                  : Math.max(
+                      retained?.epoch ?? 0,
+                      installed?.route.epoch ?? 0,
+                    ) + 1,
+          };
+          // Reject destination/policy/storage conflicts BEFORE changing the adapter
+          // registration or committing its enabled config.
+          await runtimeRequest(p.socket, {
+            operation: "validate-route",
+            route,
+          });
+          const activation = await change.commit();
+          c.routes[routeId] = {
+            route,
+            agent,
+            surface,
+            profile: profileName,
+            transcriptConsent: context.transcriptConsent,
+            activation,
+          };
+        },
+        async () => {
+          await runtimeRequest(p.socket, { operation: "refresh" });
+        },
+      );
     } catch (e) {
       await change.rollback();
       throw e;
     }
-    await runtimeRequest(p.socket, { operation: "refresh" });
     output({
       state:
         command === "enable"
