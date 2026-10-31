@@ -8,7 +8,7 @@
 
 Trace LLM calls, agents, tools, and retrieval. Keep your application code and your observability stack.
 
-**77 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
+**78 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
 
 [Get started](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
 
@@ -299,11 +299,11 @@ After a call finishes, open the `traceai-quickstart` project in **Observe** in F
 
 ## Integrations
 
-**77 integration families, with language coverage you can inspect.** Each SDK link opens its package source. A dash means no dedicated framework package in this repository—not a promise of unsupported runtime behavior.
+**78 integration families, with language coverage you can inspect.** Each SDK link opens its package source. A dash means no dedicated framework package in this repository—not a promise of unsupported runtime behavior.
 
 Python and TypeScript provide framework instrumentors; Java provides client wrappers and framework modules; Go provides middleware and framework integrations. **C# provides [manual spans and activities](csharp/src/FIInstrumentation/), not automatic framework instrumentation**, so its framework cells are intentionally empty.
 
-All 77 families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
+All 78 families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
 
 [Model providers](#model-providers) · [Agent frameworks](#agent-frameworks) · [RAG & vector databases](#rag-vector-databases) · [Tools & search](#tools-search) · [Voice & realtime](#voice-realtime) · [Gateways & proxies](#gateways-proxies) · [Coding agents](#coding-agents) · [Java frameworks](#java-frameworks) · [Other](#other)
 
@@ -377,6 +377,7 @@ Retrieval pipelines, vector stores, and search backends.
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Azure AI Search | — | — | [SDK](java/traceai-java-azure-search/ "traceai-java-azure-search") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Chroma | [SDK](python/frameworks/chromadb/ "traceAI-chromadb") | [SDK](typescript/packages/traceai_chromadb/ "@traceai/chromadb") | [SDK](java/traceai-java-chromadb/ "traceai-java-chromadb") | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cognee | [SDK](python/frameworks/cognee/ "traceai-cognee") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Elasticsearch | — | — | [SDK](java/traceai-java-elasticsearch/ "traceai-java-elasticsearch") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Google Discovery Engine | [SDK](python/frameworks/discoveryengine/ "traceAI-discoveryengine") | — | — | — | — |
 | <img src=".github/assets/integrations/haystack-tile.svg" width="24" height="24" alt=""> Haystack | [SDK](python/frameworks/haystack/ "traceAI-haystack") | — | — | — | — |

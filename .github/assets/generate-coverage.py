@@ -30,7 +30,7 @@ NAMES = {
     "azure-openai": "Azure OpenAI", "azure-search": "Azure AI Search",
     "bedrock": "Amazon Bedrock", "beeai": "BeeAI", "cerebras": "Cerebras",
     "chromadb": "Chroma", "claude-agent-sdk": "Claude Agent SDK", "codex-sdk": "Codex SDK",
-    "cohere": "Cohere", "crewai": "CrewAI", "cursor-sdk": "Cursor SDK",
+    "cognee": "Cognee", "cohere": "Cohere", "crewai": "CrewAI", "cursor-sdk": "Cursor SDK",
     "deepseek": "DeepSeek", "discoveryengine": "Google Discovery Engine", "dspy": "DSPy",
     "eino": "Eino", "elasticsearch": "Elasticsearch", "elevenlabs-agents": "ElevenLabs Agents",
     "exa": "Exa", "firecrawl": "Firecrawl", "fireworks": "Fireworks AI", "genkit": "Genkit",
@@ -69,7 +69,7 @@ CATEGORIES = [
      "smolagents strands vercel voltagent"),
     ("rag-vector-databases", "RAG & vector databases",
      "Retrieval pipelines, vector stores, and search backends.",
-     "azure-search chromadb discoveryengine elasticsearch haystack lancedb llamaindex "
+     "azure-search chromadb cognee discoveryengine elasticsearch haystack lancedb llamaindex "
      "milvus mongodb pgvector pinecone qdrant redis weaviate"),
     ("tools-search", "Tools & search",
      "Tool connectivity, web search, crawling, and extraction.",

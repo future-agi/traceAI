@@ -70,7 +70,10 @@ class CoverageTests(unittest.TestCase):
         section = readme.split("## Integrations\n", 1)[1].split("\n## ", 1)[0]
         self.assertNotRegex(section, r"(?i)<\s*/?\s*(?:details|summary)\b")
         self.assertIn(f'**{data["integration_families"]} integration families · 5 languages', readme)
-        self.assertEqual(data["integration_families"], 77)
+        self.assertEqual(data["integration_families"], 78)
+        cognee = next(family for family in data["families"] if family["id"] == "cognee")
+        self.assertEqual(cognee["category"], "rag-vector-databases")
+        self.assertEqual(cognee["languages"]["Python"][0]["package"], "traceai-cognee")
         self.assertEqual(len(data["categories"]), 9)
         keys = [key for category in data["categories"] for key in category["families"]]
         self.assertEqual(len(keys), len(set(keys)))

@@ -11,6 +11,30 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _error_status(exception: BaseException) -> trace_api.Status:
+    """Format useful diagnostics without trusting an exception's __str__."""
+    name = type(exception).__name__
+    try:
+        detail = str(exception)
+    except BaseException:
+        detail = "<exception message unavailable>"
+    return trace_api.Status(trace_api.StatusCode.ERROR, f"{name}: {detail}")
+
+
+def _finish_request_error(span: _WithSpan, exception: BaseException) -> None:
+    # Each operation is isolated: even a broken processor must not obscure the
+    # original SDK error or prevent a best-effort attempt to end the span.
+    for action in (
+        lambda: span.set_status(_error_status(exception)),
+        lambda: span.record_exception(exception),
+        span.finish_tracing,
+    ):
+        try:
+            action()
+        except BaseException:
+            pass
+
+
 class _ValueAndType(NamedTuple):
     value: str
     type: FiMimeTypeValues
@@ -30,13 +54,13 @@ def _finish_tracing(
     try:
         attributes: Attributes = dict(has_attributes.get_attributes())
     except Exception as e:
-        logger.exception("Failed to get attributes")
+        logger.warning("Failed to get attributes")
         attributes = None
 
     try:
         extra_attributes: Attributes = dict(has_attributes.get_extra_attributes())
     except Exception as e:
-        logger.exception("Failed to get extra attributes")
+        logger.warning("Failed to get extra attributes")
         extra_attributes = None
 
     try:
@@ -46,8 +70,7 @@ def _finish_tracing(
             extra_attributes=extra_attributes,
         )
     except Exception as e:
-        print(f"Failed to finish tracing: {e}")
-        logger.exception("Failed to finish tracing")
+        logger.warning("Failed to finish tracing")
         raise
 
 
@@ -56,8 +79,7 @@ def _io_value_and_type(obj: Any) -> _ValueAndType:
         json_value = safe_json_dumps(obj)
         return _ValueAndType(json_value, FiMimeTypeValues.JSON)
     except Exception as e:
-        print(f"Failed to serialize as JSON: {e}")
-        logger.exception("Failed to get input attributes from request parameters.")
+        logger.warning("Failed to get input attributes from request parameters.")
 
     return _ValueAndType(str(obj), FiMimeTypeValues.TEXT)
 

@@ -12,6 +12,7 @@
   "python/frameworks/chromadb": "0.1.1",
   "python/frameworks/claude-agent-sdk": "0.1.1",
   "python/frameworks/cohere": "0.1.1",
+  "python/frameworks/cognee": "0.1.0",
   "python/frameworks/crewai": "0.1.9",
   "python/frameworks/deepseek": "0.1.1",
   "python/frameworks/discoveryengine": "0.1.0",

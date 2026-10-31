@@ -1,5 +1,5 @@
 {
-  "integration_families": 77,
+  "integration_families": 78,
   "languages": [
     "Python",
     "TypeScript",
@@ -7,7 +7,7 @@
     "Go",
     "C#"
   ],
-  "method": "Union of normalized framework families from 65 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
+  "method": "Union of normalized framework families from 66 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
   "normalization": {
     "ag2-classic": "ag2",
     "google-genai-live": "google-genai",
@@ -24,7 +24,7 @@
     "fi-instrumentation-vertexai": "vertexai"
   },
   "package_counts_in_matrix": {
-    "Python": 65,
+    "Python": 66,
     "TypeScript": 45,
     "Java": 23,
     "Go": 5,
@@ -38,6 +38,10 @@
     {
       "manifest": "typescript/packages/fi-semantic-conventions/package.json",
       "reason": "shared SDK / semantic conventions"
+    },
+    {
+      "manifest": "java/traceai-bom/pom.xml",
+      "reason": "dependency-management / aggregator POM; not an integration"
     },
     {
       "manifest": "java/traceai-java-core/pom.xml",
@@ -112,6 +116,7 @@
       "families": [
         "azure-search",
         "chromadb",
+        "cognee",
         "elasticsearch",
         "discoveryengine",
         "haystack",
@@ -1063,6 +1068,20 @@
             "manifest": "java/traceai-java-chromadb/pom.xml",
             "package": "traceai-java-chromadb",
             "source": "java/traceai-java-chromadb/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cognee",
+      "name": "Cognee",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/cognee/pyproject.toml",
+            "package": "traceai-cognee",
+            "source": "python/frameworks/cognee/"
           }
         ]
       }
