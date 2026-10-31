@@ -1,11 +1,10 @@
 import logging
 from abc import ABC
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
+from typing import Any, Callable, Iterable, Iterator, Mapping, Tuple
 
 import opentelemetry.context as context_api
-from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation import TraceConfig, get_attributes_from_context
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
@@ -20,6 +19,7 @@ from traceai_cohere._response_attributes_extractor import (
     _EmbedResponseAttributesExtractor,
     _RerankResponseAttributesExtractor,
 )
+from traceai_cohere._stream import _AsyncStream, _Stream
 from traceai_cohere._utils import _finish_tracing, _to_dict
 from traceai_cohere._with_span import _WithSpan
 
@@ -88,9 +88,13 @@ class _ChatWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -142,9 +146,13 @@ class _AsyncChatWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
@@ -196,9 +204,13 @@ class _ChatStreamWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -213,63 +225,15 @@ class _ChatStreamWrapper(_WithTracer):
 
             return self._handle_streaming_response(span, response, request_parameters)
 
-    def _handle_streaming_response(
-        self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        """Handle streaming response."""
-        content_parts: List[str] = []
-        raw_chunks: List[Dict[str, Any]] = []
-        final_response: Dict[str, Any] = {}
+    def _handle_streaming_response(self, span, response, request_parameters):
+        return _Stream(response, span, request_parameters)
 
-        def streaming_wrapper():
-            nonlocal final_response
-            try:
-                for event in response:
-                    event_dict = _to_dict(event)
-                    raw_chunks.append(event_dict)
 
-                    event_type = event_dict.get("event_type", "")
+class _AsyncChatStreamWrapper(_ChatStreamWrapper):
+    """Async SDK streams return an async iterator directly, not an awaitable."""
 
-                    if event_type == "text-generation":
-                        text = event_dict.get("text", "")
-                        if text:
-                            content_parts.append(text)
-
-                    if event_type == "stream-end":
-                        final_response = event_dict.get("response", {})
-
-                    yield event
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    final_response["text"] = "".join(content_parts)
-                    span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(raw_chunks[-5:]))  # Last 5 chunks
-                    span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, "".join(content_parts))
-
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
-                        extra_attributes=self._response_extractor.get_extra_attributes(
-                            final_response, request_parameters, is_streaming=True
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-            finally:
-                if span._span.is_recording():
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+    def _handle_streaming_response(self, span, response, request_parameters):
+        return _AsyncStream(response, span, request_parameters)
 
 
 class _EmbedWrapper(_WithTracer):
@@ -295,9 +259,13 @@ class _EmbedWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -349,9 +317,13 @@ class _AsyncEmbedWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
@@ -403,9 +375,13 @@ class _RerankWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -457,9 +433,13 @@ class _AsyncRerankWrapper(_WithTracer):
 
         with self._start_as_current_span(
             span_name=span_name,
-            attributes=self._request_extractor.get_attributes_from_request(request_parameters),
+            attributes=self._request_extractor.get_attributes_from_request(
+                request_parameters
+            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=self._request_extractor.get_extra_attributes_from_request(
+                request_parameters
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
