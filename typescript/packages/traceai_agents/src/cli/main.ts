@@ -165,7 +165,7 @@ export async function main(
           "runtime start|stop|status",
         ],
         enabled_by_default: [],
-        reasons: ["NO_QUALIFIED_ADAPTERS_BUNDLED"],
+        reasons: ["PREVIEW_BACKEND_CONTRACT_REQUIRED"],
       });
       return 0;
     }
@@ -363,7 +363,8 @@ export async function main(
       binding: profile.binding,
       transcriptConsent:
         options.transcript === "structure" ||
-        installed?.transcriptConsent === true,
+        (options.transcript === undefined &&
+          installed?.transcriptConsent === true),
     };
     if (command === "run") {
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
@@ -444,6 +445,12 @@ export async function main(
       });
       return 0;
     }
+    if (
+      command === "enable" &&
+      installed?.route.enabled &&
+      options.transcript === "off"
+    )
+      throw new AgentError("DISABLE_REQUIRED_TO_REVOKE_TRANSCRIPT", 3);
     if (command === "enable" && installed?.route.enabled) {
       output({
         state: "already-enabled",
@@ -506,6 +513,9 @@ export async function main(
             ? "held"
             : command + "-complete",
       code: 0,
+      ...(command === "enable" && adapter.instructions
+        ? { next: adapter.instructions(context) }
+        : {}),
     });
     return 0;
   } catch (e) {

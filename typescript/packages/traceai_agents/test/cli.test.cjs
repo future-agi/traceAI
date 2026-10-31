@@ -134,8 +134,11 @@ test("shipped executable has no adapter enabled, never silently installs a logo"
     "--project",
     "fixture",
   ]);
-  assert.equal(r.status, 5);
-  assert.match(r.stdout, /UNSUPPORTED_AGENT_SURFACE/);
+  assert.equal(r.status, process.platform === "darwin" ? 3 : 5);
+  assert.match(
+    r.stdout,
+    process.platform === "darwin" ? /HELD_AUTH/ : /UNSUPPORTED_AGENT_SURFACE/,
+  );
   assert.equal(fs.existsSync(path.join(root, "config")), false);
   const status = cli(root, ["status"]);
   assert.equal(status.status, 7);

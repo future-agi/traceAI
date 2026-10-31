@@ -8,7 +8,11 @@ import { chmodSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { frame } from "@traceai/agent-core/client";
 import { minimize } from "@traceai/agent-core";
-import { AdapterRegistry, enforceCapability } from "../adapters.js";
+import {
+  AdapterRegistry,
+  enforceCapability,
+  type LocalObserver,
+} from "../adapters.js";
 import { loadConfig, type Paths, type Config } from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
 import { FileSecretStore, OSSecretStore } from "../security/credentials.js";
@@ -16,6 +20,8 @@ import { exportBytes, retryDelay } from "../export/http.js";
 import { StorageClient } from "./storage-client.js";
 export class Runtime {
   private storage!: StorageClient;
+  private observers = new Map<string, LocalObserver>();
+  private observerHolds = new Map<string, string>();
   private admissionPaused = false;
   private server: Server | undefined;
   private config: Config = { schema_version: 1, profiles: {}, routes: {} };
@@ -78,12 +84,69 @@ export class Runtime {
     }
   }
   private async refresh(): Promise<void> {
+    for (const observer of this.observers.values()) await observer.stop();
+    this.observers.clear();
+    this.observerHolds.clear();
     const config = loadConfig(this.paths);
     for (const route of Object.values(config.routes)) {
       this.registry.get(route.agent, route.surface);
       await this.storage.call("route", route.route);
     }
     this.config = config;
+    for (const [id, installed] of Object.entries(config.routes)) {
+      const adapter = this.registry.get(installed.agent, installed.surface);
+      if (!installed.route.enabled || !adapter.createObserver) continue;
+      const profile = config.profiles[installed.profile];
+      if (!profile || profile.removed) continue;
+      const store =
+        profile.storage === "file"
+          ? new FileSecretStore(this.paths.credentials)
+          : new OSSecretStore();
+      let secret;
+      try {
+        secret = await store.get(profile.credentialRef);
+      } catch {
+        this.observerHolds.set(id, "HELD_IDENTITY_KEY");
+        continue;
+      }
+      if (!secret) {
+        this.observerHolds.set(id, "HELD_IDENTITY_KEY");
+        continue;
+      }
+      const observer = adapter.createObserver(
+        {
+          routeRef: id,
+          socketPath: this.paths.socket,
+          surface: installed.surface,
+          profile: installed.profile,
+          binding: profile.binding,
+          transcriptConsent: installed.transcriptConsent,
+        },
+        {
+          normalize: {
+            identityKey: Buffer.from(secret.identity_key, "hex"),
+            policyRevision: installed.route.policy.revision,
+            sourceSchema: adapter.capability.schemas[0],
+          },
+          admit: async (fact, cursor) => {
+            if (
+              !installed.route.enabled ||
+              this.stopped ||
+              this.admissionPaused
+            )
+              throw new AgentError("HELD_DISABLED", 3);
+            enforceCapability(fact, adapter.capability);
+            await this.storage.call("admit", {
+              route: id,
+              fact: minimize(fact, installed.route.policy),
+              cursor,
+            });
+            this.lastDurableAck = Date.now();
+          },
+        },
+      );
+      this.observers.set(id, observer);
+    }
   }
   private connection(socket: Socket): void {
     this.sockets.add(socket);
@@ -143,6 +206,20 @@ export class Runtime {
       throw new AgentError("INVALID_FRAME", 2);
     }
     if (m.protocol_version !== 1) throw new AgentError("INVALID_PROTOCOL", 2);
+    if (m.operation === "adapter-observe") {
+      if (
+        this.stopped ||
+        this.admissionPaused ||
+        !this.config.routes[m.route_ref]?.route.enabled
+      )
+        throw new AgentError("HELD_DISABLED", 3);
+      const observer = this.observers.get(m.route_ref);
+      if (!observer) throw new AgentError("UNSUPPORTED_OBSERVER", 5);
+      observer.accept(m.input);
+      // Callback admission is NOT durable span admission. The off-hook reader
+      // commits minimized facts separately and exposes its own counts.
+      return { protocol_version: 1, durable: false, reason_code: "SCHEDULED" };
+    }
     if (m.operation === "observe") {
       const route = this.config.routes[m.route_ref];
       if (
@@ -182,6 +259,11 @@ export class Runtime {
           surface: r.surface,
           enabled: r.route.enabled,
           activation: r.activation,
+          observer:
+            this.observers.get(r.route.id)?.status() ??
+            (this.observerHolds.has(r.route.id)
+              ? { state: "held", reasons: [this.observerHolds.get(r.route.id)] }
+              : undefined),
           policy: r.route.policy.revision,
           export:
             r.route.binding.backendContract === "immutable-agent-v1"
@@ -221,6 +303,8 @@ export class Runtime {
       const r = this.config.routes[m.route];
       if (!r) throw new AgentError("UNKNOWN_ROUTE", 3);
       r.route.enabled = false;
+      await this.observers.get(m.route)?.stop();
+      this.observers.delete(m.route);
       await this.fence();
       await this.storage.call("disable", m.route);
       if (m.purge) {
@@ -315,6 +399,8 @@ export class Runtime {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    for (const observer of this.observers.values()) await observer.stop();
+    this.observers.clear();
     this.controller?.abort();
     this.server?.close();
     for (const s of this.sockets) s.destroy();

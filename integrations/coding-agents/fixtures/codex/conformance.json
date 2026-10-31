@@ -1,0 +1,65 @@
+{
+  "scope": "Synthetic-only localhost conformance; not backend persistence or full lifecycle certification",
+  "runs": [
+    {
+      "version": "codex-cli 0.166.0",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 1,
+      "turn_spans": 1,
+      "total_tokens": 24,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 8,
+        "admitted": 4,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 4,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.165.0",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 1,
+      "turn_spans": 1,
+      "total_tokens": 24,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 8,
+        "admitted": 4,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 4,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    }
+  ]
+}

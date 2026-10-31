@@ -27,7 +27,24 @@ export interface OwnedChange {
   commit(): Promise<Activation>;
   rollback(): Promise<void>;
 }
+export interface LocalObserver {
+  accept(input: unknown): void;
+  status(): object;
+  stop(): Promise<void>;
+}
+export interface ObserverServices {
+  normalize: NormalizeContext;
+  admit(
+    fact: CanonicalFact,
+    cursor?: { stream: string; coordinate: string },
+  ): Promise<void>;
+}
 export interface Adapter {
+  createObserver?(
+    context: AdapterContext,
+    services: ObserverServices,
+  ): LocalObserver;
+  instructions?(context: AdapterContext): readonly string[];
   capability: Capability;
   preflight(
     action: "enable" | "disable" | "update" | "uninstall",
@@ -44,6 +61,8 @@ export interface Adapter {
     args: readonly string[];
   }>;
   import?(bytes: Buffer, context: NormalizeContext): readonly CanonicalFact[];
+  /** Explicitly selected source file; adapter enforces owner/no-follow/size checks. */
+  readImport?(path: string): Buffer;
 }
 export interface AdapterContext {
   routeRef: string;

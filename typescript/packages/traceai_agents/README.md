@@ -2,7 +2,29 @@
 
 `fi-agent` is a local observability runtime for explicitly enabled coding-agent integrations. It is not a coding agent, model proxy, or agent orchestrator.
 
-The executable includes no enabled or installable agent adapters. Installing the runtime does not enable tracing. Agent SDK instrumentation remains a separate integration surface.
+Installing the runtime does not enable tracing. The opt-in Codex CLI observer supports pinned 0.165.0 and 0.166.0 rollouts on macOS. Agent SDK instrumentation remains a separate integration surface.
+
+## Codex CLI observer
+
+After approving a destination profile, explicitly consent to structural rollout reading:
+
+```sh
+fi-agent enable codex --surface cli --profile work --project coding-agents --capture structure --transcript structure
+```
+
+Run the two official `codex plugin` commands printed by enable to install the generated local repository-marketplace bundle. Review and approve its hooks in Codex's `/hooks` interface, then restart the session. Enable never edits Codex configuration, trust, model selection or provider credentials. The immutable bundle includes its own observer client and uses the host-supplied `PLUGIN_ROOT`; hooks do not download packages or contact Future AGI directly.
+
+```sh
+fi-agent doctor codex --surface cli
+fi-agent status
+fi-agent disable codex --surface cli
+```
+
+Capture reconstructs requests from durable response identities and exact per-response usage, not anonymous pre/post-hook pairs or token summaries. Request timing is unknown, not claimed wire latency. Tools are siblings of model requests; explicit child-thread ancestry links separate run traces. No source content is stored. Unknown source versions, inherited/fork histories without proven ownership, rotation and compression hold rather than mint new work IDs.
+
+`fi-agent import codex --surface cli --transcript structure --path /absolute/path/rollout.jsonl --dry-run` selects one file. Commit the returned plan with `--commit PLAN_ID`; no historical-home scan is performed. The initial importer is bounded to 1 MiB and 128 spans. See `profiles/capabilities.json` for all limits and release holds.
+
+Disable revokes runtime admission and holds queued data. Remove the host's installed copy separately with `codex plugin remove traceai-codex@traceai-observers`. The runtime never removes original Codex history or another plugin's configuration.
 
 ## Authentication
 

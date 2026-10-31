@@ -29,7 +29,11 @@ export class ImportPlanner {
     context: NormalizeContext,
   ): { digest: string; facts: CanonicalFact[] } {
     if (!adapter.import) throw new AgentError("UNSUPPORTED_IMPORT", 5);
-    const bytes = readProtected(path, 1_048_576);
+    const bytes = adapter.readImport
+      ? adapter.readImport(path)
+      : readProtected(path, 1_048_576);
+    if (bytes.length > 1_048_576)
+      throw new AgentError("IMPORT_SLICE_REQUIRED", 4);
     const facts = adapter.import(bytes, context).map((f) => {
       enforceCapability(f, adapter.capability);
       return minimize(f);

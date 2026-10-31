@@ -58,6 +58,29 @@ const assert = require("node:assert/strict");
       assert.equal(hook.status, 0);
       assert.equal(hook.stdout, "");
       assert.equal(hook.stderr, "");
+      const codexHook = spawnSync(
+        process.execPath,
+        [
+          path.join(root, "bin/fi-agent-codex-hook.cjs"),
+          "--socket",
+          "/missing-fixture.sock",
+          "--route",
+          "codex.cli",
+        ],
+        {
+          env,
+          input:
+            '{"hook_event_name":"PostModelRequest","session_id":"fixture","transcript_path":null}',
+          encoding: "utf8",
+          timeout: 10000,
+        },
+      );
+      assert.equal(codexHook.status, 0);
+      assert.equal(codexHook.stdout, "");
+      assert.equal(codexHook.stderr, "");
+      assert.ok(
+        fs.existsSync(path.join(root, "dist/src/adapters/codex/codec.js")),
+      );
       assert.deepEqual(
         JSON.parse(
           fs.readFileSync(path.join(root, "profiles/capabilities.json")),
