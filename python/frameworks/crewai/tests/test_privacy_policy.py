@@ -107,6 +107,24 @@ def tracer_for(config):
         "client.config.secrets.value",
         "apiSecret",
         "secret_token",
+        "X-Amz-Security-Token",
+        "X-Vault-Token",
+        "X-Consul-Token",
+        "X-Subject-Token",
+        "X-Api-Secret",
+        "X-Service-Token",
+        "security_token",
+        "aws_security_token",
+        "vault_token",
+        "consul_token",
+        "subject_token",
+        "service_token",
+        "headers.x-aMz-SeCuRiTy-ToKeN",
+        "headers[X-Vault-Token][0]",
+        "headers.X-Consul-Token.value",
+        "headers[X-Subject-Token]",
+        "headers.X-Api-Secret.0",
+        "client.config.security_token.value",
     ],
 )
 def test_credential_spellings_and_business_fields(key):
@@ -121,6 +139,12 @@ def test_credential_spellings_and_business_fields(key):
         "tokenizer": "safe",
         "max_tokens": 90,
         "token_id": "safe-id",
+        "security_token_id": "safe-security-id",
+        "vault_token_count": 3,
+        "consul_token_ttl": 3600,
+        "subject_token_type": "safe-type",
+        "service_token_count": 2,
+        "api_secret_id": "safe-secret-id",
         "id": "business-id",
     }
     before = copy.deepcopy(payload)
@@ -135,14 +159,19 @@ def test_credential_spellings_and_business_fields(key):
 
 @pytest.mark.parametrize("flag", CONTENT_FLAGS)
 @pytest.mark.parametrize("enabled", [True, False])
-def test_every_directional_hide_flag_covers_aliases_and_events(flag, enabled, caplog):
+def test_every_directional_hide_flag_covers_aliases_and_events(
+    flag, enabled, caplog, service_credentials
+):
     tracer, exporter, provider = tracer_for(TraceConfig(**{flag: enabled}))
     attrs = {
         **{k: INPUT for k in INPUT_ALIASES},
         **{k: OUTPUT for k in OUTPUT_ALIASES},
         "headers.Authorization": SECRET,
         "gen_ai.usage.total_tokens": 42,
-        "log.body": json.dumps({"api_key": SECRET, "message": "useful log"}),
+        "log.body": json.dumps(
+            {"api_key": SECRET, "headers": service_credentials, "message": "useful log"}
+        ),
+        **{f"headers.{key}": value for key, value in service_credentials.items()},
     }
     before = copy.deepcopy(attrs)
     with tracer.start_as_current_span("privacy", attributes=attrs) as span:
@@ -152,6 +181,8 @@ def test_every_directional_hide_flag_covers_aliases_and_events(flag, enabled, ca
     wire = encode_spans(spans).SerializeToString()
     assert SECRET.encode() not in wire
     assert b"useful log" in wire and b"tool.result" in wire
+    for credential in service_credentials.values():
+        assert credential.encode() not in wire and credential not in caplog.text
     assert SECRET not in caplog.text
     if enabled:
         hidden, visible = (INPUT, OUTPUT) if "input" in flag else (OUTPUT, INPUT)
@@ -182,16 +213,23 @@ def test_every_directional_hide_flag_covers_aliases_and_events(flag, enabled, ca
         {"pii_redaction": True},
     ],
 )
-def test_default_and_explicit_combinations_always_redact_structured_aliases(kwargs):
+def test_default_and_explicit_combinations_always_redact_structured_aliases(
+    kwargs, service_credentials
+):
     tracer, exporter, provider = tracer_for(TraceConfig(**kwargs))
     structured = json.dumps(
-        {"client": {"config": {"api_key": SECRET}}, "safe": "business"}
+        {
+            "client": {"config": {"api_key": SECRET}},
+            "headers": service_credentials,
+            "safe": "business",
+        }
     )
     attrs = {k: structured for k in INPUT_ALIASES + OUTPUT_ALIASES}
     with tracer.start_as_current_span("privacy", attributes=attrs) as span:
         span.add_event("structured", attrs)
     wire = encode_spans(exporter.get_finished_spans()).SerializeToString()
     assert SECRET.encode() not in wire
+    assert all(value.encode() not in wire for value in service_credentials.values())
     assert (
         b"business" in wire
         or (kwargs.get("hide_inputs") and kwargs.get("hide_outputs"))

@@ -29,3 +29,60 @@ def native_telemetry_off(request):
         yield
     finally:
         guard.disable()
+
+
+@pytest.fixture
+def service_credentials():
+    return {
+        name: f"FAKE_SERVICE_CREDENTIAL_{index}_7f9b2a"
+        for index, name in enumerate(
+            (
+                "X-Amz-Security-Token",
+                "X-Vault-Token",
+                "X-Consul-Token",
+                "X-Subject-Token",
+                "X-Api-Secret",
+                "X-Service-Token",
+                "security_token",
+            )
+        )
+    }
+
+
+@pytest.fixture
+def native_tool_usage():
+    """Construct the real version-specific ToolUsage around a local function."""
+    from importlib.metadata import version
+    from types import SimpleNamespace
+
+    from crewai.tools.tool_usage import ToolUsage
+
+    def create(function):
+        if version("crewai") == "0.41.1":
+            from crewai.agents.tools_handler import ToolsHandler
+            from langchain_core.tools import StructuredTool
+
+            tool = StructuredTool.from_function(function)
+            usage = ToolUsage(
+                tools_handler=ToolsHandler(),
+                tools=[tool],
+                original_tools=[],
+                tools_description=function.__name__,
+                tools_names=function.__name__,
+                task=SimpleNamespace(used_tools=0),
+                function_calling_llm=None,
+                agent=SimpleNamespace(tools_results=[]),
+                action=None,
+            )
+            usage._printer.print = lambda **kwargs: None
+            return usage
+        from crewai.tools.structured_tool import CrewStructuredTool
+
+        return ToolUsage(
+            tools_handler=None,
+            tools=[CrewStructuredTool.from_function(function)],
+            task=None,
+            function_calling_llm=None,
+        )
+
+    return create

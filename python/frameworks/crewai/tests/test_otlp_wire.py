@@ -87,27 +87,11 @@ class JsonHTTPExporter(SpanExporter):
         {"hide_input_text": True, "hide_output_messages": True},
     ],
 )
-def test_real_otlp_http_wire(encoding, compressed, settings, fails):
-    captured = []
-
-    class Collector(BaseHTTPRequestHandler):
-        def do_POST(self):
-            data = self.rfile.read(int(self.headers["Content-Length"]))
-            captured.append(
-                ({key.lower(): value for key, value in self.headers.items()}, data)
-            )
-            self.send_response(200)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-        def log_message(self, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Collector)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+def test_real_otlp_http_wire(
+    encoding, compressed, settings, fails, otlp_collector, service_credentials
+):
+    endpoint, captured = otlp_collector
     provider = TracerProvider(shutdown_on_exit=False)
-    endpoint = f"http://127.0.0.1:{server.server_port}/v1/traces"
     exporter = (
         OTLPSpanExporter(
             endpoint=endpoint,
@@ -122,14 +106,31 @@ def test_real_otlp_http_wire(encoding, compressed, settings, fails):
         provider.get_tracer("synthetic-wire"),
         _CrewAITraceConfig(TraceConfig(**settings)),
     )
-    arguments = {"client": {"config": {"api_key": SECRET}}, "query": "useful query"}
-    result = {"Authorization": SECRET, "answer": "useful answer", "total_tokens": 13}
+    arguments = {
+        "client": {"config": {"api_key": SECRET}},
+        "headers": service_credentials,
+        "query": "useful query",
+    }
+    result = {
+        "Authorization": SECRET,
+        "headers": service_credentials,
+        "answer": "useful answer",
+        "total_tokens": 13,
+    }
     error = RuntimeError(SECRET)
 
     def use(calling, tool_string):
         trace.get_current_span().add_event(
             "tool.log",
-            {"log.body": json.dumps({"secret": SECRET, "safe": "useful log"})},
+            {
+                "log.body": json.dumps(
+                    {
+                        "secret": SECRET,
+                        "headers": service_credentials,
+                        "safe": "useful log",
+                    }
+                )
+            },
         )
         if fails:
             raise error
@@ -161,6 +162,10 @@ def test_real_otlp_http_wire(encoding, compressed, settings, fails):
         assert (headers.get("content-encoding") == "gzip") is compressed
         body = gzip.decompress(raw) if compressed else raw
         assert SECRET.encode() not in body and SECRET.encode() not in raw
+        assert all(
+            value.encode() not in body and value.encode() not in raw
+            for value in service_credentials.values()
+        )
         assert b"useful log" in body
         if settings.get("hide_inputs") or settings.get("hide_input_text"):
             assert b"useful query" not in body
@@ -181,9 +186,120 @@ def test_real_otlp_http_wire(encoding, compressed, settings, fails):
             assert spans[0].status.code == (2 if fails else 1)
     finally:
         provider.shutdown()
+
+
+@pytest.fixture
+def otlp_collector():
+    captured = []
+
+    class Collector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            data = self.rfile.read(int(self.headers["Content-Length"]))
+            captured.append(
+                ({key.lower(): value for key, value in self.headers.items()}, data)
+            )
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Collector)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/traces", captured
+    finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("encoding", ["protobuf", "json"])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"hide_inputs": True},
+        {"hide_outputs": True},
+        {"hide_input_text": True, "hide_output_messages": True},
+    ],
+)
+def test_native_service_credentials_never_reach_otlp_http(
+    encoding,
+    compressed,
+    settings,
+    otlp_collector,
+    native_tool_usage,
+    service_credentials,
+):
+    from traceai_crewai import CrewAIInstrumentor
+
+    endpoint, captured = otlp_collector
+    seen = []
+
+    def lookup(query: str, headers: dict) -> str:
+        """Return synthetic service credentials without altering application data."""
+        seen.append((query, dict(headers)))
+        trace.get_current_span().add_event(
+            "tool.log",
+            {"log.body": json.dumps({"headers": headers, "message": "useful log"})},
+        )
+        return json.dumps(
+            {"headers": headers, "answer": "useful answer", "total_tokens": 13}
+        )
+
+    usage = native_tool_usage(lookup)
+    arguments = {"query": "useful query", "headers": dict(service_credentials)}
+    calling = ToolCalling(tool_name="lookup", arguments=arguments)
+    baseline = usage.use(calling, "lookup")
+    provider = TracerProvider(shutdown_on_exit=False)
+    exporter = (
+        OTLPSpanExporter(
+            endpoint=endpoint,
+            timeout=5,
+            compression=Compression.Gzip if compressed else Compression.NoCompression,
+        )
+        if encoding == "protobuf"
+        else JsonHTTPExporter(endpoint, compressed)
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = CrewAIInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**settings))
+    try:
+        # Use a fresh ToolUsage to exclude native caching from the parity check.
+        actual = native_tool_usage(lookup).use(calling, "lookup")
+        assert actual == baseline
+        assert json.loads(actual)["headers"] == service_credentials
+        assert seen == [("useful query", service_credentials)] * 2
+        assert calling.arguments == arguments
+        assert arguments["headers"] == service_credentials
+        assert provider.force_flush() and len(captured) == 1
+        headers, raw = captured[0]
+        assert headers["content-type"] == (
+            "application/json" if encoding == "json" else "application/x-protobuf"
+        )
+        assert (headers.get("content-encoding") == "gzip") is compressed
+        body = gzip.decompress(raw) if compressed else raw
+        for credential in service_credentials.values():
+            assert credential.encode() not in body and credential.encode() not in raw
+        assert b"ToolUsage._use" in body and b"useful log" in body
+        assert (
+            b"total_tokens" in body
+            or settings.get("hide_outputs")
+            or settings.get("hide_output_messages")
+        )
+        assert (b"useful query" not in body) is bool(
+            settings.get("hide_inputs") or settings.get("hide_input_text")
+        )
+        assert (b"useful answer" not in body) is bool(
+            settings.get("hide_outputs") or settings.get("hide_output_messages")
+        )
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
 
 
 def test_raw_negative_control_detects_unprojected_synthetic_credential():

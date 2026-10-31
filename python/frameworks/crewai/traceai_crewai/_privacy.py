@@ -57,6 +57,14 @@ _CREDENTIAL_SUFFIXES = (
     "idtoken",
     "apitoken",
     "csrftoken",
+    # Specific service credential forms, not arbitrary '*token' fields: token
+    # counters, IDs, and tokenizer metadata must remain useful business data.
+    "securitytoken",
+    "vaulttoken",
+    "consultoken",
+    "subjecttoken",
+    "servicetoken",
+    "apisecret",
     "clientsecret",
     "clientsecretkey",
     "clientkey",
