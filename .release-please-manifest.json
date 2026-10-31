@@ -121,6 +121,7 @@
   "go/anthropic": "0.1.0",
   "go/eino": "0.1.0",
   "go/genai": "0.1.0",
+  "go/lambda": "0.1.0",
   "go/openai": "0.1.0",
   "csharp/src/FIInstrumentation": "1.0.0",
   "python": "1.2.2"
