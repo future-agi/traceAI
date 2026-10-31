@@ -42,6 +42,18 @@ export interface SecretStore {
   set(ref: string, value: StoredSecrets): Promise<void>;
   remove(ref: string): Promise<void>;
 }
+/** Revoke upstream authentication, not the destination's durable identity. */
+export async function removeAuth(
+  store: SecretStore,
+  ref: string,
+): Promise<void> {
+  const previous = await store.get(ref);
+  if (previous)
+    await store.set(ref, {
+      identity_key: previous.identity_key,
+      content_key: previous.content_key,
+    });
+}
 export function parseAuth(bytes: Buffer): {
   api_key: string;
   secret_key: string;
@@ -75,12 +87,14 @@ export function newCredentials(
 function decode(text: string): StoredSecrets {
   try {
     const v = JSON.parse(text);
-    if (v.api_key !== undefined || v.secret_key !== undefined)
-      parseAuth(
-        Buffer.from(
-          JSON.stringify({ api_key: v.api_key, secret_key: v.secret_key }),
-        ),
-      );
+    const auth =
+      "api_key" in v || "secret_key" in v
+        ? parseAuth(
+            Buffer.from(
+              JSON.stringify({ api_key: v.api_key, secret_key: v.secret_key }),
+            ),
+          )
+        : {};
     if (
       ![v.identity_key, v.content_key].every(
         (k) => typeof k === "string" && /^[a-f0-9]{64}$/.test(k),
@@ -88,8 +102,7 @@ function decode(text: string): StoredSecrets {
     )
       throw new Error();
     return {
-      api_key: v.api_key,
-      secret_key: v.secret_key,
+      ...auth,
       identity_key: v.identity_key,
       content_key: v.content_key,
     };

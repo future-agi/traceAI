@@ -10,7 +10,11 @@ import {
   type Policy,
 } from "@traceai/agent-core";
 import { AgentError } from "../security/files.js";
-import { decodeTraces, encodeFacts } from "../export/otlp.js";
+import {
+  decodeTraces,
+  encodeFacts,
+  encodeTraceObject,
+} from "../export/otlp.js";
 import { validateBinding, type Binding } from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
@@ -33,6 +37,19 @@ interface Row {
 }
 const digest = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
+/** Frozen comparison v1: runtime packaging is not source semantics. Keep all
+ * source timing, topology, usage, content and reconstruction fields comparable.
+ * This representation is only a receipt; the first wire bytes are never changed. */
+function semanticHash(bytes: Buffer): string {
+  const request = decodeTraces(bytes);
+  for (const resource of request.resourceSpans ?? []) {
+    resource.resource.attributes = resource.resource.attributes.filter(
+      (a: { key: string }) => a.key !== "service.version",
+    );
+    for (const scope of resource.scopeSpans ?? []) delete scope.scope.version;
+  }
+  return "semantic-v1:" + digest(encodeTraceObject(request));
+}
 /** Internal storage-child class. Runtime clients only use RPC; never share this connection. */
 export class Spool {
   private db: Database.Database;
@@ -53,7 +70,12 @@ export class Spool {
       // In WAL mode EXCLUSIVE retains the OS lock between transactions. The
       // storage child is the sole connection and process death releases ownership;
       // no PID files, leases, stale-directory deletion, or second lock database.
-      if (exclusiveOwner) this.db.pragma("locking_mode=EXCLUSIVE");
+      if (exclusiveOwner) {
+        this.db.pragma("locking_mode=EXCLUSIVE");
+        // Acquire ownership before reading schema/header pragmas. Competing
+        // connections must not retain shared locks then race to upgrade them.
+        this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
+      }
       if (
         this.db.prepare("SELECT sqlite_version() v").get() &&
         (this.db.prepare("SELECT sqlite_version() v").get() as any).v !==
@@ -200,10 +222,7 @@ export class Spool {
     const fact = minimize(input, route.policy);
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
-    // Resource/scope runtime versions are delivery provenance, not source work.
-    // Freeze a version-neutral semantic fingerprint and retain the first wire bytes.
-    const hash =
-      "semantic-v1:" + digest(encodeFacts([fact], route.binding, ""));
+    const hash = semanticHash(bytes);
     if (
       cursor &&
       (!/^[a-f0-9]{64}$/.test(cursor.stream) ||
@@ -221,27 +240,26 @@ export class Spool {
           fact.traceId,
           fact.spanId,
         ) as any;
-      if (old && old.hash !== hash && /^[a-f0-9]{64}$/.test(old.hash)) {
-        // Upgrade the unreleased legacy receipt only after proving its exact
-        // original hash. Pending payloads supply their version; 0.1.0 is the
-        // only shipped-preview encoder that deleted accepted payloads with a
-        // version-dependent receipt. Unknown receipts remain held, never reset.
-        const legacyVersion = old.bytes
-          ? decodeTraces(old.bytes).resourceSpans?.[0]?.scopeSpans?.[0]?.scope
-              ?.version
-          : "0.1.0";
-        if (
-          typeof legacyVersion === "string" &&
-          old.hash === digest(encodeFacts([fact], route.binding, legacyVersion))
-        ) {
+      if (old) {
+        // Upgrade pre-release wire-only receipts lazily, in this transaction.
+        // For a deleted legacy payload, require an exact wire digest under either
+        // this runtime or the sole pre-semantic package version (0.1.0). This proves
+        // equality without recreating work or trusting unknown historical codecs.
+        const equal =
+          old.hash === hash ||
+          (/^[a-f0-9]{64}$/.test(old.hash) &&
+            (old.bytes
+              ? semanticHash(old.bytes) === hash
+              : old.hash === digest(bytes) ||
+                old.hash ===
+                  digest(encodeFacts([fact], route.binding, "0.1.0"))));
+        if (!equal || old.work !== fact.sourceWorkId)
+          throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+        if (old.hash !== hash)
           this.db
             .prepare("UPDATE records SET hash=? WHERE id=?")
             .run(hash, old.id);
-          old.hash = hash;
-        }
       }
-      if (old && (old.hash !== hash || old.work !== fact.sourceWorkId))
-        throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
       let id = old?.id;
       if (!old) {
         const global = (

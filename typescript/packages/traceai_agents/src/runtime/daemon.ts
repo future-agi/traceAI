@@ -42,7 +42,9 @@ export class Runtime {
     private readonly registry = new AdapterRegistry(),
     private controlOnly = false,
   ) {}
-  async start(): Promise<void> {
+  async start(controlOnly = this.controlOnly): Promise<void> {
+    // Offline administration must never admit or drain data as a side effect.
+    this.controlOnly = controlOnly;
     protectedDirectory(this.paths.state, true);
     if (Buffer.byteLength(this.paths.socket) > 100)
       throw new AgentError("SOCKET_PATH_TOO_LONG");
@@ -295,7 +297,11 @@ export class Runtime {
           /* bounded child transactions */
         }
       }
-      return { state: m.purge ? "purged" : "held", code: 0 };
+      return {
+        state: m.purge ? "purged" : "held",
+        code: 0,
+        epoch: r.route.epoch,
+      };
     }
     if (m.operation === "flush") {
       const deadline = Number(m.deadlineMs ?? 5000);
@@ -382,8 +388,8 @@ export class Runtime {
       idle = 0;
     const active = () =>
       !this.stopped &&
-      !this.admissionPaused &&
       !this.controlOnly &&
+      !this.admissionPaused &&
       !controller.signal.aborted &&
       Date.now() < until;
     try {
@@ -419,7 +425,12 @@ export class Runtime {
           deferred.add(id);
           continue;
         }
-        if (!hasAuth(credentials) || !active() || !route.route.enabled)
+        if (
+          !credentials ||
+          !hasAuth(credentials) ||
+          !active() ||
+          !route.route.enabled
+        )
           continue;
         const result = await exportBytes(
           profile.binding,
