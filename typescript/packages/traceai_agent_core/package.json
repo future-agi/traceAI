@@ -1,0 +1,92 @@
+{
+  "name": "@traceai/agent-core",
+  "version": "0.1.0",
+  "description": "Canonical contracts and lightweight local clients for coding-agent observability",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "import": "./dist/esm/client.js",
+      "require": "./dist/src/client.js"
+    },
+    "./identity": {
+      "types": "./dist/src/identity.d.ts",
+      "import": "./dist/esm/identity.js",
+      "require": "./dist/src/identity.js"
+    },
+    "./schema": {
+      "types": "./dist/src/schema.d.ts",
+      "import": "./dist/esm/schema.js",
+      "require": "./dist/src/schema.js"
+    },
+    "./privacy": {
+      "types": "./dist/src/privacy.d.ts",
+      "import": "./dist/esm/privacy.js",
+      "require": "./dist/src/privacy.js"
+    },
+    "./usage": {
+      "types": "./dist/src/usage.d.ts",
+      "import": "./dist/esm/usage.js",
+      "require": "./dist/src/usage.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.cjs",
+    "test": "node --test test/*.test.cjs",
+    "prepare": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "schema",
+    "profiles",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24.0.0 <25"
+  },
+  "dependencies": {
+    "@traceai/fi-semantic-conventions": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_agent_core"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "client": [
+        "dist/src/client.d.ts"
+      ],
+      "identity": [
+        "dist/src/identity.d.ts"
+      ],
+      "schema": [
+        "dist/src/schema.d.ts"
+      ],
+      "privacy": [
+        "dist/src/privacy.d.ts"
+      ],
+      "usage": [
+        "dist/src/usage.d.ts"
+      ]
+    }
+  }
+}

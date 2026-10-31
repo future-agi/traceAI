@@ -1,0 +1,45 @@
+{
+  "agent": "claude-code",
+  "surface": "cli",
+  "release_state": "preview",
+  "versions": ["2.1.316"],
+  "source_schema": "claude-code-otel-2.1.316",
+  "identity_profile": "claude-code-native-v1",
+  "instrumentation_scope": {
+    "name": "com.anthropic.claude_code.tracing",
+    "version": "1.0.0"
+  },
+  "platforms": ["darwin"],
+  "tested_host": {
+    "os": "macOS 26.6.2",
+    "arch": "arm64",
+    "node": "24.11.0",
+    "mode": "cli-print"
+  },
+  "activation": "explicit fi-agent run; no persistent Claude configuration changes",
+  "native_transport": ["http/protobuf", "http/json"],
+  "capture": "structure",
+  "transcript": "held-identity-join-unproven",
+  "plugin": "not-installed-no-qualified-enrichment",
+  "identity": "Preserves native trace/span/parent IDs. HMAC native session and trace grouping. Native trace/span work IDs provide transport dedup only, not transcript aliases or provider-attempt identities.",
+  "timing": "Native logical request interval including retries, not individual HTTP attempt latency.",
+  "accounting": "Only native llm_request spans own additive inclusive input/output counters. Cache read/write included once in normalized input; missing cache fields leave inclusive input unavailable. No fabricated request attempts, summary charges or cost.",
+  "privacy": "No prompt, response, tool input/output, arbitrary resource fields, user IDs, paths, error text or event bodies persist. Local short-lived header capability can be inherited by agent tools; same-UID processes are outside the boundary.",
+  "coexistence": "Refuse unowned trace/generic endpoints, detailed beta routes, telemetry-bearing settings and detected managed policy. Keep unrelated existing per-signal exporters. No replacement or third-party fan-out.",
+  "unqualified": [
+    "interactive-tty",
+    "desktop",
+    "remote",
+    "windows",
+    "linux",
+    "managed-hosts",
+    "subagent-live-ancestry",
+    "content",
+    "transcript-enrichment",
+    "backend-persistence"
+  ],
+  "references": [
+    "https://code.claude.com/docs/en/monitoring-usage",
+    "https://code.claude.com/docs/en/managed-settings"
+  ]
+}
