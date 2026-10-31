@@ -1,16 +1,45 @@
-"""Map an OpenAI-compatible client's base_url host to gen_ai.provider.name.
+"""Resolve providers from documented OpenAI-compatible endpoints.
 
-The mapping is deliberately small and explicit: a host is only labelled with a
-vendor when it is that vendor's documented API host. Everything else (proxies,
-loopback servers, self-hosted endpoints, look-alike domains) keeps the
-instrumentor's historical label, "openai", rather than a guess.
+Most providers are identified by their API host. Cloudflare's unified endpoints
+also require an explicit model prefix; dynamic or unknown routes stay unlabelled.
+Other unknown hosts keep the instrumentor's historical "openai" fallback.
 """
 
+import re
 from typing import Optional
 
 from fi_instrumentation.fi_types import FiLLMProviderValues
 
 DEFAULT_PROVIDER = FiLLMProviderValues.OPENAI.value
+
+# Cloudflare's documented unified endpoints, not arbitrary proxies or look-alikes.
+# https://developers.cloudflare.com/ai-gateway/usage/rest-api/#model-naming
+# https://developers.cloudflare.com/ai-gateway/usage/chat-completion/#parameters
+CLOUDFLARE_ENDPOINTS = {
+    "gateway.ai.cloudflare.com": r"/v1/[^/]+/[^/]+/compat/?",
+    "api.cloudflare.com": r"/client/v4/accounts/[^/]+/ai/v1/?",
+}
+_CLOUDFLARE_MODEL_PROVIDERS = {
+    "openai": FiLLMProviderValues.OPENAI.value,
+    "anthropic": FiLLMProviderValues.ANTHROPIC.value,
+    "google": FiLLMProviderValues.GOOGLE.value,
+    "google-ai-studio": FiLLMProviderValues.GOOGLE.value,
+    "xai": FiLLMProviderValues.XAI.value,
+    "grok": FiLLMProviderValues.XAI.value,
+    "@cf": "cloudflare",
+}
+
+
+def provider_from_cloudflare(*, host: str, path: str, model: object) -> Optional[str]:
+    """Resolve explicit routes only; dynamic routing does not identify a provider."""
+    pattern = CLOUDFLARE_ENDPOINTS.get(host)
+    if pattern is None or not re.fullmatch(pattern, path) or not isinstance(model, str):
+        return None
+    prefix, _, name = model.partition("/")
+    if not name:
+        return None
+    return _CLOUDFLARE_MODEL_PROVIDERS.get(prefix)
+
 
 # Exact API hosts.
 _HOSTS = {
