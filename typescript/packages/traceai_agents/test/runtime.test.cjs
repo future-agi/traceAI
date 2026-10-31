@@ -5,7 +5,7 @@ const path = require("node:path");
 const http = require("node:http");
 const { Runtime, runtimeRequest } = require("../dist/src/runtime/daemon.js");
 const { AdapterRegistry } = require("../dist/src/adapters.js");
-const { saveConfig } = require("../dist/src/config.js");
+const { saveConfig, loadConfig } = require("../dist/src/config.js");
 const {
   FileSecretStore,
   newCredentials,
@@ -137,23 +137,50 @@ test("real storage child, local ACK, loopback export, replay and disable hold wo
     { schema: "fixture-v1", session: "s", turn: "t", id: "r", unit: "request" },
     { identityKey: Buffer.alloc(32), policyRevision: "1" },
   )[0];
-  // IPC has a strict 25ms foreground budget; if ACK is lost, replay uses the same identity.
-  let ack = await observe(p.socket, route.id, fact);
-  if (!ack.durable) ack = await observe(p.socket, route.id, fact);
+  // Shared-runner fsync can exceed the foreground budget. A timeout is neutral,
+  // not proof of loss. The explicit off-path replay must establish one durable record.
+  const foreground = await observe(p.socket, route.id, fact);
+  assert.ok(
+    foreground.durable || foreground.reason_code === "LOCAL_TIMEOUT",
+    JSON.stringify(foreground),
+  );
+  const submission = { operation: "observe", route_ref: route.id, fact };
+  const ack = await runtimeRequest(p.socket, submission);
   assert.equal(ack.durable, true, JSON.stringify(ack));
   await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
   assert.equal(uploads, 1);
   assert.ok(!Buffer.concat(bodies).includes(Buffer.from("synthetic-secret")));
   assert.equal(
-    (await observe(p.socket, route.id, fact)).reason_code,
+    (await runtimeRequest(p.socket, submission)).reason_code,
     "DUPLICATE",
   );
   await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 100 });
   assert.equal(uploads, 1);
+  // Editing only the profile cannot redirect the destination-bound outbox.
+  const changed = loadConfig(p);
+  changed.profiles.fixture.binding.endpoint = origin + "/unapproved-path";
+  saveConfig(p, changed);
+  await runtimeRequest(p.socket, { operation: "refresh" });
+  const second = reference.normalize(
+    {
+      schema: "fixture-v1",
+      session: "s",
+      turn: "t",
+      id: "r2",
+      unit: "request",
+    },
+    { identityKey: Buffer.alloc(32), policyRevision: "1" },
+  )[0];
+  await runtimeRequest(p.socket, { ...submission, fact: second });
+  await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(uploads, 1);
+  changed.profiles.fixture.binding = binding;
+  saveConfig(p, changed);
+  await runtimeRequest(p.socket, { operation: "refresh" });
+  await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(uploads, 2);
   await runtimeRequest(p.socket, { operation: "disable", route: route.id });
-  const disabled = await observe(p.socket, route.id, fact);
-  assert.equal(disabled.durable, false);
-  assert.equal(disabled.reason_code, "HELD_DISABLED");
+  await assert.rejects(runtimeRequest(p.socket, submission), /HELD_DISABLED/);
   assert.equal(
     (await runtimeRequest(p.socket, { operation: "status" })).persistence,
     "unknown",
