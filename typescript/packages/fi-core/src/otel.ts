@@ -28,7 +28,7 @@ import { Resource, resourceFromAttributes, detectResources, defaultResource } fr
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { SpanProcessorRegistry } from "./spanProcessorRegistry";
+import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 
 // Import grpc for metadata handling
 import * as grpc from "@grpc/grpc-js";
@@ -363,27 +363,30 @@ class FITracerProvider extends BasicTracerProvider {
       ? config.endpoint ?? getEnvGrpcCollectorEndpoint()
       : constructFullEndpoint(config.endpoint);
     const verbose = config.verbose ?? (getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true");
-    let processors = config.spanProcessors;
-    if (processors === undefined) {
+    let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
+    if (config.spanProcessors === undefined) {
       const headers = config.headers ?? getEnvFiAuthHeader();
       const exporter = transport === Transport.GRPC
         ? new GRPCSpanExporter({ endpoint, headers, verbose })
         : new _OTLPHTTPTraceExporter({ url: endpoint, headers });
-      processors = [config.batch
-        ? new OTelBatchSpanProcessor(exporter)
-        : new OTelSimpleSpanProcessor(exporter)];
+      defaultProcessor = config.batch
+        ? new DefaultBatchSpanProcessor(exporter)
+        : new DefaultSimpleSpanProcessor(exporter);
     }
-    const processorRegistry = new SpanProcessorRegistry(processors, config.spanProcessors === undefined);
+    const processorRegistry = new SpanProcessorRegistry(
+      config.spanProcessors ?? [],
+      () => defaultProcessor?.disable(),
+    );
     super({
       resource: config.resource,
       idGenerator: config.idGenerator ?? new UuidIdGenerator(),
-      spanProcessors: [processorRegistry],
+      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry],
     });
     this.processorRegistry = processorRegistry;
     if (verbose) {
       diag.info(`FITracerProvider: ${config.spanProcessors === undefined
         ? `${config.batch ? "Batch" : "Simple"}SpanProcessor with ${transport.toUpperCase()} exporter at ${endpoint}`
-        : `${processors.length} configured span processor(s)`}`);
+        : `${config.spanProcessors.length} configured span processor(s)`}`);
     }
   }
 

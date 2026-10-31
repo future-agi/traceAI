@@ -1,15 +1,33 @@
 import { Context } from "@opentelemetry/api";
 import { globalErrorHandler } from "@opentelemetry/core";
-import { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { BatchSpanProcessor, SimpleSpanProcessor, ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+
+// OTel 2 fixes the processor list at construction. Stop new deliveries when the
+// legacy add API replaces the default, but keep its SDK-owned flush/shutdown.
+// Keep actual SDK processors at the top level: released native adapters (such as
+// VoltAgent) borrow the default exporter's transport for their own batch queue.
+export class DefaultSimpleSpanProcessor extends SimpleSpanProcessor {
+  private enabled = true;
+  disable(): void { this.enabled = false; }
+  onEnd(span: ReadableSpan): void {
+    if (this.enabled) super.onEnd(span);
+  }
+}
+
+export class DefaultBatchSpanProcessor extends BatchSpanProcessor {
+  private enabled = true;
+  disable(): void { this.enabled = false; }
+  onEnd(span: ReadableSpan): void {
+    if (this.enabled) super.onEnd(span);
+  }
+}
 
 /** Keeps the legacy addSpanProcessor API on OTel 2's public processor interface. */
 export class SpanProcessorRegistry implements SpanProcessor {
-  private processors: SpanProcessor[];
-  // Retain replaced processors only for flushing/shutting down already-queued spans.
-  private retired: SpanProcessor[] = [];
+  private readonly processors: SpanProcessor[];
   private shutdownPromise?: Promise<void>;
 
-  constructor(processors: SpanProcessor[], private replaceDefault: boolean) {
+  constructor(processors: SpanProcessor[], private readonly disableDefault?: () => void) {
     this.processors = [...processors];
   }
 
@@ -17,11 +35,7 @@ export class SpanProcessorRegistry implements SpanProcessor {
     if (this.shutdownPromise) {
       throw new Error("Cannot add a span processor after shutdown");
     }
-    if (this.replaceDefault) {
-      this.retired.push(...this.processors);
-      this.processors = [];
-      this.replaceDefault = false;
-    }
+    this.disableDefault?.();
     this.processors.push(processor);
   }
 
@@ -61,14 +75,14 @@ export class SpanProcessorRegistry implements SpanProcessor {
   }
 
   async forceFlush(): Promise<void> {
-    await Promise.all([...this.retired, ...this.processors].map(async processor => {
+    await Promise.all(this.processors.map(async processor => {
       await processor.forceFlush();
     }));
   }
 
   shutdown(): Promise<void> {
     this.shutdownPromise ??= Promise.all(
-      [...this.retired, ...this.processors].map(async processor => {
+      this.processors.map(async processor => {
         await processor.shutdown();
       }),
     ).then(() => undefined);
