@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "node build.cjs",
-    "test": "node --test test/*.test.cjs",
+    "test": "node --test --test-concurrency=1 test/*.test.cjs",
     "prepare": "pnpm run build"
   },
   "files": [

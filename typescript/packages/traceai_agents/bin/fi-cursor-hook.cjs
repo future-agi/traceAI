@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 "use strict";
 // Passive post-action hooks only. Empty stdout is the documented neutral result.
-// Failures, including a missing build, never affect Cursor or print source data.
-const deadline = setTimeout(() => process.exit(0), 25);
+// Module loading is process startup, measured separately from the 25ms input/IPC
+// budget. Starting that timer before require could discard stdin without reading it.
 try {
-  require("../dist/src/adapters/cursor/hook.js")
-    .observeCursor(process.argv.slice(2))
+  const { observeCursor } = require("../dist/src/adapters/cursor/hook.js");
+  const deadline = setTimeout(() => process.exit(0), 25);
+  observeCursor(process.argv.slice(2))
     .catch(() => undefined)
     .finally(() => {
       clearTimeout(deadline);
       process.exit(0);
     });
 } catch {
-  clearTimeout(deadline);
   process.exit(0);
 }
