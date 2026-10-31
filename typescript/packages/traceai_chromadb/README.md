@@ -1,441 +1,113 @@
 # @traceai/chromadb
 
-OpenTelemetry instrumentation for [ChromaDB](https://www.trychroma.com/) - the AI-native open-source vector database.
+Trace Chroma collection operations in Node.js with OpenTelemetry and view their latency, result counts, and errors in Future AGI.
 
-## Overview
-
-This package provides automatic tracing for ChromaDB operations in Node.js applications, enabling full observability of your vector database interactions in RAG pipelines, semantic search, and AI applications.
-
-## Installation
+## Install
 
 ```bash
-npm install @traceai/chromadb
-# or
-yarn add @traceai/chromadb
-# or
-pnpm add @traceai/chromadb
+npm install chromadb @traceai/chromadb @traceai/fi-core @opentelemetry/api @opentelemetry/context-async-hooks
 ```
 
-## Quick Start
+The instrumentor supports the Chroma 1.x, 2.x, and 3.x Node clients. The example below uses Chroma 3.x and a Chroma server at `localhost:8000`. It supplies embeddings directly, so no embedding-provider key is needed.
 
-### Basic Setup
+## Configure tracing
 
-```typescript
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your environment using your Future AGI credentials. For a self-hosted deployment, also set `FI_BASE_URL` to your collector base URL.
+
+Save this as `app.mjs`. Explicit module instrumentation works with ESM without an additional import hook. Call it before obtaining collections.
+
+```javascript
+import { register, ProjectType } from "@traceai/fi-core";
 import { ChromaDBInstrumentation } from "@traceai/chromadb";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-
-// Set up OpenTelemetry
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(
-  new SimpleSpanProcessor(
-    new OTLPTraceExporter({
-      url: "https://api.futureagi.com/v1/traces",
-      headers: {
-        "Authorization": `Bearer ${process.env.FI_API_KEY}`,
-        "FI-Project-Name": process.env.FI_PROJECT_NAME,
-      },
-    })
-  )
-);
-provider.register();
-
-// Register ChromaDB instrumentation
-registerInstrumentations({
-  instrumentations: [
-    new ChromaDBInstrumentation({
-      instrumentationConfig: {
-        captureDocuments: true,
-      },
-    }),
-  ],
-});
-
-// Now use ChromaDB as normal - all operations are traced
-import { ChromaClient } from "chromadb";
-
-const client = new ChromaClient();
-const collection = await client.getOrCreateCollection({ name: "my_collection" });
-
-// This operation will be automatically traced
-await collection.add({
-  ids: ["doc1", "doc2"],
-  documents: ["Hello world", "Goodbye world"],
-  embeddings: [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
-});
-```
-
-### Manual Instrumentation
-
-If you need more control over when instrumentation is applied:
-
-```typescript
-import { ChromaDBInstrumentation } from "@traceai/chromadb";
+import { context } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import * as chromadb from "chromadb";
 
+// Set up context propagation for this standalone example.
+const contextManager = new AsyncLocalStorageContextManager().enable();
+context.setGlobalContextManager(contextManager);
+const provider = register({
+  projectName: "chroma-search",
+  projectType: ProjectType.OBSERVE,
+});
 const instrumentation = new ChromaDBInstrumentation();
+instrumentation.setTracerProvider(provider);
 instrumentation.manuallyInstrument(chromadb);
+
+try {
+  const client = new chromadb.ChromaClient({ host: "localhost", port: 8000 });
+  const collection = await client.getOrCreateCollection({ name: "articles" });
+  await collection.upsert({
+    ids: ["doc1", "doc2"],
+    documents: ["Search with vectors", "Store document metadata"],
+    embeddings: [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+  });
+  const results = await collection.query({
+    queryEmbeddings: [[0.1, 0.2, 0.3]],
+    nResults: 2,
+  });
+  console.log(results.ids);
+} finally {
+  instrumentation.disable();
+  await provider.shutdown();
+  contextManager.disable();
+}
 ```
 
-## Configuration Options
+```bash
+node app.mjs
+```
 
-```typescript
-interface ChromaDBInstrumentationConfig {
-  // Whether to capture query vectors in spans (may be large)
-  captureQueryVectors?: boolean;
+Open the `chroma-search` project in [Future AGI](https://app.futureagi.com) to inspect the `chroma upsert` and `chroma query` spans.
 
-  // Whether to capture result vectors in spans (may be large)
-  captureResultVectors?: boolean;
+If you already have an OpenTelemetry provider, reuse it with `instrumentation.setTracerProvider(provider)` rather than creating another provider. Keep one instrumentor instance per process.
 
-  // Whether to capture document content in spans
-  captureDocuments?: boolean;
-}
+## Automatic instrumentation
 
-// Example with all options
+For CommonJS, create the instrumentor before the first `require("chromadb")`. For ESM automatic instrumentation, load the [OpenTelemetry instrumentation hook](https://www.npmjs.com/package/@opentelemetry/instrumentation) before importing Chroma. Explicit `manuallyInstrument(chromadb)` is the simpler option when you control application startup.
+
+Both paths cover exported collection classes and collections returned by client factories, including `getCollection`, `createCollection`, and `getOrCreateCollection`. Chroma 3.x handles from `client.collection(id)` are also covered. `disable()` restores methods; `enable()` restores tracing for already-discovered collections without stacking wrappers.
+
+## Traced operations
+
+| Method | Span name |
+| --- | --- |
+| `add` | `chroma add` |
+| `query` | `chroma query` |
+| `search` (when available in your Chroma client) | `chroma search` |
+| `get` | `chroma get` |
+| `update` | `chroma update` |
+| `upsert` | `chroma upsert` |
+| `delete` | `chroma delete` |
+| `count` | `chroma count` |
+| `peek` | `chroma peek` |
+
+Each operation emits one `CLIENT` span with `db.system=chromadb`, `db.operation.name`, and `fi.span.kind=VECTOR_DB`. Internal delegation, such as `peek` calling `get`, does not create a second database span. Factory calls discover collection implementations but do not emit database spans themselves.
+
+Operation attributes include the collection name when available, query result limit, result count, and write count/dimensions. `search` records the number of searches and total returned IDs across the batch. A lightweight collection handle does not know the collection name, so its name is recorded as `unknown`.
+
+## Data captured
+
+The instrumentor does not record document contents or embedding vectors. The existing `captureDocuments`, `captureQueryVectors`, and `captureResultVectors` options remain accepted for compatibility but do not enable content capture.
+
+Query `where` filters and collection names are recorded; avoid putting secrets in either. Error messages can also contain application data. To hide error messages and exception details, configure the instrumentor with:
+
+```javascript
 const instrumentation = new ChromaDBInstrumentation({
-  instrumentationConfig: {
-    captureQueryVectors: false,  // Disable to reduce span size
-    captureResultVectors: false,
-    captureDocuments: true,
-  },
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
+  traceConfig: { hideErrorDetails: true },
 });
 ```
-
-## Traced Operations
-
-| Operation | Span Name | Description |
-|-----------|-----------|-------------|
-| `add` | `chroma add` | Add documents/embeddings to collection |
-| `query` | `chroma query` | Semantic similarity search |
-| `get` | `chroma get` | Retrieve documents by ID |
-| `update` | `chroma update` | Update existing documents |
-| `upsert` | `chroma upsert` | Insert or update documents |
-| `delete` | `chroma delete` | Remove documents from collection |
-| `count` | `chroma count` | Count documents in collection |
-| `peek` | `chroma peek` | Preview documents in collection |
-
-## Span Attributes
-
-Each span includes these semantic convention attributes:
-
-| Attribute | Description | Example |
-|-----------|-------------|---------|
-| `db.system` | Database system identifier | `chromadb` |
-| `db.operation.name` | Operation being performed | `query`, `add` |
-| `db.namespace` | Collection name | `my_collection` |
-| `db.vector.collection.name` | Collection name | `my_collection` |
-| `db.vector.query.top_k` | Number of results requested | `10` |
-| `db.vector.query.filter` | Query filter (JSON) | `{"field": "value"}` |
-| `db.vector.results.count` | Number of results returned | `5` |
-| `db.vector.upsert.count` | Number of vectors upserted | `100` |
-| `db.vector.upsert.dimensions` | Vector dimensions | `1536` |
-| `db.vector.delete.count` | Number of vectors deleted | `10` |
-| `fi.span.kind` | TraceAI span kind | `VECTOR_DB` |
-
-## Real-World Use Cases
-
-### 1. RAG (Retrieval-Augmented Generation) Pipeline
-
-Build a knowledge base and retrieve relevant context for LLM responses:
-
-```typescript
-import { ChromaClient } from "chromadb";
-import OpenAI from "openai";
-
-const chroma = new ChromaClient();
-const openai = new OpenAI();
-
-// Create a knowledge base collection
-const knowledgeBase = await chroma.getOrCreateCollection({
-  name: "company_docs",
-  metadata: { "hnsw:space": "cosine" },
-});
-
-// Ingest documents (traced automatically)
-async function ingestDocuments(documents: string[]) {
-  const embeddings = await Promise.all(
-    documents.map(async (doc) => {
-      const response = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: doc,
-      });
-      return response.data[0].embedding;
-    })
-  );
-
-  await knowledgeBase.add({
-    ids: documents.map((_, i) => `doc_${i}`),
-    documents,
-    embeddings,
-    metadatas: documents.map((_, i) => ({
-      source: "internal_docs",
-      ingested_at: new Date().toISOString(),
-    })),
-  });
-}
-
-// RAG query function (traced automatically)
-async function ragQuery(question: string): Promise<string> {
-  // Get embedding for the question
-  const questionEmbedding = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: question,
-  });
-
-  // Retrieve relevant context (this creates a traced span)
-  const results = await knowledgeBase.query({
-    queryEmbeddings: [questionEmbedding.data[0].embedding],
-    nResults: 3,
-    include: ["documents", "metadatas", "distances"],
-  });
-
-  // Generate response with context
-  const context = results.documents[0].join("\n\n");
-  const response = await openai.chat.completions.create({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: `Answer based on this context:\n${context}`,
-      },
-      { role: "user", content: question },
-    ],
-  });
-
-  return response.choices[0].message.content;
-}
-```
-
-### 2. Semantic Search with Filters
-
-Build a product search with category filtering:
-
-```typescript
-const productCollection = await chroma.getOrCreateCollection({
-  name: "products",
-});
-
-// Add products with metadata
-await productCollection.add({
-  ids: ["prod_001", "prod_002", "prod_003"],
-  documents: [
-    "Wireless Bluetooth headphones with noise cancellation",
-    "Premium leather wallet with RFID protection",
-    "Ergonomic wireless mouse for gaming",
-  ],
-  embeddings: [/* embeddings */],
-  metadatas: [
-    { category: "electronics", price: 149.99, in_stock: true },
-    { category: "accessories", price: 49.99, in_stock: true },
-    { category: "electronics", price: 79.99, in_stock: false },
-  ],
-});
-
-// Search with filters (traced with filter attributes)
-async function searchProducts(query: string, category?: string, maxPrice?: number) {
-  const queryEmbedding = await getEmbedding(query);
-
-  const whereFilter: any = {};
-  if (category) whereFilter.category = category;
-  if (maxPrice) whereFilter.price = { $lte: maxPrice };
-
-  const results = await productCollection.query({
-    queryEmbeddings: [queryEmbedding],
-    nResults: 10,
-    where: Object.keys(whereFilter).length > 0 ? whereFilter : undefined,
-    include: ["documents", "metadatas", "distances"],
-  });
-
-  return results;
-}
-
-// Example: Search for electronics under $100
-const results = await searchProducts("wireless audio device", "electronics", 100);
-```
-
-### 3. Chatbot with Long-Term Memory
-
-Implement persistent conversation memory:
-
-```typescript
-const memoryCollection = await chroma.getOrCreateCollection({
-  name: "conversation_memory",
-});
-
-interface ConversationTurn {
-  conversationId: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-}
-
-// Store conversation turn (traced)
-async function storeMemory(turn: ConversationTurn) {
-  const embedding = await getEmbedding(turn.content);
-
-  await memoryCollection.upsert({
-    ids: [`${turn.conversationId}_${turn.timestamp.getTime()}`],
-    documents: [turn.content],
-    embeddings: [embedding],
-    metadatas: [{
-      conversation_id: turn.conversationId,
-      role: turn.role,
-      timestamp: turn.timestamp.toISOString(),
-    }],
-  });
-}
-
-// Retrieve relevant memory (traced)
-async function recallMemory(conversationId: string, currentMessage: string, limit = 5) {
-  const queryEmbedding = await getEmbedding(currentMessage);
-
-  const results = await memoryCollection.query({
-    queryEmbeddings: [queryEmbedding],
-    nResults: limit,
-    where: { conversation_id: conversationId },
-    include: ["documents", "metadatas"],
-  });
-
-  return results.documents[0].map((doc, i) => ({
-    content: doc,
-    role: results.metadatas[0][i].role,
-    timestamp: results.metadatas[0][i].timestamp,
-  }));
-}
-
-// Cleanup old memories (traced)
-async function cleanupOldMemories(conversationId: string, keepLast = 100) {
-  const allMemories = await memoryCollection.get({
-    where: { conversation_id: conversationId },
-    include: ["metadatas"],
-  });
-
-  if (allMemories.ids.length > keepLast) {
-    const sortedIds = allMemories.ids
-      .map((id, i) => ({ id, timestamp: allMemories.metadatas[i].timestamp }))
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-    const idsToDelete = sortedIds.slice(keepLast).map(m => m.id);
-
-    await memoryCollection.delete({ ids: idsToDelete });
-  }
-}
-```
-
-### 4. Document Deduplication
-
-Find and remove duplicate documents:
-
-```typescript
-async function findDuplicates(collection: any, threshold = 0.95) {
-  const allDocs = await collection.peek({ limit: 1000 });
-  const duplicates: string[][] = [];
-
-  for (let i = 0; i < allDocs.ids.length; i++) {
-    // Query for similar documents (traced)
-    const results = await collection.query({
-      queryEmbeddings: [allDocs.embeddings[i]],
-      nResults: 5,
-      include: ["distances"],
-    });
-
-    // Find near-duplicates (distance < 1 - threshold for cosine)
-    const similarIds = results.ids[0]
-      .filter((id, j) => {
-        const similarity = 1 - results.distances[0][j];
-        return id !== allDocs.ids[i] && similarity >= threshold;
-      });
-
-    if (similarIds.length > 0) {
-      duplicates.push([allDocs.ids[i], ...similarIds]);
-    }
-  }
-
-  return duplicates;
-}
-
-// Remove duplicates, keeping the first one
-async function removeDuplicates(collection: any, duplicateGroups: string[][]) {
-  const idsToRemove = duplicateGroups.flatMap(group => group.slice(1));
-
-  if (idsToRemove.length > 0) {
-    await collection.delete({ ids: idsToRemove });
-  }
-
-  return idsToRemove.length;
-}
-```
-
-## Viewing Traces
-
-After setting up the instrumentation, you can view your traces in the Future AGI dashboard:
-
-1. Go to [app.futureagi.com](https://app.futureagi.com)
-2. Navigate to your project
-3. View the Traces section to see all ChromaDB operations
-4. Each span shows:
-   - Operation type (add, query, etc.)
-   - Collection name
-   - Query parameters
-   - Number of results
-   - Timing information
-   - Any errors that occurred
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `FI_API_KEY` | Your Future AGI API key |
-| `FI_PROJECT_NAME` | Your project name |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL |
 
 ## Troubleshooting
 
-### Spans Not Appearing
-
-1. Ensure instrumentation is registered before importing ChromaDB
-2. Verify your OTLP exporter is configured correctly
-3. Check that your API key and project name are set
-
-### Large Span Sizes
-
-If spans are too large, disable vector capture:
-
-```typescript
-new ChromaDBInstrumentation({
-  instrumentationConfig: {
-    captureQueryVectors: false,
-    captureResultVectors: false,
-  },
-});
-```
+- **No collection spans:** call `manuallyInstrument` on the same Chroma module your application uses, before obtaining collections. This is especially important with ESM or bundled applications.
+- **Spans are separate from their parent request:** configure an OpenTelemetry context manager, or use your existing Node SDK's context management.
+- **Traces do not reach Future AGI:** check both `FI_API_KEY` and `FI_SECRET_KEY`, the collector endpoint, and that you flush or shut down the provider before exiting.
 
 ## Development
 
-```bash
-# Build
-pnpm build
-
-# Run tests
-pnpm test
-
-# Type check
-pnpm tsc --noEmit
-```
+Build the workspace dependencies before building this package. `pnpm test` runs unit tests; `pnpm test:runtime` exercises the installed Chroma client against a loopback fixture and exports OTLP spans to a loopback receiver. The compatibility workflow also tests CJS/ESM imports and automatic/manual instrumentation across supported major versions.
 
 ## License
 
 Apache-2.0
-
-## Links
-
-- [Future AGI Documentation](https://docs.futureagi.com)
-- [ChromaDB Documentation](https://docs.trychroma.com)
-- [OpenTelemetry](https://opentelemetry.io)
-- [GitHub Issues](https://github.com/future-agi/traceAI/issues)
