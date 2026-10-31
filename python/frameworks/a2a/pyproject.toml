@@ -13,7 +13,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -26,12 +25,12 @@ classifiers = [
 packages = [{ include = "traceai_a2a" }]
 
 [tool.poetry.dependencies]
-python = ">3.9,<3.14"
+python = ">=3.10,<3.14"
 opentelemetry-api = ">=1.26.0"
 opentelemetry-sdk = ">=1.26.0"
 opentelemetry-instrumentation = ">=0.47b0"
 fi-instrumentation-otel = ">=0.1.11"
-wrapt = ">=1.14"
+a2a-sdk = { version = ">=0.2.4,<2", optional = true }
 
 [tool.poetry.extras]
 a2a = ["a2a-sdk"]
@@ -40,6 +39,8 @@ a2a = ["a2a-sdk"]
 pytest = ">=7.0"
 pytest-asyncio = ">=0.21"
 opentelemetry-sdk = ">=1.26.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.26.0"
+a2a-sdk = { version = ">=0.2.4,<2", extras = ["grpc"] }
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"
