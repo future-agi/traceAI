@@ -1,217 +1,147 @@
 # traceAI-chromadb
 
-OpenTelemetry instrumentation for [ChromaDB](https://www.trychroma.com/) vector database.
+Trace ChromaDB collection reads, writes, and retrievals with OpenTelemetry and view them in Future AGI.
 
-## Installation
+## Install
 
 ```bash
 pip install traceAI-chromadb
 ```
 
-## Quick Start
+## Initialize tracing
+
+Set your Future AGI credentials before starting the application:
+
+```bash
+export FI_API_KEY="YOUR_FI_API_KEY"
+export FI_SECRET_KEY="YOUR_FI_SECRET_KEY"
+```
 
 ```python
-import os
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_chromadb import ChromaDBInstrumentor
-import chromadb
 
-# Set up environment
-os.environ["FI_API_KEY"] = "<your-api-key>"
-os.environ["FI_SECRET_KEY"] = "<your-secret-key>"
-
-# Register tracer
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="my-rag-app"
+    project_name="chroma-retrieval",
 )
-
-# Instrument ChromaDB
 ChromaDBInstrumentor().instrument(tracer_provider=trace_provider)
-
-# Use ChromaDB as normal - all operations are traced!
-client = chromadb.Client()
-collection = client.create_collection("my-collection")
-
-# Add documents
-collection.add(
-    ids=["id1", "id2"],
-    documents=["Hello world", "Goodbye world"],
-    metadatas=[{"source": "doc1"}, {"source": "doc2"}]
-)
-
-# Query
-results = collection.query(
-    query_texts=["Hello"],
-    n_results=5
-)
 ```
 
-## Instrumented Operations
+Initialize once per process, before calling collection methods. Use only one
+collection-level Chroma instrumentor; do not combine this package with another
+Chroma collection instrumentor. Chroma's native HTTP transport tracing covers a
+different layer and may produce additional child spans.
 
-| Operation | Span Name | Description |
-|-----------|-----------|-------------|
-| `add` | `chroma add` | Add documents/embeddings |
-| `query` | `chroma query` | Semantic search |
-| `get` | `chroma get` | Retrieve by ID or filter |
-| `update` | `chroma update` | Update existing documents |
-| `upsert` | `chroma upsert` | Insert or update |
-| `delete` | `chroma delete` | Delete documents |
-| `count` | `chroma count` | Get collection count |
-| `peek` | `chroma peek` | Preview collection |
+## Run a retrieval
 
-## Span Attributes
-
-### Common Attributes
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `db.system` | string | Always `"chroma"` |
-| `db.operation.name` | string | Operation name |
-| `db.namespace` | string | Collection name |
-| `db.vector.collection.name` | string | Collection name |
-
-### Query Attributes
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `db.vector.query.top_k` | int | n_results parameter |
-| `db.vector.query.filter` | string | JSON where clause |
-| `db.vector.query.where_document` | string | Document filter |
-| `db.vector.query.include` | string | Included fields |
-| `db.vector.query.type` | string | "embedding" or "text" |
-| `db.vector.results.count` | int | Number of results |
-| `db.vector.results.ids` | string | JSON result IDs |
-| `db.vector.results.scores` | string | JSON distances |
-
-### Add/Upsert Attributes
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `db.vector.upsert.count` | int | Number of items |
-| `db.vector.upsert.dimensions` | int | Embedding dimensions |
-| `db.vector.documents.count` | int | Number of documents |
-
-## Examples
-
-### Persistent Client
+This example supplies small illustrative vectors directly, so no embedding model
+or model API key is needed. In your application, supply your own embeddings or
+configure a Chroma embedding function.
 
 ```python
-from fi_instrumentation import register
-from traceai_chromadb import ChromaDBInstrumentor
 import chromadb
 
-# Register and instrument
-trace_provider = register(project_name="chroma-persistent")
-ChromaDBInstrumentor().instrument(tracer_provider=trace_provider)
-
-# Use persistent client
-client = chromadb.PersistentClient(path="/path/to/db")
-collection = client.get_or_create_collection("documents")
-
-# All operations are traced
+client = chromadb.EphemeralClient()
+collection = client.create_collection("sample-documents", embedding_function=None)
 collection.add(
-    ids=["doc1"],
-    documents=["Important document content"],
-    embeddings=[[0.1] * 384]  # Your embeddings
+    ids=["guide", "faq"],
+    embeddings=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+    documents=["Getting started guide", "Frequently asked questions"],
 )
+results = collection.query(query_embeddings=[[1.0, 0.0, 0.0]], n_results=1)
+print(results["ids"])
+trace_provider.force_flush()
 ```
 
-### With Embedding Function
+Open **Observe** in Future AGI and select `chroma-retrieval`. The example produces
+`chroma add` and `chroma query` spans. Existing application spans remain their
+parents when you use the same tracer provider.
+
+### Async HTTP client
+
+On Chroma versions that provide `AsyncHttpClient`, the same initialization traces
+awaited collection operations. Connect to your running Chroma server:
 
 ```python
-from chromadb.utils import embedding_functions
+import asyncio
+import chromadb
 
-# Use with OpenAI embeddings
-openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-    api_key="sk-...",
-    model_name="text-embedding-3-small"
-)
+async def main():
+    client = await chromadb.AsyncHttpClient(host="localhost", port=8000)
+    collection = await client.get_or_create_collection(
+        "sample-documents", embedding_function=None
+    )
+    await collection.upsert(ids=["guide"], embeddings=[[1.0, 0.0, 0.0]])
+    results = await collection.query(query_embeddings=[[1.0, 0.0, 0.0]], n_results=1)
+    print(results["ids"])
 
-collection = client.create_collection(
-    name="openai-docs",
-    embedding_function=openai_ef
-)
-
-# Add documents - embeddings generated automatically
-collection.add(
-    ids=["id1", "id2"],
-    documents=["Document one", "Document two"]
-)
-
-# Query with text - embedding generated automatically
-results = collection.query(
-    query_texts=["search query"],
-    n_results=5
-)
+asyncio.run(main())
+trace_provider.force_flush()
 ```
 
-### RAG with LangChain
+## Supported operations
+
+These methods are traced on both `Collection` and `AsyncCollection`, when the
+installed Chroma version exposes them. Async spans cover the awaited operation,
+not just coroutine creation. Positional and keyword arguments are supported;
+NumPy inputs are supported where Chroma accepts them.
+
+| Method | Span name | Captured details |
+|---|---|---|
+| `add` | `chroma add` | Item count and supplied embedding dimensions |
+| `upsert` | `chroma upsert` | Item count and supplied embedding dimensions |
+| `update` | `chroma update` | Item count and which fields were supplied |
+| `query` | `chroma query` | Requested result count, filters, first-query result summary |
+| `search` | `chroma search` | Search count and first-search result summary |
+| `get` | `chroma get` | ID count, filters, pagination and returned item count |
+| `delete` | `chroma delete` | Requested ID count and filters |
+| `count` | `chroma count` | Collection item count |
+| `peek` | `chroma peek` | Requested limit and returned item count |
+
+`search` requires a Chroma version and deployment supporting its Search API.
+Client/collection lifecycle methods (such as create, modify, fork, or delete
+collection), indexing status and attached functions are not instrumented by this
+package. Embedding model calls require their own provider instrumentation.
+
+## Span attributes and data capture
+
+Every operation includes `db.system="chroma"`, `db.operation.name`,
+`db.namespace` and `db.vector.collection.name`. Spans use `SpanKind.CLIENT`.
+Failures retain the original exception and are recorded as span errors.
+
+| Attribute | Meaning |
+|---|---|
+| `db.vector.query.top_k` | `query`'s actual `n_results` argument |
+| `db.vector.query.filter` | JSON `where` filter |
+| `db.vector.query.where_document` | JSON document filter |
+| `db.vector.query.include` | Requested result fields |
+| `db.vector.query.type` | `embedding` or `text`, for those query input types |
+| `db.vector.search.count` | Number of Search requests |
+| `db.vector.results.count` | Returned items; for `query`/`search`, first request only |
+| `db.vector.results.ids` | Up to ten IDs from the first query/search result |
+| `db.vector.results.scores` | Up to ten distances (`query`) or scores (`search`) |
+| `db.vector.upsert.count` | Number of items supplied to `add`/`upsert` |
+| `db.vector.upsert.dimensions` | Dimensions of explicitly supplied embeddings |
+
+The instrumentor does not attach document bodies, query text or embedding vectors
+to successful spans. Collection names, filters, result IDs and exception messages
+can still contain sensitive information. Review those fields before exporting
+sensitive workloads; this package does not implement its own content-redaction
+configuration. Search rank/filter expressions are not serialized.
+
+To stop tracing collection operations, call:
 
 ```python
-from fi_instrumentation import register
-from traceai_chromadb import ChromaDBInstrumentor
-from traceai_langchain import LangChainInstrumentor
-
-# Instrument both
-trace_provider = register(project_name="rag-langchain")
-ChromaDBInstrumentor().instrument(tracer_provider=trace_provider)
-LangChainInstrumentor().instrument(tracer_provider=trace_provider)
-
-# Use LangChain with Chroma
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
-
-vectorstore = Chroma(
-    collection_name="langchain-docs",
-    embedding_function=OpenAIEmbeddings()
-)
-
-# Add documents
-vectorstore.add_texts(
-    texts=["Document 1", "Document 2"],
-    metadatas=[{"source": "web"}, {"source": "pdf"}]
-)
-
-# Search - all operations traced
-docs = vectorstore.similarity_search("query", k=5)
-```
-
-## Testing
-
-ChromaDB runs in-memory, so no external database is needed for testing.
-
-### Unit Tests
-
-```bash
-cd python/frameworks/chromadb
-pip install pytest chromadb
-pytest tests/ -v
-```
-
-### E2E Integration Tests
-
-```bash
-cd python/frameworks/tests_e2e
-pytest test_chromadb_e2e.py -v
-```
-
-### Example
-
-Run the semantic search example:
-
-```bash
-cd examples
-python semantic_search.py
+ChromaDBInstrumentor().uninstrument()
 ```
 
 ## Resources
 
-- [ChromaDB Documentation](https://docs.trychroma.com/)
-- [TraceAI Documentation](https://docs.futureagi.com/)
-- [OpenTelemetry Database Conventions](https://opentelemetry.io/docs/specs/semconv/database/)
-- [Vector DB Guide](../../docs/VECTOR_DB_GUIDE.md)
+- [ChromaDB documentation](https://docs.trychroma.com/)
+- [Future AGI documentation](https://docs.futureagi.com/)
+- [OpenTelemetry database conventions](https://opentelemetry.io/docs/specs/semconv/database/)
 
 ## License
 
