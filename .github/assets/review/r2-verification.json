@@ -1,0 +1,256 @@
+{
+  "content_head": "f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+  "java": {
+    "status": "PASS",
+    "companion_head": "f5e5b9045295949416d66e6117cd44b7035520a6",
+    "coordinates": "com.futureagi:traceai-java-openai:1.0.0",
+    "java_version": 21,
+    "source_matches_readme_exactly": true,
+    "java_snippet_sha256": "65d4f6371b485a24a5addc543b2ba3012cd357e7541f09e63512856bb727150d",
+    "FI_BASE_URL_present": false,
+    "trace_endpoint": "https://api.futureagi.com/tracer/v1/traces",
+    "model_endpoint": "http://127.0.0.1:8317/v1",
+    "model": "gpt-6.1-sol",
+    "since": "2026-10-29T16:36:16.396107+00:00",
+    "project": "traceai-quickstart",
+    "traces": [
+      {
+        "trace_id": "8687a493-a815-a640-261e-857aff1f11b6",
+        "summary": {
+          "total_spans": 1,
+          "total_duration_ms": 5459,
+          "total_tokens": 314,
+          "total_prompt_tokens": 308,
+          "total_completion_tokens": 6,
+          "total_cost": 0.0006760000000000001,
+          "error_count": 0,
+          "span_type_counts": {
+            "llm": 1
+          }
+        },
+        "spans": [
+          {
+            "depth": 0,
+            "span_id": "e61780a4c6285144",
+            "parent_span_id": null,
+            "name": "OpenAI Chat Completion",
+            "type": "llm",
+            "fi.span.kind": "LLM",
+            "model": "gpt-6.1-sol",
+            "provider": "openai",
+            "tokens": [
+              308,
+              6,
+              314
+            ],
+            "input_len": 218,
+            "output_len": 6,
+            "attr_input_len": 0,
+            "attr_output_len": 6,
+            "tool.name": null,
+            "status": "OK",
+            "retrieval_docs": 0,
+            "attr_keys": [
+              "fi.raw_input",
+              "fi.raw_output",
+              "fi.span.kind",
+              "gen_ai.input.messages",
+              "gen_ai.operation.name",
+              "gen_ai.output.messages",
+              "gen_ai.provider.name",
+              "gen_ai.request.model",
+              "gen_ai.response.finish_reasons",
+              "gen_ai.response.id",
+              "gen_ai.response.model",
+              "gen_ai.span.kind",
+              "gen_ai.usage.input_tokens",
+              "gen_ai.usage.output_tokens",
+              "gen_ai.usage.total_tokens",
+              "output.value"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "coverage_merge": {
+    "status": "PASS",
+    "readme_head": "f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+    "java_head": "f5e5b9045295949416d66e6117cd44b7035520a6",
+    "merge": "Local detached worktree, --no-commit --no-ff; not pushed",
+    "coverage_unchanged": true,
+    "idempotent": true,
+    "families": 77,
+    "package_counts": {
+      "Python": 65,
+      "TypeScript": 45,
+      "Java": 23,
+      "Go": 5,
+      "C#": 0
+    },
+    "excluded_shared_packages": [
+      {
+        "manifest": "typescript/packages/fi-core/package.json",
+        "reason": "shared SDK / semantic conventions"
+      },
+      {
+        "manifest": "typescript/packages/fi-semantic-conventions/package.json",
+        "reason": "shared SDK / semantic conventions"
+      },
+      {
+        "manifest": "java/traceai-bom/pom.xml",
+        "reason": "dependency-management / aggregator POM; not an integration"
+      },
+      {
+        "manifest": "java/traceai-java-core/pom.xml",
+        "reason": "shared SDK / BOM / example; not an integration"
+      },
+      {
+        "manifest": "csharp/src/FIInstrumentation/FIInstrumentation.csproj",
+        "reason": "manual-span SDK; no framework auto-instrumentors"
+      }
+    ],
+    "tests": "4 passed on current branch and on actual companion merge"
+  },
+  "github_render": [
+    {
+      "head": "f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+      "theme": "light",
+      "url": "https://github.com/future-agi/traceAI/tree/f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+      "http_status": 200,
+      "errors": [],
+      "images": 87,
+      "broken_images": [],
+      "tables": [
+        {
+          "headers": [
+            "Integration",
+            "Python",
+            "TypeScript",
+            "Java",
+            "Go",
+            "C#"
+          ],
+          "rows": 25
+        },
+        {
+          "headers": [
+            "Integration",
+            "Python",
+            "TypeScript",
+            "Java",
+            "Go",
+            "C#"
+          ],
+          "rows": 52
+        }
+      ],
+      "pinecone": {
+        "src": "https://github.com/future-agi/traceAI/raw/f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4/.github/assets/integrations/pinecone-tile.svg",
+        "width": 24,
+        "height": 24,
+        "loaded": true
+      },
+      "background": "rgb(255, 255, 255)"
+    },
+    {
+      "head": "f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+      "theme": "dark",
+      "url": "https://github.com/future-agi/traceAI/tree/f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4",
+      "http_status": 200,
+      "errors": [],
+      "images": 87,
+      "broken_images": [],
+      "tables": [
+        {
+          "headers": [
+            "Integration",
+            "Python",
+            "TypeScript",
+            "Java",
+            "Go",
+            "C#"
+          ],
+          "rows": 25
+        },
+        {
+          "headers": [
+            "Integration",
+            "Python",
+            "TypeScript",
+            "Java",
+            "Go",
+            "C#"
+          ],
+          "rows": 52
+        }
+      ],
+      "pinecone": {
+        "src": "https://github.com/future-agi/traceAI/raw/f7bdbe68bb28e81558ce6fe25f4ce9b83c4eb2c4/.github/assets/integrations/pinecone-tile.svg",
+        "width": 24,
+        "height": 24,
+        "loaded": true
+      },
+      "background": "rgb(13, 17, 23)"
+    }
+  ],
+  "screenshots": {
+    "readme-light": {
+      "file": ".github/assets/review/r2-readme-light.png",
+      "sha256": "48a0d31203542e5405573c7a15ea427e5dd2a67e0f44d3b648f8d3dcafc4aab0"
+    },
+    "readme-dark": {
+      "file": ".github/assets/review/r2-readme-dark.png",
+      "sha256": "5f9676f890510035a8ea00ab6734cd80b8046363cda793e5d0073532936a3c87"
+    },
+    "integrations-light": {
+      "file": ".github/assets/review/r2-integrations-light.png",
+      "sha256": "f000ab2f8d4c5291a5e1bcb50542b6248cda6bccd7f0a6fbae2b0d9852563b51"
+    },
+    "integrations-dark": {
+      "file": ".github/assets/review/r2-integrations-dark.png",
+      "sha256": "91d542d74d7699a46516aec9305afa60a7d58f496bf99791ce6502d08cef0fda"
+    },
+    "java-light": {
+      "file": ".github/assets/review/r2-java-light.png",
+      "sha256": "4c3cabd41119fe4bd6e8d7c1dd1ac29dce8587e7821619c3920147d6810c7198"
+    },
+    "java-dark": {
+      "file": ".github/assets/review/r2-java-dark.png",
+      "sha256": "7bb7b74e4514ecc23433b7dff3394f574a33f5591e945f50a7feb4749a34b1d9"
+    },
+    "pinecone-light": {
+      "file": ".github/assets/review/r2-pinecone-light.png",
+      "sha256": "57b989bed737550fadf76f5fb5cb124a558fd802c4586390b1f3933e09bcf434"
+    },
+    "pinecone-dark": {
+      "file": ".github/assets/review/r2-pinecone-dark.png",
+      "sha256": "16c67b3ed89f3e66e5688083d66dbfa5784dbce182b77ce43adbfe54f6bdf4b4"
+    }
+  },
+  "visually_inspected": [
+    "README light and dark",
+    "Pinecone at actual 24px in both themes",
+    "Integration matrix both themes",
+    "Java code block both themes"
+  ],
+  "hero": {
+    "unchanged_from": "043ab81874c776a7e15ca5ec70cc9e2979a4d4bb",
+    "sha256": "970bcfd25c04a93ee9c051748b7fe71967002a558096e60e107672bf6ccf1344"
+  },
+  "pinecone": {
+    "asset": "Original plain P text tile, not a brand logo",
+    "license": "Apache-2.0, repository-authored documentation artwork",
+    "source_check": {
+      "url": "https://unpkg.com/simple-icons@16.36.0/icons/pinecone.svg",
+      "http_status": 404
+    },
+    "surface": "Same #f6f8fa fill / #d0d7de border as neighboring tiles"
+  },
+  "safety": {
+    "registry_published": false,
+    "remote_merges": false,
+    "merge_check": "Uncommitted detached-worktree merge tested and aborted; not pushed",
+    "credentials_saved": false
+  }
+}
