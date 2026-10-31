@@ -1,0 +1,43 @@
+{
+  "name": "@traceai/openrouter-agent",
+  "version": "0.1.0",
+  "description": "Privacy-first Future AGI tracing through OpenRouter Agent lifecycle hooks",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && node scripts/esm.cjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {"node": ">=22"},
+  "dependencies": {
+    "@opentelemetry/api": ">=1.9.0 <1.10.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0"
+  },
+  "peerDependencies": {"@openrouter/agent": ">=0.11.0 <0.12.0"},
+  "devDependencies": {
+    "@openrouter/agent": "0.11.0",
+    "@openrouter/sdk": "0.13.67",
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3",
+    "zod": "4.6.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_openrouter_agent"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {"access": "public"}
+}
