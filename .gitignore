@@ -83,5 +83,9 @@ planning/
 **/bin/
 **/obj/
 
+# Maintained Node CLI entrypoints, not compiled language binaries.
+!typescript/packages/traceai_agents/bin/
+!typescript/packages/traceai_agents/bin/*.cjs
+
 # Python
 **/uv.lock
