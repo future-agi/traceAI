@@ -186,10 +186,16 @@ describe('LangChain Instrumentation', () => {
       mockCallbackManagerModule.CallbackManager.configure = jest.fn();
     });
 
-    it('should patch configure when _configureSync is not available', () => {
+    it('should inject a tracer through configure when _configureSync is not available', () => {
+      const original = mockCallbackManagerModule.CallbackManager.configure;
+      const returned = Promise.resolve({ handlers: [] });
+      original.mockReturnValue(returned);
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
 
-      expect(mockCallbackManagerModule.CallbackManager.configure).toBeDefined();
+      const result = mockCallbackManagerModule.CallbackManager.configure([]);
+      expect(result).toBe(returned);
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(original.mock.calls[0][0]).toHaveLength(1);
     });
   });
 

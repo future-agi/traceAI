@@ -91,14 +91,12 @@ export class LangChainInstrumentation extends InstrumentationBase {
   }
 
   protected init(): InstrumentationModuleDefinition {
-    const module =
-      new InstrumentationNodeModuleDefinition(
-        "@langchain/core/dist/callbacks/manager.cjs",
-        ["^0.1.0", "^0.2.0", "^0.3.0"],
-        this.patch.bind(this),
-        this.unpatch.bind(this),
-      );
-    return module;
+    return new InstrumentationNodeModuleDefinition(
+      "@langchain/core/dist/callbacks/manager.cjs",
+      ["^0.1.0", "^0.2.0", "^0.3.0", "^1.0.0"],
+      this.patch.bind(this),
+      this.unpatch.bind(this),
+    );
   }
 
   get tracer(): Tracer {
@@ -141,12 +139,9 @@ export class LangChainInstrumentation extends InstrumentationBase {
     const instrumentation = this;
 
     /**
-     * _configureSync is only available in v0.2.0 and above
-     * It was added as a replacement to the configure method which is marked as soon to be deprecated
-     * In v0.2.0 and above, the configure method is a wrapper around _configureSync
-     * However, configure is not always called, where as _configureSync is always called
-     * so we want to patch only configure sync if it's available
-     * and only configure if _configureSync is not available so we don't get duplicate traces
+     * Later 0.2.x releases added _configureSync; the 0.2.0 floor only has
+     * configure. Patch exactly one entry point, since newer configure methods
+     * delegate to _configureSync and wrapping both would duplicate tracing.
      */
     if ("_configureSync" in module.CallbackManager) {
       this._wrap(module.CallbackManager, "_configureSync", (original) => {
@@ -163,6 +158,16 @@ export class LangChainInstrumentation extends InstrumentationBase {
           );
           args[0] = newInheritableHandlers;
 
+          return original.apply(this, args);
+        };
+      });
+    } else {
+      this._wrap(module.CallbackManager, "configure", (original) => {
+        return function (
+          this: typeof CallbackManagerModuleV02,
+          ...args: Parameters<typeof CallbackManagerModuleV02.CallbackManager.configure>
+        ) {
+          args[0] = addTracerToHandlers(instrumentation.fiTracer, args[0]);
           return original.apply(this, args);
         };
       });

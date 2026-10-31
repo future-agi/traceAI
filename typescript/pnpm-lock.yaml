@@ -1130,7 +1130,7 @@ importers:
   packages/traceai_langchain:
     dependencies:
       '@langchain/core':
-        specifier: ^0.2.0 || ^0.3.0
+        specifier: ^0.2.0 || ^0.3.0 || ^1.0.0
         version: 0.3.56(openai@4.98.0(ws@8.22.0)(zod@3.24.4))
       '@opentelemetry/api':
         specifier: ^1.9.0
