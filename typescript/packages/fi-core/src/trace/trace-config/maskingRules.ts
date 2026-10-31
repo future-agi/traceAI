@@ -4,85 +4,23 @@ import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
 import { isErrorDetailAttribute } from "./errorDetails";
+import { redactMessages } from "./messageRedaction";
 
-/**
- * Redacts content within a JSON blob of messages.
- * Parses the JSON string, replaces all "content" fields with REDACTED_VALUE,
- * and returns the modified JSON string.
- */
-function redactContentInJsonBlob(value: AttributeValue): AttributeValue | undefined {
-  if (typeof value !== "string") return value;
-  try {
-    const messages = JSON.parse(value);
-    if (!Array.isArray(messages)) return REDACTED_VALUE;
-    const redacted = messages.map((msg: Record<string, unknown>) => {
-      const copy = { ...msg };
-      if (copy.content !== undefined) {
-        copy.content = REDACTED_VALUE;
-      }
-      return copy;
-    });
-    return JSON.stringify(redacted);
-  } catch {
-    return REDACTED_VALUE;
-  }
-}
-
-/**
- * Redacts images within a JSON blob of messages.
- * Removes image_url fields from content arrays within messages.
- */
-function redactImagesInJsonBlob(value: AttributeValue): AttributeValue | undefined {
-  if (typeof value !== "string") return value;
-  try {
-    const messages = JSON.parse(value);
-    if (!Array.isArray(messages)) return value;
-    const redacted = messages.map((msg: Record<string, unknown>) => {
-      const copy = { ...msg };
-      if (Array.isArray(copy.content)) {
-        copy.content = (copy.content as Record<string, unknown>[]).filter(
-          (part) => part.type !== "image_url" && part.type !== "input_image" && part.type !== "image"
-        );
-      }
-      return copy;
-    });
-    return JSON.stringify(redacted);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Masks input text in LLM input messages (JSON blob format).
- * Redacts "content" fields within the gen_ai.input.messages JSON blob.
- */
-const maskInputTextRule: MaskingRule = {
+// Apply text and image settings together: the masking rule list stops at its
+// first match, so independent rules would let image hiding bypass text hiding.
+const maskInputContentRule: MaskingRule = {
   condition: ({ config, key }) =>
-    config.hideInputText &&
+    (config.hideInputText || config.hideInputImages) &&
     key === SemanticConventions.LLM_INPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactContentInJsonBlob(value) : undefined,
+  action: ({ config, value }) => value != null
+    ? redactMessages({ value, hideText: config.hideInputText, hideImages: config.hideInputImages }) : undefined,
 };
 
-/**
- * Masks output text in LLM output messages (JSON blob format).
- * Redacts "content" fields within the gen_ai.output.messages JSON blob.
- */
 const maskOutputTextRule: MaskingRule = {
   condition: ({ config, key }) =>
-    config.hideOutputText &&
-    key === SemanticConventions.LLM_OUTPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactContentInJsonBlob(value) : undefined,
-};
-
-/**
- * Masks input images in LLM input messages (JSON blob format).
- * Removes image content parts from the gen_ai.input.messages JSON blob.
- */
-const maskInputImagesRule: MaskingRule = {
-  condition: ({ config, key }) =>
-    config.hideInputImages &&
-    key === SemanticConventions.LLM_INPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactImagesInJsonBlob(value) : undefined,
+    config.hideOutputText && key === SemanticConventions.LLM_OUTPUT_MESSAGES,
+  action: ({ value }) => value != null
+    ? redactMessages({ value, hideText: true, hideImages: false }) : undefined,
 };
 
 /**
@@ -158,8 +96,7 @@ const maskingRules: MaskingRule[] = [
       key === SemanticConventions.LLM_OUTPUT_MESSAGES,
     action: () => undefined,
   },
-  maskInputImagesRule,
-  maskInputTextRule,
+  maskInputContentRule,
   maskOutputTextRule,
   maskEmbeddingVectorsRule,
 ];
@@ -178,10 +115,11 @@ export function mask({
 }: MaskingRuleArgs): AttributeValue | undefined {
   for (const rule of maskingRules) {
     if (rule.condition({ config, key, value })) {
-      return rule.action({ config, key, value });
+      value = rule.action({ config, key, value });
+      break;
     }
   }
-  // No key-based rule matched — apply PII redaction if enabled
+  // Apply PII redaction to retained text even when a content rule matched.
   if (config.piiRedaction && value != null) {
     return redactPiiInValue(value);
   }
