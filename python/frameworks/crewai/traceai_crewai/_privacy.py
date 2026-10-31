@@ -9,15 +9,22 @@ from fi_instrumentation import TraceConfig
 
 REDACTED = "__REDACTED__"
 # Match credential concepts, not a finite list of vendor header spellings.
-_CREDENTIAL_MARKERS = (
+_KEY_CREDENTIAL_MARKERS = (
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "clientkey",
+    "signingkey",
+    "subscriptionkey",
+    "applicationkey",
+    "masterkey",
+)
+_CREDENTIAL_MARKERS = _KEY_CREDENTIAL_MARKERS + (
     "token",
     "secret",
     "password",
     "passwd",
     "passphrase",
-    "apikey",
-    "accesskey",
-    "privatekey",
     "credential",
     "auth",
     "cookie",
@@ -26,8 +33,6 @@ _CREDENTIAL_MARKERS = (
     "bearer",
     "jwt",
     "otp",
-    "clientkey",
-    "signingkey",
 )
 # Exact normalized exceptions only: never exempt arbitrary '*_count'/'*_id'
 # names (e.g. private_token_count could still carry a credential). This documents
@@ -52,6 +57,13 @@ _NON_SECRET_NAMES = frozenset(
         "cachecreationinputtokens",
         "cachereadinputtokens",
         "reasoningtokens",
+        # OpenAI prediction details, Gemini usage, and generation limits.
+        "acceptedpredictiontokens",
+        "rejectedpredictiontokens",
+        "candidatestokencount",
+        "thoughtstokencount",
+        "cachedcontenttokencount",
+        "maxnewtokens",
         "audiotokens",
         "tokencount",
         "inputtokencount",
@@ -124,7 +136,9 @@ def _credential_key(key: str) -> bool:
     # a value/index. Exceptions apply to one complete field, never its children.
     if _normalized_name(key) in _NON_SECRET_NAMES:
         return False
-    parts = [_normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part]
+    parts = [
+        _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
+    ]
     for normalized in parts:
         if normalized in _NON_SECRET_NAMES:
             continue
@@ -138,12 +152,58 @@ def _credential_key(key: str) -> bool:
     return any(
         marker in left + right
         for left, right in zip(parts, parts[1:])
-        for marker in ("apikey", "accesskey", "privatekey", "clientkey", "signingkey")
+        for marker in _KEY_CREDENTIAL_MARKERS
     )
 
 
-def _safe_data(value: Any, depth: int = 0) -> Any:
-    """Copy only plain business data, never calling runtime serializers or repr."""
+def _field_path(key: str) -> tuple:
+    return tuple(
+        _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
+    )
+
+
+def _is_headers_field(key: str) -> bool:
+    parts = _field_path(key)
+    return bool(parts and parts[-1].endswith("headers"))
+
+
+def _redact_header_records(value: dict) -> dict:
+    """Shallow projection of complete selector/value records, in any order.
+
+    Leave unrelated values (including core's lazy callbacks) unevaluated. The
+    caller's per-attribute mask remains responsible for individual values.
+    """
+    credential_values = set()
+    for key, item in value.items():
+        if type(key) is not str or type(item) is not str:
+            continue
+        parts = _field_path(key)
+        if (
+            parts
+            and parts[-1] in ("name", "key", "header", "0")
+            and _credential_key(item)
+        ):
+            paired_field = "1" if parts[-1] == "0" else "value"
+            credential_values.add(parts[:-1] + (paired_field,))
+    return {
+        key: (
+            REDACTED
+            if type(key) is str and _field_path(key) in credential_values
+            else item
+        )
+        for key, item in value.items()
+    }
+
+
+def _safe_data(
+    value: Any, depth: int = 0, *, _header_context: bool = False
+) -> Any:
+    """Copy plain data; interpret pairs only inside a header collection.
+
+    Header context comes from a headers field or a collection of two-item pairs,
+    including serialized collections. A standalone two-string business list is
+    not a header just because its first element mentions authentication/tokens.
+    """
     if depth > 20:
         return "[omitted]"
     if type(value) is str:
@@ -157,48 +217,57 @@ def _safe_data(value: Any, depth: int = 0) -> Any:
                 # inspect (including valid JSON beyond parser resource limits).
                 return "[omitted unparseable structured data]"
             if type(parsed) in (dict, list):
-                return json.dumps(_safe_data(parsed, depth + 1))
+                return json.dumps(
+                    _safe_data(
+                        parsed, depth + 1, _header_context=_header_context
+                    )
+                )
         return value
     if value is None or type(value) in (int, float, bool):
         return value
     if type(value) is dict:
-        # Name/value header records, including their flattened representations.
-        # Keep the selector and unrelated fields; redact only the paired value.
-        def path(key: str) -> tuple:
-            return tuple(
-                _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
-            )
-
-        credential_values = set()
-        for key, item in value.items():
-            if type(key) is not str or type(item) is not str:
-                continue
-            parts = path(key)
-            if (
-                parts
-                and parts[-1] in ("name", "key", "header", "0")
-                and _credential_key(item)
-            ):
-                paired_field = "1" if parts[-1] == "0" else "value"
-                credential_values.add(parts[:-1] + (paired_field,))
         return {
             key: (
                 REDACTED
-                if _credential_key(key) or path(key) in credential_values
-                else _safe_data(item, depth + 1)
+                if _credential_key(key)
+                else _safe_data(
+                    item,
+                    depth + 1,
+                    _header_context=_is_headers_field(key),
+                )
             )
-            for key, item in value.items()
+            for key, item in _redact_header_records(value).items()
             if type(key) is str
         }
     if type(value) in (list, tuple):
-        if len(value) == 2 and type(value[0]) is str and _credential_key(value[0]):
+        if (
+            _header_context
+            and len(value) == 2
+            and type(value[0]) is str
+            and _credential_key(value[0])
+        ):
             return [value[0], REDACTED]
-        return [_safe_data(item, depth + 1) for item in value]
+        pair_collection = bool(value) and all(
+            type(item) in (list, tuple)
+            and len(item) == 2
+            and type(item[0]) is str
+            for item in value
+        )
+        return [
+            _safe_data(
+                item,
+                depth + 1,
+                _header_context=pair_collection or _header_context,
+            )
+            for item in value
+        ]
     return "[omitted runtime object]"
 
 
 def _has_prefix(key: str, prefixes: tuple) -> bool:
-    return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
+    return any(
+        key == prefix or key.startswith(prefix + ".") for prefix in prefixes
+    )
 
 
 class _CrewAITraceConfig(TraceConfig):
@@ -215,10 +284,14 @@ class _CrewAITraceConfig(TraceConfig):
 
     def mask(self, key: str, value: Any) -> Any:
         hide_input = (
-            self.hide_inputs or self.hide_input_text or self.hide_input_messages
+            self.hide_inputs
+            or self.hide_input_text
+            or self.hide_input_messages
         )
         hide_output = (
-            self.hide_outputs or self.hide_output_text or self.hide_output_messages
+            self.hide_outputs
+            or self.hide_output_text
+            or self.hide_output_messages
         )
         if (hide_input and _has_prefix(key, _INPUT_ALIASES)) or (
             hide_output and _has_prefix(key, _OUTPUT_ALIASES)
@@ -229,7 +302,7 @@ class _CrewAITraceConfig(TraceConfig):
             return None
         if _credential_key(key):
             return REDACTED
-        projected = _safe_data(masked)
+        projected = _safe_data(masked, _header_context=_is_headers_field(key))
         # OTel attributes cannot carry dictionaries (nor lists of dictionaries).
         if type(projected) is dict or (
             type(projected) is list

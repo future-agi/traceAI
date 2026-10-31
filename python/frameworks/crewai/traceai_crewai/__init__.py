@@ -2,7 +2,7 @@ import logging
 from importlib import import_module
 from typing import Any, Collection
 
-from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation import TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_crewai._wrappers import (
@@ -11,6 +11,7 @@ from traceai_crewai._wrappers import (
     _ToolUseWrapper,
 )
 from traceai_crewai._privacy import _CrewAITraceConfig
+from traceai_crewai._tracer import _CrewAITracer
 from traceai_crewai._telemetry import _NativeTelemetryGuard
 from traceai_crewai.version import __version__
 from wrapt import wrap_function_wrapper
@@ -39,7 +40,7 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
             config = TraceConfig()
         else:
             assert isinstance(config, TraceConfig)
-        self._tracer = FITracer(
+        self._tracer = _CrewAITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=_CrewAITraceConfig(config),
         )

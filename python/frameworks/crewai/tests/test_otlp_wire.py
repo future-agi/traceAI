@@ -16,7 +16,9 @@ from google.protobuf.json_format import MessageToDict
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http import Compression
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    OTLPSpanExporter,
+)
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
@@ -26,7 +28,9 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 from traceai_crewai._privacy import _CrewAITraceConfig
 from traceai_crewai._wrappers import _ToolUseWrapper
@@ -98,7 +102,9 @@ def test_real_otlp_http_wire(
         OTLPSpanExporter(
             endpoint=endpoint,
             timeout=5,
-            compression=Compression.Gzip if compressed else Compression.NoCompression,
+            compression=(
+                Compression.Gzip if compressed else Compression.NoCompression
+            ),
         )
         if encoding == "protobuf"
         else JsonHTTPExporter(endpoint, compressed)
@@ -159,7 +165,9 @@ def test_real_otlp_http_wire(
         assert len(captured) == 1
         headers, raw = captured[0]
         assert headers["content-type"] == (
-            "application/json" if encoding == "json" else "application/x-protobuf"
+            "application/json"
+            if encoding == "json"
+            else "application/x-protobuf"
         )
         assert (headers.get("content-encoding") == "gzip") is compressed
         body = gzip.decompress(raw) if compressed else raw
@@ -171,7 +179,9 @@ def test_real_otlp_http_wire(
         assert b"useful log" in body
         if settings.get("hide_inputs") or settings.get("hide_input_text"):
             assert b"useful query" not in body
-        if settings.get("hide_outputs") or settings.get("hide_output_messages"):
+        if settings.get("hide_outputs") or settings.get(
+            "hide_output_messages"
+        ):
             assert b"useful answer" not in body
         if not settings:
             assert b"useful query" in body
@@ -198,7 +208,13 @@ def otlp_collector():
         def do_POST(self):
             data = self.rfile.read(int(self.headers["Content-Length"]))
             captured.append(
-                ({key.lower(): value for key, value in self.headers.items()}, data)
+                (
+                    {
+                        key.lower(): value
+                        for key, value in self.headers.items()
+                    },
+                    data,
+                )
             )
             self.send_response(200)
             self.send_header("Content-Length", "0")
@@ -230,7 +246,8 @@ def otlp_collector():
     ],
 )
 @pytest.mark.parametrize(
-    "shape", ["dict", "pairs", "name", "key", "header", "serialized", "flattened"]
+    "shape",
+    ["dict", "pairs", "name", "key", "header", "serialized", "flattened"],
 )
 def test_native_service_credentials_never_reach_otlp_http(
     shape,
@@ -249,13 +266,17 @@ def test_native_service_credentials_never_reach_otlp_http(
     if shape == "pairs":
         tool_headers = [list(item) for item in fields.items()]
     elif shape in ("name", "key", "header"):
-        tool_headers = [{shape: key, "value": value} for key, value in fields.items()]
+        tool_headers = [
+            {shape: key, "value": value} for key, value in fields.items()
+        ]
     elif shape == "serialized":
         tool_headers = json.dumps(
             [{"name": key, "value": value} for key, value in fields.items()]
         )
     elif shape == "flattened":
-        tool_headers = {f"headers[{key}].value": value for key, value in fields.items()}
+        tool_headers = {
+            f"headers[{key}].value": value for key, value in fields.items()
+        }
     else:
         tool_headers = fields
     before = copy.deepcopy(tool_headers)
@@ -265,7 +286,11 @@ def test_native_service_credentials_never_reach_otlp_http(
         seen.append((query, copy.deepcopy(headers)))
         trace.get_current_span().add_event(
             "tool.log",
-            {"log.body": json.dumps({"headers": headers, "message": "useful log"})},
+            {
+                "log.body": json.dumps(
+                    {"headers": headers, "message": "useful log"}
+                )
+            },
         )
         return json.dumps(
             {"headers": headers, "answer": "useful answer", "total_tokens": 13}
@@ -280,14 +305,18 @@ def test_native_service_credentials_never_reach_otlp_http(
         OTLPSpanExporter(
             endpoint=endpoint,
             timeout=5,
-            compression=Compression.Gzip if compressed else Compression.NoCompression,
+            compression=(
+                Compression.Gzip if compressed else Compression.NoCompression
+            ),
         )
         if encoding == "protobuf"
         else JsonHTTPExporter(endpoint, compressed)
     )
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = CrewAIInstrumentor()
-    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**settings))
+    instrumentor.instrument(
+        tracer_provider=provider, config=TraceConfig(**settings)
+    )
     try:
         # Use a fresh ToolUsage to exclude native caching from the parity check.
         actual = native_tool_usage(lookup).use(calling, "lookup")
@@ -299,12 +328,17 @@ def test_native_service_credentials_never_reach_otlp_http(
         assert provider.force_flush() and len(captured) == 1
         headers, raw = captured[0]
         assert headers["content-type"] == (
-            "application/json" if encoding == "json" else "application/x-protobuf"
+            "application/json"
+            if encoding == "json"
+            else "application/x-protobuf"
         )
         assert (headers.get("content-encoding") == "gzip") is compressed
         body = gzip.decompress(raw) if compressed else raw
         for credential in service_credentials.values():
-            assert credential.encode() not in body and credential.encode() not in raw
+            assert (
+                credential.encode() not in body
+                and credential.encode() not in raw
+            )
         assert b"ToolUsage._use" in body and b"useful log" in body
         assert (
             b"total_tokens" in body
@@ -315,8 +349,143 @@ def test_native_service_credentials_never_reach_otlp_http(
             settings.get("hide_inputs") or settings.get("hide_input_text")
         )
         assert (b"useful answer" not in body) is bool(
-            settings.get("hide_outputs") or settings.get("hide_output_messages")
+            settings.get("hide_outputs")
+            or settings.get("hide_output_messages")
         )
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("encoding", ["protobuf", "json"])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("scenario", ["flat-attributes", "business-data"])
+def test_native_batch_projection_and_business_parity(
+    encoding, compressed, scenario, otlp_collector, native_tool_usage
+):
+    from traceai_crewai import CrewAIInstrumentor
+
+    # Independent, realistic OpenAI prediction details / Gemini usage / HF limit.
+    payload = {
+        "usage": {
+            "completion_tokens_details": {
+                "accepted_prediction_tokens": 3,
+                "rejected_prediction_tokens": 5,
+            },
+            "candidates_token_count": 7,
+            "thoughts_token_count": 11,
+            "cached_content_token_count": 13,
+            "total_tokens": 42,
+        },
+        "max_new_tokens": 64,
+        "topics": ["authentication", "billing"],
+        "categories": ["tokenization", "shipping"],
+        "id": "business-id",
+    }
+    before = copy.deepcopy(payload)
+    flat = {"request.id": "useful batch id", "usage.total_tokens": 42}
+    for selector in ("name", "key", "header", "0"):
+        value_field = "1" if selector == "0" else "value"
+        for bracketed in (False, True):
+            for reverse in (False, True):
+                root = f"request.headers.{selector}.{int(bracketed)}.{int(reverse)}"
+
+                def path(index, field):
+                    return (
+                        f"{root}[{index}]['{field}']"
+                        if bracketed
+                        else f"{root}.{index}.{field}"
+                    )
+
+                records = [
+                    (path(0, selector), "Authorization"),
+                    (path(0, value_field), SECRET),
+                    (path(1, selector), "Accept"),
+                    (path(1, value_field), "application/json"),
+                ]
+                flat.update(reversed(records) if reverse else records)
+    flat_before = copy.deepcopy(flat)
+
+    def lookup(data: Any) -> str:
+        """Exercise the actual native ToolUsage and its current span."""
+        span = trace.get_current_span()
+        if scenario == "flat-attributes":
+            span.set_attributes(flat)
+            span.add_event("batch.log", flat)
+        span.add_event("structured.log", {"log.body": json.dumps(data)})
+        return json.dumps({"answer": "useful answer", **data})
+
+    calling = ToolCalling(tool_name="lookup", arguments={"data": payload})
+    baseline = native_tool_usage(lookup).use(calling, "lookup")
+    endpoint, captured = otlp_collector
+    provider = TracerProvider(shutdown_on_exit=False)
+    exporter = (
+        OTLPSpanExporter(
+            endpoint=endpoint,
+            timeout=5,
+            compression=(
+                Compression.Gzip if compressed else Compression.NoCompression
+            ),
+        )
+        if encoding == "protobuf"
+        else JsonHTTPExporter(endpoint, compressed)
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = CrewAIInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig())
+    try:
+        assert native_tool_usage(lookup).use(calling, "lookup") == baseline
+        assert payload == before and flat == flat_before
+        assert provider.force_flush() and len(captured) == 1
+        headers, raw = captured[0]
+        assert (headers.get("content-encoding") == "gzip") is compressed
+        body = gzip.decompress(raw) if compressed else raw
+        assert SECRET.encode() not in body and b"useful answer" in body
+        decoded = (
+            json.loads(body)
+            if encoding == "json"
+            else MessageToDict(
+                ExportTraceServiceRequest.FromString(body),
+                use_integers_for_enums=True,
+            )
+        )
+        spans = [
+            span
+            for resource in decoded["resourceSpans"]
+            for scope in resource["scopeSpans"]
+            for span in scope["spans"]
+        ]
+        assert len(spans) == 1
+
+        def attributes(items):
+            return {
+                item["key"]: item["value"].get(
+                    "stringValue", item["value"].get("intValue")
+                )
+                for item in items
+            }
+
+        attrs = attributes(spans[0]["attributes"])
+        output = json.loads(attrs["output.value"])
+        if isinstance(output, str):
+            output = json.loads(output)
+        assert output == {"answer": "useful answer", **before}
+        assert json.loads(attrs["input.value"])["tool_args"]["data"] == before
+        events = {
+            event["name"]: attributes(event["attributes"])
+            for event in spans[0]["events"]
+        }
+        assert json.loads(events["structured.log"]["log.body"]) == before
+        if scenario == "flat-attributes":
+            expected = {
+                key: "__REDACTED__" if value == SECRET else value
+                for key, value in flat.items()
+            }
+            for batch in (attrs, events["batch.log"]):
+                for key, value in expected.items():
+                    assert batch[key] == (
+                        str(value) if type(value) is int else value
+                    )
     finally:
         instrumentor.uninstrument()
         provider.shutdown()

@@ -36,6 +36,12 @@ SAFE_NAMES = (
     "authorship",
     "api_secret_id",
     "reasoning_tokens",
+    "accepted_prediction_tokens",
+    "rejected_prediction_tokens",
+    "candidates_token_count",
+    "thoughts_token_count",
+    "cached_content_token_count",
+    "max_new_tokens",
     "token_count",
     "max_tokens",
     "max_completion_tokens",
@@ -86,6 +92,12 @@ def test_generated_credential_matrix(prefix, case):
         ("api", "key"),
         ("access", "key"),
         ("private", "key"),
+        ("subscription", "key"),
+        ("application", "key"),
+        ("master", "key"),
+        ("ocp", "apim", "subscription", "key"),
+        ("dd", "application", "key"),
+        ("parse", "master", "key"),
         ("credential",),
         ("auth",),
         ("authorization",),
@@ -115,7 +127,10 @@ def test_generated_credential_matrix(prefix, case):
         projected = _safe_data(payload)
         assert SECRET not in json.dumps(projected), name
         assert projected["headers"]["Accept"] == "application/json"
-        assert projected["total_tokens"] == 42 and projected["id"] == "business-id"
+        assert (
+            projected["total_tokens"] == 42
+            and projected["id"] == "business-id"
+        )
         assert json.loads(projected["raw"])["answer"] == "useful answer"
         assert payload == before
         assert (
@@ -138,18 +153,26 @@ def test_explicit_metadata_exceptions_preserve_values_and_not_children(name):
         payload = {spelling: 42, f"usage.{spelling}": 42, "id": "safe-id"}
         assert _safe_data(payload) == payload
         # An allowlisted parent cannot bypass inspection of its children.
-        assert SECRET not in json.dumps(_safe_data({spelling: {"api_key": SECRET}}))
+        assert SECRET not in json.dumps(
+            _safe_data({spelling: {"api_key": SECRET}})
+        )
         assert _credential_key(f"{spelling}.api_key")
 
 
 def test_unknown_vendor_token_metadata_is_not_a_generic_bypass():
-    for name in ("private_token_count", "vendor_secret_id", "vendor_auth_type"):
+    for name in (
+        "private_token_count",
+        "vendor_secret_id",
+        "vendor_auth_type",
+    ):
         assert _safe_data({name: SECRET})[name] == REDACTED
 
 
 @pytest.mark.parametrize("shape", ["pairs", "tuples", "name", "key", "header"])
 def test_header_lists_and_serialized_lists(shape, service_credentials):
-    fields = list(service_credentials.items()) + [("Accept", "application/json")]
+    fields = list(service_credentials.items()) + [
+        ("Accept", "application/json")
+    ]
     if shape == "pairs":
         headers = [list(item) for item in fields]
     elif shape == "tuples":
@@ -168,7 +191,8 @@ def test_header_lists_and_serialized_lists(shape, service_credentials):
     assert headers == original
     if shape not in ("pairs", "tuples"):
         assert all(
-            item["description"] == "business data" for item in projected["headers"]
+            item["description"] == "business data"
+            for item in projected["headers"]
         )
     for name in service_credentials:
         assert name in rendered
@@ -181,7 +205,9 @@ def test_flattened_header_records(selector, brackets):
 
     def key(index, field):
         return (
-            f"headers[{index}]['{field}']" if brackets else f"headers.{index}.{field}"
+            f"headers[{index}]['{field}']"
+            if brackets
+            else f"headers.{index}.{field}"
         )
 
     original = {
@@ -200,3 +226,23 @@ def test_flattened_header_records(selector, brackets):
     assert safe[key(1, value_field)] == "application/json"
     assert safe["usage.total_tokens"] == 42
     assert original == before
+
+
+@pytest.mark.parametrize(
+    "first", ["authentication", "tokenization", "session", "author"]
+)
+def test_two_item_business_lists_are_not_header_pairs(first):
+    payload = {
+        "topics": [first, "billing"],
+        "categories": (first, "shipping"),
+        "serialized": json.dumps([first, "business data"]),
+        "total_tokens": 42,
+    }
+    before = copy.deepcopy(payload)
+    expected = {**payload, "categories": [first, "shipping"]}
+    assert _safe_data(payload) == expected
+    assert payload == before
+    # Recognizable pair collections still work, including bare serialized JSON.
+    for headers in ([["Authorization", SECRET]], [("X-API-Key", SECRET)]):
+        assert SECRET not in json.dumps(_safe_data(headers))
+        assert SECRET not in _safe_data(json.dumps(headers))
