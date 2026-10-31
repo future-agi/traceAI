@@ -459,6 +459,7 @@ def test_get_attributes_from_function_call_output(
                 "gen_ai.output.messages.0.message.role": "assistant",
                 "gen_ai.usage.output_tokens": 5,
                 "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.total_tokens": 15,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -500,6 +501,7 @@ def test_get_attributes_from_function_call_output(
                 "gen_ai.output.messages.0.message.role": "assistant",
                 "gen_ai.usage.output_tokens": 5,
                 "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.total_tokens": 15,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -524,6 +526,7 @@ def test_get_attributes_from_function_call_output(
                 "gen_ai.output.messages.0.message.role": "assistant",
                 "gen_ai.usage.output_tokens": 5,
                 "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.total_tokens": 15,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -593,7 +596,7 @@ def test_get_attributes_from_mcp_list_tool_span_data(
         ),
         pytest.param(
             [],
-            {},
+            {"input.value": "[]", "input.mime_type": "application/json"},
             id="empty_input",
         ),
         pytest.param(
@@ -652,7 +655,7 @@ def test_get_attributes_from_chat_completions_input(
         ),
         pytest.param(
             [],
-            {},
+            {"output.value": "[]", "output.mime_type": "application/json"},
             id="empty_output",
         ),
         pytest.param(
@@ -999,7 +1002,7 @@ def test_get_attributes_from_chat_completions_tool_call_dict(
         ),
         pytest.param(
             {"input_tokens": 0, "output_tokens": 0},
-            {},
+            {"gen_ai.usage.input_tokens": 0, "gen_ai.usage.output_tokens": 0},
             id="zero_tokens",
         ),
     ],
@@ -1176,7 +1179,7 @@ def test_get_attributes_from_message_content_list(
                     input_tokens=10,
                     output_tokens=5,
                     total_tokens=15,
-                    input_tokens_details=InputTokensDetails(
+                    input_tokens_details=InputTokensDetails(cache_write_tokens=0,
                         cached_tokens=0,
                     ),
                     output_tokens_details=OutputTokensDetails(
@@ -1369,7 +1372,7 @@ def test_get_attributes_from_message_content_list(
                     input_tokens=1000,
                     output_tokens=500,
                     total_tokens=1500,
-                    input_tokens_details=InputTokensDetails(
+                    input_tokens_details=InputTokensDetails(cache_write_tokens=0,
                         cached_tokens=100,
                     ),
                     output_tokens_details=OutputTokensDetails(
@@ -2026,7 +2029,7 @@ def test_get_attributes_from_message(
                 input_tokens=10,
                 output_tokens=5,
                 total_tokens=15,
-                input_tokens_details=InputTokensDetails(
+                input_tokens_details=InputTokensDetails(cache_write_tokens=0,
                     cached_tokens=0,
                 ),
                 output_tokens_details=OutputTokensDetails(
@@ -2052,7 +2055,7 @@ def test_get_attributes_from_message(
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
-                input_tokens_details=InputTokensDetails(
+                input_tokens_details=InputTokensDetails(cache_write_tokens=0,
                     cached_tokens=0,
                 ),
                 output_tokens_details=OutputTokensDetails(
@@ -2073,7 +2076,7 @@ def test_get_attributes_from_message(
                 input_tokens=1000,
                 output_tokens=500,
                 total_tokens=1500,
-                input_tokens_details=InputTokensDetails(
+                input_tokens_details=InputTokensDetails(cache_write_tokens=0,
                     cached_tokens=100,
                 ),
                 output_tokens_details=OutputTokensDetails(

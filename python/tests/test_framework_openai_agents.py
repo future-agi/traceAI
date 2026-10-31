@@ -160,6 +160,7 @@ class TestFiTracingProcessor:
         trace = Mock(spec=Trace)
         trace.name = "test_trace"
         trace.trace_id = "trace_123"
+        trace.export.return_value = {}
         
         self.processor.on_trace_start(trace)
         
@@ -296,8 +297,12 @@ class TestFiTracingProcessor:
         self.processor.on_span_end(span)
         
         # Verify response handling
-        mock_otel_span.set_attribute.assert_any_call("output.mime_type", "application/json")
-        mock_otel_span.set_attribute.assert_any_call("output.value", '{"test": "response"}')
+        mock_otel_span.set_attributes.assert_any_call({"input.value": "test input"})
+        mock_otel_span.set_attributes.assert_any_call({
+            "attr1": "value1",
+            "output.mime_type": "application/json",
+            "output.value": '{"test": "response"}',
+        })
 
     @patch('traceai_openai_agents._processor._get_attributes_from_generation_span_data')
     def test_on_span_end_generation_span_data(self, mock_get_attributes):
@@ -528,6 +533,7 @@ class TestIntegrationScenarios:
         trace = Mock(spec=Trace)
         trace.name = "test_trace"
         trace.trace_id = "trace_123"
+        trace.export.return_value = {}
         
         processor.on_trace_start(trace)
         assert "trace_123" in processor._root_spans
