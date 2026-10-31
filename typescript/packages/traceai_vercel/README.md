@@ -91,6 +91,59 @@ export default async function handler(
 
 That’s it! Every invocation will emit FI-compliant OpenTelemetry spans you can inspect in the TraceAI dashboard.
 
+## Eve native destination
+
+For Eve 0.80.0, keep Eve's own `otel()` and `otelIntegration()` files. Do not use the Next.js setup above, register another provider, or wrap Eve's model calls with another instrumentor.
+
+Install the standard export processor and exporter alongside this package:
+
+```bash
+npm install @traceai/vercel @opentelemetry/sdk-trace-base @opentelemetry/exporter-trace-otlp-http
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY` and `FI_PROJECT_NAME`. Add the project to the resource in your single `agent/instrumentation/otel.ts`:
+
+```ts
+import { otel } from 'eve/instrumentation/otel';
+
+export default otel({
+  resource: {
+    project_name: process.env.FI_PROJECT_NAME,
+    project_type: 'observe',
+  },
+});
+```
+
+Add `agent/instrumentation/futureagi.ts`:
+
+```ts
+import { otelIntegration } from 'eve/instrumentation/otel';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { createEveDestination } from '@traceai/vercel';
+
+export default otelIntegration(createEveDestination({
+  processor: new BatchSpanProcessor(new OTLPTraceExporter({
+    url: `${(process.env.FI_BASE_URL || 'https://api.futureagi.com').replace(/\/+$/, '')}/tracer/v1/traces`,
+    headers: {
+      'X-Api-Key': process.env.FI_API_KEY!,
+      'X-Secret-Key': process.env.FI_SECRET_KEY!,
+    },
+  })),
+  captureContent: process.env.FI_CAPTURE_CONTENT === '1',
+}));
+```
+
+`createEveDestination()` returns native destination options, not a provider. It:
+
+- Applies Eve's destination-local redaction by default, including prompts, responses, tool payloads, errors and session titles, and removes principal IDs. Set `FI_CAPTURE_CONTENT=1` to opt in; Eve's global capture ceiling still applies.
+- Maps native agent, step, model and tool kinds, adds `session.id` from `gen_ai.conversation.id`, and maps retained content to input/output attributes.
+- Keeps model token usage and moves turn/step totals to `eve.aggregate.usage.*` so summing model usage does not count aggregates twice.
+- Filters `workflow` and `@vercel/otel/fetch` scopes and reparents their children through known filtered ancestors. Ancestry is bounded to 4,096 filtered spans; active children keep their already-resolved parent.
+- Leaves other destinations' spans unchanged and delegates flushing/shutdown to the supplied export processor.
+
+Pass a `BatchSpanProcessor` or `SimpleSpanProcessor`. The destination forwards ended spans only, so processors that require `onStart` are not supported. Eve manages the provider lifecycle. Native content capture and Workflow retention remain Eve's responsibility.
+
 ## Environment variables
 
 ```bash
