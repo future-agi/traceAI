@@ -53,7 +53,12 @@ export class Spool {
       // In WAL mode EXCLUSIVE retains the OS lock between transactions. The
       // storage child is the sole connection and process death releases ownership;
       // no PID files, leases, stale-directory deletion, or second lock database.
-      if (exclusiveOwner) this.db.pragma("locking_mode=EXCLUSIVE");
+      if (exclusiveOwner) {
+        this.db.pragma("locking_mode=EXCLUSIVE");
+        // Acquire ownership before any header-reading pragma. Otherwise two
+        // starters can retain SHARED locks and both fail to upgrade to EXCLUSIVE.
+        this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
+      }
       if (
         this.db.prepare("SELECT sqlite_version() v").get() &&
         (this.db.prepare("SELECT sqlite_version() v").get() as any).v !==
@@ -68,7 +73,6 @@ export class Spool {
       if (this.db.pragma("max_page_count", { simple: true }) !== 16384)
         throw new AgentError("UNQUALIFIED_PAGE_LIMIT");
       this.db.pragma("journal_mode=WAL");
-      if (exclusiveOwner) this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
       this.db.pragma("synchronous=FULL");
       this.db.pragma("wal_autocheckpoint=0");
       this.db.pragma("journal_size_limit=0");

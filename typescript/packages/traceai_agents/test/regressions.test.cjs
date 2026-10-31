@@ -718,3 +718,44 @@ test("Codex CLI check validates the same replacement as update; offline revocati
     false,
   );
 });
+
+test("storage ownership precedes header inspection, preventing two-reader upgrade deadlock", async (t) => {
+  const { root, p, env } = fixture(t);
+  const { Spool } = require("../dist/src/storage/store.js");
+  const spoolRoot = path.join(p.state, "spool");
+  const initial = new Spool(spoolRoot, "0.1.0");
+  initial.close();
+  // New SQLite databases begin in rollback-journal mode; establish that state
+  // deterministically rather than depending on startup scheduler interleaving.
+  const database = new (require("better-sqlite3"))(
+    path.join(spoolRoot, "spool.db"),
+  );
+  database.pragma("journal_mode=DELETE");
+  database.close();
+  const release = path.join(root, "release-barrier");
+  const entry = path.resolve(__dirname, "fixtures/ownership.cjs");
+  const spawnOwner = () => {
+    const child = fork(entry, [spoolRoot, release], {
+      env,
+      execPath: process.execPath,
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+    cleanup(t, () => {
+      child.kill("SIGKILL");
+    });
+    return child;
+  };
+  const first = spawnOwner();
+  assert.equal((await once(first, "message"))[0].phase, "inspection");
+  // Keep the first process paused after its first header read. A second owner
+  // must fail ownership BEFORE it can reach that read and retain a SHARED lock.
+  const second = spawnOwner();
+  const [result] = await once(second, "message");
+  const ready = once(first, "message");
+  fs.writeFileSync(release, "release", { mode: 0o600 });
+  assert.deepEqual(result, {
+    phase: "held",
+    code: "RUNTIME_OWNERSHIP_CONFLICT",
+  });
+  assert.equal((await ready)[0].phase, "ready");
+});
