@@ -497,24 +497,10 @@ autolog integrations record function arguments, return values and model
 messages without being asked (seen in the autolog run above, not in the
 tests). Whatever MLflow captures lands in Future AGI.
 
-MLflow's own hook for removing it is a span processor:
-
-```python
-from mlflow.entities import SpanStatusCode
-
-def drop_content(span):
-    if span.inputs is not None:
-        span.set_inputs("[REDACTED]")
-    if span.outputs is not None:
-        span.set_outputs("[REDACTED]")
-    if span.status.status_code == SpanStatusCode.ERROR:
-        span.set_status("ERROR")   # keeps ERROR, drops the exception text
-
-mlflow.tracing.configure(span_processors=[drop_content])
-```
-
-MLflow runs it when a span ends, before export (`mlflow/entities/span.py:1176-1177`).
-`python src/app.py --drop-content ...` registers it. Tested with the GenAI
+The example uses MLflow's span-processor hook to remove recorded content.
+`python src/app.py --drop-content ...` registers both `drop_exception_events`
+and `drop_content` from `src/app.py`; MLflow runs them when a span ends,
+before export. Tested with the GenAI
 switch off and on: none of the question, the policy text or the answer is
 anywhere in the export; with the switch off the two keys remain, holding
 `"[REDACTED]"`, and with it on no message key is exported.
@@ -526,12 +512,19 @@ status message, and adds an `exception` event holding the message and
 `exception.stacktrace`, whose frames are local file paths (so the user
 name). Plain MLflow exports all of it. `src/app.py` therefore always
 registers `drop_exception_events`, which removes the `exception` events
-(MLflow has no public call for that: it clears the underlying OpenTelemetry
-span's event list, and does nothing if that attribute is missing), and
+(preserving unrelated events and their timestamps), and
 `--drop-content` additionally clears the status message
-(`drop_content` above). The span stays `ERROR` either way. Copy
-`drop_exception_events` from `src/app.py` into your own app if you do not
-use it; without it your stack traces and local paths are exported.
+(`drop_content` above), as well as GenAI message events and events with
+content-bearing attributes. The span stays `ERROR` either way. Custom
+attributes with other names are not automatically redacted.
+
+The processors read events through the public OpenTelemetry API. MLflow
+3.16.1 and OpenTelemetry 1.45 have no public event-removal API, so the
+example isolates a private backing-collection fallback in `_filter_events`.
+If event inspection or removal fails, it stops the application before the
+affected span is queued for export. Raising an ordinary exception is not
+safe here: MLflow catches processor exceptions and exports the span anyway.
+Without the exception filter, stack traces and local paths are exported.
 
 Not covered by those processors (source reading, not tested): attributes
 your code sets with other keys are exported as they are; autolog also

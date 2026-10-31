@@ -254,8 +254,8 @@ Its limits:
 - **Flush, shutdown, exit and `uninstrument()` do not wait for a read by default.**
   Each ends every stream span still waiting for its read at once, with what
   is known, so it is exported: `replicate.stream.read=flushed` for
-  `force_flush()`, `shutdown` for `shutdown()` (including the SIGTERM/SIGINT
-  handler `register()` installs) and interpreter exit, `uninstrumented` for
+  `force_flush()`, `shutdown` for `shutdown()` (including application-owned signal
+  cleanup) and normal interpreter exit, `uninstrumented` for
   `uninstrument()`. Each also cancels that span's read in flight, which closes
   its connection. `uninstrument()` never waits for a read. Like a flush, a
   shutdown or an exit, it does wait up to 5 s for the one span the package's
@@ -355,8 +355,8 @@ The span stays open on the returned prediction:
   While that `wait()` or `cancel()` runs, the span belongs to it: the cap, a
   `force_flush()` and releasing the prediction object leave it alone, so the
   final status, output and duration are recorded however long the prediction
-  runs. Only `shutdown()` on the provider (including the SIGTERM/SIGINT
-  handler `register()` installs) or interpreter exit ends it earlier, as a
+  runs. Only `shutdown()` on the provider (including application-owned signal
+  cleanup) or normal interpreter exit ends it earlier, as a
   best effort: as of that moment, as cancelled (ERROR `cancelled`,
   `replicate.cancelled`, as every call still running then is), with the last
   status the client polled and no output, so the span is exported before the
@@ -385,8 +385,14 @@ deferred is delivery, not the recorded data. Delivery is bounded:
   shut down. A later `wait()` on that prediction gets its own
   `replicate.prediction.wait` span.
 - **Flush and shutdown.** `force_flush()` and `shutdown()` on the provider
-  end every held span first, so a flush at the end of a request, a container
-  stop (SIGTERM) or Ctrl-C (SIGINT) under `register()` exports it. A flush
+  end every held span first, so a flush at the end of a request exports it.
+  For a container stop (SIGTERM) or Ctrl-C (SIGINT), your application must
+  call `provider.shutdown()` in its shutdown lifecycle before exiting;
+  `register()` does not install or replace signal handlers. Default SIGTERM
+  skips Python exit hooks and can lose held and queued spans. See
+  [application-owned shutdown](../../README.md#application-owned-shutdown)
+  for a standalone example; use your server's shutdown hook in a hosted app.
+  A flush
   leaves a span whose `wait()`/`cancel()` is still running to that call;
   `shutdown()` ends it too (see above). `uninstrument()` restores both
   methods.
@@ -503,8 +509,8 @@ recorded.
   generator (`ValueError: generator already executing`) and ends nothing:
   the stream goes on in that thread, and so does its span.
 - A call still running, or a stream or run iterator still open, when the
-  provider shuts down (`shutdown()`, including the SIGTERM/SIGINT handler
-  `register()` installs) or the interpreter exits ends then, as cancelled,
+  provider shuts down (`shutdown()`, including application-owned signal
+  cleanup) or the interpreter exits normally ends then, as cancelled,
   so it is exported before the processors stop: a `run()` / `async_run()`
   with the prediction it polled, a create with no prediction yet, a
   `wait()` / `cancel()` with the last status the client polled, a stream with
@@ -704,8 +710,8 @@ Stored in Future AGI and read back, one trace each:
 Not live-verified, stand-in only: `predictions.create` followed by `wait()`
 (the held create span), `cancel`, deployments, run iterators, image and file
 outputs, text chunks that start like a URL, a stream stopped before `done`
-(the output kept, Ctrl-C), a call still running at a shutdown (SIGTERM or
-SIGINT under `register()`) or at exit, and the opt-in read as it is now
+(the output kept, Ctrl-C), a call still running at a shutdown (including application-owned
+SIGTERM or SIGINT cleanup) or at normal exit, and the opt-in read as it is now
 (round 4 on), including its skips. Trainings are not traced (checked with
 the stand-in).
 

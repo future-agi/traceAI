@@ -36,8 +36,8 @@ Span model (TH-8320):
 A call the caller stops (Ctrl-C, a signal handler's ``sys.exit()``, a
 cancelled asyncio task or trio scope) ends as cancelled
 (``replicate.cancelled``), wherever that lands. A call still running when the
-provider shuts down or the interpreter exits (for example under the
-SIGTERM/SIGINT handler ``register()`` installs) is ended then, as cancelled
+provider shuts down or the interpreter exits normally (including an application's
+SIGTERM/SIGINT handler calling ``provider.shutdown()``) is ended then, as cancelled
 and with what it knows, so it is exported before the processors stop.
 
 A call made while the caller has suppressed instrumentation
@@ -434,7 +434,7 @@ _REGISTRIES: "weakref.WeakSet[PendingRegistry]" = weakref.WeakSet()
 # whose vendor code is still running (run, async_run, a create, a wait or a
 # cancel), and the streams and run iterators handed to the caller and not
 # finished. One still open at a provider shutdown or interpreter exit (a
-# call interrupted by register()'s SIGTERM/SIGINT handler, one running on
+# call interrupted by application-owned signal cleanup, one running on
 # another thread, a referenced iterator neither completed nor dropped) ends
 # then, as cancelled (see end_open_iterators).
 _OPEN: "weakref.WeakSet[_Call]" = weakref.WeakSet()

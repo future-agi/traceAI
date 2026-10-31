@@ -33,15 +33,15 @@ def tracer_provider():
 def mock_mcp_modules():
     """Mock MCP modules and classes."""
     mock_modules = {}
-    
+
     # Mock SessionMessage and JSONRPCRequest
     mock_session_message = MagicMock()
     mock_jsonrpc_request = MagicMock()
     mock_jsonrpc_request.params = {"test": "value"}
-    
+
     mock_modules["session_message"] = mock_session_message
     mock_modules["jsonrpc_request"] = mock_jsonrpc_request
-    
+
     return mock_modules
 
 
@@ -63,30 +63,38 @@ class TestMCPInstrumentor:
         """Test instrumentor dependencies are properly declared."""
         instrumentor = MCPInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
-        
-        # fi-instrumentation is a package dependency, not a separately patched SDK.
-        assert dependencies == ("mcp >= 0.1.0",)
+
+        from importlib.metadata import requires
+        from packaging.requirements import Requirement
+
+        assert isinstance(dependencies, tuple)
+        mcp_deps = [Requirement(dep) for dep in dependencies if Requirement(dep).name == "mcp"]
+        metadata_deps = [Requirement(dep) for dep in requires("traceAI-mcp") if Requirement(dep).name == "mcp"]
+        assert len(mcp_deps) == len(metadata_deps) == 1
+        assert mcp_deps[0].specifier == metadata_deps[0].specifier
+        assert "1.8.0" not in mcp_deps[0].specifier
+        assert "1.8.1" in mcp_deps[0].specifier
 
     def test_instrument_registers_post_import_hooks(self):
         """Test that instrumentation registers all necessary post-import hooks."""
         instrumentor = MCPInstrumentor()
-        
-        with patch("traceai_mcp.register_post_import_hook") as mock_register:
+
+        with patch.object(instrumentor, "_pending_hooks", set(), create=True), patch("traceai_mcp.register_post_import_hook") as mock_register:
             instrumentor._instrument()
-            
+
             # Verify all expected post-import hooks are registered
             expected_modules = [
                 "mcp.client.streamable_http",
-                "mcp.server.streamable_http", 
+                "mcp.server.streamable_http",
                 "mcp.client.sse",
                 "mcp.server.sse",
                 "mcp.client.stdio",
                 "mcp.server.stdio",
                 "mcp.server.session"
             ]
-            
+
             assert mock_register.call_count == len(expected_modules)
-            
+
             # Check that each expected module was registered
             called_modules = [call.args[1] for call in mock_register.call_args_list]
             for module in expected_modules:
@@ -94,107 +102,108 @@ class TestMCPInstrumentor:
 
     def test_uninstrument_unwraps_functions(self):
         """Test that uninstrumentation properly unwraps wrapped functions."""
+        import mcp.client.stdio as client
+        import mcp.server.stdio as server
+
         instrumentor = MCPInstrumentor()
-        
-        with patch("traceai_mcp.unwrap") as mock_unwrap:
+        originals = (client.stdio_client, server.stdio_server)
+        instrumentor._instrument()
+        try:
+            assert client.stdio_client is not originals[0]
+            assert server.stdio_server is not originals[1]
+        finally:
             instrumentor._uninstrument()
-            
-            # Verify specific functions are unwrapped
-            expected_calls = [
-                call("mcp.client.stdio", "stdio_client"),
-                call("mcp.server.stdio", "stdio_server"),
-            ]
-            
-            mock_unwrap.assert_has_calls(expected_calls, any_order=True)
+        assert client.stdio_client is originals[0]
+        assert server.stdio_server is originals[1]
 
     def test_wrap_transport_with_callback(self):
         """Test _wrap_transport_with_callback async context manager."""
         instrumentor = MCPInstrumentor()
-        
+
         async def test_wrapper():
             mock_read_stream = AsyncMock()
             mock_write_stream = AsyncMock()
             mock_callback = MagicMock()
-            
+
             # Create a proper async context manager class
             class MockContextManager:
                 async def __aenter__(self):
                     return (mock_read_stream, mock_write_stream, mock_callback)
-                
+
                 async def __aexit__(self, exc_type, exc_val, exc_tb):
                     return None
-            
+
             # Create a mock wrapped function that returns the context manager
             def mock_wrapped(*args, **kwargs):
                 return MockContextManager()
-            
+
             async with instrumentor._wrap_transport_with_callback(
                 mock_wrapped, None, (), {}
             ) as (reader, writer, callback):
                 assert isinstance(reader, InstrumentedStreamReader)
                 assert isinstance(writer, InstrumentedStreamWriter)
                 assert callback == mock_callback
-                
+
                 # Verify the streams are properly wrapped with instrumented versions
                 assert hasattr(reader, '_ObjectProxy__wrapped')
                 assert hasattr(writer, '_ObjectProxy__wrapped')
-        
+
         # Run the async test
         asyncio.run(test_wrapper())
 
     def test_wrap_plain_transport(self):
         """Test _wrap_plain_transport async context manager."""
         instrumentor = MCPInstrumentor()
-        
+
         async def test_wrapper():
             mock_read_stream = AsyncMock()
             mock_write_stream = AsyncMock()
-            
+
             # Create a proper async context manager class
             class MockContextManager:
                 async def __aenter__(self):
                     return (mock_read_stream, mock_write_stream)
-                
+
                 async def __aexit__(self, exc_type, exc_val, exc_tb):
                     return None
-            
+
             # Create a mock wrapped function that returns the context manager
             def mock_wrapped(*args, **kwargs):
                 return MockContextManager()
-            
+
             async with instrumentor._wrap_plain_transport(
                 mock_wrapped, None, (), {}
             ) as (reader, writer):
                 assert isinstance(reader, InstrumentedStreamReader)
                 assert isinstance(writer, InstrumentedStreamWriter)
-                
+
                 # Verify the streams are properly wrapped with instrumented versions
                 assert hasattr(reader, '_ObjectProxy__wrapped')
                 assert hasattr(writer, '_ObjectProxy__wrapped')
-        
+
         # Run the async test
         asyncio.run(test_wrapper())
 
     def test_base_session_init_wrapper(self):
         """Test _base_session_init_wrapper modifies session streams."""
         instrumentor = MCPInstrumentor()
-        
+
         # Mock the session instance
         mock_instance = MagicMock()
         mock_reader = MagicMock()
         mock_writer = MagicMock()
         mock_instance._incoming_message_stream_reader = mock_reader
         mock_instance._incoming_message_stream_writer = mock_writer
-        
+
         # Mock the wrapped function
         mock_wrapped = MagicMock()
-        
+
         # Call the wrapper
         instrumentor._base_session_init_wrapper(mock_wrapped, mock_instance, (), {})
-        
+
         # Verify the wrapped function was called
         mock_wrapped.assert_called_once_with()
-        
+
         # Verify the streams were replaced with context-aware versions
         assert isinstance(
             mock_instance._incoming_message_stream_reader,
@@ -208,21 +217,21 @@ class TestMCPInstrumentor:
     def test_base_session_init_wrapper_missing_streams(self):
         """Test _base_session_init_wrapper when streams are missing."""
         instrumentor = MCPInstrumentor()
-        
+
         # Mock the session instance without streams
         mock_instance = MagicMock()
         mock_instance._incoming_message_stream_reader = None
         mock_instance._incoming_message_stream_writer = None
-        
+
         # Mock the wrapped function
         mock_wrapped = MagicMock()
-        
+
         # Call the wrapper - should not raise errors
         instrumentor._base_session_init_wrapper(mock_wrapped, mock_instance, (), {})
-        
+
         # Verify the wrapped function was called
         mock_wrapped.assert_called_once_with()
-        
+
         # Verify streams remain None
         assert mock_instance._incoming_message_stream_reader is None
         assert mock_instance._incoming_message_stream_writer is None
@@ -234,39 +243,39 @@ class TestInstrumentedStreamReader:
     def test_context_manager_support(self, mock_stream):
         """Test async context manager support."""
         reader = InstrumentedStreamReader(mock_stream)
-        
+
         async def test_context():
             async with reader as stream:
                 assert stream == mock_stream
-            
+
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
-        
+
         asyncio.run(test_context())
 
     def test_async_iteration_without_jsonrpc(self, mock_stream):
         """Test async iteration with non-JSONRPCRequest messages."""
         reader = InstrumentedStreamReader(mock_stream)
-        
+
         # Mock message that's not a JSONRPCRequest
         mock_message = MagicMock()
         mock_message.message.root = MagicMock()
         mock_message.message.root.__class__.__name__ = "SomeOtherMessage"
-        
+
         # Create an async iterator manually
         async def async_iter():
             for item in [mock_message]:
                 yield item
-        
+
         # Mock the __aiter__ method directly
         mock_stream.__aiter__ = lambda self: async_iter()
-        
+
         async def test_iteration():
             items = []
             async for item in reader:
                 items.append(item)
             return items
-        
+
         items = asyncio.run(test_iteration())
         assert len(items) == 1
         assert items[0] == mock_message
@@ -278,14 +287,14 @@ class TestInstrumentedStreamWriter:
     def test_context_manager_support(self, mock_stream):
         """Test async context manager support."""
         writer = InstrumentedStreamWriter(mock_stream)
-        
+
         async def test_context():
             async with writer as stream:
                 assert stream == mock_stream
-            
+
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
-        
+
         asyncio.run(test_context())
 
 
@@ -295,39 +304,39 @@ class TestContextSavingStreamWriter:
     def test_context_manager_support(self, mock_stream):
         """Test async context manager support."""
         writer = ContextSavingStreamWriter(mock_stream)
-        
+
         async def test_context():
             async with writer as stream:
                 assert stream == mock_stream
-            
+
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
-        
+
         asyncio.run(test_context())
 
     def test_send_saves_context(self, mock_stream):
         """Test that send saves current context with item."""
         writer = ContextSavingStreamWriter(mock_stream)
-        
+
         mock_item = MagicMock()
-        
+
         async def test_send():
             with patch("opentelemetry.context.get_current") as mock_get_context:
                 mock_context = MagicMock()
                 mock_get_context.return_value = mock_context
-                
+
                 await writer.send(mock_item)
-                
+
                 # Verify context was captured and sent with item
                 mock_get_context.assert_called_once()
-                
+
                 # Check that send was called with ItemWithContext
                 args, kwargs = mock_stream.send.call_args
                 sent_item = args[0]
                 assert isinstance(sent_item, ItemWithContext)
                 assert sent_item.item == mock_item
                 assert sent_item.ctx == mock_context
-        
+
         asyncio.run(test_send())
 
 
@@ -337,14 +346,14 @@ class TestContextAttachingStreamReader:
     def test_context_manager_support(self, mock_stream):
         """Test async context manager support."""
         reader = ContextAttachingStreamReader(mock_stream)
-        
+
         async def test_context():
             async with reader as stream:
                 assert stream == mock_stream
-            
+
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
-        
+
         asyncio.run(test_context())
 
 
@@ -355,9 +364,9 @@ class TestItemWithContext:
         """Test ItemWithContext can be created and holds data."""
         mock_item = MagicMock()
         mock_context = MagicMock()
-        
+
         item_with_context = ItemWithContext(item=mock_item, ctx=mock_context)
-        
+
         assert item_with_context.item == mock_item
         assert item_with_context.ctx == mock_context
 
@@ -365,13 +374,13 @@ class TestItemWithContext:
         """Test ItemWithContext is frozen (immutable)."""
         mock_item = MagicMock()
         mock_context = MagicMock()
-        
+
         item_with_context = ItemWithContext(item=mock_item, ctx=mock_context)
-        
+
         # Should not be able to modify frozen dataclass
         with pytest.raises(AttributeError):
             item_with_context.item = MagicMock()
-        
+
         with pytest.raises(AttributeError):
             item_with_context.ctx = MagicMock()
 
@@ -382,7 +391,7 @@ class TestErrorHandling:
     def test_instrumentation_with_missing_dependencies(self):
         """Test instrumentation behavior with missing dependencies."""
         instrumentor = MCPInstrumentor()
-        
+
         # Should not raise errors even if some components are missing
         try:
             deps = instrumentor.instrumentation_dependencies()
@@ -397,33 +406,90 @@ class TestIntegrationScenarios:
 
     def test_full_instrumentation_lifecycle(self):
         """Test complete MCP instrumentation lifecycle."""
+        import mcp.client.stdio as client
+        import mcp.server.stdio as server
+
         instrumentor = MCPInstrumentor()
-        
-        with patch("traceai_mcp.register_post_import_hook") as mock_register:
-            with patch("traceai_mcp.unwrap") as mock_unwrap:
-                # Test instrumentation
-                instrumentor._instrument()
-                assert mock_register.call_count >= 7  # All transport hooks
-                
-                # Test uninstrumentation
-                instrumentor._uninstrument()
-                assert mock_unwrap.call_count >= 2  # Stdio client/server unwrapped
+        originals = (client.stdio_client, server.stdio_server)
+        for _ in range(2):
+            instrumentor._instrument()
+            assert client.stdio_client is not originals[0]
+            assert server.stdio_server is not originals[1]
+            instrumentor._uninstrument()
+            assert client.stdio_client is originals[0]
+            assert server.stdio_server is originals[1]
 
     def test_multiple_transport_support(self):
         """Test that multiple transport types are supported."""
         instrumentor = MCPInstrumentor()
-        
+
         # Test that all expected transports have wrappers
         transport_wrappers = {
             "streamable_http": instrumentor._wrap_transport_with_callback,
             "sse": instrumentor._wrap_plain_transport,
             "stdio": instrumentor._wrap_plain_transport,
         }
-        
+
         for transport_name, wrapper in transport_wrappers.items():
             assert callable(wrapper)
             assert hasattr(wrapper, "__call__")
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"]) 
+    pytest.main([__file__, "-v"])
+
+class TestMCPSdkV2Compat:
+    """Regression: mcp>=2.x renamed `streamablehttp_client` to
+    `streamable_http_client` and the client factory yields a 2-tuple
+    (no session-id callback). The instrumentor must handle both."""
+
+    def test_wrap_transport_with_callback_two_tuple(self):
+        """v2 client factory yields (read, write) — wrapper must not unpack 3."""
+        instrumentor = MCPInstrumentor()
+
+        async def test_wrapper():
+            mock_read_stream = AsyncMock()
+            mock_write_stream = AsyncMock()
+
+            class MockContextManager:
+                async def __aenter__(self):
+                    return (mock_read_stream, mock_write_stream)
+
+                async def __aexit__(self, exc_type, exc_val, exc_tb):
+                    return None
+
+            def mock_wrapped(*args, **kwargs):
+                return MockContextManager()
+
+            async with instrumentor._wrap_transport_with_callback(
+                mock_wrapped, None, (), {}
+            ) as (reader, writer):
+                assert isinstance(reader, InstrumentedStreamReader)
+                assert isinstance(writer, InstrumentedStreamWriter)
+
+        asyncio.run(test_wrapper())
+
+    def test_streamable_http_hook_wraps_v2_name(self):
+        """When only `streamable_http_client` exists (mcp>=2), the hook must
+        wrap that name — not the removed v1 `streamablehttp_client`."""
+        instrumentor = MCPInstrumentor()
+
+        captured = {}
+
+        def capture_hook(fn, module_name):
+            captured[module_name] = fn
+
+        fake_module = MagicMock()
+        fake_module.streamable_http_client = MagicMock()
+        del fake_module.streamablehttp_client  # v2 has no legacy name
+
+        with patch.object(instrumentor, "_pending_hooks", set(), create=True), patch("traceai_mcp.register_post_import_hook", capture_hook), patch(
+            "traceai_mcp.wrap_function_wrapper"
+        ) as mock_wrap:
+            instrumentor._instrument()
+            hook = captured["mcp.client.streamable_http"]
+            hook(fake_module)
+
+            args, _kwargs = mock_wrap.call_args
+            assert args[0] is fake_module
+            assert args[1] == "streamable_http_client"

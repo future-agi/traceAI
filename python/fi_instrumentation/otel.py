@@ -3,7 +3,6 @@ import inspect
 import json
 import logging
 import os
-import signal
 import sys
 import threading
 import uuid
@@ -408,31 +407,13 @@ class TracerProvider(_TracerProvider):
         super().shutdown()
 
     def setup_signal_handlers(self):
-        """Set up signal handlers to ensure proper shutdown on termination"""
-        def handle_signal(signum, frame):
-            print(f"Received signal {signum}, shutting down tracer provider...")
-            try:
-                self.shutdown()
-            except Exception as e:
-                logger.error(f"Error during signal handler shutdown: {e}")
-            finally:
-                sys.exit(0)
+        """Register normal-exit cleanup without changing application signal policy.
 
-        try:
-            signal.signal(signal.SIGINT, handle_signal)
-            signal.signal(signal.SIGTERM, handle_signal)
-        except ValueError as e:
-            logger.warning(
-                f"Failed to register signal handlers: {e}. "
-                "This is expected when running in non-main threads."
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to register signal handlers due to unexpected error: {e}. "
-            )
-
+        Applications that handle termination signals can explicitly flush or
+        shut down their provider in their own handler. Default SIGTERM does not
+        run Python's atexit handlers.
+        """
         atexit.register(self.shutdown)
-
         return self
 
 
@@ -610,9 +591,8 @@ class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
     Args:
-        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If not provided, the
-            `BASE_URL` environment variable will be used to infer which
-            collector endpoint to use, defaults to the gRPC endpoint.
+        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
+            `FI_GRPC_URL` is used, defaulting to the Future AGI gRPC endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
@@ -647,8 +627,8 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             else:
                 bound_args.arguments["headers"] = headers
 
-        endpoint = get_env_grpc_collector_endpoint()
-        bound_args.arguments["endpoint"] = endpoint
+        if bound_args.arguments.get("endpoint") is None:
+            bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
     def shutdown(self) -> None:
@@ -670,29 +650,29 @@ class HTTPSpanExporter(_HTTPSpanExporter):
     - `opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter`
 
     Args:
-        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If not provided, the
-            `BASE_URL` environment variable will be used to infer which
-            collector endpoint to use, defaults to the HTTP endpoint.
+        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
+            the endpoint is derived from `FI_BASE_URL`, defaulting to the Future AGI HTTP endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        endpoint = kwargs.get("endpoint")
-        headers = kwargs.get("headers")
+        bound_args = _get_class_signature(_HTTPSpanExporter).bind_partial(*args, **kwargs)
+        endpoint = bound_args.arguments.get("endpoint")
+        headers = bound_args.arguments.get("headers")
 
         if endpoint is None:
             _, endpoint = _normalized_endpoint(None)
-            kwargs["endpoint"] = endpoint
+            bound_args.arguments["endpoint"] = endpoint
 
         final_headers = {k.lower(): v for k, v in (headers or {}).items()}
         if AUTHORIZATION not in final_headers:
             auth_header = get_env_fi_auth_header()
             if auth_header:
                 final_headers.update(auth_header)
-        kwargs["headers"] = final_headers or None
+        bound_args.arguments["headers"] = final_headers or None
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*bound_args.args, **bound_args.kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""

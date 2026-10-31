@@ -106,9 +106,9 @@ def grpc_collector(monkeypatch: pytest.MonkeyPatch) -> Iterator[List[str]]:
 def make_provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     """Call register() as a customer would, without setting the global provider.
 
-    register() replaces the SIGINT/SIGTERM handlers: they are put back afterwards, and every
-    provider is shut down. Ask for a collector fixture first: register() reads the collector URL
-    when it builds the exporter.
+    Every provider is shut down and the application's signal handlers are preserved.
+    Ask for a collector fixture first: register() reads the collector URL when it builds
+    the exporter.
     """
     monkeypatch.setenv("FI_API_KEY", "test-api-key")
     monkeypatch.setenv("FI_SECRET_KEY", "test-secret-key")

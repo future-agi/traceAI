@@ -204,6 +204,8 @@ def test_async_streamed_and_failed_chat_record_the_requested_model(make_tracer):
     ("https://generativelanguage.googleapis.com/v1beta/openai/", "google"),
     ("https://api.deepseek.com/v1", "deepseek"),
     ("https://api.x.ai/v1", "xai"),
+    ("https://api.together.ai/v1", "together"),
+    ("https://API.Together.ai./v1", "together"),
     ("https://api.mistral.ai/v1", "mistralai"),
     ("https://inference.baseten.co/v1", "baseten"),
     ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "dashscope"),
@@ -222,6 +224,9 @@ def test_async_streamed_and_failed_chat_record_the_requested_model(make_tracer):
     ("https://llm-proxy.customer.example/v1", "openai"),
     ("https://inference.baseten.co.customer.example/v1", "openai"),
     ("https://notopenai.azure.com.evil.example/v1", "openai"),
+    ("https://api.together.ai.customer.example/v1", "openai"),
+    ("https://proxy.api.together.ai/v1", "openai"),
+    ("https://notapi.together.ai/v1", "openai"),
 ])
 def test_provider_name_follows_the_base_url_host(make_tracer, base_url, provider):
     exporter = make_tracer()
@@ -363,3 +368,52 @@ def test_hide_outputs_hides_embedding_vectors_in_all_copies(make_tracer):
     assert "embedding" not in json.loads(attrs["embedding.embeddings"])["data"][0]
     assert attrs["output.value"] == "__REDACTED__"
     assert attrs["embedding.embeddings.0.embedding.text"] == "A short example."
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "stream", "error"])
+def test_together_provider_on_sync_and_async_calls(make_tracer, use_async, outcome):
+    exporter = make_tracer()
+    handler = {
+        "success": lambda _: httpx.Response(200, json=chat_completion()),
+        "stream": lambda _: chat_stream(),
+        "error": unauthorized,
+    }[outcome]
+    kwargs = {
+        "model": REQUEST_MODEL,
+        "messages": [{"role": "user", "content": "q"}],
+        "stream": outcome == "stream",
+    }
+
+    async def run_async():
+        async with async_client(handler, base_url="https://api.together.ai/v1") as c:
+            response = await c.chat.completions.create(**kwargs)
+            if outcome == "stream":
+                async for _ in response:
+                    pass
+
+    def run_sync():
+        with client(handler, base_url="https://api.together.ai/v1") as c:
+            response = c.chat.completions.create(**kwargs)
+            if outcome == "stream":
+                list(response)
+
+    def run():
+        if use_async:
+            asyncio.run(run_async())
+        else:
+            run_sync()
+
+    if outcome == "error":
+        with pytest.raises(openai.AuthenticationError):
+            run()
+    else:
+        run()
+
+    span, attrs = only_span(exporter)
+    assert attrs["gen_ai.provider.name"] == "together"
+    assert attrs["gen_ai.request.model"] == (
+        RESPONSE_MODEL if outcome == "success" else REQUEST_MODEL
+    )
+    if outcome == "error":
+        assert span.status.status_code == StatusCode.ERROR
