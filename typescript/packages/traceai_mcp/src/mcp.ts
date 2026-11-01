@@ -5,6 +5,19 @@ import {
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
 import { VERSION } from "./version";
+import { patchedModules, wrappedMethods } from "./state";
+import { FastMCPOptions, Operations, transportOperations } from "./operations";
+export type { FastMCPOptions } from "./operations";
+
+/** Structural module contract; fastmcp remains an optional application dependency. */
+export interface FastMCPModule {
+  FastMCPSession: {
+    prototype: {
+      connect: (...args: never[]) => unknown;
+      readonly server: MCPServer;
+    };
+  };
+}
 
 // Structural boundaries shared by the monolithic and split SDKs. No runtime SDK
 // dependency or private handler maps: handlers registered before and after connect
@@ -87,8 +100,6 @@ type ModuleName =
   | (typeof transports)[number][1]
   | "@modelcontextprotocol/server"
   | "@modelcontextprotocol/sdk/server/index";
-const patchedModules = new Map<ModuleName, Set<object>>();
-const wrappedMethods = new WeakSet<Method>();
 
 /** Whether at least one copy of the named module is currently instrumented. */
 export function isPatched(moduleName: ModuleName): boolean {
@@ -107,17 +118,91 @@ interface Patch {
   restore(): void;
 }
 
-/** Propagates request context; does not create execution spans or capture content. */
+/** Propagation-only by default, with explicit opt-in FastMCP operation tracing. */
 export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfig> {
   // Lazily initialized: InstrumentationBase can apply module hooks during super().
   private patches?: Map<object, Map<string, Patch>>;
   private moduleTargets?: Map<object, Set<ModuleName>>;
   private connectedServers?: WeakMap<object, Set<MCPServer>>;
+  private operations?: Set<Operations>;
 
   constructor({
     instrumentationConfig,
   }: { instrumentationConfig?: InstrumentationConfig } = {}) {
     super("@traceai/mcp", VERSION, instrumentationConfig ?? {});
+  }
+
+  /**
+   * Opt in to npm FastMCP server-operation spans before starting any servers.
+   * Pass the installed version explicitly; unsupported versions/shapes are a no-op.
+   * Generic MCP instrumentation stays propagation-only. No provider is installed.
+   */
+  public instrumentFastMCP(
+    module: FastMCPModule,
+    options: FastMCPOptions,
+  ): boolean {
+    const version = /^(\d+)\.(\d+)\.(\d+)$/.exec(options.version);
+    if (
+      !version ||
+      !(+version[1] === 4 || (+version[1] === 3 && +version[2] === 35))
+    )
+      return false;
+    const target = module?.FastMCPSession?.prototype;
+    if (
+      !target ||
+      typeof target.connect !== "function" ||
+      !Object.getOwnPropertyDescriptor(target, "server")?.get
+    )
+      return false;
+    // Snapshot configuration so later mutations cannot silently enable capture.
+    const config = {
+      ...options,
+      captureContent: { ...options.captureContent },
+    };
+    const instrumentation = this;
+    this.patchMethod(
+      target,
+      "connect",
+      (original) =>
+        function (
+          this: FastMCPModule["FastMCPSession"]["prototype"],
+          ...args: unknown[]
+        ) {
+          const transport = args[0] as MCPTransport;
+          if (
+            !transport ||
+            typeof transport.start !== "function" ||
+            typeof transport.send !== "function"
+          )
+            return Reflect.apply(original, this, args);
+          if (!transportOperations.has(transport)) {
+            const operations = new Operations(
+              instrumentation.tracer,
+              config,
+              () => Reflect.get(transport, "sessionId"),
+              () => {
+                if (transportOperations.get(transport) === operations)
+                  transportOperations.delete(transport);
+                instrumentation.operations?.delete(operations);
+              },
+            );
+            (instrumentation.operations ??= new Set()).add(operations);
+            transportOperations.set(transport, operations);
+          }
+          instrumentation.instrumentTransport(transport);
+          try {
+            const result = Reflect.apply(original, this, args);
+            void Promise.resolve(result).then(undefined, () =>
+              instrumentation.restoreTarget(transport),
+            );
+            return result;
+          } catch (error) {
+            instrumentation.restoreTarget(transport);
+            throw error;
+          }
+        },
+    );
+    return wrappedMethods.has(target.connect);
   }
 
   /** Explicit instrumentation also works with ESM, bundlers and preloaded modules. */
@@ -168,6 +253,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   /** Restores manual patches as well as auto-instrumentation hooks. */
   public override disable(): void {
     super.disable();
+    for (const operations of this.operations ?? []) operations.close();
     for (const target of this.patches?.keys() ?? []) this.restoreTarget(target);
   }
 
@@ -307,7 +393,9 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
             // Do not mutate reusable/frozen requests or user-owned metadata.
             args[0] = { ...message, params: { ...params, _meta: carrier } };
           }
-          return Reflect.apply(original, this, args);
+          const send = () => Reflect.apply(original, this, args);
+          const operations = transportOperations.get(this);
+          return operations ? operations.send(message, send) : send();
         },
     );
     this.patchMethod(
@@ -329,13 +417,15 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
       (original) =>
         function (this: MCPTransport, ...args: unknown[]) {
           const message = args[0];
-          if (!isRequest(message)) return Reflect.apply(original, this, args);
+          const dispatch = () => Reflect.apply(original, this, args);
+          const operations = transportOperations.get(transport);
+          const receive = () =>
+            operations ? operations.receive(message, dispatch) : dispatch();
+          if (!isRequest(message)) return receive();
           const params = isRecord(message.params) ? message.params : undefined;
           const carrier = isRecord(params?._meta) ? params._meta : {};
           const parent = propagation.extract(context.active(), carrier);
-          return context.with(parent, () =>
-            Reflect.apply(original, this, args),
-          );
+          return context.with(parent, receive);
         },
     );
     // A socket/peer may close without calling our close() method.
@@ -434,6 +524,8 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private restoreTarget(target: object): void {
+    transportOperations.get(target)?.close();
+    transportOperations.delete(target);
     const methods = this.patches?.get(target);
     if (!methods) return;
     for (const patch of methods.values()) patch.restore();

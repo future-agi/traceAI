@@ -64,3 +64,49 @@ jobs:
           NODE="$(command -v node)"
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             "$NODE" "$PWD/contract/smoke.cjs" "$RUNNER_TEMP/mcp-smoke"
+
+  fastmcp:
+    name: FastMCP ${{ matrix.fastmcp }} (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.23.4', '24.11.0']
+        fastmcp: ['3.35.0', '4.0.0', '4.23.8']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build and pack
+        working-directory: typescript/packages/traceai_mcp
+        run: |
+          pnpm --filter @traceai/mcp... install --frozen-lockfile --ignore-scripts
+          mkdir -p "$RUNNER_TEMP/mcp-package"
+          pnpm pack --pack-destination "$RUNNER_TEMP/mcp-package"
+      - name: Install clean FastMCP fixture and check declarations
+        working-directory: typescript/packages/traceai_mcp
+        env:
+          FASTMCP_VERSION: ${{ matrix.fastmcp }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/fastmcp-smoke" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP/mcp-package"/*.tgz "fastmcp@$FASTMCP_VERSION" \
+            @modelcontextprotocol/sdk@1.32.2 @opentelemetry/api@1.9.0 \
+            @opentelemetry/sdk-trace-node@2.8.0 @opentelemetry/sdk-trace-base@2.8.0 \
+            @opentelemetry/exporter-trace-otlp-http@0.219.0 @opentelemetry/resources@2.8.0 \
+            @opentelemetry/core@2.8.0 zod@3.25.76
+          cp contract/fastmcp-types.mts "$RUNNER_TEMP/fastmcp-smoke/types.mts"
+          pnpm exec tsc --module Node16 --moduleResolution Node16 --target es2022 --skipLibCheck --strict --noEmit "$RUNNER_TEMP/fastmcp-smoke/types.mts"
+          git diff --exit-code -- ../../pnpm-lock.yaml
+      - name: Verify real HTTP, stdio, CJS, ESM and OTLP with loopback-only networking
+        working-directory: typescript/packages/traceai_mcp
+        run: |
+          NODE="$(command -v node)"
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            "$NODE" "$PWD/contract/fastmcp.cjs" "$RUNNER_TEMP/fastmcp-smoke"

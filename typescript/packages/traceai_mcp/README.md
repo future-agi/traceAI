@@ -1,6 +1,6 @@
-# MCP context propagation
+# MCP tracing
 
-`@traceai/mcp` connects application traces across MCP client/server requests. It injects the active OpenTelemetry context into request `params._meta` and restores it while the receiving SDK dispatches the request. It does **not** create spans, capture arguments/results, or replace your tracing provider.
+`@traceai/mcp` connects application traces across MCP client/server requests. By default it only injects the active OpenTelemetry context into request `params._meta` and restores it while the receiving SDK dispatches the request. It does **not** replace your tracing provider. For the npm `fastmcp` framework, you can explicitly enable server-operation spans with `instrumentFastMCP()`.
 
 ## Install
 
@@ -74,6 +74,36 @@ Explicit instrumentation is the portable route for ESM, preloaded modules and bu
 - Existing `_meta` fields and send options are preserved. Request objects are not mutated.
 - Instrumenting the same transport through both server and transport entry points does not wrap it twice.
 - `instrumentation.disable()` restores module methods and callbacks on active transports. Closed transports release their instrumentation state. Reapply explicit instrumentation before the next connection if you want to turn a manually instrumented server back on.
-- No execution spans are added, so an agent framework's tool spans are not duplicated. Keep argument/result capture and privacy controls in the application or framework that creates spans.
+- Without `instrumentFastMCP()`, no execution spans are added. Keep argument/result capture and privacy controls in the application or framework that creates those spans.
 
 If a server span appears in a separate trace, instrument both endpoints, start a client application span before making the request, and ensure both providers register a W3C propagator and an async context manager. A server that only propagates context and never creates spans has nothing to export by itself.
+
+## Trace npm FastMCP operations
+
+Use Node 22.23.4 or later and npm `fastmcp` 3.35.x or 4.x. This is not Python FastMCP. FastMCP supports legacy, handshake-based MCP revisions; this adapter does not add newer protocol support or instrument ViteMCP.
+
+Initialize your standard OpenTelemetry provider before starting the server. Then opt in on the same instrumentation instance you use for MCP propagation:
+
+```ts
+import * as fastmcp from "fastmcp";
+import { MCPInstrumentation } from "@traceai/mcp";
+
+const instrumentation = new MCPInstrumentation({ instrumentationConfig: { enabled: false } });
+const supported = instrumentation.instrumentFastMCP(fastmcp, {
+  version: "4.23.8", // Match the version installed in your application.
+});
+if (!supported) throw new Error("Unsupported FastMCP version or module shape");
+
+const server = new fastmcp.FastMCP({ name: "inventory", version: "1.0.0" });
+// Register tools, resources and prompts normally, then server.start(...).
+```
+
+This explicit module hook works for CommonJS and ESM and covers transient stateless HTTP sessions. Install it **before** any `start()`/`connect()` calls. Unsupported versions, prereleases and module shapes return `false` without changing application execution. One instrumentation instance should own a server's lifecycle. Call `disable()` to stop tracing; reapply explicit hooks before creating new connections to resume.
+
+Each incoming operation has one `SERVER` span named `fastmcp <method>`. Tool calls use `fi.span.kind=TOOL` and `tool.name`; other methods use `CHAIN`. Resource reads record a SHA-256 URI identifier rather than disclosing the URI. Spans inside your handlers inherit the operation as their parent. Discovery, initialization and ping are metadata-only. Notifications never create operation spans. Reverse sampling and elicitation use context propagation; instrument the client's transport and the actual model SDK to trace model work. This package does not infer token usage or cost from tool output.
+
+HTTP session IDs are recorded as `mcp.session.id` after initialization; absent IDs on stdio/stateless transports stay absent. Set `sessionId` explicitly only when you have a separate end-user conversation ID; it becomes `session.id`.
+
+Arguments and results are **off by default**. To enable bounded JSON capture, pass `captureContent: { input: true, output: true, maxLength: 4096 }`. This captures tool/prompt arguments and successful tool/resource/prompt results, not discovery payloads. `FI_HIDE_INPUTS`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_INPUT_MESSAGES`, and their `OUTPUT` equivalents override capture when set to `true`. Headers, `_meta`, credential-named fields, image/audio/binary blocks, error messages, error results and stacks are never captured, including when `FI_HIDE_ERROR_DETAILS` is unset or false. Application-defined text may still contain sensitive data when you opt in; enable capture only for data you intend to export. Values exceeding the byte/work/depth limit are omitted rather than emitted as invalid JSON.
+
+Requests end after response delivery or observed cancellation/close/failure. Defaults bound unfinished spans to five minutes and 1024 in-flight requests per transport; configure `maxDurationMs` (maximum one hour) and `maxPendingRequests` (maximum 10000) if needed. Bounds affect telemetry only, not tool execution. In stateless HTTP, a cancellation POST can reach a different FastMCP server instance; the original operation retains its actual server outcome rather than being marked cancelled solely because the client stopped waiting.
