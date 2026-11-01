@@ -558,7 +558,26 @@ export async function main(
     if (command === "doctor") {
       if (options["ingest-check"] || options.loopback)
         throw new AgentError("UNQUALIFIED_DIAGNOSTIC", 5);
-      const activation = await adapter.probe(context);
+      let activation;
+      try {
+        activation = await adapter.probe(context);
+      } catch (error) {
+        if (!(error instanceof AgentError) || error.code !== "RUNTIME_UNAVAILABLE")
+          throw error;
+        output({
+          state: "runtime-unavailable",
+          code: 0,
+          activation: {
+            installed: !!installed,
+            trusted: "unknown",
+            activated: "unknown",
+            restartRequired: "unknown",
+          },
+          acceptance: "unknown",
+          persistence: "unknown",
+        });
+        return 0;
+      }
       output({
         state: activation.activated ? "activated" : "waiting-for-activation",
         code: 0,

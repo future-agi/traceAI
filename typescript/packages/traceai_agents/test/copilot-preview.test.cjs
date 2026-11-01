@@ -13,9 +13,11 @@ test("preview Copilot CLI pins its binary and activates only native traces", asy
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fi-preview-cli-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, "copilot");
-  fs.writeFileSync(bin, '#!/bin/sh\necho "GitHub Copilot CLI 1.0.98"\n', {
+  const version = fs.readFileSync(path.resolve(__dirname, '../../../../integrations/coding-agents/fixtures/source/copilot-cli-1.0.98-version.txt'), 'utf8');
+  fs.writeFileSync(bin, '#!/bin/sh\nprintf "GitHub Copilot CLI 1.0.98.\\nRun \'copilot update\' to check for updates.\\n"\n', {
     mode: 0o700,
   });
+  assert.equal(require('node:child_process').execFileSync(bin, ['--version'], { encoding: 'utf8' }), version);
   const prior = process.env.PATH;
   process.env.PATH = dir;
   try {
@@ -71,6 +73,22 @@ test("preview Copilot CLI pins its binary and activates only native traces", asy
     process.env.PATH = prior;
     delete process.env.OTEL_EXPORTER_OTLP_HEADERS;
   }
+});
+
+test("preview probes the official npm-loader shebang with the trusted Node runtime", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fi-preview-npm-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "copilot");
+  const version = fs.readFileSync(path.resolve(__dirname, '../../../../integrations/coding-agents/fixtures/source/copilot-cli-1.0.98-version.txt'), 'utf8');
+  fs.writeFileSync(bin, '#!/usr/bin/env node\nprocess.stdout.write(' + JSON.stringify(version) + ');\n', { mode: 0o700 });
+  const prior = process.env.PATH;
+  process.env.PATH = dir;
+  try {
+    const launch = await copilotCliAdapter.launch({ surface: "cli", routeRef: "copilot.cli", preview: true }, { tracing: true });
+    assert.equal(launch.executable, process.execPath);
+    assert.deepEqual(launch.args, [fs.realpathSync(bin)]);
+    assert.equal(require('node:child_process').execFileSync(launch.executable, [...launch.args, '--version'], { encoding: 'utf8' }), version);
+  } finally { process.env.PATH = prior; }
 });
 
 test("explicit preview gate is required for CLI and never bypasses VS Code hold", async (t) => {

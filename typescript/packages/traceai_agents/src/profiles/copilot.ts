@@ -11,10 +11,14 @@ import type { Adapter, Capability, NormalizeContext } from "../adapters.js";
 import type { NativeSpanEnvelope } from "../runtime/receiver.js";
 import { decodeNativeId } from "../export/otlp.js";
 import { AgentError } from "../security/files.js";
+import { runtimeRequest } from "../runtime/daemon.js";
 import {
   accessSync,
+  closeSync,
   constants,
   mkdtempSync,
+  openSync,
+  readSync,
   realpathSync,
   rmSync,
 } from "node:fs";
@@ -286,7 +290,7 @@ const inactive = {
   activated: false,
   restartRequired: false,
 };
-function qualifiedBinary(): string {
+function qualifiedBinary(): { executable: string; args: string[] } {
   // Resolve a pinned released CLI, not a project-local command or a shell alias.
   const candidates = (process.env.PATH ?? "")
     .split(delimiter)
@@ -302,14 +306,31 @@ function qualifiedBinary(): string {
     }
     const home = mkdtempSync(join(tmpdir(), "fi-copilot-version-"));
     try {
-      const version = execFileSync(executable, ["--version"], {
+      // The official npm entrypoint is '#!/usr/bin/env node'. Launch it with
+      // this runtime's absolute Node rather than trusting PATH to find Node.
+      const fd = openSync(executable, "r");
+      const header = Buffer.alloc(32);
+      let length: number;
+      try {
+        length = readSync(fd, header, 0, header.length, 0);
+      } finally {
+        closeSync(fd);
+      }
+      const npmLoader = header.toString("utf8", 0, length).startsWith("#!/usr/bin/env node\n");
+      const invocation = npmLoader
+        ? { executable: process.execPath, args: [executable] }
+        : { executable, args: [] as string[] };
+      const version = execFileSync(invocation.executable, [...invocation.args, "--version"], {
         env: { HOME: home, PATH: "/usr/bin:/bin" },
         encoding: "utf8",
-        timeout: 2000,
+        // The npm loader first resolves its native platform package and the
+        // pinned binary may initialize an empty HOME before printing a version.
+        timeout: 10_000,
         maxBuffer: 1024,
       });
-      if (/^(?:GitHub Copilot CLI\s+|copilot\s+)?1\.0\.98\s*$/i.test(version))
-        return executable;
+      if (/^GitHub Copilot CLI 1\.0\.98\.\nRun 'copilot update' to check for updates\.\n$/.test(version) ||
+          /^(?:GitHub Copilot CLI |copilot )?1\.0\.98\n?$/.test(version))
+        return invocation;
     } catch {
       // No fallback to an unqualified executable later on PATH.
     } finally {
@@ -331,10 +352,20 @@ export const copilotCliAdapter: Adapter = {
   async preflight(action, context) {
     if ((action === "enable" || action === "update") && !context.preview)
       throw new AgentError("COPILOT_PREVIEW_FLAG_REQUIRED", 5);
-    return { commit: async () => inactive, rollback: async () => {} };
+    return {
+      commit: async () => ({ ...inactive, installed: action !== "uninstall" }),
+      rollback: async () => {},
+    };
   },
-  async probe() {
-    return inactive;
+  async probe(context) {
+    // The runtime owns local durable ACKs. The adapter cannot infer them from
+    // installation alone, and an ACK must never imply remote persistence.
+    const status = await runtimeRequest(context.socketPath, { operation: "status" });
+    const route = status.agents?.find(
+      (agent: { agent: string; surface: string }) =>
+        agent.agent === "copilot" && agent.surface === "cli",
+    );
+    return route?.activation ?? inactive;
   },
   async launch(context, { tracing }) {
     if (!context.preview)
@@ -349,10 +380,9 @@ export const copilotCliAdapter: Adapter = {
       )
     )
       throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
-    const executable = qualifiedBinary();
+    const invocation = qualifiedBinary();
     return {
-      executable,
-      args: [],
+      ...invocation,
       env: tracing
         ? ({ COPILOT_OTEL_ENABLED: "true" } as Record<string, string>)
         : ({} as Record<string, string>),
