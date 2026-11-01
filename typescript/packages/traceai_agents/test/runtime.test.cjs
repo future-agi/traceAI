@@ -133,6 +133,10 @@ test("real storage child, local ACK, loopback export, replay and disable hold wo
     fs.rmSync(root, { recursive: true, force: true });
   });
   await runtime.start();
+  const empty = await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(empty.code, 0);
+  assert.equal(empty.state, "complete");
+  assert.equal(empty.counts.pending, 0);
   const fact = reference.normalize(
     { schema: "fixture-v1", session: "s", turn: "t", id: "r", unit: "request" },
     { identityKey: Buffer.alloc(32), policyRevision: "1" },
@@ -147,7 +151,9 @@ test("real storage child, local ACK, loopback export, replay and disable hold wo
   const submission = { operation: "observe", route_ref: route.id, fact };
   const ack = await runtimeRequest(p.socket, submission);
   assert.equal(ack.durable, true, JSON.stringify(ack));
-  await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  const delivered = await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(delivered.code, 0);
+  assert.equal(delivered.counts.pending, 0);
   assert.equal(uploads, 1);
   assert.ok(!Buffer.concat(bodies).includes(Buffer.from("synthetic-secret")));
   assert.equal(
@@ -172,15 +178,37 @@ test("real storage child, local ACK, loopback export, replay and disable hold wo
     { identityKey: Buffer.alloc(32), policyRevision: "1" },
   )[0];
   await runtimeRequest(p.socket, { ...submission, fact: second });
-  await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  const pending = await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(pending.code, 4);
+  assert.equal(pending.counts.pending, 1);
   assert.equal(uploads, 1);
   changed.profiles.fixture.binding = binding;
   saveConfig(p, changed);
   await runtimeRequest(p.socket, { operation: "refresh" });
   await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
   assert.equal(uploads, 2);
+  const heldConfig = loadConfig(p);
+  heldConfig.profiles.fixture.binding.endpoint = origin + "/unapproved-path";
+  saveConfig(p, heldConfig);
+  await runtimeRequest(p.socket, { operation: "refresh" });
+  const third = reference.normalize(
+    { schema: "fixture-v1", session: "s", turn: "t", id: "r3", unit: "request" },
+    { identityKey: Buffer.alloc(32), policyRevision: "1" },
+  )[0];
+  await runtimeRequest(p.socket, { ...submission, fact: third });
   await runtimeRequest(p.socket, { operation: "disable", route: route.id });
   await assert.rejects(runtimeRequest(p.socket, submission), /HELD_DISABLED/);
+  await runtimeRequest(p.socket, { operation: "refresh" });
+  const reenabled = loadConfig(p);
+  reenabled.profiles.fixture.binding = binding;
+  reenabled.routes[route.id].route.enabled = true;
+  reenabled.routes[route.id].route.epoch += 1;
+  saveConfig(p, reenabled);
+  await runtimeRequest(p.socket, { operation: "refresh" });
+  const released = await runtimeRequest(p.socket, { operation: "flush", deadlineMs: 1000 });
+  assert.equal(released.code, 0);
+  assert.equal(released.counts.pending, 0);
+  assert.equal(uploads, 3, "queued capture survives disable and is delivered after re-enable");
   assert.equal(
     (await runtimeRequest(p.socket, { operation: "status" })).persistence,
     "unknown",

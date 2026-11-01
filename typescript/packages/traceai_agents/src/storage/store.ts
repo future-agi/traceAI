@@ -182,6 +182,7 @@ export class Spool {
         throw new AgentError("HELD_DESTINATION_CHANGED", 3);
       if (
         route.epoch < old.epoch ||
+        (route.enabled && !old.enabled && route.epoch === old.epoch) ||
         (route.epoch === old.epoch &&
           JSON.stringify(prior.policy) !== JSON.stringify(route.policy))
       )
@@ -191,6 +192,9 @@ export class Spool {
   route(route: Route): void {
     this.validateRoute(route);
     this.write(() => {
+      const prior = this.db
+        .prepare("SELECT enabled,epoch FROM routes WHERE id=?")
+        .get(route.id) as { enabled: number; epoch: number } | undefined;
       this.db
         .prepare(
           "INSERT INTO routes VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config,enabled=excluded.enabled,epoch=excluded.epoch",
@@ -201,6 +205,15 @@ export class Spool {
           Number(route.enabled),
           route.epoch,
         );
+      // A durable disable fences the old sender. Re-enable transfers retained
+      // capture to the new generation in the same transaction as the route;
+      // accepted/purged receipts remain immutable and are never re-sent.
+      if (prior?.enabled === 0 && route.enabled && route.epoch > prior.epoch)
+        this.db
+          .prepare(
+            "UPDATE records SET epoch=? WHERE route=? AND epoch<? AND bytes IS NOT NULL AND state IN ('queued','ambiguous','held','held-auth','split')",
+          )
+          .run(route.epoch, route.id, route.epoch);
     });
   }
   getRoute(id: string): Route {
@@ -468,6 +481,14 @@ export class Spool {
           "SELECT state,count(*) count FROM records GROUP BY state LIMIT 16",
         )
         .all(),
+      drain_counts: this.db
+        .prepare(
+          `SELECT count(*) pending,
+            count(*) FILTER (WHERE state IN ('held','held-auth','split')) rejected,
+            count(*) FILTER (WHERE state='ambiguous') ambiguous
+           FROM records WHERE bytes IS NOT NULL`,
+        )
+        .get(),
       held_disabled: (
         this.db
           .prepare(

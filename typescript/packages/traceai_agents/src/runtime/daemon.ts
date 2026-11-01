@@ -434,11 +434,20 @@ export class Runtime {
       } finally {
         if (timer) clearTimeout(timer);
       }
+      // Read the durable store after joining the sender: the cached status can
+      // predate this flush (or an admission concurrent with it). No HTTP success
+      // is interpreted as backend persistence.
+      const storage = await this.storage.call("status") as {
+        drain_counts: { pending: number; rejected: number; ambiguous: number };
+      };
+      this.statusCache = storage;
+      const counts = storage.drain_counts;
       return {
         schema_version: 1,
-        state: "pending",
-        code: 4,
-        storage: this.statusCache,
+        state: counts.pending ? "pending" : "complete",
+        code: counts.pending ? 4 : 0,
+        counts,
+        storage,
         persistence: "unknown",
       };
     }
