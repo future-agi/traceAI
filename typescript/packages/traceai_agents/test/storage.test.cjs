@@ -574,3 +574,19 @@ test("bounded expiry reclaims hundreds of old observed-turn windows and terminal
   assert.equal(check.prepare("SELECT count(*) n FROM observed_turns").get().n, 0);
   check.close();
 });
+
+test("previously expired orphan windows are collected without new receipt expiry", (t) => {
+  const { spool, dir } = fixture(t);
+  const db = new Database(path.join(dir, "spool.db"));
+  const age = Date.now() - 8 * 86_400_000;
+  const id = "f".repeat(64);
+  db.prepare(`INSERT INTO observed_turns(binding,work,route,epoch,start_ns,end_ns,deadline,terminal)
+    VALUES(?,?,?,1,?,?,?,?)`).run(route().binding.id, id, route().id,
+      String(BigInt(age) * 1_000_000n), String(BigInt(age) * 1_000_000n), age,
+      JSON.stringify({ outcome: "success", id }));
+  db.close();
+  assert.equal(spool.expire(), 0);
+  const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+  assert.equal(check.prepare("SELECT count(*) n FROM observed_turns").get().n, 0);
+  check.close();
+});

@@ -66,7 +66,8 @@ function semanticHash(bytes: Buffer): string {
 export class Spool {
   private db: Database.Database;
   private paused: string | undefined;
-  private gcOrphans = false;
+  // A prior runtime may already have expired receipts but left turn windows.
+  private gcOrphans = true;
   private usageCursor = 0;
   private planCursor = 0;
   private turnCursor = 0;
