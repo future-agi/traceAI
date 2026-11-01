@@ -23,6 +23,7 @@ export interface InstalledRoute {
   surface: string;
   profile: string;
   transcriptConsent: boolean;
+  preview?: boolean;
   activation: {
     installed: boolean;
     trusted: boolean | "unknown";
@@ -105,7 +106,12 @@ export function loadConfig(p: Paths): Config {
         !token(value.agent) ||
         !token(value.surface) ||
         !c.profiles[value.profile] ||
-        value.route.id !== key
+        value.route.id !== key ||
+        (value.preview !== undefined &&
+          (value.preview !== true ||
+            key !== "copilot.cli" ||
+            value.agent !== "copilot" ||
+            value.surface !== "cli"))
       )
         throw new Error();
     }
@@ -131,7 +137,10 @@ export async function configTransaction<T>(
   try {
     const fd = openSync(
       lockFile,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_WRONLY |
+        constants.O_NOFOLLOW,
       0o600,
     );
     closeSync(fd);

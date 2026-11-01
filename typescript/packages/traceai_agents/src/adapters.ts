@@ -62,6 +62,8 @@ export interface AdapterContext {
   profile: string;
   binding: Binding;
   transcriptConsent: boolean;
+  /** Opt-in compatibility mode; never implied by installing a package. */
+  preview?: boolean;
 }
 export interface NormalizeContext {
   identityKey: Uint8Array;

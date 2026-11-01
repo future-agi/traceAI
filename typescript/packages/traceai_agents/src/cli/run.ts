@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { Adapter, AdapterContext } from "../adapters.js";
 import { AgentError } from "../security/files.js";
 import { runtimeRequest } from "../runtime/daemon.js";
@@ -9,6 +9,8 @@ const traceEnvironment = new Set([
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
   "OTEL_TRACES_EXPORTER",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "COPILOT_OTEL_ENABLED",
 ]);
 export function agentEnvironment(
   env: NodeJS.ProcessEnv,
@@ -32,23 +34,11 @@ export async function runAgent(
   options: { signalDelivery?: "terminal" | "dedicated-wrapper-group" } = {},
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (!adapter.launch) throw new AgentError("UNSUPPORTED_RUN", 5);
-  if (options.signalDelivery === "dedicated-wrapper-group") {
-    // Never signal a group owned by a shell, IDE or supervisor. ps is used
-    // only for this explicit mode; unavailable/ambiguous group ID fails closed.
-    let group: number;
-    try {
-      group = Number(
-        execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(process.pid)], {
-          encoding: "utf8",
-          timeout: 1000,
-        }).trim(),
-      );
-    } catch {
-      throw new AgentError("UNSUPPORTED_SIGNAL_DELIVERY", 5);
-    }
-    if (process.platform === "win32" || group !== process.pid)
-      throw new AgentError("UNSUPPORTED_SIGNAL_DELIVERY", 5);
-  }
+  // Group leadership does not reveal whether SIGINT came from a supervisor or
+  // from the terminal foreground group (which has already signaled the child).
+  // Until there is a verifiable supervisor-only channel, refuse this mode.
+  if (options.signalDelivery === "dedicated-wrapper-group")
+    throw new AgentError("UNSUPPORTED_SIGNAL_DELIVERY", 5);
   let launch = await adapter.launch(context, { tracing });
   // Validate before opening ingress, including the no-tracing fallback.
   const validate = () => {
@@ -115,6 +105,16 @@ export async function runAgent(
             ? {
                 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: lease.endpoint,
                 OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/json",
+                // CLI 1.0.98 emits metrics even with OTEL_METRICS_EXPORTER=none.
+                // Route them to the same loopback listener's rejected metrics
+                // path, never to the default or an unrelated exporter.
+                ...(adapter.capability?.agent === "copilot" &&
+                adapter.capability.surface === "cli"
+                  ? {
+                      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:
+                        lease.endpoint.replace(/\/v1\/traces$/, "/v1/metrics"),
+                    }
+                  : {}),
                 OTEL_EXPORTER_OTLP_TRACES_HEADERS:
                   "Authorization=" +
                   encodeURIComponent("Bearer " + lease.token),
@@ -125,12 +125,11 @@ export async function runAgent(
     // A terminal sends SIGINT to its foreground group. Interactive agents
     // remain in that group for terminal access, so never duplicate that SIGINT.
     // Noninteractive agents get their own group, including their shell/tools;
-    // forward to the group, not just the direct child PID. A supervisor that
-    // signals only the wrapper of an interactive agent must explicitly opt in
-    // to dedicated-wrapper-group AND start the wrapper as its own group leader:
-    // signaling a shared foreground group would interrupt unrelated processes.
+    // forward to the group, not just the direct child PID. Interactive wrapper-
+    // only SIGINT cannot be safely forwarded without duplicating terminal delivery.
     // Windows console signal delivery is not qualified for group forwarding.
-    const interactive = process.platform !== "win32" && Boolean(process.stdin.isTTY);
+    const interactive =
+      process.platform !== "win32" && Boolean(process.stdin.isTTY);
     const child = spawn(launch.executable, [...launch.args, ...args], {
       env: agentEnvironment(process.env, overlay),
       stdio: "inherit",
@@ -138,26 +137,9 @@ export async function runAgent(
       detached: process.platform !== "win32" && !interactive,
     });
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-    let forwardingGroup = false;
     const handlers = signals.map((signal) => {
       const handler = () => {
-        // Ignore our own notification when forwarding to a dedicated wrapper
-        // group. Only callers that own that group may opt in to this mode.
-        if (forwardingGroup && signal === "SIGINT") {
-          forwardingGroup = false;
-          return;
-        }
-        if (interactive && signal === "SIGINT") {
-          if (options.signalDelivery !== "dedicated-wrapper-group") return;
-          forwardingGroup = true;
-          try {
-            process.kill(-process.pid, signal);
-          } catch (error) {
-            forwardingGroup = false;
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-          }
-          return;
-        }
+        if (interactive && signal === "SIGINT") return;
         try {
           if (process.platform !== "win32" && !interactive)
             process.kill(-child.pid!, signal);

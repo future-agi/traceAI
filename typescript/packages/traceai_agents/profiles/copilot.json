@@ -1,6 +1,6 @@
 {
   "profile": "copilot-native-ids-v1",
-  "release_state": "qualification-only",
+  "release_state": "cli-preview-opt-in-vscode-held",
   "capture": "structure",
   "source": "native",
   "duplicate_hook_emitter": false,
@@ -13,11 +13,11 @@
       "COPILOT_EFFECTIVE_MANAGED_SETTINGS_UNQUALIFIED"
     ],
     "transport": "CLI 1.0.98 real loopback-only synthetic turns establish separate trace/metric endpoint routing; OTEL_METRICS_EXPORTER=none does not disable metrics. JSON/protobuf normalization and local replay are tested. Effective enterprise telemetry policy and authentication precedence remain unqualified; this is not installed managed capture.",
-    "runtime_lifecycle": "Runtime-owned short-lived trace receivers, same-UID scoped local header capabilities, durable activation receipts, bounded lease renewal/expiry and disable/stop revocation are implemented. The common managed launcher preserves coding status and strips FI credentials. The public Copilot adapter remains held pending source-specific launch/policy qualification.",
+    "runtime_lifecycle": "Runtime-owned short-lived trace receivers, same-UID scoped local header capabilities, durable activation receipts, bounded lease renewal/expiry and disable/stop revocation are implemented. The CLI launch is opt-in with --preview on enable and run; it pins 1.0.98, routes unwanted metrics to a rejected loopback endpoint and preserves coding status. VS Code remains held pending harness qualification.",
     "remaining_activation_gap": [
-      "No Copilot launch() is shipped. CLI 1.0.98 activates OTel only through COPILOT_OTEL_ENABLED=true, OTEL_EXPORTER_OTLP_ENDPOINT or COPILOT_OTEL_FILE_EXPORTER_PATH; a traces endpoint alone is not a documented activator, and COPILOT_OTEL_ENABLED is deliberately not in the generic trace-only overlay allowlist.",
-      "Activation also enables metrics. OTEL_METRICS_EXPORTER=none still emitted metrics in real 1.0.98 runs, and there is no tested source setting that disables them; without an approved destination they would fall back to the default OTLP endpoint. This is the signal-isolation hold.",
-      "Effective-destination preflight must also cover COPILOT_OTEL_FILE_EXPORTER_PATH, COPILOT_OTEL_EXPORTER_TYPE, generic/per-signal headers and certificates, not only the generic and traces endpoint variables.",
+      "An opt-in --preview launcher pins CLI 1.0.98, enables COPILOT_OTEL_ENABLED=true and sends traces to a per-launch local receiver; a traces endpoint alone is not a documented activator. Signed-in real-agent activation remains unverified.",
+      "Activation also enables metrics. OTEL_METRICS_EXPORTER=none still emitted metrics in real 1.0.98 runs. Preview points the metric signal at the loopback listener's rejected /v1/metrics path; unlike the trace signal it carries no bearer. This prevents exporting metrics to an unrelated default endpoint but does not prove signed-in managed policy precedence.",
+      "The preview launcher refuses inherited COPILOT_OTEL_* and OTEL_EXPORTER_OTLP_* variables before launch, including file exporter, generic/per-signal headers and certificates. Enterprise-managed policy is not observable from the CLI; this remains a preview qualification hold.",
       "Built-in help says enterprise managed telemetry settings can enable OTel, but documents neither their location nor precedence over environment variables. This is the managed-settings hold."
     ],
     "local_capability_scope": "The per-launch bearer is delivered in OTEL_EXPORTER_OTLP_TRACES_HEADERS and is inherited by shell, MCP and other processes Copilot starts. It authorizes only that loopback lease; same-user processes are outside this boundary and it is not an upstream key or sandbox.",

@@ -46,6 +46,7 @@ const flags = new Set([
   "purge-capture",
   "loopback",
   "ingest-check",
+  "preview",
 ]);
 const valued = new Set([
   "profile",
@@ -184,7 +185,7 @@ export async function main(
         code: 0,
         commands: [
           "auth add|remove",
-          "enable",
+          "enable --preview (Copilot CLI 1.0.98 only)",
           "disable",
           "update",
           "uninstall",
@@ -223,81 +224,89 @@ export async function main(
       if (!token(name)) throw new AgentError("INVALID_PROFILE", 2);
       if (pos[1] === "add") {
         const auth = parseAuth(await authInput(options));
-        await configTransaction(p, async (config) => {
-          const existing = config.profiles[name];
-          const storage = options.storage ?? existing?.storage ?? "os";
-          if (storage !== "file" && storage !== "os")
-            throw new AgentError("INVALID_STORAGE", 2);
-          if (existing && storage !== existing.storage)
-            throw new AgentError("STORAGE_MIGRATION_REQUIRED", 3);
-          const endpoint = String(
-            options.endpoint ?? existing?.binding.endpoint ?? DEFAULT_ENDPOINT,
-          );
-          const project = required(options, "project");
-          const binding = {
-            id: existing?.binding.id ?? randomUUID(),
-            endpoint,
-            approvedOrigin: new URL(endpoint).origin,
-            project,
-            loopbackTest: options["loopback-test"] === true,
-          };
-          validateBinding(binding);
-          if (
-            existing &&
-            (existing.binding.endpoint !== endpoint ||
-              existing.binding.project !== project)
-          )
-            throw new AgentError("HELD_DESTINATION_CHANGED", 3);
-          const profile: Profile = existing ?? {
-            binding,
-            storage,
-            credentialRef: randomUUID(),
-          };
-          if (options["contract-manifest"]) {
-            const manifest = JSON.parse(
-              readProtected(required(options, "contract-manifest")).toString(),
+        await configTransaction(
+          p,
+          async (config) => {
+            const existing = config.profiles[name];
+            const storage = options.storage ?? existing?.storage ?? "os";
+            if (storage !== "file" && storage !== "os")
+              throw new AgentError("INVALID_STORAGE", 2);
+            if (existing && storage !== existing.storage)
+              throw new AgentError("STORAGE_MIGRATION_REQUIRED", 3);
+            const endpoint = String(
+              options.endpoint ??
+                existing?.binding.endpoint ??
+                DEFAULT_ENDPOINT,
             );
+            const project = required(options, "project");
+            const binding = {
+              id: existing?.binding.id ?? randomUUID(),
+              endpoint,
+              approvedOrigin: new URL(endpoint).origin,
+              project,
+              loopbackTest: options["loopback-test"] === true,
+            };
+            validateBinding(binding);
             if (
-              manifest.contract !== "immutable-agent-v1" ||
-              manifest.endpoint !== endpoint ||
-              manifest.project !== project ||
-              manifest.immutableAdmission !== true ||
-              manifest.uniqueReads !== true ||
-              manifest.usagePlans !== true
+              existing &&
+              (existing.binding.endpoint !== endpoint ||
+                existing.binding.project !== project)
             )
-              throw new AgentError("HELD_BACKEND_CONTRACT", 3);
-            profile.binding.backendContract = "immutable-agent-v1";
-            // Approval may follow installation. Upgrade the installed route with
-            // the same immutable destination and epoch, or refuse atomically.
-            for (const route of Object.values(config.routes)) {
-              if (route.profile !== name) continue;
-              if (!sameDestination(route.route.binding, profile.binding))
-                throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
-              controlRuntime ??= await ensureControlRuntime(p, settings);
-              await runtimeRequest(p.socket, {
-                operation: "validate-route",
-                route: { ...route.route, binding: profile.binding },
-              });
-              route.route.binding = profile.binding;
+              throw new AgentError("HELD_DESTINATION_CHANGED", 3);
+            const profile: Profile = existing ?? {
+              binding,
+              storage,
+              credentialRef: randomUUID(),
+            };
+            if (options["contract-manifest"]) {
+              const manifest = JSON.parse(
+                readProtected(
+                  required(options, "contract-manifest"),
+                ).toString(),
+              );
+              if (
+                manifest.contract !== "immutable-agent-v1" ||
+                manifest.endpoint !== endpoint ||
+                manifest.project !== project ||
+                manifest.immutableAdmission !== true ||
+                manifest.uniqueReads !== true ||
+                manifest.usagePlans !== true
+              )
+                throw new AgentError("HELD_BACKEND_CONTRACT", 3);
+              profile.binding.backendContract = "immutable-agent-v1";
+              // Approval may follow installation. Upgrade the installed route with
+              // the same immutable destination and epoch, or refuse atomically.
+              for (const route of Object.values(config.routes)) {
+                if (route.profile !== name) continue;
+                if (!sameDestination(route.route.binding, profile.binding))
+                  throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
+                controlRuntime ??= await ensureControlRuntime(p, settings);
+                await runtimeRequest(p.socket, {
+                  operation: "validate-route",
+                  route: { ...route.route, binding: profile.binding },
+                });
+                route.route.binding = profile.binding;
+              }
             }
-          }
-          const secrets = store(p, profile);
-          const previous = existing
-            ? await secrets.get(profile.credentialRef)
-            : undefined;
-          if (existing && !previous)
-            throw new AgentError("HELD_IDENTITY_KEY", 3);
-          await secrets.set(
-            profile.credentialRef,
-            newCredentials(auth, previous),
-          );
-          profile.removed = false;
-          config.profiles[name] = profile;
-        },
+            const secrets = store(p, profile);
+            const previous = existing
+              ? await secrets.get(profile.credentialRef)
+              : undefined;
+            if (existing && !previous)
+              throw new AgentError("HELD_IDENTITY_KEY", 3);
+            await secrets.set(
+              profile.credentialRef,
+              newCredentials(auth, previous),
+            );
+            profile.removed = false;
+            config.profiles[name] = profile;
+          },
           async () => {
             if (
               options["contract-manifest"] &&
-              Object.values(loadConfig(p).routes).some((r) => r.profile === name)
+              Object.values(loadConfig(p).routes).some(
+                (r) => r.profile === name,
+              )
             )
               await runtimeRequest(p.socket, { operation: "refresh" });
           },
@@ -390,8 +399,11 @@ export async function main(
     if (!agent) throw new AgentError("MISSING_AGENT", 2);
     const surface = required(options, "surface");
     const adapter = registry.get(agent, surface);
+    const copilotPreview =
+      agent === "copilot" && surface === "cli" && options.preview === true;
     if (
       adapter.activationHolds?.length &&
+      !copilotPreview &&
       !["disable", "uninstall"].includes(command)
     ) {
       // Static qualification does not need FI auth, secret-store access, agent
@@ -466,7 +478,18 @@ export async function main(
         options.transcript === undefined
           ? installed?.transcriptConsent === true
           : options.transcript === "structure",
+      preview:
+        copilotPreview && (command === "enable" || installed?.preview === true),
     };
+    if (
+      copilotPreview &&
+      installed &&
+      !installed.preview &&
+      command !== "enable"
+    )
+      throw new AgentError("PREVIEW_REENABLE_REQUIRED", 3);
+    if (installed?.preview && !copilotPreview && !cleanup)
+      throw new AgentError("PREVIEW_FLAG_REQUIRED", 3);
     if (
       ["enable", "run"].includes(command) &&
       adapter.capability.transcript &&
@@ -477,8 +500,11 @@ export async function main(
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
       // Generic destinations are never overwritten. Agent-specific effective state is adapter preflight's job.
       if (
-        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
-        process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+        Object.keys(process.env).some((key) =>
+          /^(OTEL_EXPORTER_OTLP(_.*)?|OTEL_TRACES_EXPORTER|COPILOT_OTEL_.*)$/.test(
+            key,
+          ),
+        )
       )
         throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
       let tracing = true;
@@ -658,6 +684,7 @@ export async function main(
             surface,
             profile: profileName,
             transcriptConsent: context.transcriptConsent,
+            ...(context.preview ? { preview: true } : {}),
             activation,
           };
         },

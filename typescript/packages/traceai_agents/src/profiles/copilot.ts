@@ -11,6 +11,16 @@ import type { Adapter, Capability, NormalizeContext } from "../adapters.js";
 import type { NativeSpanEnvelope } from "../runtime/receiver.js";
 import { decodeNativeId } from "../export/otlp.js";
 import { AgentError } from "../security/files.js";
+import {
+  accessSync,
+  constants,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 
 export const COPILOT_SCHEMA = "copilot-cli-1.0.98-otel";
 export const COPILOT_IDENTITY = "copilot-native-ids-v1";
@@ -276,22 +286,78 @@ const inactive = {
   activated: false,
   restartRequired: false,
 };
+function qualifiedBinary(): string {
+  // Resolve a pinned released CLI, not a project-local command or a shell alias.
+  const candidates = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter((dir) => dir.startsWith("/"))
+    .map((dir) => join(dir, "copilot"));
+  for (const candidate of candidates) {
+    let executable: string;
+    try {
+      executable = realpathSync(candidate);
+      accessSync(executable, constants.X_OK);
+    } catch {
+      continue;
+    }
+    const home = mkdtempSync(join(tmpdir(), "fi-copilot-version-"));
+    try {
+      const version = execFileSync(executable, ["--version"], {
+        env: { HOME: home, PATH: "/usr/bin:/bin" },
+        encoding: "utf8",
+        timeout: 2000,
+        maxBuffer: 1024,
+      });
+      if (/^(?:GitHub Copilot CLI\s+|copilot\s+)?1\.0\.98\s*$/i.test(version))
+        return executable;
+    } catch {
+      // No fallback to an unqualified executable later on PATH.
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+    throw new AgentError("COPILOT_VERSION_UNQUALIFIED", 5);
+  }
+  throw new AgentError("COPILOT_CLI_NOT_FOUND", 5);
+}
+
 export const copilotCliAdapter: Adapter = {
   capability,
-  // CLI 1.0.98 supports distinct trace and metric endpoints. Routing alone is
-  // not qualification of managed-policy/header precedence or a safe launch.
-  // Keep public activation held; the common leased receiver is not that proof.
+  // Preview is explicit on both enable and run. Unknown enterprise-managed
+  // telemetry precedence remains a preview limitation, not a GA claim.
   activationHolds: [
     "COPILOT_SIGNAL_ISOLATION_UNQUALIFIED",
     "COPILOT_EFFECTIVE_MANAGED_SETTINGS_UNQUALIFIED",
   ],
-  async preflight(action) {
-    if (action === "enable" || action === "update")
-      throw new AgentError("COPILOT_SIGNAL_ISOLATION_UNQUALIFIED", 5);
+  async preflight(action, context) {
+    if ((action === "enable" || action === "update") && !context.preview)
+      throw new AgentError("COPILOT_PREVIEW_FLAG_REQUIRED", 5);
     return { commit: async () => inactive, rollback: async () => {} };
   },
   async probe() {
     return inactive;
+  },
+  async launch(context, { tracing }) {
+    if (!context.preview)
+      throw new AgentError("COPILOT_PREVIEW_FLAG_REQUIRED", 5);
+    // The CLI can be activated by managed policy even if the local environment
+    // says otherwise. Never replace an observable third-party destination.
+    if (
+      Object.keys(process.env).some((key) =>
+        /^(OTEL_EXPORTER_OTLP(_.*)?|OTEL_TRACES_EXPORTER|COPILOT_OTEL_.*)$/.test(
+          key,
+        ),
+      )
+    )
+      throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
+    const executable = qualifiedBinary();
+    return {
+      executable,
+      args: [],
+      env: tracing
+        ? ({ COPILOT_OTEL_ENABLED: "true" } as Record<string, string>)
+        : ({} as Record<string, string>),
+      native: tracing,
+    };
   },
   normalize(input, context) {
     return [normalizeCopilotCli(input, context)];

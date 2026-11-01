@@ -11,7 +11,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { frame } from "@traceai/agent-core/client";
 import { minimize, type CanonicalFact } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
-import { configTransaction, loadConfig, type Paths, type Config } from "../config.js";
+import {
+  configTransaction,
+  loadConfig,
+  type Paths,
+  type Config,
+} from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
 import {
   FileSecretStore,
@@ -252,7 +257,10 @@ export class Runtime {
     const signature = this.nativeSignature(this.config, id);
     const adapter = this.registry.get(route.agent, route.surface);
     // The control socket is not an escape hatch around CLI qualification holds.
-    if (adapter.activationHolds?.length)
+    if (
+      adapter.activationHolds?.length &&
+      !(id === "copilot.cli" && route.preview === true)
+    )
       throw new AgentError(adapter.activationHolds[0], 5);
     if (!adapter.capability.native || adapter.capability.schemas.length !== 1)
       throw new AgentError("UNSUPPORTED_NATIVE_PROFILE", 5);
@@ -333,6 +341,7 @@ export class Runtime {
         agents: Object.values(this.config.routes).map((r) => ({
           agent: r.agent,
           surface: r.surface,
+          preview: r.preview === true,
           enabled: r.route.enabled,
           activation: {
             ...r.activation,
@@ -437,7 +446,7 @@ export class Runtime {
       // Read the durable store after joining the sender: the cached status can
       // predate this flush (or an admission concurrent with it). No HTTP success
       // is interpreted as backend persistence.
-      const storage = await this.storage.call("status") as {
+      const storage = (await this.storage.call("status")) as {
         drain_counts: { pending: number; rejected: number; ambiguous: number };
       };
       this.statusCache = storage;

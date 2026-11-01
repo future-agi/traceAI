@@ -2,7 +2,7 @@
 
 `fi-agent` is a local observability runtime for explicitly enabled coding-agent integrations. It is not a coding agent, model proxy, or agent orchestrator.
 
-The executable includes no enabled or installable agent adapters. Installing the runtime does not enable tracing. Agent SDK instrumentation remains a separate integration surface.
+Installing the runtime does not enable tracing. Copilot CLI 1.0.98 has an explicitly opted-in preview; VS Code remains qualification-only. Agent SDK instrumentation remains a separate integration surface.
 
 ## Authentication
 
@@ -50,9 +50,9 @@ For a qualified native adapter, `run` asks the runtime for a short-lived loopbac
 
 The per-launch capability is passed to the agent in a trace-specific header variable. Tools and subprocesses started by that agent inherit it. It grants access only to that loopback lease, but it is not a sandbox against other same-user processes.
 
-If the local runtime is unavailable or holds the route, `run` starts the agent without managed trace variables and returns the agent's own exit status or signal. Routes that are not enabled, unsupported profiles and destination conflicts refuse before launch. Bundled Copilot CLI and VS Code profiles remain qualification-only and cannot use this path yet.
+If the local runtime is unavailable or holds the route, `run` starts the agent without managed trace variables and returns the agent's own exit status or signal. Routes that are not enabled, unsupported profiles and destination conflicts refuse before launch. To opt into **Copilot CLI 1.0.98 preview only**, configure an approved profile and run `fi-agent enable copilot --surface cli --profile work --project coding-agents --preview`, then `fi-agent run copilot --surface cli --profile work --preview -- <copilot arguments>`. Both commands require the flag. The launcher checks the installed CLI version; no agent home or provider credentials are copied into the FI profile. The CLI's emitted metrics are directed to the same loopback receiver at `/v1/metrics`, where they are rejected rather than exported or stored. The traces-specific lease bearer is never added to metric headers. Unknown enterprise-managed telemetry settings may override launch settings, so this is not qualified for GA: verify effective destination and durable admission on a signed-in preview session before claiming capture. The backend must provide an approved immutable-agent-v1 manifest for additive export; without it, local capture can succeed while remote delivery stays held. VS Code remains held: its editor/extension versions, harness and settings transaction are not pinned.
 
-On POSIX systems, a noninteractive managed run forwards signals to the agent's process group, including tools it starts. Interactive terminal SIGINT already reaches the foreground group, so the wrapper does not forward it again. A supervisor that signals only the interactive wrapper PID must start the wrapper in a **dedicated process group** and opt in to `runAgent(..., { signalDelivery: "dedicated-wrapper-group" })`; the library verifies group ownership and refuses this option in a shared group. The default cannot distinguish a wrapper-only interrupt from a terminal-wide interrupt, and does not claim to support wrapper-only signalling. Windows process-tree signal delivery is not qualified.
+On POSIX systems, a noninteractive managed run forwards signals to the agent's process group, including tools it starts. Interactive terminal SIGINT already reaches the foreground group, so the wrapper does not forward it again. The opt-in `dedicated-wrapper-group` mode is refused even for group leaders: a terminal-wide SIGINT and a supervisor's wrapper-only SIGINT are indistinguishable at the wrapper and forwarding would interrupt the agent twice. Wrapper-only interactive signalling is unsupported. Windows process-tree signal delivery is not qualified.
 
 ## Compatibility
 
