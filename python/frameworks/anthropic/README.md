@@ -56,7 +56,7 @@ client = anthropic.Anthropic(open_telemetry={"tracer_provider": trace_provider})
 
 The SDK's spans include model, timing and token usage, and include prompts and responses only with `"traces": {"content_mode": "content"}`. `TraceConfig`, `FI_HIDE_*` settings and the `using_session` / `using_attributes` context (session, user, metadata, tags) don't apply to them.
 
-When `AnthropicInstrumentor` is installed and the SDK's spans would reach the same tracer provider (because you pass it to the client, or because it is the global provider), the instrumentor records `messages.create` and `messages.count_tokens` calls itself and turns the SDK's span off for each of those calls, so each call is recorded once with the Future AGI context and privacy controls. Your client keeps its own `open_telemetry` option. To skip this per-call step, create the client with `open_telemetry=False`. `messages.stream()` is not wrapped by the instrumentor, so it keeps the SDK's span.
+When `AnthropicInstrumentor` is installed and the SDK's spans would reach the same tracer provider (because you pass it to the client, or because it is the global provider), the instrumentor records `messages.create` (sync and async) and sync `messages.count_tokens` calls itself and turns the SDK's span off for each of those calls, so each call is recorded once with the Future AGI context and privacy controls. Your client keeps its own `open_telemetry` option. To skip this per-call step, create the client with `open_telemetry=False`. `messages.stream()` and async `messages.count_tokens` are not wrapped by the instrumentor, so they keep the SDK's span.
 
 ### Create Anthropic Components
 Set up your Anthropic client with built-in observability.

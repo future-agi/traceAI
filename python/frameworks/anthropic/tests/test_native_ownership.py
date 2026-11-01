@@ -424,3 +424,55 @@ def test_trace_config_applies_to_the_one_span(providers, global_provider, monkey
     assert [span.instrumentation_scope.name for span in spans] == [FI_SCOPE]
     payload = json.dumps(dict(spans[0].attributes), default=str)
     assert "synthetic prompt" not in payload and "synthetic answer" not in payload
+
+
+def sent_requests(asynchronous, instrumented, instrument, provider):
+    """The requests a client given `provider` sends, with or without the instrumentor."""
+    seen = []
+
+    def capture(request):
+        headers = {k: v for k, v in request.headers.items() if k not in ("traceparent", "tracestate")}
+        seen.append((request.method, str(request.url), headers, request.content))
+        return respond(request)
+
+    instrumentor = instrument(tracer_provider=provider) if instrumented else None
+    try:
+        options = dict(
+            api_key="sk-ant-synthetic",
+            base_url="http://localhost",
+            max_retries=0,
+            default_headers={"x-custom": "kept"},
+            open_telemetry={"tracer_provider": provider},
+        )
+        extra = dict(extra_headers={"x-extra": "kept"}, metadata={"user_id": "synthetic"})
+        if asynchronous:
+
+            async def run():
+                transport = httpx.MockTransport(capture)
+                async with anthropic.AsyncAnthropic(**options, http_client=httpx.AsyncClient(transport=transport)) as client:
+                    await client.with_options(timeout=5).messages.create(**PARAMS, **extra)
+
+            asyncio.run(run())
+        else:
+            with anthropic.Anthropic(**options, http_client=httpx.Client(transport=httpx.MockTransport(capture))) as client:
+                client.with_options(timeout=5).messages.create(**PARAMS, **extra)
+                client.messages.count_tokens(model=PARAMS["model"], messages=PARAMS["messages"])
+    finally:
+        if instrumentor is not None:
+            instrumentor.uninstrument()
+    for _, _, headers, _ in seen:
+        # Generated per request; everything else must match.
+        headers.pop("x-stainless-retry-count", None)
+        headers.pop("idempotency-key", None)
+    return seen
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_the_client_copy_sends_the_same_request(providers, instrument, asynchronous):
+    fi, fi_exporter, _, _ = providers
+    untraced = sent_requests(asynchronous, False, instrument, fi)
+    traced = sent_requests(asynchronous, True, instrument, fi)
+    assert traced == untraced
+    assert all(headers.get("x-custom") == "kept" for _, _, headers, _ in traced)
+    assert traced[0][2].get("x-extra") == "kept"
+    assert any("sk-ant-synthetic" in value for value in traced[0][2].values())
