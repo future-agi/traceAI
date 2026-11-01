@@ -353,7 +353,34 @@ export async function main(
       return 0;
     }
     if (command === "status") {
-      output(await runtimeRequest(p.socket, { operation: "status" }));
+      try {
+        output(await runtimeRequest(p.socket, { operation: "status" }));
+      } catch (e) {
+        if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+          throw e;
+        // Read only protected, bounded configuration. Never open the SQLite
+        // writer's database from a stopped CLI or infer remote persistence.
+        const config = loadConfig(p);
+        output({
+          state: "runtime-unavailable",
+          code: 0,
+          reasons: ["RUNTIME_UNAVAILABLE"],
+          storage: { state: "unknown", counts: "unknown", physical: "unknown" },
+          last_durable_local_ack: "unknown",
+          unknown_gap: "unknown",
+          persistence: "unknown",
+          agents: Object.values(config.routes).map((r) => ({
+            agent: r.agent,
+            surface: r.surface,
+            enabled: r.route.enabled,
+            activation: { ...r.activation, trusted: "unknown", activated: "unknown" },
+            policy: r.route.policy.revision,
+            export: r.route.binding.backendContract === "immutable-agent-v1"
+              ? "approved"
+              : "HELD_BACKEND_CONTRACT",
+          })),
+        });
+      }
       return 0;
     }
     if (command === "flush") {

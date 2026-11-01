@@ -207,8 +207,67 @@ test("shipped executable has no adapter enabled, never silently installs a logo"
   assert.match(r.stdout, /UNSUPPORTED_AGENT_SURFACE/);
   assert.equal(fs.existsSync(path.join(root, "config")), false);
   const status = cli(root, ["status"]);
-  assert.equal(status.status, 7);
-  assert.match(status.stdout, /RUNTIME_UNAVAILABLE/);
+  assert.equal(status.status, 0, status.stdout);
+  const report = JSON.parse(status.stdout);
+  assert.equal(report.state, "runtime-unavailable");
+  assert.deepEqual(report.agents, []);
+  assert.equal(report.storage.state, "unknown");
+  assert.equal(report.persistence, "unknown");
+});
+test("stopped runtime status separates installed route facts from unavailable storage", (t) => {
+  const root = fixture(t);
+  fs.mkdirSync(path.join(root, "config"), { mode: 0o700 });
+  const config = {
+    schema_version: 1,
+    profiles: {
+      work: {
+        binding: {
+          id: "00000000-0000-4000-8000-000000000001",
+          endpoint: "https://api.futureagi.com/tracer/v1/traces",
+          approvedOrigin: "https://api.futureagi.com",
+          project: "fixture",
+        },
+        storage: "file",
+        credentialRef: "synthetic-ref",
+        removed: true,
+      },
+    },
+    routes: {
+      "reference.fixture": {
+        agent: "reference",
+        surface: "fixture",
+        profile: "work",
+        transcriptConsent: false,
+        activation: { installed: true, trusted: true, activated: true, restartRequired: false },
+        route: {
+          id: "reference.fixture",
+          binding: {
+            id: "00000000-0000-4000-8000-000000000001",
+            endpoint: "https://api.futureagi.com/tracer/v1/traces",
+            approvedOrigin: "https://api.futureagi.com",
+            project: "fixture",
+          },
+          policy: { revision: "1", categories: [], ceiling: [] },
+          enabled: false,
+          epoch: 2,
+        },
+      },
+    },
+  };
+  fs.writeFileSync(path.join(root, "config/config.json"), JSON.stringify(config), { mode: 0o600 });
+  const status = cli(root, ["status", "--json"]);
+  assert.equal(status.status, 0, status.stdout);
+  const report = JSON.parse(status.stdout);
+  assert.equal(report.state, "runtime-unavailable");
+  assert.equal(report.agents[0].agent, "reference");
+  assert.equal(report.agents[0].enabled, false);
+  assert.equal(report.agents[0].activation.activated, "unknown");
+  assert.equal(report.agents[0].activation.trusted, "unknown");
+  assert.equal(report.storage.state, "unknown");
+  assert.equal(report.last_durable_local_ack, "unknown");
+  assert.equal(report.persistence, "unknown");
+  assert.equal(report.agents[0].export, "HELD_BACKEND_CONTRACT");
+  assert.doesNotMatch(status.stdout, /synthetic-ref|api.futureagi.com/);
 });
 test("run environment strips FI credentials and refuses provider/permission overrides", () => {
   const env = agentEnvironment(

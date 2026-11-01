@@ -304,6 +304,79 @@ test("ambiguous rows retain immutable bytes and retry eligibility, but obey fenc
   assert.equal(spool.next(route().id), undefined);
 });
 
+test("terminal receipts and accounting indexes reclaim bounded pages after retention", (t) => {
+  const { spool, dir } = fixture(t);
+  for (let i = 0; i < 320; i++) {
+    spool.admit(route().id, fact(`retained-${i}`));
+    const row = spool.next(route().id);
+    spool.complete(row.id, row.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  }
+  const db = new Database(path.join(dir, "spool.db"));
+  db.prepare("UPDATE records SET created=?").run(Date.now() - 8 * 86400000);
+  db.close();
+  for (let i = 0; i < 5; i++) spool.expire();
+  const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+  assert.equal(check.prepare("SELECT count(*) n FROM records").get().n, 0);
+  assert.equal(check.prepare("SELECT count(*) n FROM usage").get().n, 0);
+  assert.equal(check.prepare("SELECT count(*) n FROM plans").get().n, 0);
+  const pagesAfterGc = check.pragma("page_count", { simple: true });
+  check.close();
+  for (let i = 0; i < 320; i++) {
+    spool.admit(route().id, fact(`second-cycle-${i}`));
+    const row = spool.next(route().id);
+    spool.complete(row.id, row.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  }
+  const reused = new Database(path.join(dir, "spool.db"), { readonly: true });
+  assert.ok(reused.pragma("page_count", { simple: true }) <= pagesAfterGc + 16);
+  reused.close();
+  assert.equal(spool.admit(route().id, fact("retained-0")).duplicate, false);
+  assert.equal(spool.admit(route().id, fact("retained-0")).duplicate, true);
+});
+
+test("v1 receipts migrate without deleting pending work or its accounting plan", (t) => {
+  const dir = fs.mkdtempSync(path.join(base, "migration-"));
+  let spool = new Spool(dir, "0.1.0");
+  try {
+    spool.route(route());
+    spool.admit(route().id, fact("legacy"));
+    spool.close();
+    const db = new Database(path.join(dir, "spool.db"));
+    db.exec("DROP INDEX terminal_age; DROP INDEX record_plans");
+    db.exec("ALTER TABLE records DROP COLUMN plan");
+    db.exec("ALTER TABLE cursors DROP COLUMN updated");
+    db.prepare("UPDATE meta SET value='1' WHERE key='schema'").run();
+    db.pragma("user_version=1");
+    db.close();
+    spool = new Spool(dir, "0.1.1");
+    assert.equal(spool.admit(route().id, fact("legacy")).duplicate, true);
+    spool.admit(route().id, fact("new"));
+    const pending = spool.next(route().id);
+    assert.equal(pending.work, fact("legacy").sourceWorkId);
+    const db2 = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(db2.pragma("user_version", { simple: true }), 2);
+    assert.equal(db2.prepare("SELECT count(*) n FROM plans").get().n, 1);
+    db2.close();
+  } finally {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("active accounting and unexpired receipts survive receipt collection", (t) => {
+  const { spool, dir } = fixture(t);
+  spool.admit(route().id, fact("old"));
+  spool.admit(route().id, fact("queued"));
+  const old = spool.next(route().id);
+  spool.complete(old.id, old.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  const db = new Database(path.join(dir, "spool.db"));
+  db.prepare("UPDATE records SET created=? WHERE id=?").run(Date.now() - 8 * 86400000, old.id);
+  db.close();
+  spool.expire();
+  assert.equal(spool.admit(route().id, fact("queued")).duplicate, true);
+  assert.equal(spool.next(route().id).work, fact("queued").sourceWorkId);
+  assert.throws(() => spool.admit(route().id, { ...fact("queued"), endNs: "3000000000" }), /HELD_IMMUTABLE_CONFLICT/);
+});
+
 test("stalled second reader prevents another write and WAL stays within one transaction", (t) => {
   const { spool, dir } = fixture(t);
   spool.admit(route().id, fact("before"));
