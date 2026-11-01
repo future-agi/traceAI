@@ -25,6 +25,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from traceai_weaviate import WeaviateInstrumentor
+from weaviate.collections.classes.internal import GroupByReturn
 
 QUERIES = {
     "near_vector": "_NearVectorQuery",
@@ -334,6 +335,26 @@ def test_counts_and_partial_failures(
         else StatusCode.OK
     )
     assert span.status.status_code is expected
+
+
+@pytest.mark.parametrize("is_async", MODES)
+@pytest.mark.parametrize("objects_are_flattened", [False, True])
+def test_grouped_query_counts_objects_not_groups(rig, is_async, objects_are_flattened):
+    groups = {
+        "a": SimpleNamespace(objects=[SimpleNamespace(properties={}) for _ in range(3)]),
+        "b": SimpleNamespace(objects=[SimpleNamespace(properties={}) for _ in range(4)]),
+    }
+    # The SDK flattens groups into objects; also guard against a response with
+    # an incomplete top-level objects list so the group count stays authoritative.
+    objects = [obj for group in groups.values() for obj in group.objects]
+    response = GroupByReturn(
+        objects=objects if objects_are_flattened else objects[:2], groups=groups
+    )
+    run = rig("near_text", is_async, result=response)
+    assert invoke(run.client, "near_text", is_async, query="synthetic") is response
+    (span,) = run.exporter.get_finished_spans()
+    assert span.attributes["db.vector.results.count"] == 7
+    assert len(response.groups) == 2
 
 
 @pytest.mark.skipif(True not in MODES, reason="SDK predates async client")

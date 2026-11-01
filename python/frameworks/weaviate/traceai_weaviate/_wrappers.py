@@ -147,15 +147,17 @@ class OperationWrapper:
             return
         try:
             if self._operation in _QUERIES:
+                groups = getattr(result, "groups", None)
                 objects = getattr(result, "objects", None)
-                if isinstance(objects, (list, tuple)):
+                if isinstance(groups, dict):
+                    # GroupByReturn also has an objects list. Count members of
+                    # groups, not the number of groups or a partial flat list.
+                    count = sum(len(group.objects) for group in groups.values())
+                    span.set_attribute("db.vector.results.count", count)
+                elif isinstance(objects, (list, tuple)):
                     span.set_attribute("db.vector.results.count", len(objects))
+                if isinstance(objects, (list, tuple)):
                     self._documents(span, objects)
-                else:
-                    groups = getattr(result, "groups", None)
-                    if isinstance(groups, dict):
-                        count = sum(len(group.objects) for group in groups.values())
-                        span.set_attribute("db.vector.results.count", count)
             elif self._operation == "delete_by_id" and isinstance(result, bool):
                 span.set_attribute("db.vector.delete.count", int(result))
             elif self._operation == "delete_many":
