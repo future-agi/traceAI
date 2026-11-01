@@ -1939,6 +1939,12 @@ importers:
 
   packages/traceai_strands:
     dependencies:
+      '@opentelemetry/core':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1946,7 +1952,7 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@strands-agents/sdk':
-        specifier: ^0.1.0
+        specifier: ^0.1.0 || ^1.23.0
         version: 0.1.6(@cfworker/json-schema@4.1.1)(ws@8.22.0)
       '@traceai/fi-core':
         specifier: workspace:^
@@ -1955,12 +1961,9 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
-      '@opentelemetry/sdk-trace-base':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-node':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@types/jest':
         specifier: ^29.5.14
         version: 29.5.14
