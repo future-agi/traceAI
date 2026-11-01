@@ -3,26 +3,57 @@ import type { Adapter, AdapterContext } from "../adapters.js";
 import { AgentError } from "../security/files.js";
 import { runtimeRequest } from "../runtime/daemon.js";
 import type { NativeLease } from "../runtime/native.js";
-/** Only trace settings may be overlaid. No provider/model/permission/sandbox variables. */
+/** Only trace settings and a gated Copilot signal sink may be overlaid. */
 const traceEnvironment = new Set([
   "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
   "OTEL_TRACES_EXPORTER",
+]);
+const copilotEnvironment = new Set([
   "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
   "COPILOT_OTEL_ENABLED",
 ]);
 export function agentEnvironment(
   env: NodeJS.ProcessEnv,
   overlay: Record<string, string>,
+  copilotPreview = false,
 ): NodeJS.ProcessEnv {
   const result = { ...env };
   for (const key of Object.keys(result))
     if (/^FI_(API_KEY|SECRET_KEY|AGENT_.*)$/.test(key)) delete result[key];
   for (const [key, value] of Object.entries(overlay)) {
-    if (!traceEnvironment.has(key))
+    if (
+      !traceEnvironment.has(key) &&
+      !(copilotPreview && copilotEnvironment.has(key))
+    )
       throw new AgentError("UNSAFE_LAUNCH_OVERLAY", 6);
     result[key] = value;
+  }
+  if (copilotPreview) {
+    if (
+      overlay.COPILOT_OTEL_ENABLED !== undefined &&
+      overlay.COPILOT_OTEL_ENABLED !== "true"
+    )
+      throw new AgentError("UNSAFE_LAUNCH_OVERLAY", 6);
+    if (overlay.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT !== undefined) {
+      try {
+        const traces = new URL(overlay.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT);
+        const metrics = new URL(overlay.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT);
+        if (
+          traces.protocol !== "http:" ||
+          traces.hostname !== "127.0.0.1" ||
+          traces.origin !== metrics.origin ||
+          traces.pathname !== "/v1/traces" ||
+          metrics.pathname !== "/v1/metrics" ||
+          metrics.search ||
+          metrics.hash
+        )
+          throw new Error();
+      } catch {
+        throw new AgentError("UNSAFE_LAUNCH_OVERLAY", 6);
+      }
+    }
   }
   return result;
 }
@@ -34,6 +65,10 @@ export async function runAgent(
   options: { signalDelivery?: "terminal" | "dedicated-wrapper-group" } = {},
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (!adapter.launch) throw new AgentError("UNSUPPORTED_RUN", 5);
+  const copilotPreview =
+    context.preview === true &&
+    adapter.capability?.agent === "copilot" &&
+    adapter.capability.surface === "cli";
   // Group leadership does not reveal whether SIGINT came from a supervisor or
   // from the terminal foreground group (which has already signaled the child).
   // Until there is a verifiable supervisor-only channel, refuse this mode.
@@ -44,7 +79,7 @@ export async function runAgent(
   const validate = () => {
     if (!launch.executable.startsWith("/"))
       throw new AgentError("ABSOLUTE_EXECUTABLE_REQUIRED", 5);
-    agentEnvironment(process.env, launch.env);
+    agentEnvironment(process.env, launch.env, copilotPreview);
   };
   validate();
   let lease: NativeLease | undefined;
@@ -108,8 +143,7 @@ export async function runAgent(
                 // CLI 1.0.98 emits metrics even with OTEL_METRICS_EXPORTER=none.
                 // Route them to the same loopback listener's rejected metrics
                 // path, never to the default or an unrelated exporter.
-                ...(adapter.capability?.agent === "copilot" &&
-                adapter.capability.surface === "cli"
+                ...(copilotPreview
                   ? {
                       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:
                         lease.endpoint.replace(/\/v1\/traces$/, "/v1/metrics"),
@@ -131,7 +165,7 @@ export async function runAgent(
     const interactive =
       process.platform !== "win32" && Boolean(process.stdin.isTTY);
     const child = spawn(launch.executable, [...launch.args, ...args], {
-      env: agentEnvironment(process.env, overlay),
+      env: agentEnvironment(process.env, overlay, copilotPreview),
       stdio: "inherit",
       shell: false,
       detached: process.platform !== "win32" && !interactive,

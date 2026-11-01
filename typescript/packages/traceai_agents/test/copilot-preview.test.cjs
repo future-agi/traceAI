@@ -36,6 +36,7 @@ test("preview Copilot CLI pins its binary and activates only native traces", asy
         OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:1234/v1/traces",
         OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://127.0.0.1:1234/v1/metrics",
       },
+      true,
     );
     assert.equal(
       new URL(overlay.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).hostname,
@@ -113,4 +114,25 @@ test("explicit preview gate is required for CLI and never bypasses VS Code hold"
     if (previous[1] === undefined) delete process.env.FI_AGENT_STATE_HOME;
     else process.env.FI_AGENT_STATE_HOME = previous[1];
   }
+});
+
+test("generic adapter cannot override signals, and preview cannot route metrics off-host", () => {
+  assert.throws(
+    () => agentEnvironment({}, { COPILOT_OTEL_ENABLED: "true" }),
+    /UNSAFE_LAUNCH_OVERLAY/,
+  );
+  assert.throws(
+    () =>
+      agentEnvironment(
+        {},
+        {
+          COPILOT_OTEL_ENABLED: "true",
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:1234/v1/traces",
+          OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:
+            "https://outside.invalid/v1/metrics",
+        },
+        true,
+      ),
+    /UNSAFE_LAUNCH_OVERLAY/,
+  );
 });
