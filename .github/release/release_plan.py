@@ -205,7 +205,7 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
-        return set(d["releases"]) if d else None
+        return {version for version, files in d["releases"].items() if files} if d else None
     if eco == "typescript":
         d = _get_json("https://registry.npmjs.org/" + p["name"].replace("/", "%2F"))
         return set(d.get("versions", {})) if d else None
@@ -235,11 +235,10 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
         parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
         if not on_central(parent):
             return None
-        later = [a for a in modules if not on_central(a)]
-        if later and strict:
+        if not strict:
+            return {p["version"]}
+        if any(not on_central(a) for a in modules):
             return None
-        if later:
-            print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
