@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from fi_instrumentation import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
@@ -84,8 +84,35 @@ class _NativeTraceConfig(ObjectProxy):
                     parts.append(part)
                     continue
                 masked = self.__wrapped__.mask(policy_key, part.get(field))
+                if (
+                    key == SpanAttributes.GEN_AI_INPUT_MESSAGES
+                    and part.get("type") == "tool_call_response"
+                    and isinstance(masked, list)
+                ):
+                    masked = self._mask_tool_images(masked, prefix)
                 if masked is not None:
                     part[field] = masked
                     parts.append(part)
             message["parts"] = parts
         return json.dumps(messages)
+
+    def _mask_tool_images(self, chunks: list[Any], prefix: str) -> list[Any]:
+        # Unlike user messages, the SDK leaves tool responses as raw content
+        # chunks, with image_url represented by either a string or a URL object.
+        result = []
+        for index, chunk in enumerate(chunks):
+            if not isinstance(chunk, dict) or chunk.get("type") != "image_url":
+                result.append(chunk)
+                continue
+            image = chunk.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if not isinstance(url, str):
+                continue
+            policy_key = f"{prefix}.{index}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"
+            masked = self.__wrapped__.mask(policy_key, url)
+            if masked is not None:
+                chunk["image_url"] = (
+                    {**image, "url": masked} if isinstance(image, dict) else masked
+                )
+                result.append(chunk)
+        return result

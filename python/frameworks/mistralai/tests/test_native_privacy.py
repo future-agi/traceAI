@@ -68,6 +68,79 @@ def test_input_image_limit_and_environment_config(monkeypatch, hidden):
         assert result[1] == {"type": "uri", "modality": "image", "uri": REDACTED_VALUE}
 
 
+@pytest.mark.parametrize("hidden", [False, True])
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_tool_image_environment_and_length_boundaries(monkeypatch, hidden, direction):
+    monkeypatch.setenv("FI_HIDE_INPUT_IMAGES", str(hidden).lower())
+    short = "data:image/png;base64," + "A" * 8
+    long = short + "A"
+    url = "https://example.invalid/" + "a" * 80
+    config = _NativeTraceConfig(TraceConfig(base64_image_max_length=len(short)))
+    chunks = [
+        {"type": "text", "text": "visible-text"},
+        {"type": "image_url", "image_url": short},
+        {"type": "image_url", "image_url": {"url": long, "detail": "low"}},
+        {"type": "image_url", "image_url": {"url": url}},
+        {"type": "text", "text": "trailing-text"},
+    ]
+    payload = json.dumps(
+        [
+            {
+                "role": "tool",
+                "parts": [
+                    {"type": "tool_call_response", "id": "call-1", "response": chunks}
+                ],
+            }
+        ]
+    )
+    result = json.loads(config.mask(f"gen_ai.{direction}.messages", payload))[0][
+        "parts"
+    ][0]
+    assert result["id"] == "call-1"
+    if direction == "output":
+        assert result["response"] == chunks
+    elif hidden:
+        assert result["response"] == [chunks[0], chunks[-1]]
+    else:
+        assert result["response"] == [
+            chunks[0],
+            chunks[1],
+            {
+                "type": "image_url",
+                "image_url": {"url": REDACTED_VALUE, "detail": "low"},
+            },
+            chunks[3],
+            chunks[4],
+        ]
+
+
+@pytest.mark.parametrize(
+    "image", [None, 123, {}, {"url": None}, {"url": ["private-image"]}]
+)
+def test_malformed_tool_images_are_not_forwarded(image):
+    config = _NativeTraceConfig(TraceConfig(hide_input_images=True))
+    payload = json.dumps(
+        [
+            {
+                "role": "tool",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call-1",
+                        "response": [
+                            {"type": "image_url", "image_url": image},
+                            {"type": "text", "text": "visible-text"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    )
+    result = json.loads(config.mask("gen_ai.input.messages", payload))[0]["parts"][0]
+    assert result["id"] == "call-1"
+    assert result["response"] == [{"type": "text", "text": "visible-text"}]
+
+
 def test_unrelated_attributes_and_empty_messages_are_preserved():
     config = _NativeTraceConfig(TraceConfig(hide_input_text=True))
     assert config.mask("gen_ai.request.model", "mistral-test") == "mistral-test"
