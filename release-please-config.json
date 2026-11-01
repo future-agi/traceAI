@@ -951,7 +951,10 @@
       "release-type": "maven",
       "component": "java",
       "package-name": "com.futureagi:traceai-java-parent",
-      "skip-snapshot": true
+      "skip-snapshot": true,
+      "extra-files": [
+        {"type": "generic", "path": "java/compatibility/spring-ai/pom.xml"}
+      ]
     },
     "go/a2a": {
       "release-type": "go",
