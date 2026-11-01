@@ -87,18 +87,17 @@ OpenAIInstrumentor().instrument(tracer_provider=trace_provider)
 Set up your OpenAI client with built-in observability.  
 
 ```python
-import openai
+from openai import OpenAI
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
-
-response = openai.ChatCompletion.create(
-    model="gpt-4-0",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Can you tell me a joke?"}
-    ]
-)
-
-print(response.choices[0].message['content'].strip())
+# OpenAI reads OPENAI_API_KEY from your environment.
+with OpenAI() as client:
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Can you tell me a joke?"},
+        ],
+    )
+    print((response.choices[0].message.content or "").strip())
 ```
 
