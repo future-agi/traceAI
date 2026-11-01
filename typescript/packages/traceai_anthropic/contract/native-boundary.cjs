@@ -34,9 +34,26 @@ const events = [
   { type: 'message_stop' },
 ];
 let requests = 0;
+// Sends two events, then holds the body open until the request is aborted.
+function stalledStream(signal) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      for (const event of events.slice(0, 2)) {
+        controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+      }
+      await new Promise(resolve => { if (signal.aborted) resolve(); signal.addEventListener('abort', resolve); });
+      controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    },
+  });
+}
 const fetch = async (_url, init) => {
   requests++;
   const body = JSON.parse(init.body);
+  if (body.model === 'synthetic-stall') {
+    return new Response(stalledStream(init.signal), { status: 200,
+      headers: { 'content-type': 'text/event-stream', 'request-id': 'req_synthetic' } });
+  }
   if (body.model === 'synthetic-error') {
     return new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'SYNTHETIC_ERROR_DETAIL' } }),
       { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_error' } });
@@ -78,6 +95,10 @@ async function main() {
       class DerivedAnthropic extends Anthropic {}
       instrumentation.manuallyInstrument(DerivedAnthropic);
       assert.equal(Anthropic.Messages.prototype.create, original, 'inherited native capability must also be respected');
+      warnings.length = 0;
+      instrumentation.manuallyInstrument(req(sdkPackage));
+      assert.equal(Anthropic.Messages.prototype.create, original, 'CommonJS module object must also be respected');
+      assert.ok(warnings.some(w => w.includes('native')), 'CommonJS module object gets the native warning');
     } else {
       assert.notEqual(Anthropic.Messages.prototype.create, original);
       assert.equal(isPatched(), true);
@@ -88,6 +109,8 @@ async function main() {
       memory.reset();
       wire.length = 0;
       await operation();
+      // The legacy instrumentor ends a stream span after its own copy of the stream drains.
+      for (let i = 0; i < 100 && memory.getFinishedSpans().length < count; i++) await new Promise(r => setTimeout(r, 5));
       await provider.forceFlush();
       const spans = memory.getFinishedSpans();
       assert.equal(spans.length, count, label);
@@ -108,6 +131,52 @@ async function main() {
     if (!native) {
       // Keep the existing supported legacy entry point. No claim of native parity here.
       assert.equal(spans[0].attributes['fi.span.kind'], 'LLM');
+      // The legacy wrapper must hand back the SDK's APIPromise unchanged in shape.
+      await run('withResponse', async () => {
+        const promise = client.messages.create(params);
+        assert.equal(typeof promise.withResponse, 'function');
+        const { data, response } = await promise.withResponse();
+        assert.equal(data.id, message.id);
+        assert.equal(response.status, 200);
+      });
+      await run('asResponse retains unread body', async () => {
+        const raw = await client.messages.create(params).asResponse();
+        assert.equal(raw.bodyUsed, false);
+        assert.equal((await raw.json()).id, message.id);
+      });
+      await run('stream withResponse', async () => {
+        const { data: stream } = await client.messages.create({ ...params, stream: true }).withResponse();
+        const received = [];
+        for await (const event of stream) received.push(event);
+        assert.deepEqual(received, events);
+      });
+      await run('stream helper', async () => {
+        const result = await client.messages.stream(params).finalMessage();
+        assert.equal(result.content[0].text, 'PRIVATE_OUTPUT_CANARY');
+      });
+      // The SDK ends an aborted stream without an error. That is a cancellation, not OK.
+      await run('stream controller abort', async () => {
+        const stream = await client.messages.create({ ...params, model: 'synthetic-stall', stream: true });
+        const iterator = stream[Symbol.asyncIterator]();
+        await iterator.next();
+        stream.controller.abort();
+        while (!(await iterator.next()).done);
+      }, 1, SpanStatusCode.UNSET);
+      await run('stream request signal abort', async () => {
+        const abort = new AbortController();
+        const stream = await client.messages.create({ ...params, model: 'synthetic-stall', stream: true },
+          { signal: abort.signal });
+        const iterator = stream[Symbol.asyncIterator]();
+        await iterator.next();
+        abort.abort();
+        while (!(await iterator.next()).done);
+      }, 1, SpanStatusCode.UNSET);
+      await run('API error remains typed', async () => {
+        await assert.rejects(client.messages.create({ ...params, model: 'synthetic-error' }), Anthropic.BadRequestError);
+      }, 1, SpanStatusCode.ERROR);
+      // CommonJS hook path: the module object, not the default export.
+      instrumentation.manuallyInstrument(req(sdkPackage));
+      await run('module object adds no second wrapper', async () => { await client.messages.create(params); });
     } else {
       await run('withResponse', async () => {
         const promise = client.messages.create(params);
