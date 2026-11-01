@@ -7,8 +7,11 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from fi_instrumentation import FITracer, TraceConfig
+from mistralai.extra.observability.formatting import format_output_message
 from opentelemetry import trace
 from wrapt import ObjectProxy, wrap_function_wrapper
+
+from traceai_mistralai._privacy import _NativeTraceConfig
 
 logger = logging.getLogger(__name__)
 # Fail-open telemetry diagnostics deliberately omit payload-bearing exceptions.
@@ -89,7 +92,7 @@ class _NativeTracer(FITracer):
 class _NativeProvider(trace.TracerProvider):
     def __init__(self, provider: trace.TracerProvider, config: TraceConfig) -> None:
         self._provider = provider
-        self._config = config
+        self._config = _NativeTraceConfig(config)
 
     def get_tracer(self, *args: Any, **kwargs: Any) -> _NativeTracer:
         return _NativeTracer(self._provider.get_tracer(*args, **kwargs), self._config)
@@ -199,15 +202,22 @@ class _NativeInstrumentation:
                                 )
                     elif event_type == "message.output.delta":
                         content = event.get("content")
-                        if isinstance(content, str):
-                            parts.append({"type": "text", "content": content})
-                        elif isinstance(content, dict):
-                            parts.append(content)
+                        if isinstance(content, (str, dict)):
+                            # Reuse the SDK's non-streaming OTel conversion for
+                            # text, reasoning and image chunks, not provider keys.
+                            message = {
+                                "content": [content]
+                                if isinstance(content, dict)
+                                else content
+                            }
+                            parts.extend(
+                                format_output_message({"message": message})["parts"]
+                            )
                     elif event_type == "function.call.delta":
                         parts.append(
                             {
                                 "type": "tool_call",
-                                "id": event.get("id"),
+                                "id": event.get("tool_call_id"),
                                 "name": event.get("name"),
                                 "arguments": event.get("arguments"),
                             }
