@@ -114,13 +114,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([(e["name"], e["first_release"]) for e in p["typescript"]], [("@traceai/openai", True)])
         self.assertEqual(p["skipped"], [{"name": "traceAI-openai", "reason": "0.1.10 is already published"}])
 
-    def test_bootstrap_token_only_for_listed_projects_never_published(self):
+    def test_bootstrap_token_for_listed_projects_including_after_their_first_release(self):
+        # A project the token created has no trusted publisher until someone adds one, so its
+        # next upload must still use the token; only removing it from the list switches it over.
         have = {"traceai-agno": None, "traceAI-openai": None, "fi-instrumentation-otel": {"1.0.0"}}
         cfg = {"skip": {}, "pypi_bootstrap_token": ["traceai-agno", "fi-instrumentation-otel"]}
-        with patch.object(release_plan, 'published_versions', side_effect=lambda p: have.get(p["name"], set())):
+        with patch.object(release_plan, 'published_versions', side_effect=lambda p, **kw: have.get(p["name"], set())):
             p = release_plan.plan(self.packages, cfg, only={"traceai-agno", "traceAI-openai", "fi-instrumentation-otel"})
         self.assertEqual({e["name"]: e["pypi_bootstrap"] for e in p["python"]},
-                         {"fi-instrumentation-otel": False, "traceai-agno": True, "traceAI-openai": False})
+                         {"fi-instrumentation-otel": True, "traceai-agno": True, "traceAI-openai": False})
 
     def test_check_mode_exit_codes(self):
         self.assertEqual(release_plan.main(["--check", "--root", str(self.repo.root)]), 0)
