@@ -69,6 +69,7 @@
 
         <!-- Frameworks -->
         <module>traceai-langchain4j</module>
+        <module>traceai-java-quarkus-langchain4j</module>
         <module>traceai-spring-ai</module>
         <module>traceai-spring-boot-starter</module>
         <module>traceai-java-semantic-kernel</module>

@@ -51,7 +51,10 @@
     "ts-jest": "^29.1.2",
     "tsc-alias": "^1.8.8",
     "typescript": "^5.3.3",
-    "weaviate-client": "^3.0.0"
+    "weaviate-client": "^3.0.0",
+    "@opentelemetry/sdk-trace-base": "2.0.1",
+    "@opentelemetry/context-async-hooks": "2.0.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.202.0"
   },
   "peerDependencies": {
     "weaviate-client": ">=3.0.0"

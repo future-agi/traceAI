@@ -14,8 +14,10 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   transform: {
-    '^.+\\.ts$': 'ts-jest'
+    '^.+\\.[tj]s$': ['ts-jest', { isolatedModules: true, tsconfig: { allowJs: true } }]
   },
+  // Current weaviate-client uses ESM uuid, including from its CJS entry point.
+  transformIgnorePatterns: ['node_modules/(?!uuid/|.*node_modules/uuid/)'],
   moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',
     '^@traceai/fi-semantic-conventions$': '<rootDir>/../fi-semantic-conventions/src'

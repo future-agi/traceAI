@@ -60,6 +60,33 @@ import {
 
 const MODULE_NAME = "openai";
 
+/** Attribute the receiving service, not a model's author or a guessed fallback route. */
+function providerForResource(resource: unknown): string {
+  try {
+    // OpenAI 4.0 uses `client`; later clients use `_client`. Resolve per request
+    // because different clients (or a changed baseURL) can share patched methods.
+    const owner = resource as {
+      _client?: { baseURL?: unknown };
+      client?: { baseURL?: unknown };
+    } | null;
+    const baseURL = (owner?._client ?? owner?.client)?.baseURL;
+    if (typeof baseURL === "string") {
+      const url = new URL(baseURL);
+      if (
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        url.hostname.toLowerCase().replace(/\.$/, "") === "ai-gateway.vercel.sh"
+      ) {
+        return "vercel";
+      }
+    }
+  } catch {
+    // Do not log the URL or the exception: either can contain credentials.
+    diag.debug("@traceai/openai: unable to resolve endpoint provider; retaining compatibility attribution");
+  }
+  // Preserve historical attribution for all other endpoints. Never export the URL.
+  return LLMProvider.OPENAI;
+}
+
 /**
  * Flag to check if the openai module has been patched
  * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
@@ -216,7 +243,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
@@ -310,7 +337,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.LLM_MODEL_NAME]: body.model,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
                 ...getCompletionInputValueAndMimeType(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -396,6 +423,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.INPUT_MIME_TYPE]: isStringInput
                 ? MimeType.TEXT
                 : MimeType.JSON,
+              [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               ...getEmbeddingTextAttributes(body),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -473,7 +501,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                  [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
