@@ -1,0 +1,59 @@
+name: Flue native tracing
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_flue/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/flue-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flue:
+    name: Flue ${{ matrix.flue }} / Node ${{ matrix.node }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flue: '2.2.2'
+            node: '22.19.0'
+          - flue: '2.3.0'
+            node: '22.23.4'
+    defaults:
+      run:
+        working-directory: typescript/packages/traceai_flue
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install matching native Flue packages
+        env:
+          FLUE_VERSION: ${{ matrix.flue }}
+        run: |
+          npm install --ignore-scripts --no-package-lock --no-audit --no-fund \
+            "@flue/runtime@$FLUE_VERSION" "@flue/opentelemetry@$FLUE_VERSION" \
+            "@flue/cli@$FLUE_VERSION" "@flue/vite@$FLUE_VERSION"
+      - name: Build and test with outbound network denied
+        run: |
+          npm run build
+          sandbox-exec -f test/offline.sb npm test
+          sandbox-exec -f test/offline.sb npm run test:lifecycle
+      - name: Pack and install as a customer
+        run: |
+          mkdir -p "$RUNNER_TEMP/flue-pack" "$RUNNER_TEMP/flue-install"
+          TARBALL=$(npm pack --pack-destination "$RUNNER_TEMP/flue-pack" --silent)
+          npm install --prefix "$RUNNER_TEMP/flue-install" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP/flue-pack/$TARBALL" \
+            "@flue/runtime@${{ matrix.flue }}" "@flue/opentelemetry@${{ matrix.flue }}"
+          cd "$RUNNER_TEMP/flue-install"
+          node -e "if (typeof require('@traceai/flue').configure !== 'function') process.exit(1)"
+          node --input-type=module -e "import {configure} from '@traceai/flue'; if (typeof configure !== 'function') process.exit(1)"
