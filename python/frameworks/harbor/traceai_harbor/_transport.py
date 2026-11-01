@@ -122,7 +122,9 @@ def send(payload: bytes, settings: Settings) -> None:
                         ):
                             raise DeliveryError("invalid_response")
                         body = bytearray()
-                        for chunk in response.iter_raw(chunk_size=4096):
+                        # Do not coalesce chunks: a trickling peer must not hide
+                        # elapsed time behind a buffer smaller than 4096 bytes.
+                        for chunk in response.iter_raw():
                             if time.monotonic() > deadline:
                                 raise DeliveryError("response_deadline")
                             body.extend(chunk)
