@@ -32,7 +32,7 @@ const body = (chat, extras = {}) => ({
     : { prompt: input }),
   ...extras,
 });
-const response = (chat) => ({
+const response = (chat, toolArgument = '{"x":1}') => ({
   id: "response-id",
   object: chat ? "chat.completion" : "text_completion",
   created: 0,
@@ -49,7 +49,7 @@ const response = (chat) => ({
                 {
                   id: "tool-id",
                   type: "function",
-                  function: { name: "lookup", arguments: '{"x":1}' },
+                  function: { name: "lookup", arguments: toolArgument },
                 },
               ],
             },
@@ -128,6 +128,7 @@ function client(
     malformed = false,
     streamError = false,
     transportError = false,
+    privateToolArgument = false,
     baseURL = "http://vllm.test/v1",
   } = {},
 ) {
@@ -146,7 +147,9 @@ function client(
         : malformed
           ? "{bad-json"
           : JSON.stringify(
-              status >= 400 ? { error: { message: input } } : response(chat),
+              status >= 400
+                ? { error: { message: input } }
+                : response(chat, privateToolArgument ? output : '{"x":1}'),
             );
       const result = new Response(payload, {
         status,
@@ -437,6 +440,56 @@ for (const chat of [true, false]) {
     assert.ok(!JSON.stringify(packets).includes(input));
     assert.ok(!JSON.stringify(packets).includes(output));
   });
+  for (const flag of ["hideInputMessages", "hideInputText", "hideInputImages"]) {
+    test(`${name}: ${flag} hides all request payload aliases on OTLP`, async () => {
+      instrument({ traceConfig: { [flag]: true } });
+      await create(client(chat), chat, {
+        tools: [
+          { type: "function", function: { name: "lookup", description: input } },
+        ],
+        extra_body: { template: input },
+      });
+      const span = await one();
+      assert.ok(!JSON.stringify(packets).includes(input));
+      assert.ok(
+        JSON.stringify(span.attrs).includes(output),
+        "output remains visible",
+      );
+      for (const key of [
+        "input.value",
+        "raw.input",
+        "gen_ai.input.messages",
+        "gen_ai.request.parameters",
+        "gen_ai.tool.definitions",
+      ])
+        assert.equal(span.attrs[key], undefined, `${key} must not bypass privacy`);
+    });
+  }
+  for (const flag of ["hideOutputMessages", "hideOutputText"]) {
+    for (const stream of [false, true]) {
+      test(`${name}: ${flag} hides ${stream ? "streaming" : "regular"} response payload aliases on OTLP`, async () => {
+        instrument({ traceConfig: { [flag]: true } });
+        const result = await create(
+          client(chat, { stream, privateToolArgument: true }),
+          chat,
+          stream ? { stream: true } : {},
+        );
+        if (stream) for await (const chunk of result) void chunk;
+        const span = await one();
+        assert.ok(!JSON.stringify(packets).includes(output));
+        assert.ok(
+          JSON.stringify(span.attrs).includes(input),
+          "input remains visible",
+        );
+        for (const key of [
+          "output.value",
+          "raw.output",
+          "gen_ai.output.messages",
+        ])
+          assert.equal(span.attrs[key], undefined, `${key} must not bypass privacy`);
+      });
+    }
+  }
 }
 
 test("documented FI register setup sends private spans to the configured endpoint", async () => {

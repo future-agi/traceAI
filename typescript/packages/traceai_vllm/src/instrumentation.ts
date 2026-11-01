@@ -177,7 +177,8 @@ export class VLLMInstrumentation extends InstrumentationBase {
   private _baseUrlPattern?: string | RegExp;
   private readonly modules = new Set<OpenAIModule>();
   private readonly patches = new Map<ResourcePrototype, Create>();
-  private hideInputs = false;
+  private hideInputPayload = false;
+  private hideOutputPayload = false;
 
   constructor(config: VLLMInstrumentationConfig = {}) {
     // InstrumentationBase can call enable() before subclass fields/configuration exist.
@@ -197,7 +198,17 @@ export class VLLMInstrumentation extends InstrumentationBase {
       tracer: this.tracer,
       traceConfig: this._traceConfig,
     });
-    this.hideInputs = generateTraceConfig(this._traceConfig).hideInputs;
+    const privacy = generateTraceConfig(this._traceConfig);
+    // The raw body, invocation extras and tool definitions duplicate message content.
+    // Fine-grained core masking cannot safely redact arbitrary nested payloads, so
+    // omit content-bearing aliases whenever any corresponding privacy flag is set.
+    this.hideInputPayload =
+      privacy.hideInputs ||
+      privacy.hideInputMessages ||
+      privacy.hideInputText ||
+      privacy.hideInputImages;
+    this.hideOutputPayload =
+      privacy.hideOutputs || privacy.hideOutputMessages || privacy.hideOutputText;
   }
 
   public override setTracerProvider(provider: TracerProvider): void {
@@ -324,7 +335,8 @@ export class VLLMInstrumentation extends InstrumentationBase {
           return original.call(this, body, options);
         }
         const { messages: _messages, prompt: _prompt, ...parameters } = body;
-        const hideInputs = instrumentation.hideInputs;
+        const hideInputPayload = instrumentation.hideInputPayload;
+        const hideOutputPayload = instrumentation.hideOutputPayload;
         const span = instrumentation.fiTracer.startSpan(
           chat ? "vLLM Chat Completions" : "vLLM Completions",
           {
@@ -336,13 +348,13 @@ export class VLLMInstrumentation extends InstrumentationBase {
               [SemanticConventions.GEN_AI_OPERATION_NAME]: chat
                 ? "chat"
                 : "text_completion",
-              [SemanticConventions.INPUT_VALUE]:
-                safelyJSONStringify(body) ?? "",
-              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
-              // Invocation extras/tools can contain prompt material; core masks messages/raw bodies.
-              ...(!hideInputs
+              ...(!hideInputPayload
                 ? {
+                    [SemanticConventions.INPUT_VALUE]:
+                      safelyJSONStringify(body) ?? "",
+                    [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+                    [SemanticConventions.RAW_INPUT]:
+                      safelyJSONStringify(body) ?? "",
                     [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                       safelyJSONStringify(parameters) ?? "",
                     ...(chat
@@ -385,17 +397,12 @@ export class VLLMInstrumentation extends InstrumentationBase {
                 value as StreamResponse<StreamChunk>,
                 finish,
                 chat,
+                hideOutputPayload,
               );
             }
             const response = value as ChatCompletion & Completion;
             if (response && Array.isArray(response.choices)) {
               finish(undefined, {
-                [SemanticConventions.OUTPUT_VALUE]: chat
-                  ? (safelyJSONStringify(response) ?? "")
-                  : (response.choices[0]?.text ?? ""),
-                [SemanticConventions.OUTPUT_MIME_TYPE]: chat
-                  ? MimeType.JSON
-                  : MimeType.TEXT,
                 [SemanticConventions.LLM_MODEL_NAME]: response.model,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: response.model,
                 [SemanticConventions.GEN_AI_RESPONSE_ID]: response.id,
@@ -403,10 +410,20 @@ export class VLLMInstrumentation extends InstrumentationBase {
                   safelyJSONStringify(
                     response.choices.map((c) => c.finish_reason),
                   ) ?? "[]",
-                ...(chat ? getChatOutputMessagesAttributes(response) : {}),
                 ...getUsageAttributes(response),
-                [SemanticConventions.RAW_OUTPUT]:
-                  safelyJSONStringify(response) ?? "",
+                ...(!hideOutputPayload
+                  ? {
+                      [SemanticConventions.OUTPUT_VALUE]: chat
+                        ? (safelyJSONStringify(response) ?? "")
+                        : (response.choices[0]?.text ?? ""),
+                      [SemanticConventions.OUTPUT_MIME_TYPE]: chat
+                        ? MimeType.JSON
+                        : MimeType.TEXT,
+                      ...(chat ? getChatOutputMessagesAttributes(response) : {}),
+                      [SemanticConventions.RAW_OUTPUT]:
+                        safelyJSONStringify(response) ?? "",
+                    }
+                  : {}),
               });
             } else finish();
             return value;

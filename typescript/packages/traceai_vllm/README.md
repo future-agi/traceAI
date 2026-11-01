@@ -105,7 +105,7 @@ const response = await client.completions.create({
 | Option | Purpose |
 | --- | --- |
 | `baseUrlPattern` | String substring or regular expression matched against the SDK client's base URL. |
-| `traceConfig` | FI content/error privacy options. Content capture remains enabled by default for compatibility; the example explicitly hides it. |
+| `traceConfig` | FI content/error privacy options. Content capture remains enabled by default for compatibility; the example explicitly hides it. Input message/text/image or output message/text hiding conservatively omits the corresponding payload attributes (including raw bodies, tools, and invocation extras) because those aliases can duplicate private content; model and usage metadata remain available. |
 | `instrumentationConfig` | OpenTelemetry instrumentation settings, including `enabled: false` for deferred activation. |
 
 `disable()` restores this instrumentor's resource methods, including manually registered modules. `enable()` reapplies registered modules. CommonJS automatic instrumentation must be enabled before loading `openai`; for ESM or an already loaded SDK, use `manuallyInstrument()`.

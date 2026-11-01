@@ -106,6 +106,7 @@ export function observeStream<T extends StreamChunk>(
   stream: Stream<T>,
   finish: ReturnType<typeof spanEnder>,
   chat: boolean,
+  hideOutputPayload = false,
 ): Stream<T> {
   const messages = new Map<
     number,
@@ -148,6 +149,7 @@ export function observeStream<T extends StreamChunk>(
       )
         continue;
       if (choice.finish_reason) reasons.set(choice.index, choice.finish_reason);
+      if (hideOutputPayload) continue;
       let message = messages.get(choice.index);
       if (!message) {
         message = { role: "assistant", content: "", tool_calls: [] };
@@ -187,10 +189,14 @@ export function observeStream<T extends StreamChunk>(
       error,
       {
         ...metadata,
-        [S.OUTPUT_VALUE]: output[0]?.content ?? "",
-        [S.OUTPUT_MIME_TYPE]: "text/plain",
-        ...(chat
-          ? { [S.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(output) ?? "[]" }
+        ...(!hideOutputPayload
+          ? {
+              [S.OUTPUT_VALUE]: output[0]?.content ?? "",
+              [S.OUTPUT_MIME_TYPE]: "text/plain",
+              ...(chat
+                ? { [S.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(output) ?? "[]" }
+                : {}),
+            }
           : {}),
         [S.GEN_AI_RESPONSE_FINISH_REASONS]:
           safelyJSONStringify([...reasons.values()]) ?? "[]",
