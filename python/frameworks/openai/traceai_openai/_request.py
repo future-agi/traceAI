@@ -16,7 +16,11 @@ from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
-from traceai_openai._providers import provider_from_host
+from traceai_openai._providers import (
+    CLOUDFLARE_ENDPOINTS,
+    provider_from_cloudflare,
+    provider_from_host,
+)
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
@@ -138,14 +142,26 @@ class _WithOpenAI(ABC):
         )
 
     def _get_attributes_from_instance(
-        self, instance: Any
+        self, instance: Any, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        # The provider is the vendor behind the client's base_url, not the SDK:
-        # known OpenAI-compatible hosts get their own label, anything else "openai".
         base_url = getattr(instance, "base_url", None)
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider_from_host(
-            getattr(base_url, "host", None)
-        )
+        host = getattr(base_url, "host", None)
+        host = host.lower().rstrip(".") if isinstance(host, str) else None
+        if host in CLOUDFLARE_ENDPOINTS:
+            # Keep the gateway distinct from the inference provider. Never export
+            # the full URL: its path/query/userinfo can contain IDs or credentials.
+            yield SpanAttributes.SERVER_ADDRESS, host
+            if (port := getattr(base_url, "port", None)) is not None:
+                yield SpanAttributes.SERVER_PORT, port
+            provider = provider_from_cloudflare(
+                host=host,
+                path=base_url.path,
+                model=request_parameters.get("model"),
+            )
+        else:
+            provider = provider_from_host(host)
+        if provider is not None:
+            yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider
 
     def _get_attributes_from_request(
         self,
@@ -297,7 +313,7 @@ class _Request(_WithTracer, _WithOpenAI):
         with self._start_as_current_span(
             span_name=span_name,
             attributes=chain(
-                self._get_attributes_from_instance(instance),
+                self._get_attributes_from_instance(instance, request_parameters),
                 self._get_attributes_from_request(
                     cast_to=cast_to,
                     request_parameters=request_parameters,
@@ -374,7 +390,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
         with self._start_as_current_span(
             span_name=span_name,
             attributes=chain(
-                self._get_attributes_from_instance(instance),
+                self._get_attributes_from_instance(instance, request_parameters),
                 self._get_attributes_from_request(
                     cast_to=cast_to,
                     request_parameters=request_parameters,
@@ -441,6 +457,11 @@ def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]
         and isinstance(json_data := args[1].json_data, Mapping)
         else {}
     )
+    # The SDK applies extra_body after json_data. Honor a model override so a
+    # dynamic Cloudflare route is never labelled from the superseded argument.
+    extra_json = getattr(args[1], "extra_json", None)
+    if isinstance(extra_json, Mapping) and "model" in extra_json:
+        request_parameters = {**request_parameters, "model": extra_json["model"]}
     # FIXME: Because request parameters is just a Mapping, it can contain any value as long as it
     # serializes correctly in an HTTP request body. For example, Enum values may be present if a
     # third-party library puts them there. Enums can turn into their intended string values via
