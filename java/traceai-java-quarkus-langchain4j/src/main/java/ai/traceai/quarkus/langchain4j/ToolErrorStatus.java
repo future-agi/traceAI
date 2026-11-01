@@ -1,4 +1,4 @@
-package ai.traceai.examples.quarkus;
+package ai.traceai.quarkus.langchain4j;
 
 import io.opentelemetry.api.trace.Span;
 import io.quarkiverse.langchain4j.runtime.tool.ToolExecutionErrorContext;
@@ -8,8 +8,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Marks the {@code langchain4j.tools.<name>} span of a tool that threw as {@code ERROR}. Quarkus LangChain4j records
- * the exception but leaves the status {@code UNSET}. {@code ToolSpanContributor} exists from Quarkus LangChain4j 1.12.0;
- * on older lines leave this file out.
+ * the exception but leaves the status {@code UNSET}. Requires Quarkus LangChain4j 1.12.0 or newer.
  */
 @Singleton
 public class ToolErrorStatus implements ToolSpanContributor {

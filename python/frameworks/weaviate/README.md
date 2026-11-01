@@ -1,44 +1,109 @@
 # traceAI-weaviate
 
-OpenTelemetry instrumentation for [Weaviate](https://weaviate.io/) vector database (v4 API).
+Trace Weaviate collection searches and writes in Future AGI with the maintained Python client instrumentor.
 
-## Installation
+## Install
 
 ```bash
 pip install traceAI-weaviate
 ```
 
-## Quick Start
+Use the Weaviate v4 Python client. Synchronous collections are supported from the first stable v4 release (4.4.0); asynchronous collections require 4.7.0 or later.
 
-```python
-from fi_instrumentation import register
-from traceai_weaviate import WeaviateInstrumentor
-import weaviate
+## Trace a search
 
-trace_provider = register(project_name="my-rag-app")
-WeaviateInstrumentor().instrument(tracer_provider=trace_provider)
+Set your Future AGI credentials in your application environment:
 
-client = weaviate.connect_to_local()
-collection = client.collections.get("Documents")
-
-# All operations are traced
-results = collection.query.near_text(query="machine learning", limit=5)
-collection.data.insert(properties={"title": "My Doc", "content": "..."})
+```bash
+export FI_API_KEY="your-api-key"
+export FI_SECRET_KEY="your-secret-key"
 ```
 
-## Instrumented Operations
+This example uses a local Weaviate instance with an existing `Documents` collection containing searchable text properties. Enable instrumentation once, before making collection requests:
 
-| Operation | Span Name | Description |
-|-----------|-----------|-------------|
-| `near_vector` | `weaviate near_vector` | Vector similarity search |
-| `near_text` | `weaviate near_text` | Text-based semantic search |
-| `hybrid` | `weaviate hybrid` | Hybrid BM25 + vector search |
-| `bm25` | `weaviate bm25` | Keyword search |
-| `fetch_objects` | `weaviate fetch_objects` | Fetch objects |
-| `insert` | `weaviate insert` | Insert single object |
-| `insert_many` | `weaviate insert_many` | Batch insert |
-| `delete_by_id` | `weaviate delete_by_id` | Delete by ID |
-| `delete_many` | `weaviate delete_many` | Batch delete |
+```python
+import weaviate
+from fi_instrumentation import TraceConfig, register
+from traceai_weaviate import WeaviateInstrumentor
+
+provider = register(project_name="my-rag-app")
+WeaviateInstrumentor().instrument(
+    tracer_provider=provider,
+    config=TraceConfig(hide_error_details=True),
+)
+
+with weaviate.connect_to_local() as client:
+    documents = client.collections.get("Documents")
+    results = documents.query.bm25(query="machine learning", limit=5)
+    print(f"Found {len(results.objects)} documents")
+
+provider.force_flush()
+```
+
+Open **my-rag-app** in Future AGI and inspect the `weaviate bm25` span. It includes the collection, operation, requested limit, returned-object count and status. Searches have the `RETRIEVER` semantic kind; data operations have `VECTOR_DB`. Each operation is an OpenTelemetry `CLIENT` span under the active parent span.
+
+The same instrumentor supports async collections. After the setup above, use the SDK's async API normally:
+
+```python
+import asyncio
+
+async def search():
+    async with weaviate.use_async_with_local() as client:
+        documents = client.collections.get("Documents")
+        results = await documents.query.bm25(query="machine learning", limit=5)
+        print(f"Found {len(results.objects)} documents")
+
+asyncio.run(search())
+provider.force_flush()
+```
+
+## Supported operations
+
+| Collection method | Span name |
+| --- | --- |
+| `query.near_vector` | `weaviate near_vector` |
+| `query.near_text` | `weaviate near_text` |
+| `query.hybrid` | `weaviate hybrid` |
+| `query.bm25` | `weaviate bm25` |
+| `query.fetch_objects` | `weaviate fetch_objects` |
+| `data.insert` | `weaviate insert` |
+| `data.insert_many` | `weaviate insert_many` |
+| `data.delete_by_id` | `weaviate delete_by_id` |
+| `data.delete_many` | `weaviate delete_many` |
+
+Both sync and async versions of these methods are traced. Administration, aggregation, generation, other query methods, updates, references and background batch context managers are not instrumented. `db.operation.name` identifies the method, such as `near_text` or `insert_many`. Limits and similarity thresholds are recorded only when supplied; the instrumentor does not guess server defaults. Partial batch failures set an error status and a failed-object count without capturing their error bodies.
+
+## Control captured content
+
+By default, spans contain operation metadata, not query text, vectors, filters, inserted properties or returned document properties. Exception messages can contain application data: use `TraceConfig(hide_error_details=True)`, as above, or set `FI_HIDE_ERROR_DETAILS=true` to remove exception messages, stack traces and error status descriptions while retaining the error type.
+
+To opt in to text queries and returned document properties, set `capture_content=True` on the initial `instrument()` call:
+
+```python
+WeaviateInstrumentor().instrument(
+    tracer_provider=provider,
+    config=TraceConfig(hide_error_details=True),
+    capture_content=True,
+)
+```
+
+This captures `near_text`, `hybrid` and `bm25` query text and the properties of at most 20 returned objects from ordinary, non-grouped queries. Each text attribute is limited to 16,384 characters. Vectors, filters, references, inserted properties and batch error bodies are never captured. `TraceConfig` input/output hide flags and their `FI_HIDE_*` environment equivalents override content capture; PII redaction also applies. Collection names remain metadata.
+
+To change configuration, call `uninstrument()` before enabling instrumentation again. Calling `instrument()` repeatedly does not add another layer of spans.
+
+## Pause or disable tracing
+
+```python
+from fi_instrumentation.instrumentation import suppress_tracing
+
+with suppress_tracing():
+    # Supported Weaviate calls made here do not produce instrumentor spans.
+    pass
+
+WeaviateInstrumentor().uninstrument()
+```
+
+Uninstrumenting restores the SDK methods. It does not close your Weaviate client or shut down the tracer provider; your application retains ownership of both.
 
 ## License
 
