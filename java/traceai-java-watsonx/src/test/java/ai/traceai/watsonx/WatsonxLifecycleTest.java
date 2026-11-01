@@ -45,6 +45,7 @@ class WatsonxLifecycleTest {
     TextGenerationRequest request;
     TextGenerationResponse response;
     CompletableFuture<Void> future;
+    CompletableFuture<Void> tracedFuture;
     ArgumentCaptor<TextGenerationHandler> callbacks;
 
     @BeforeEach
@@ -64,7 +65,7 @@ class WatsonxLifecycleTest {
     @AfterEach void cleanup() { provider.close(); }
 
     TextGenerationHandler start(TextGenerationHandler user) {
-        assertThat(new TracedWatsonxAI(service, tracer).generateTextStream(request, user)).isSameAs(future);
+        tracedFuture = new TracedWatsonxAI(service, tracer).generateTextStream(request, user);
         verify(service).generateStreaming(eq(request), callbacks.capture());
         return callbacks.getValue();
     }
@@ -126,7 +127,7 @@ class WatsonxLifecycleTest {
         start(mock(TextGenerationHandler.class));
         IllegalStateException error = new IllegalStateException("failure");
         future.completeExceptionally(error);
-        assertThatThrownBy(future::join).hasCause(error);
+        assertThatThrownBy(tracedFuture::join).hasCause(error);
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
         assertThat(exporter.getFinishedSpanItems().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
     }
@@ -134,7 +135,8 @@ class WatsonxLifecycleTest {
     @Test
     void cancellationReachesOriginalFutureAndEndsExactlyOnce() {
         TextGenerationHandler handler = start(mock(TextGenerationHandler.class));
-        assertThat(future.cancel(true)).isTrue();
+        assertThat(tracedFuture.cancel(true)).isTrue();
+        assertThat(tracedFuture.isCancelled()).isTrue();
         handler.onCompleteResponse(response); // Late callback cannot create a second span.
         assertThat(future.isCancelled()).isTrue();
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
@@ -178,7 +180,7 @@ class WatsonxLifecycleTest {
         ChatHandler user = mock(ChatHandler.class);
         when(user.failOnFirstError()).thenReturn(true);
         when(chat.chatStreaming(eq(request), any())).thenAnswer(invocation -> future);
-        assertThat(new TracedWatsonxAI(chat, tracer).chatStream(request, user)).isSameAs(future);
+        CompletableFuture<?> traced = new TracedWatsonxAI(chat, tracer).chatStream(request, user);
         ArgumentCaptor<ChatHandler> capture = ArgumentCaptor.forClass(ChatHandler.class);
         verify(chat).chatStreaming(eq(request), capture.capture());
         ChatHandler handler = capture.getValue();
@@ -192,10 +194,36 @@ class WatsonxLifecycleTest {
         assertThat(handler.failOnFirstError()).isTrue();
         assertThat(exporter.getFinishedSpanItems()).isEmpty();
         future.cancel(true);
+        assertThat(traced.isCancelled()).isTrue();
         verify(user).onPartialResponse("chunk", partial);
         verify(user).onPartialThinking("reasoning", partial);
         verify(user).onPartialToolCall(tool);
         verify(user).onCompleteToolCall(complete);
+        assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+    }
+
+    @Test
+    void returnedFutureCompletesOnlyAfterSpanEnds() throws Exception {
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        Span span = spy(provider.get("test").spanBuilder("blocking-end").startSpan());
+        doAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("test timed out");
+            return invocation.callRealMethod();
+        }).when(span).end();
+        FITracer tracer = spy(this.tracer);
+        doReturn(span).when(tracer).startSpan(any(), any());
+        CompletableFuture<Void> returned = new TracedWatsonxAI(service, tracer)
+            .generateTextStream(request, mock(TextGenerationHandler.class));
+        CompletableFuture<?> producer = CompletableFuture.runAsync(() -> future.complete(null));
+        try {
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThat(future.isDone()).isTrue();
+            assertThat(returned.isDone()).isFalse();
+        } finally { release.countDown(); }
+        returned.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        producer.get(5, java.util.concurrent.TimeUnit.SECONDS);
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
     }
 

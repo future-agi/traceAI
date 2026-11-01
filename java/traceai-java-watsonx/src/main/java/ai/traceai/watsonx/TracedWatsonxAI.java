@@ -35,7 +35,7 @@ import java.util.function.Supplier;
  * Traces IBM's TextGenerationService, ChatService or EmbeddingService.
  * Wrap each service separately. Calls through the original service are not traced.
  * Supports the released SDK contracts tested at 0.12.0 and 0.40.0.
- * Streaming returns the SDK's own future, preserving its cancellation behavior.
+ * Streaming futures preserve SDK results and forward cancellation, completing after the span ends.
  */
 public class TracedWatsonxAI {
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(TracedWatsonxAI.class);
@@ -157,7 +157,7 @@ public class TracedWatsonxAI {
      * The future result is null with IBM 0.12.0 and ChatResponse with IBM 0.40.0.
      * @param request the IBM chat request
      * @param handler the consumer of IBM streaming events
-     * @return the original SDK future, including its cancellation behavior
+     * @return a future with the SDK result that forwards cancellation and completes after the span ends
      */
     public CompletableFuture<?> chatStream(ChatRequest request, ChatHandler handler) {
         Objects.requireNonNull(handler, "handler");
@@ -220,7 +220,7 @@ public class TracedWatsonxAI {
     private final class Operation {
         private final Span span;
         private final Context context;
-        private final AtomicBoolean ended = new AtomicBoolean();
+        private boolean ended;
         private final AtomicBoolean failed = new AtomicBoolean();
 
         Operation(String name, FISpanKind kind, Object request, Object parameters) {
@@ -254,21 +254,34 @@ public class TracedWatsonxAI {
             }
         }
 
-        void finish(Throwable error) {
-            if (!ended.compareAndSet(false, true)) return;
+        synchronized void finish(Throwable error) {
+            if (ended) return;
+            ended = true;
             if (error != null) {
                 if (error instanceof CompletionException && error.getCause() != null) error = error.getCause();
                 error(error);
             }
-            span.setStatus(failed.get() ? StatusCode.ERROR : StatusCode.OK);
-            span.end();
+            capture(() -> span.setStatus(failed.get() ? StatusCode.ERROR : StatusCode.OK));
+            capture(span::end);
         }
 
         <T> CompletableFuture<T> stream(Supplier<CompletableFuture<T>> action) {
             try (Scope ignored = context.makeCurrent()) {
                 CompletableFuture<T> future = Objects.requireNonNull(action.get(), "IBM streaming future");
-                future.whenComplete((result, error) -> finish(error));
-                return future;
+                CompletableFuture<T> traced = new CompletableFuture<>() {
+                    @Override public boolean cancel(boolean mayInterruptIfRunning) {
+                        if (!future.cancel(mayInterruptIfRunning)) return false;
+                        finish(new java.util.concurrent.CancellationException());
+                        return super.cancel(mayInterruptIfRunning);
+                    }
+                };
+                future.whenComplete((result, error) -> {
+                    // End before releasing callers that may immediately flush/shut down tracing.
+                    finish(error);
+                    if (error == null) traced.complete(result);
+                    else traced.completeExceptionally(error);
+                });
+                return traced;
             } catch (RuntimeException | Error error) {
                 finish(error);
                 throw error;

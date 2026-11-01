@@ -155,7 +155,7 @@ class WatsonxTransportTest {
         Object request = TextGenerationRequest.builder().input("offline prompt").build();
         CompletableFuture<Void> result = new TracedWatsonxAI(service, tracer).generateTextStream(request);
         result.get(10, TimeUnit.SECONDS);
-        awaitSpan();
+        assertThat(exporter.getFinishedSpanItems()).hasSize(1);
         assertThat(requests).hasValue(1);
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
     }
@@ -167,17 +167,11 @@ class WatsonxTransportTest {
         CompletableFuture<?> future = new TracedWatsonxAI(service, tracer).chatStream(
             ChatRequest.builder().messages(List.of(UserMessage.text("offline prompt"))).build(), handler);
         future.get(10, TimeUnit.SECONDS);
-        awaitSpan();
+        assertThat(exporter.getFinishedSpanItems()).hasSize(1);
         verify(handler).onCompleteResponse(any(ChatResponse.class));
         assertThat(exporter.getFinishedSpanItems().get(0).getAttributes()
             .get(io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
             .isEqualTo("offline answer");
-    }
-
-    void awaitSpan() throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (exporter.getFinishedSpanItems().isEmpty() && System.nanoTime() < deadline) Thread.sleep(5);
-        assertThat(exporter.getFinishedSpanItems()).hasSize(1);
     }
 
     @Test
@@ -214,7 +208,7 @@ class WatsonxTransportTest {
             assertThat(exporter.getFinishedSpanItems()).isEmpty();
             release.countDown();
             result.get(10, TimeUnit.SECONDS);
-            awaitSpan();
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
             assertThat(failure).hasValue(null);
             assertThat(exporter.getFinishedSpanItems().get(0).getAttributes()
                 .get(io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
