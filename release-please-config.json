@@ -951,7 +951,10 @@
       "release-type": "maven",
       "component": "java",
       "package-name": "com.futureagi:traceai-java-parent",
-      "skip-snapshot": true
+      "skip-snapshot": true,
+      "extra-files": [
+        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"}
+      ]
     },
     "go/a2a": {
       "release-type": "go",
@@ -978,6 +981,13 @@
       "release-type": "go",
       "component": "go/genai",
       "package-name": "github.com/future-agi/traceAI/go/genai",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/lambda": {
+      "release-type": "go",
+      "component": "go/lambda",
+      "package-name": "github.com/future-agi/traceAI/go/lambda",
       "tag-separator": "/",
       "initial-version": "0.1.0"
     },
@@ -1044,6 +1054,27 @@
         {
           "type": "docs",
           "section": "Documentation"
+        }
+      ]
+    },
+    "typescript/packages/traceai_elevenlabs": {
+      "release-type": "node",
+      "component": "npm-traceai-elevenlabs",
+      "package-name": "@traceai/elevenlabs",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "go/bedrock": {
+      "release-type": "go",
+      "component": "go/bedrock",
+      "package-name": "github.com/future-agi/traceAI/go/bedrock",
+      "tag-separator": "/",
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "client.go"
         }
       ]
     }

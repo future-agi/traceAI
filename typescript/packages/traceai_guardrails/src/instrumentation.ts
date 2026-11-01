@@ -10,7 +10,7 @@ import {
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
 import {
-  Span,
+  TracerProvider,
   SpanKind,
   SpanStatusCode,
   context,
@@ -37,22 +37,43 @@ export interface GuardrailsInstrumentationConfig {
 export class GuardrailsInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private readonly manualModules = new Set<object>();
+  private readonly patchedPrototypes = new Set<object>();
 
   constructor(config: GuardrailsInstrumentationConfig = {}) {
+    // The base constructor can call enable() before traceConfig is assigned.
     super(
       "@traceai/fi-instrumentation-guardrails",
       VERSION,
-      config.instrumentationConfig || {}
+      { ...config.instrumentationConfig, enabled: false }
     );
     this._traceConfig = config.traceConfig;
+    this.setConfig(config.instrumentationConfig || {});
+    if (this.getConfig().enabled) this.enable();
   }
 
   override enable(): void {
-    super.enable();
     this.fiTracer = new FITracer({
       tracer: this.tracer,
       traceConfig: this._traceConfig,
     });
+    super.enable();
+    for (const module of this.manualModules) this.patch(module);
+  }
+
+  override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this._traceConfig,
+    });
+  }
+
+  override disable(): void {
+    super.disable();
+    for (const prototype of this.patchedPrototypes) {
+      this.unpatch({ Guard: { prototype } });
+    }
   }
 
   protected init() {
@@ -70,11 +91,14 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
    */
   manuallyInstrument(guardrailsModule: any): void {
     if (guardrailsModule == null) return;
-    this.patch(guardrailsModule);
+    this.manualModules.add(guardrailsModule);
+    if (this.isEnabled()) this.patch(guardrailsModule);
   }
 
-  private patch(guardrailsModule: any & { _fiPatched?: boolean }): any {
-    if (guardrailsModule?._fiPatched || _isFIPatched) {
+  private patch(guardrailsModule: any): any {
+    const prototype = guardrailsModule?.Guard?.prototype;
+    if (!prototype || patchOwners.has(prototype)) return guardrailsModule;
+    if (!["validate", "parse", "call"].some(method => typeof prototype[method] === "function")) {
       return guardrailsModule;
     }
 
@@ -119,25 +143,20 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
       );
     }
 
-    guardrailsModule._fiPatched = true;
-    _isFIPatched = true;
+    // ESM namespaces are immutable. Track the mutable prototype, not exports.
+    patchOwners.set(prototype, this);
+    this.patchedPrototypes.add(prototype);
     return guardrailsModule;
   }
 
-  private unpatch(guardrailsModule: any & { _fiPatched?: boolean }): void {
-    if (guardrailsModule?.Guard?.prototype?.validate) {
-      this._unwrap(guardrailsModule.Guard.prototype, "validate");
+  private unpatch(guardrailsModule: any): void {
+    const prototype = guardrailsModule?.Guard?.prototype;
+    if (patchOwners.get(prototype) !== this) return;
+    for (const method of ["validate", "parse", "call"]) {
+      if (typeof prototype[method] === "function") this._unwrap(prototype, method);
     }
-    if (guardrailsModule?.Guard?.prototype?.parse) {
-      this._unwrap(guardrailsModule.Guard.prototype, "parse");
-    }
-    if (guardrailsModule?.Guard?.prototype?.call) {
-      this._unwrap(guardrailsModule.Guard.prototype, "call");
-    }
-    if (guardrailsModule) {
-      guardrailsModule._fiPatched = false;
-    }
-    _isFIPatched = false;
+    patchOwners.delete(prototype);
+    this.patchedPrototypes.delete(prototype);
   }
 
   private async traceGuardValidation(
@@ -168,15 +187,17 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
         return original.apply(instance, args);
       });
 
-      // Extract validation result details
-      const validationPassed = result?.validated !== false && result?.valid !== false;
-
       span.setAttributes({
         [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
         [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
         [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(result),
-        "guardrails.validation_passed": validationPassed,
       });
+      // The JS bridge exposes ValidationOutcome.validationPassed, not valid.
+      // A missing/undecodable outcome must not be reported as a success.
+      const validationPassed = getValidationPassed(result);
+      if (validationPassed !== undefined) {
+        span.setAttribute("guardrails.validation_passed", validationPassed);
+      }
 
       if (result?.reask) {
         span.setAttribute("guardrails.reask_count", result.reask_count || 1);
@@ -199,24 +220,31 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
+// One owner per Guard prototype, including multiple installed SDK copies.
+const patchOwners = new Map<object, GuardrailsInstrumentation>();
 
-/**
- * Check if the module has been patched.
- */
+/** Check whether any Guard prototype is patched. */
 export function isPatched(): boolean {
-  return _isFIPatched;
+  return patchOwners.size > 0;
 }
 
-/**
- * Reset the patched state (for testing only).
- */
+/** Restore patched methods and reset ownership (for testing only). */
 export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
+  for (const owner of new Set(patchOwners.values())) owner.disable();
 }
 
-// Helper functions
+function getValidationPassed(result: unknown): boolean | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  if ("validationPassed" in result && typeof result.validationPassed === "boolean") {
+    return result.validationPassed;
+  }
+  // Retain compatibility with existing wrappers using the legacy fields.
+  const validated = "validated" in result ? result.validated : undefined;
+  const valid = "valid" in result ? result.valid : undefined;
+  if (validated === false || valid === false) return false;
+  if (validated === true || valid === true) return true;
+  return undefined;
+}
 
 function safeJsonStringify(obj: unknown): string {
   try {

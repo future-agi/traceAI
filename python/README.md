@@ -61,6 +61,32 @@ signal.signal(signal.SIGINT, stop)
 
 In a web server, worker or async service, use the framework's shutdown hook instead of replacing its handlers: stop accepting work, finish or cancel active requests, then call `provider.shutdown()`. `force_flush()` exports ended spans without shutting down the provider; it does not replace shutdown for operations still running.
 
+## AWS Lambda invocation tracing
+
+The core SDK provides `fi_instrumentation.aws_lambda.LambdaTracer`; no separate Lambda instrumentor package is needed. Create one instance outside your synchronous handler and share its provider with model-client instrumentors:
+
+```python
+from fi_instrumentation import register
+from fi_instrumentation.aws_lambda import LambdaTracer
+from fi_instrumentation.fi_types import ProjectType
+
+provider = register(
+    project_name="lambda-orders", project_type=ProjectType.OBSERVE,
+    batch=True, schedule_delay_millis=60_000, timeout=2, verbose=False,
+)
+tracing = LambdaTracer(provider)
+
+@tracing.wrap
+def lambda_handler(event, context):
+    return {"statusCode": 200, "body": "Order accepted"}
+```
+
+The wrapper emits one `lambda.handler` server span with the invocation ID, trigger and cold-start flag. It imports only W3C `traceparent` from API Gateway v1/v2, function URL and ALB events (including multi-value headers). Other events start fresh traces. The invocation wrapper never captures event/result content, request URLs, headers, exception messages or stacks; errors carry only their type. Child instrumentors retain their own privacy settings.
+
+After the span ends, it waits up to two seconds for a flush, capped by the remaining invocation time minus 250 ms. Configure those limits with `flush_timeout_millis` and `reserve_millis`. A timed-out flush is **not cancelled** and may continue; later invocations skip flushing while it is in flight, preventing additional flush workers from accumulating. Delivery remains best effort. Use a batch processor and a finite exporter timeout; synchronous span processors can block inside span end, outside this wait budget.
+
+Remove any copied Lambda tracing helper, manual invocation span or explicit flush when adopting the wrapper. Do not combine it with `AwsLambdaInstrumentor` or an auto-instrumenting Lambda layer. Do not shut down the shared provider after each invocation. The old example's `LAMBDA_TRACE_CAPTURE_CONTENT` switch does not apply to this metadata-only wrapper.
+
 ## Context and privacy
 
 Use `using_attributes(session_id=..., user_id=..., metadata=...)` to attach application context. The core also provides `using_session`, `using_user`, `using_tags`, and `suppress_tracing`.

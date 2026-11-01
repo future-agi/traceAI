@@ -28,7 +28,7 @@ function methodBody(source: string, signature: RegExp): string {
 
 describe("installed @openai/codex-sdk shape", () => {
   it("is the version the package is tested against", () => {
-    expect(JSON.parse(readFileSync(join(SDK_DIR, "package.json"), "utf8")).version).toBe("0.162.1");
+    expect(JSON.parse(readFileSync(join(SDK_DIR, "package.json"), "utf8")).version).toBe("0.166.0");
   });
 
   const js = sdkFile("index.js");
