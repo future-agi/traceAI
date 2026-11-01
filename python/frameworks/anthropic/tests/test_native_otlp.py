@@ -1,8 +1,8 @@
-"""The SDK's native spans reach the Future AGI collector path with what Observe reads.
+"""Each Messages call reaches the Future AGI collector path once, with what Observe reads.
 
-Real path: Anthropic SDK native tracing -> fi_instrumentation register() provider ->
-OTLP/HTTP exporter -> loopback harness Receiver. Synthetic transport and credentials;
-nothing leaves 127.0.0.1.
+Real path: Anthropic SDK native tracing (or AnthropicInstrumentor) -> fi_instrumentation
+register() provider -> OTLP/HTTP exporter -> loopback harness Receiver. Synthetic
+transport and credentials; nothing leaves 127.0.0.1.
 """
 
 import inspect
@@ -87,27 +87,22 @@ def send(provider, content_mode=None):
         assert client.messages.create(**PARAMS).content[0].text == ANSWER
 
 
-@pytest.mark.parametrize("instrumented", [False, True])
-def test_native_span_reaches_the_collector_once_with_model_usage_and_content(collector, instrumented):
-    provider = register_provider()
-    instrumentor = None
-    if instrumented:
-        from traceai_anthropic import AnthropicInstrumentor
-
-        instrumentor = AnthropicInstrumentor()
-        instrumentor.instrument(tracer_provider=provider)
-    try:
-        send(provider, content_mode="content")
-        provider.force_flush()
-    finally:
-        if instrumentor is not None:
-            instrumentor.uninstrument()
-        provider.shutdown()
-
+def assert_collector_auth(collector):
     requests = collector.requests()
     assert requests and {r["path"] for r in requests} == {"/tracer/v1/traces"}
     assert requests[0]["headers"]["x-api-key"] == "synthetic-api-key"
     assert requests[0]["headers"]["x-secret-key"] == "synthetic-secret-key"
+
+
+def test_native_span_reaches_the_collector_once_with_model_usage_and_content(collector):
+    provider = register_provider()
+    try:
+        send(provider, content_mode="content")
+        provider.force_flush()
+    finally:
+        provider.shutdown()
+
+    assert_collector_auth(collector)
     spans = collector.spans()
     assert [span["name"] for span in spans] == ["anthropic.messages.create"]
     values = attributes(spans[0])
@@ -120,6 +115,32 @@ def test_native_span_reaches_the_collector_once_with_model_usage_and_content(col
     assert int(values["gen_ai.usage.output_tokens"]) == 2
     assert PROMPT in json.loads(values["gen_ai.input.messages"])[0]["parts"][0]["content"]
     assert ANSWER in json.loads(values["gen_ai.output.messages"])[0]["parts"][0]["content"]
+
+
+def test_instrumented_client_reaches_the_collector_once_with_future_agi_context(collector):
+    from fi_instrumentation import using_attributes
+    from traceai_anthropic import AnthropicInstrumentor
+
+    provider = register_provider()
+    instrumentor = AnthropicInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        with using_attributes(session_id="sess-1", user_id="user-1"):
+            send(provider, content_mode="content")
+        provider.force_flush()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+    assert_collector_auth(collector)
+    spans = collector.spans()
+    assert [span["name"] for span in spans] == ["Messages"]
+    values = attributes(spans[0])
+    assert values["session.id"] == "sess-1"
+    assert values["user.id"] == "user-1"
+    assert values["gen_ai.span.kind"] == "LLM"
+    assert PROMPT in values["input.value"]
+    assert ANSWER in values["output.value"]
 
 
 def test_native_default_exports_metadata_without_content(collector):

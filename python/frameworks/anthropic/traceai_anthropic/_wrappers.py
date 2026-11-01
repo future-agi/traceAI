@@ -61,8 +61,11 @@ class _WithTracer(ABC):
         self._tracer = tracer
         self._native_tracing = native_tracing
 
-    def _native_tracing_owns(self, instance: Any) -> bool:
-        return self._native_tracing is not None and self._native_tracing.owns(instance)
+    def _without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """The original method for this call, with the SDK's duplicate native span turned off."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span(wrapped, instance)
 
     @contextmanager
     def _start_as_current_span(
@@ -254,10 +257,9 @@ class _MessagesWrapper(_BaseWrapper):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(
-            context_api._SUPPRESS_INSTRUMENTATION_KEY
-        ) or self._native_tracing_owns(instance):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = dict(arguments).pop("messages", None)
@@ -348,10 +350,9 @@ class _AsyncMessagesWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(
-            context_api._SUPPRESS_INSTRUMENTATION_KEY
-        ) or self._native_tracing_owns(instance):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
@@ -422,10 +423,9 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
         args,
         kwargs,
     ):
-        if context_api.get_value(
-            context_api._SUPPRESS_INSTRUMENTATION_KEY
-        ) or self._native_tracing_owns(instance):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = arguments.get("messages", None)

@@ -58,8 +58,9 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             logger.warning("ai-evaluation is not installed, please install it to trace protect")
             Protect = None
 
-        # The SDK's own spans (anthropic>=1.14) replace this instrumentor's Messages
-        # spans only when they reach the same provider; see _native.py.
+        # When the SDK's own spans (anthropic>=1.14) would reach the same provider,
+        # the instrumentor keeps its Messages spans and turns the SDK's off per call;
+        # see _native.py.
         native_tracing = _NativeTracing(kwargs.get("tracer_provider"))
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
