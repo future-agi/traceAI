@@ -269,3 +269,56 @@ def test_stream_http_error_is_recorded_at_the_sdk_failure_point(monkeypatch, is_
         assert len(span.events) == 1
         for private in (QUESTION, PRIVATE_URL, PRIVATE_OUTPUT, TAVILY_KEY):
             assert private not in traced.wire()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_rejected_initial_send_does_not_end_resumable_stream(monkeypatch, is_async):
+    transport = Transport()
+    with instrumented() as traced:
+        async def run():
+            client = await transport.async_client()
+            try:
+                stream = await client.research(QUESTION, stream=True)
+                with pytest.raises(TypeError):
+                    await stream.asend("invalid-first-send")
+                assert traced.spans() == []
+                return [chunk async for chunk in stream]
+            finally:
+                await client.close()
+        if is_async:
+            result = asyncio.run(run())
+        else:
+            stream = transport.sync_client(monkeypatch).research(QUESTION, stream=True)
+            with pytest.raises(TypeError):
+                stream.send("invalid-first-send")
+            assert traced.spans() == []
+            result = list(stream)
+        assert result == CHUNKS
+        assert traced.one().status.status_code == StatusCode.OK
+
+
+def test_concurrent_advance_rejection_does_not_finish_active_stream():
+    transport = Transport()
+    with instrumented() as traced:
+        async def run():
+            transport.wait = asyncio.Event()
+            client = await transport.async_client()
+            try:
+                stream = await client.research(QUESTION, stream=True)
+                await anext(stream)
+                await anext(stream)
+                pending = asyncio.create_task(anext(stream))
+                await asyncio.sleep(0)
+                try:
+                    with pytest.raises(RuntimeError):
+                        await anext(stream)
+                    assert traced.spans() == []
+                finally:
+                    transport.wait.set()
+                    with pytest.raises(StopAsyncIteration):
+                        await pending
+            finally:
+                await client.close()
+        asyncio.run(run())
+        assert traced.one().status.status_code == StatusCode.OK
+        assert transport.closed

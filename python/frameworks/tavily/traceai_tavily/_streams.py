@@ -100,7 +100,10 @@ class _SyncResearchStream(_ResearchStream, Generator):
             self._finish()
             raise
         except BaseException as error:
-            self._finish(error)
+            # Invalid send/concurrent iteration can fail without closing the
+            # SDK generator. It may still be resumed, so keep its span open.
+            if self._stream.gi_frame is None:
+                self._finish(error)
             raise
         else:
             if closed:
@@ -136,7 +139,8 @@ class _AsyncResearchStream(_ResearchStream, AsyncGenerator):
             self._finish()
             raise
         except BaseException as error:
-            self._finish(error)
+            if self._stream.ag_frame is None:
+                self._finish(error)
             raise
         else:
             if closed:
