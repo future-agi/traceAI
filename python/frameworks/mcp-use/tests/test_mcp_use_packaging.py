@@ -76,7 +76,7 @@ def test_classifiers_and_python_range_match_the_tested_versions():
 
 def test_version_matches_pyproject_and_changelog():
     version = re.search(r'^version\s*=\s*"([^"]+)"', PYPROJECT.read_text(), re.M).group(1)
-    assert traceai_mcp_use.__version__ == version == "0.1.0"
+    assert traceai_mcp_use.__version__ == version
     # Hand-written "## x.y.z" or release-please "## [x.y.z](compare-url) (date)".
     assert re.search(r"^## \[?([^\]\s(]+)", CHANGELOG.read_text(), re.M).group(1) == version
     assert re.search(r'^name\s*=\s*"traceAI-mcp-use"', PYPROJECT.read_text(), re.M)
@@ -103,4 +103,3 @@ def test_package_source_imports_neither_langfuse_nor_traceai_mcp_nor_patches():
         r"setattr\(",
     ):
         assert not re.search(forbidden, source, re.M), forbidden
-    assert Version(traceai_mcp_use.__version__) == Version("0.1.0")
