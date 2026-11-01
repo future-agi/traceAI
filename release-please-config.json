@@ -1057,6 +1057,14 @@
         }
       ]
     },
+    "typescript/packages/traceai_elevenlabs": {
+      "release-type": "node",
+      "component": "npm-traceai-elevenlabs",
+      "package-name": "@traceai/elevenlabs",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "go/bedrock": {
       "release-type": "go",
       "component": "go/bedrock",
