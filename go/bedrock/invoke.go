@@ -184,7 +184,38 @@ type invokeResponse struct {
 	StopReason string          `json:"stop_reason"`
 }
 
+// Metadata is independent of the content budget. Unmarshal skips unknown fields
+// (including content) without copying their values; never decode the entire
+// response into a map or RawMessage merely to read usage from a large completion.
+// Bound stop_reason too, so a malformed response cannot allocate arbitrary text.
+type stopReason string
+
+func (s *stopReason) UnmarshalJSON(data []byte) error {
+	*s = ""
+	if len(data) > 512 {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = stopReason(value)
+	return nil
+}
+
 func (r *record) invokeOutput(data []byte) {
+	var metadata struct {
+		Usage      *invokeUsage `json:"usage"`
+		StopReason stopReason   `json:"stop_reason"`
+	}
+	if json.Unmarshal(data, &metadata) != nil {
+		return
+	}
+	r.invokeUsage(metadata.Usage)
+	r.stop(string(metadata.StopReason))
+	if !r.privacy.output() {
+		return
+	}
 	if len(data) > 2*maxCapture {
 		r.truncated = true
 		return
@@ -193,14 +224,10 @@ func (r *record) invokeOutput(data []byte) {
 	if json.Unmarshal(data, &out) != nil {
 		return
 	}
-	if r.privacy.output() {
-		for i, b := range r.invokeBlocks(out.Content) {
-			copy := b
-			r.blocks[int32(i)] = &copy
-		}
+	for i, b := range r.invokeBlocks(out.Content) {
+		copy := b
+		r.blocks[int32(i)] = &copy
 	}
-	r.invokeUsage(out.Usage)
-	r.stop(out.StopReason)
 }
 func (r *record) invokeEvent(ev types.ResponseStream) {
 	v, ok := ev.(*types.ResponseStreamMemberChunk)

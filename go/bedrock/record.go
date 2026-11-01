@@ -99,7 +99,7 @@ func (r *record) take(s string) string {
 func (r *record) delta(index int32, kind, text string) {
 	if text != "" && !r.first {
 		r.first = true
-		r.span.SetAttributes(attribute.Float64("gen_ai.latency.time_to_first_token", time.Since(r.started).Seconds()))
+		r.span.SetAttributes(attribute.Float64("gen_ai.server.time_to_first_token", float64(time.Since(r.started))/float64(time.Millisecond)))
 	}
 	if !r.privacy.output() {
 		return

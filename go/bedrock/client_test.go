@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,11 +76,33 @@ func rawClient(t *testing.T, h http.HandlerFunc, options ...func(*bedrockruntime
 		h(w, r)
 	}))
 	t.Cleanup(server.Close)
+	options = append(options, func(o *bedrockruntime.Options) { o.HTTPClient = requestWriteBarrier{o.HTTPClient} })
 	return bedrockruntime.New(bedrockruntime.Options{Region: "us-east-1", BaseEndpoint: aws.String(server.URL), Credentials: credentials.NewStaticCredentialsProvider("synthetic-access", "synthetic-secret", ""), Retryer: retry.NewStandard(func(o *retry.StandardOptions) {
 		o.MaxAttempts = 2
 		o.Backoff = retry.BackoffDelayerFunc(func(int, error) (time.Duration, error) { return 0, nil })
 	})}, options...)
 }
+
+// Loopback responses can arrive before net/http finishes its final request-body
+// read. Smithy's ClientHandler closes that body as soon as Do returns, causing
+// a native write-side EOF and socket close unrelated to event-stream decoding.
+// Synchronize fixture writes instead of adding sleeps or accepting lost events.
+type requestWriteBarrier struct{ bedrockruntime.HTTPClient }
+
+func (c requestWriteBarrier) Do(r *http.Request) (*http.Response, error) {
+	written := make(chan struct{})
+	var once sync.Once
+	ctx := httptrace.WithClientTrace(r.Context(), &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { once.Do(func() { close(written) }) }})
+	response, err := c.HTTPClient.Do(r.WithContext(ctx))
+	if err == nil {
+		select {
+		case <-written:
+		case <-ctx.Done():
+		}
+	}
+	return response, err
+}
+
 func input() *bedrockruntime.ConverseInput {
 	return &bedrockruntime.ConverseInput{ModelId: aws.String(model), Messages: []types.Message{{Role: types.ConversationRoleUser, Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "question"}, &types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{ToolUseId: aws.String("call-old"), Content: []types.ToolResultContentBlock{&types.ToolResultContentBlockMemberText{Value: "tool-result"}}}}}}}, System: []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: "system prompt"}}, InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws.Int32(100), Temperature: aws.Float32(0)}, ToolConfig: &types.ToolConfiguration{Tools: []types.Tool{&types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: aws.String("weather"), InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(map[string]any{"type": "object"})}}}}}}
 }
@@ -212,7 +235,7 @@ func TestConverseStreamLifetimeAndIdentity(t *testing.T) {
 		t.Fatalf("spans %d", len(spans))
 	}
 	a := attrs(spans[0])
-	if !strings.Contains(a["output.value"].AsString(), "Paris") || a["gen_ai.latency.time_to_first_token"].AsFloat64() <= 0 {
+	if !strings.Contains(a["output.value"].AsString(), "Paris") || a["gen_ai.server.time_to_first_token"].AsFloat64() <= 0 {
 		t.Fatal(a)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/smithy-go/transport/http/protocol/restjson1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -54,6 +55,23 @@ func NewClient(inner Runtime, opts ...Option) *Client {
 		o(c)
 	}
 	return c
+}
+
+// The SDK's default restJson1 protocol holds a mutable event-stream codec on
+// the client (smithy-go v1.28.7). Give each streaming operation its own protocol,
+// including suppressed/unsampled/unknown-model calls. Keep the original client
+// and all its other options; do not mutate caller slices or serialize requests.
+// Run last so a per-call default-protocol override is isolated too. Custom
+// protocols and Runtime implementations retain their own concurrency contract.
+func streamOptions(opts []func(*bedrockruntime.Options)) []func(*bedrockruntime.Options) {
+	out := make([]func(*bedrockruntime.Options), len(opts), len(opts)+1)
+	copy(out, opts)
+	return append(out, func(o *bedrockruntime.Options) {
+		if _, ok := o.Protocol.(*restjson1.Protocol); ok {
+			// restJson1 does not use the service schema argument.
+			o.Protocol = restjson1.New(nil)
+		}
+	})
 }
 
 type contextKey uint8
@@ -157,7 +175,7 @@ func (c *Client) ConverseStream(ctx context.Context, in *bedrockruntime.Converse
 	if r != nil && in != nil {
 		r.converseInput(in.Messages, in.System, in.InferenceConfig, in.ToolConfig)
 	}
-	out, err := c.inner.ConverseStream(ctx, in, opts...)
+	out, err := c.inner.ConverseStream(ctx, in, streamOptions(opts)...)
 	if out == nil {
 		if r != nil {
 			r.finish(err, false)
@@ -214,7 +232,7 @@ func (c *Client) InvokeModelWithResponseStream(ctx context.Context, in *bedrockr
 			}
 		}
 	}
-	out, err := c.inner.InvokeModelWithResponseStream(ctx, in, opts...)
+	out, err := c.inner.InvokeModelWithResponseStream(ctx, in, streamOptions(opts)...)
 	if out == nil {
 		if r != nil {
 			r.finish(err, false)

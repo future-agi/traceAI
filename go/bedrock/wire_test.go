@@ -34,6 +34,8 @@ func TestCustomerExampleOTLP(t *testing.T) {
 		}
 		if strings.HasSuffix(r.URL.Path, "converse-stream") {
 			w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+			// Model latency before headers also avoids the native loopback request-write race.
+			time.Sleep(50 * time.Millisecond)
 			converseFrames(w)
 		} else {
 			w.Header().Set("Content-Type", "application/json")
@@ -103,8 +105,15 @@ func TestCustomerExampleOTLP(t *testing.T) {
 		}
 		values := map[string]string{}
 		cacheWriteFound := false
+		firstTokenMillis := float64(0)
 		for _, a := range s.Attributes {
 			values[a.Key] = a.Value.GetStringValue()
+			if a.Key == "gen_ai.server.time_to_first_token" {
+				firstTokenMillis = a.Value.GetDoubleValue()
+			}
+			if a.Key == "gen_ai.latency.time_to_first_token" {
+				t.Error("unrecognized timing key on OTLP wire")
+			}
 			// This is the cache-write key accepted by Future AGI ingestion,
 			// not the provider's cache_creation_input_tokens payload field.
 			if a.Key == "gen_ai.usage.cache_write_tokens" {
@@ -113,6 +122,9 @@ func TestCustomerExampleOTLP(t *testing.T) {
 			if a.Key == "gen_ai.usage.cache_creation_tokens" {
 				t.Error("unrecognized cache-write attribute on the OTLP wire")
 			}
+		}
+		if s.Name == "bedrock.ConverseStream" && (firstTokenMillis < 40 || firstTokenMillis > float64(s.EndTimeUnixNano-s.StartTimeUnixNano)/1e6) {
+			t.Errorf("OTLP first-token value %g must be milliseconds", firstTokenMillis)
 		}
 		if !cacheWriteFound {
 			t.Error("canonical cache-write token count missing from OTLP")

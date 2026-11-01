@@ -110,10 +110,8 @@ func TestSDKStreamCancellationErrorParity(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				p, e := provider(t)
-				for i := 0; i < 30; i++ {
-					// Independent clients isolate cancellation from an earlier
-					// native decoder's asynchronous cleanup.
-					raw := rawClient(t, func(w http.ResponseWriter, r *http.Request) {
+				newRaw := func() *bedrockruntime.Client {
+					return rawClient(t, func(w http.ResponseWriter, r *http.Request) {
 						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
 						if operation == "ConverseStream" {
 							_ = frame(w, "contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hello"}}`)
@@ -123,6 +121,18 @@ func TestSDKStreamCancellationErrorParity(t *testing.T) {
 						w.(http.Flusher).Flush()
 						<-r.Context().Done()
 					})
+				}
+				var raw *bedrockruntime.Client
+				if wrapped {
+					raw = newRaw()
+				}
+				for i := 0; i < 30; i++ {
+					// The adapter safely reuses a client even while canceled native
+					// decoders finish asynchronously. Native-only calls still need
+					// independent clients on the affected upstream SDK.
+					if !wrapped {
+						raw = newRaw()
+					}
 					client := NewClient(raw, WithTracerProvider(p))
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					if operation == "ConverseStream" {

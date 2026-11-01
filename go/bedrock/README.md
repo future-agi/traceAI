@@ -4,7 +4,7 @@ Trace Bedrock Runtime calls in Future AGI with messages, tools, token usage and 
 
 ## Install
 
-Requires Go 1.26+ and AWS SDK for Go v2 Bedrock Runtime 1.49.0+.
+Requires Go 1.26+ and AWS SDK for Go v2 Bedrock Runtime 1.63.9+.
 
 ```sh
 go get github.com/future-agi/traceAI/go/bedrock
@@ -51,7 +51,9 @@ return stream.Err()
 
 Stream outputs have adapter-specific Go types. Their `GetStream()` returns the AWS reader interface with `Events()`, `Err()` and `Close()`. Read from that method, not from the embedded native output. SDK event objects and ordering are preserved. Always close streams, including when stopping early; use a cancelable context for requests whose consumers may disappear. An unread, unclosed stream without a canceled context remains open, just as an AWS stream does.
 
-Spans end after EOF, an SDK error, cancellation or close, rather than at response headers. Early closes carry `traceai.stream.closed_early=true`; usage is only present if the service sent it. Time to first token is measured at the first nonempty text or tool-argument delta, not at a role/header event.
+Spans end after EOF, an SDK error, cancellation or close, rather than at response headers. Early closes carry `traceai.stream.closed_early=true`; usage is only present if the service sent it. Time to first token is measured at the first nonempty text or tool-argument delta, not at a role/header event, and exported as `gen_ai.server.time_to_first_token` in milliseconds.
+
+The adapter isolates the standard AWS `restJson1` protocol for each streaming call, so you can use one AWS client for overlapping streams. Route streaming calls through the adapter: direct native streaming calls on a shared client can race in the current AWS SDK. This isolation also applies when tracing is suppressed or unsampled. Custom protocol implementations and custom `Runtime` implementations remain responsible for their own concurrency safety.
 
 ## Supported calls
 
@@ -78,6 +80,6 @@ Set these variables before constructing the adapter, or pass `WithTraceConfig`:
 
 Images, binary data, documents, reasoning, guardrail details and raw SDK error text are never recorded. `FI_HIDE_INPUT_IMAGES` and `FI_HIDE_ERROR_DETAILS` are accepted for consistency; setting them to false does not enable those fields. Do not put sensitive data in model, session or user identifiers. The adapter does not control separately configured AWS logging or native instrumentation.
 
-Content capture has separate 32 KiB input/output budgets, at most 40 content attributes per side, 32 input messages, 64 blocks per message and 16 tool definitions. Truncation is marked with `traceai.capture.truncated=true`. These limits affect telemetry only, never application responses. InvokeModel bodies larger than 64 KiB are not normalized. Binary and unknown blocks are not serialized as a fallback.
+Content capture has separate 32 KiB input/output budgets, at most 40 content attributes per side, 32 input messages, 64 blocks per message and 16 tool definitions. Truncation is marked with `traceai.capture.truncated=true`. These limits affect telemetry only, never application responses. InvokeModel request bodies larger than 64 KiB are not normalized. For supported requests, responses larger than 64 KiB omit captured content but retain service-reported usage and finish reasons, including when output capture is disabled. Binary and unknown blocks are not serialized as a fallback.
 
 Use `ContextWithUserID` for an opaque end-user identifier and `ContextWithSuppression` to skip this adapter for a call. Native AWS diagnostic spans may coexist with the single semantic LLM span; avoid adding another Bedrock semantic instrumentor around the same call.
