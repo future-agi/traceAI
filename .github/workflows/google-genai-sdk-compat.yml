@@ -57,4 +57,4 @@ jobs:
         run: |
           set -euo pipefail
           tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          sandbox-exec -f "$tests/network.sb" node --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          sandbox-exec -f "$tests/network.sb" node --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"

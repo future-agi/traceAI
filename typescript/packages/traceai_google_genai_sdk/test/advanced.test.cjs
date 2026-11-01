@@ -1,3 +1,4 @@
+const { output, eventType } = require("./interaction-fixtures.cjs");
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
@@ -32,7 +33,7 @@ const interaction = (status = "completed") => ({
   id: "i-1",
   model: "gemini-test",
   status,
-  outputs: [{ type: "text", text: "answer" }],
+  ...output("answer"),
   usage: { total_input_tokens: 4, total_output_tokens: 2, total_tokens: 6 },
 });
 function json(res, body) {
@@ -233,7 +234,11 @@ test("per-client providers, FI sessions and concurrent streams do not leak", asy
       tracerProvider: otherProvider,
       traceConfig: { hideInputs: true, hideOutputs: true },
     });
-  handler = (req, res) => sse(res, [answer("FIRST_OUTPUT_SENTINEL"), answer("SECOND_OUTPUT_SENTINEL")]);
+  handler = (req, res) =>
+    sse(res, [
+      answer("FIRST_OUTPUT_SENTINEL"),
+      answer("SECOND_OUTPUT_SENTINEL"),
+    ]);
   await Promise.all(
     [first, second].map((ai, index) =>
       context.with(
@@ -288,11 +293,14 @@ test("Interactions get streaming, failed responses, background submission and pr
   handler = (req, res) =>
     sse(res, [
       {
-        event_type: "content.delta",
+        event_type: eventType("content.delta"),
         index: 0,
         delta: { type: "text", text: "hello" },
       },
-      { event_type: "interaction.complete", interaction: interaction() },
+      {
+        event_type: eventType("interaction.complete"),
+        interaction: interaction(),
+      },
     ]);
   for await (const chunk of await oldResource.get("i-1", { stream: true })) {
   }
@@ -308,11 +316,14 @@ test("Interactions streams support reader and legacy readable conversion", async
   handler = (req, res) =>
     sse(res, [
       {
-        event_type: "content.delta",
+        event_type: eventType("content.delta"),
         index: 0,
         delta: { type: "text", text: "hello" },
       },
-      { event_type: "interaction.complete", interaction: interaction() },
+      {
+        event_type: eventType("interaction.complete"),
+        interaction: interaction(),
+      },
     ]);
   const stream = await ai.interactions.create({
     model: "gemini-test",

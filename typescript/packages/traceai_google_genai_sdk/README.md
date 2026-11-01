@@ -49,7 +49,9 @@ try {
 }
 ```
 
-Open your `google-genai-app` project in Future AGI and inspect the generation spans. Each public SDK call is one logical span; automatic tool calling and continuation remain the SDK's responsibility, without additional synthetic tool-execution spans. Existing OpenTelemetry parents and FI session/user context are retained.
+Open your `google-genai-app` project in Future AGI and inspect the generation spans. Each public SDK call is one logical span; automatic tool calling and continuation remain the SDK's responsibility, without additional synthetic tool-execution spans. Generation usage sums independent Google requests, counting each stream's cumulative usage only once. Tool definitions come from the declarations the SDK resolves, without invoking tools again. Existing OpenTelemetry parents and FI session/user context are retained.
+
+If a generation request omits usage, `google.genai.usage_capture=partial` marks the observed counts as incomplete. If per-request observation is unavailable, for example because SDK methods were frozen before setup, usage is omitted and marked `google.genai.usage_capture=unavailable` rather than reporting the final tool hop as a complete call total.
 
 ## Supported calls
 
@@ -66,6 +68,6 @@ The shared FI controls apply when you instrument the client: `FI_HIDE_INPUTS`, `
 
 Text-hiding options omit that side's entire content surface, including tool arguments and schemas. Raw request/response objects, transport headers, media bytes, URLs, embedding vectors and provider error messages/stacks are never recorded, even with content capture enabled. Error spans retain error status and a generic error type. `FI_BASE64_IMAGE_MAX_LENGTH` cannot enable media capture. Content capture is bounded to 16,384 characters per call; adjust `maxContentLength` between 0 and 65,536. Truncated captures carry `google.genai.capture_truncated`.
 
-`disable()` stops tracing new calls; `enable()` resumes it. `dispose()` restores the client's public methods while in-flight calls finish. Repeated setup on a client returns the existing handle and retains its original options. To change providers or privacy settings, dispose and instrument again. Frozen methods cannot be instrumented; configure tracing before freezing your client. Always flush and shut down the provider when your process exits.
+`disable()` stops tracing new calls; `enable()` resumes it. `dispose()` stops tracing new calls immediately and restores the client's methods after in-flight calls drain. Repeated setup on a client returns the existing handle and retains its original options. To change providers or privacy settings, dispose and instrument again. Frozen methods cannot be instrumented; configure tracing before freezing your client. Always flush and shut down the provider when your process exits.
 
 If you already configured an OpenTelemetry provider, pass it as `tracerProvider` instead of registering another provider. Instrument each client once, and avoid combining this package with another instrumentor for the same SDK calls.

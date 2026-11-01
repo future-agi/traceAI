@@ -1,3 +1,4 @@
+const { output, eventType } = require("./interaction-fixtures.cjs");
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
@@ -48,7 +49,7 @@ const interaction = () => ({
   id: "interaction-1",
   model: "gemini-test",
   status: "completed",
-  outputs: [{ type: "text", text: "interaction answer" }],
+  ...output("interaction answer"),
   usage: { total_input_tokens: 5, total_output_tokens: 3, total_tokens: 8 },
 });
 function json(res, value, status = 200) {
@@ -88,15 +89,18 @@ function defaults(req, res) {
     if (req.body.stream || req.url.includes("stream=true"))
       return sse(res, [
         {
-          event_type: "interaction.start",
+          event_type: eventType("interaction.start"),
           interaction: { id: "interaction-1", status: "in_progress" },
         },
         {
-          event_type: "content.delta",
+          event_type: eventType("content.delta"),
           index: 0,
           delta: { type: "text", text: "interaction answer" },
         },
-        { event_type: "interaction.complete", interaction: interaction() },
+        {
+          event_type: eventType("interaction.complete"),
+          interaction: interaction(),
+        },
       ]);
     return json(res, interaction());
   }

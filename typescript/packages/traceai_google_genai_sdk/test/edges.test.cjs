@@ -1,3 +1,4 @@
+const { output, eventType } = require("./interaction-fixtures.cjs");
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
@@ -26,7 +27,7 @@ const interaction = () => ({
   id: "i-1",
   model: "gemini-test",
   status: "completed",
-  outputs: [{ type: "text", text: "answer" }],
+  ...output("answer"),
   usage: { total_input_tokens: 4, total_output_tokens: 2, total_tokens: 6 },
 });
 function json(res, body) {
@@ -258,7 +259,7 @@ test("Interactions tool turns, continuation and disabled continuation preserve u
     if (handle) handle.dispose();
     return {
       status: result.status,
-      outputs: result.outputs,
+      output: result.steps ?? result.outputs,
       requests: structuredClone(requests),
     };
   }
@@ -283,11 +284,14 @@ test("stream branching stays functional and explicitly ends request-only telemet
   handler = (req, res) =>
     sse(res, [
       {
-        event_type: "content.delta",
+        event_type: eventType("content.delta"),
         index: 0,
         delta: { type: "text", text: "hello" },
       },
-      { event_type: "interaction.complete", interaction: interaction() },
+      {
+        event_type: eventType("interaction.complete"),
+        interaction: interaction(),
+      },
     ]);
   const stream = await ai.interactions.create({
     model: "gemini-test",
@@ -394,11 +398,14 @@ test("Interactions preserves version-specific promise helpers and unread raw res
   handler = (req, res) =>
     sse(res, [
       {
-        event_type: "content.delta",
+        event_type: eventType("content.delta"),
         index: 0,
         delta: { type: "text", text: "hello" },
       },
-      { event_type: "interaction.complete", interaction: interaction() },
+      {
+        event_type: eventType("interaction.complete"),
+        interaction: interaction(),
+      },
     ]);
   const streaming = ai.interactions.create({
     model: "gemini-test",

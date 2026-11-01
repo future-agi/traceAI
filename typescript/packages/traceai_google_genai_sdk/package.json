@@ -22,7 +22,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test test/compat.test.cjs test/advanced.test.cjs test/edges.test.cjs"
+    "test": "node --test test/compat.test.cjs test/advanced.test.cjs test/edges.test.cjs test/regressions.test.cjs"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",

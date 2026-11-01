@@ -6,6 +6,7 @@ const http = require("node:http");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const exec = promisify(execFile);
+const { modern } = require("./interaction-fixtures.cjs");
 
 test("exact README ESM snippet uses published FI core and exports real authenticated OTLP", async () => {
   const consumer = process.env.CONSUMER_DIR;
@@ -87,7 +88,16 @@ test("exact README ESM snippet uses published FI core and exports real authentic
     );
     assert.equal(spans.length, 2);
     assert.ok(spans.every((s) => s.endTimeUnixNano));
-    const types = `import { GoogleGenAI } from '@google/genai';\nimport { instrumentGoogleGenAI, type GoogleGenAITracingOptions, VERSION } from '@traceai/google-genai-sdk';\nconst options: GoogleGenAITracingOptions = {traceConfig: {hideInputs: true}};\nconst h = instrumentGoogleGenAI(new GoogleGenAI({apiKey: 'synthetic'}), options); h.disable(); h.enable(); h.dispose(); const version: string = VERSION;\n`;
+    let types = `import { GoogleGenAI } from '@google/genai';\nimport { instrumentGoogleGenAI, type GoogleGenAITracingOptions, VERSION } from '@traceai/google-genai-sdk';\nconst options: GoogleGenAITracingOptions = {traceConfig: {hideInputs: true}};\nconst h = instrumentGoogleGenAI(new GoogleGenAI({apiKey: 'synthetic'}), options); h.disable(); h.enable(); h.dispose(); const version: string = VERSION;\n`;
+    if (modern)
+      types += `
+import type { Interactions } from '@google/genai';
+const step: Interactions.ModelOutputStep = {type: 'model_output', content: [{type: 'text', text: 'CURRENT_OUTPUT_SENTINEL'}]};
+const delta: Interactions.StepDelta = {event_type: 'step.delta', index: 0, delta: {type: 'text', text: 'same'}};
+const usage: Interactions.Usage = {total_input_tokens: 10, total_output_tokens: 3, total_thought_tokens: 7, total_tokens: 20};
+const error: Interactions.ErrorEvent = {event_type: 'error', error: {code: 'INTERNAL', message: 'PRIVATE_ERROR_SENTINEL'}};
+const params: Parameters<GoogleGenAI['interactions']['create']>[0] = {model: 'gemini-test', input: 'hello', system_instruction: 'SYSTEM_SENTINEL'};
+`;
     await fs.writeFile(path.join(consumer, "types.mts"), types);
     await exec(process.execPath, [
       path.join(consumer, "node_modules/typescript/bin/tsc"),

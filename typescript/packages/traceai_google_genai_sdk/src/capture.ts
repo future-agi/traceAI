@@ -16,6 +16,12 @@ export class Capture {
   private remaining: number;
   private output: unknown[] = [];
   private firstContent = false;
+  private truncated = false;
+  private generation = false;
+  private hops = 0;
+  private capturedTools = false;
+  private usageTotals = new Map<string, number>();
+  private usageHops = new Map<string, number>();
   private started = performance.now();
   private allowInput: boolean;
   private allowOutput: boolean;
@@ -37,21 +43,35 @@ export class Capture {
       config.hideOutputText
     );
   }
+  private bounded(value: unknown, size: number): unknown[] {
+    const items = list(value);
+    if (items.length > size) this.truncated = true;
+    return items.slice(0, size);
+  }
   private text(value: unknown): string | undefined {
-    if (typeof value !== "string" || this.remaining <= 0) return undefined;
-    const result = value.slice(0, Math.min(this.remaining, 4096));
+    if (typeof value !== "string") return undefined;
+    const result = value.slice(0, Math.max(0, Math.min(this.remaining, 4096)));
+    if (result.length < value.length) this.truncated = true;
+    if (this.remaining <= 0) return undefined;
     this.remaining -= result.length + 16;
     return result;
   }
   private json(value: unknown, depth = 0): unknown {
-    if (this.remaining <= 0 || depth > 6) return undefined;
+    if (typeof value === "function" || value === undefined) return undefined;
+    if (this.remaining <= 0 || depth > 6) {
+      this.truncated = true;
+      return undefined;
+    }
     this.remaining -= 16;
+    if (value === null) return null;
     if (typeof value === "string") return this.text(value);
     if (typeof value === "boolean" || typeof value === "number") return value;
     if (Array.isArray(value))
-      return value.slice(0, 32).map((v) => this.json(v, depth + 1));
+      return this.bounded(value, 32).map((v) => this.json(v, depth + 1));
     const result: RecordValue = {};
-    for (const key of Object.keys(record(value)).slice(0, 32)) {
+    const keys = Object.keys(record(value));
+    if (keys.length > 32) this.truncated = true;
+    for (const key of keys.slice(0, 32)) {
       if (/data|bytes|base64|headers|api.?key|secret|token|uri|url/i.test(key))
         continue;
       const boundedKey = this.text(key);
@@ -62,7 +82,7 @@ export class Capture {
   }
   private parts(value: unknown): unknown[] {
     const result: unknown[] = [];
-    for (const item of list(value).slice(0, 64)) {
+    for (const item of this.bounded(value, 64)) {
       if (this.remaining <= 0) break;
       const part = record(item);
       const text = this.text(typeof item === "string" ? item : part.text);
@@ -84,6 +104,8 @@ export class Capture {
     return result;
   }
   input(params: RecordValue, operation: string): void {
+    this.generation =
+      operation === "generateContent" || operation === "generateContentStream";
     this.string(S.LLM_MODEL_NAME, params.model);
     if (operation === "embedContent") {
       this.string(S.EMBEDDING_MODEL_NAME, params.model);
@@ -125,16 +147,16 @@ export class Capture {
     );
     if (!this.allowInput) return;
     const messages: unknown[] = [];
-    if (config.systemInstruction)
+    const system = params.system_instruction ?? config.systemInstruction;
+    if (system)
       messages.push({
         role: "system",
-        content: this.parts(
-          record(config.systemInstruction).parts ?? config.systemInstruction,
-        ),
+        content: this.parts(record(system).parts ?? system),
       });
-    for (const item of list(
+    for (const item of this.bounded(
       params.contents ?? params.input ?? params.prompt,
-    ).slice(0, 64)) {
+      64,
+    )) {
       if (this.remaining <= 0) break;
       const content = record(item);
       messages.push({
@@ -144,15 +166,73 @@ export class Capture {
     }
     if (messages.length)
       this.span.setAttribute(S.LLM_INPUT_MESSAGES, JSON.stringify(messages));
-    if (config.tools ?? params.tools)
-      this.span.setAttribute(
-        S.LLM_TOOLS,
-        JSON.stringify(this.json(config.tools ?? params.tools)) ?? "[]",
-      );
+    // Generation tools are observed only after the SDK resolves CallableTools.
+    if (!this.generation) this.tools(config.tools ?? params.tools);
+  }
+  private tools(value: unknown): void {
+    if (!this.allowInput || this.capturedTools || value == null) return;
+    this.capturedTools = true;
+    this.span.setAttribute(
+      S.LLM_TOOLS,
+      JSON.stringify(this.json(value)) ?? "[]",
+    );
+  }
+  /** A hop gets its own cumulative usage snapshot. Sum independent hops, not SSE chunks. */
+  generationHop(params: RecordValue): (value: unknown) => void {
+    this.hops++;
+    this.tools(record(params.config).tools);
+    const previous = new Map<string, number>();
+    return (value) => {
+      for (const [key, count] of this.usage(
+        record(record(value).usageMetadata),
+      )) {
+        const total =
+          (this.usageTotals.get(key) ?? 0) + count - (previous.get(key) ?? 0);
+        if (!previous.has(key))
+          this.usageHops.set(key, (this.usageHops.get(key) ?? 0) + 1);
+        previous.set(key, count);
+        this.usageTotals.set(key, total);
+        this.span.setAttribute(key, total);
+      }
+    };
   }
   string(key: string, value: unknown): void {
-    if (typeof value === "string")
+    if (typeof value === "string") {
+      if (value.length > 256) this.truncated = true;
       this.span.setAttribute(key, value.slice(0, 256));
+    }
+  }
+  private usage(usage: RecordValue): Map<string, number> {
+    const result = new Map<string, number>();
+    for (const [key, names] of [
+      [
+        S.LLM_TOKEN_COUNT_PROMPT,
+        ["promptTokenCount", "total_input_tokens", "input_tokens"],
+      ],
+      [
+        S.LLM_TOKEN_COUNT_COMPLETION,
+        ["candidatesTokenCount", "total_output_tokens", "output_tokens"],
+      ],
+      [S.LLM_TOKEN_COUNT_TOTAL, ["totalTokenCount", "total_tokens"]],
+      [
+        S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+        ["cachedContentTokenCount", "total_cached_tokens"],
+      ],
+      [
+        S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+        [
+          "thoughtsTokenCount",
+          "total_thought_tokens",
+          "total_reasoning_tokens",
+        ],
+      ],
+    ] as const) {
+      const count = names
+        .map((name) => usage[name])
+        .find((v) => typeof v === "number" && Number.isFinite(v));
+      if (typeof count === "number") result.set(key, count);
+    }
+    return result;
   }
   response(value: unknown): void {
     const response = record(value);
@@ -175,37 +255,22 @@ export class Capture {
       if (Array.isArray(values))
         this.span.setAttribute("embedding.dimensions", values.length);
     }
-    const usage = record(
-      response.usageMetadata ?? interaction.usage ?? response.usage,
-    );
-    for (const [key, names] of [
-      [
-        S.LLM_TOKEN_COUNT_PROMPT,
-        ["promptTokenCount", "total_input_tokens", "input_tokens"],
-      ],
-      [
-        S.LLM_TOKEN_COUNT_COMPLETION,
-        ["candidatesTokenCount", "total_output_tokens", "output_tokens"],
-      ],
-      [S.LLM_TOKEN_COUNT_TOTAL, ["totalTokenCount", "total_tokens"]],
-      [
-        S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
-        ["cachedContentTokenCount", "total_cached_tokens"],
-      ],
-      [
-        S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
-        ["thoughtsTokenCount", "total_reasoning_tokens"],
-      ],
-    ] as const) {
-      const count = names
-        .map((name) => usage[name])
-        .find((v) => typeof v === "number" && Number.isFinite(v));
-      if (typeof count === "number") this.span.setAttribute(key, count);
+    if (!this.generation) {
+      const usage = record(
+        response.usageMetadata ??
+          interaction.usage ??
+          response.usage ??
+          record(response.metadata).total_usage,
+      );
+      for (const [key, count] of this.usage(usage))
+        this.span.setAttribute(key, count);
     }
     const candidates = list(response.candidates);
     const reasons = candidates
       .map((c) => record(c).finishReason)
       .filter((x): x is string => typeof x === "string");
+    if (reasons.length > 16 || reasons.some((reason) => reason.length > 128))
+      this.truncated = true;
     if (reasons.length)
       this.span.setAttribute(
         S.GEN_AI_RESPONSE_FINISH_REASONS,
@@ -220,7 +285,13 @@ export class Capture {
             list(record(record(candidate).content).parts).length > 0,
         ) ||
         response.event_type === "content.delta" ||
-        list(response.outputs ?? interaction.outputs).length > 0)
+        response.event_type === "step.delta" ||
+        list(
+          response.steps ??
+            interaction.steps ??
+            response.outputs ??
+            interaction.outputs,
+        ).length > 0)
     ) {
       this.firstContent = true;
       this.span.setAttribute(
@@ -229,24 +300,46 @@ export class Capture {
       );
     }
     if (!this.allowOutput || this.remaining <= 0) return;
-    for (const candidate of candidates.slice(0, 16)) {
+    for (const candidate of this.bounded(candidates, 16)) {
       const content = record(record(candidate).content);
       this.append({
         role: this.text(content.role) ?? "model",
         content: this.parts(content.parts),
       });
     }
-    // Interactions output is either a completed snapshot or individual content.delta events.
-    if (response.outputs ?? interaction.outputs) {
+    // Released Interactions use model_output steps; older releases use outputs.
+    const steps = response.steps ?? interaction.steps;
+    if (steps !== undefined) {
+      this.output = [];
+      for (const step of this.bounded(steps, 64)) {
+        if (record(step).type === "model_output")
+          this.append({
+            role: "model",
+            content: this.parts(record(step).content),
+          });
+      }
+    } else if (response.outputs ?? interaction.outputs) {
       this.output = [];
       this.append({
         role: "model",
         content: this.parts(response.outputs ?? interaction.outputs),
       });
-    } else if (response.event_type === "content.delta") {
+    } else if (
+      response.event_type === "content.delta" ||
+      response.event_type === "step.delta"
+    ) {
       this.append({ role: "model", content: this.parts(response.delta) });
+    } else if (
+      response.event_type === "step.start" &&
+      record(response.step).type === "model_output"
+    ) {
+      this.append({
+        role: "model",
+        content: this.parts(record(response.step).content),
+      });
     }
   }
+
   private append(message: unknown): void {
     if (!list(record(message).content).length) return;
     this.output.push(message);
@@ -257,7 +350,15 @@ export class Capture {
         S.LLM_OUTPUT_MESSAGES,
         JSON.stringify(this.output),
       );
-    if (this.remaining <= 0)
+    if (this.truncated || this.remaining <= 0)
       this.span.setAttribute("google.genai.capture_truncated", true);
+    if (this.generation && !this.hops)
+      this.span.setAttribute("google.genai.usage_capture", "unavailable");
+    else if (
+      this.generation &&
+      (!this.usageHops.size ||
+        [...this.usageHops.values()].some((count) => count < this.hops))
+    )
+      this.span.setAttribute("google.genai.usage_capture", "partial");
   }
 }
