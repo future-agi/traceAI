@@ -151,15 +151,25 @@ Only W3C `traceparent` is extracted, from API Gateway v1/v2, function URL and AL
 
 Invocation data is metadata-only: the wrapper does not copy event bodies, results, URLs, query strings, arbitrary headers or exception messages/stacks. Error metadata is restricted to built-in error categories. Root error details remain hidden even with `FI_HIDE_ERROR_DETAILS=false`; there is no content-capture opt-in. Child instrumentors and application-added attributes have their own privacy policies. `provider: undefined` disables invocation tracing; validate both FI credentials and project configuration before constructing an exporter so partial authentication is never sent.
 
-Use this wrapper **instead of** upstream `AwsLambdaInstrumentation`, an auto-instrumenting ADOT layer or another invocation wrapper. Wrapping the same returned handler again is a no-op. Response-streaming handlers are not instrumented and retain their original function identity/stream markers. Promise handlers work on Node 22/24/26. For Node 22 callback handlers, select completion explicitly:
+Use this wrapper **instead of** upstream `AwsLambdaInstrumentation`, an auto-instrumenting ADOT layer or another invocation wrapper. Wrapping the same returned handler again is a no-op. Response-streaming handlers are not instrumented and retain their original function identity/stream markers. Promise handlers work on Node 22/24/26, including async functions annotated with AWS types such as `APIGatewayProxyHandler`. The default completion mode observes the returned value or promise, not the callback; select `completion: 'callback'` for a callback implementation even if it has the same AWS type.
+
+For Node 22 callback handlers, you must set `context.callbackWaitsForEmptyEventLoop = false` **before calling the traced handler** and keep it false until completion. This lets Lambda return without waiting for pending exporter sockets after the flush budget expires. It also stops Lambda waiting for unrelated background work, so finish all required application work before calling back. The wrapper never changes this application-owned flag. If it is true or unset on entry, the wrapper calls the original handler without invocation tracing or flushing.
 
 ```typescript
-export const handler = traceLambdaHandler((event, context, callback) => {
+import type { APIGatewayProxyHandler } from 'aws-lambda';
+
+const callbackHandler: APIGatewayProxyHandler = (event, context, callback) => {
   callback(null, { statusCode: 200, body: 'Order accepted' });
-}, { provider, completion: 'callback' });
+};
+const tracedHandler = traceLambdaHandler(callbackHandler, { provider, completion: 'callback' });
+
+export const handler: APIGatewayProxyHandler = (event, context, callback) => {
+  context.callbackWaitsForEmptyEventLoop = false;
+  tracedHandler(event, context, callback);
+};
 ```
 
-Use one completion style per handler. Callback mode takes the first callback result or synchronous error, ends the span, attempts flushing, then calls the runtime callback once. Use promise handlers on Node 24 and later. Do not use legacy `context.done`, `context.succeed` or `context.fail` completion methods. Enable the OpenTelemetry diagnostic logger at DEBUG to see static telemetry-failure messages; the wrapper never logs caught exception contents.
+Use one completion style per handler. With callback tracing enabled, the wrapper takes the first callback result or synchronous error, ends the span, attempts flushing, then calls the runtime callback once. Use promise handlers on Node 24 and later. Do not use legacy `context.done`, `context.succeed` or `context.fail` completion methods. Enable the OpenTelemetry diagnostic logger at DEBUG to see static telemetry-failure messages; the wrapper never logs caught exception contents.
 
 ### Advanced Configuration
 

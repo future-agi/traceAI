@@ -9,6 +9,8 @@ export interface LambdaInvocationContext {
   awsRequestId?: string;
   functionName?: string;
   getRemainingTimeInMillis(): number;
+  /** Callback tracing requires this to be false before invocation and through completion. */
+  callbackWaitsForEmptyEventLoop?: boolean;
 }
 
 export interface LambdaTracingOptions {
@@ -126,7 +128,21 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
   handler: (event: Event, invocation: C) => Result | Promise<Result>,
   options: LambdaTracingOptions & { completion?: "promise" },
 ): (event: Event, invocation: C) => Promise<Result>;
-/** Callback completion is supported only on the AWS Node 22 runtime. */
+/**
+ * Accept AWS Handler-typed async functions (whose declared signature also requires
+ * a callback). Promise completion observes the return value, not the callback;
+ * callback implementations must explicitly select completion: "callback".
+ */
+export function traceLambdaHandler<Event, Result, C extends LambdaInvocationContext>(
+  handler: (event: Event, invocation: C, callback: LambdaCallback<Result>) => void | Promise<Result>,
+  options: LambdaTracingOptions & { completion?: "promise" },
+): (event: Event, invocation: C) => Promise<Result>;
+/**
+ * Callback completion is supported only on the AWS Node 22 runtime. Set
+ * context.callbackWaitsForEmptyEventLoop = false before calling the wrapper and
+ * keep it false through completion. Otherwise the original handler runs without
+ * invocation tracing or flushing. The wrapper never changes this flag itself.
+ */
 export function traceLambdaHandler<Event, Result, C extends LambdaInvocationContext>(
   handler: (event: Event, invocation: C, callback: LambdaCallback<Result>) => void,
   options: LambdaTracingOptions & { completion: "callback" },
@@ -193,6 +209,14 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
 
   const wrapped = options.completion === "callback"
     ? function(this: unknown, event: Event, invocation: C, callback: LambdaCallback<Result>) {
+      // A bounded Promise wait cannot cancel the export socket. With AWS's default
+      // event-loop waiting that socket would still delay a successful response.
+      // Do not alter application semantics or even start a span without opt-in.
+      if (invocation.callbackWaitsForEmptyEventLoop !== false) {
+        firstInvocation = false;
+        diagnostic("callback tracing skipped: callbackWaitsForEmptyEventLoop must be false");
+        return handler.call(this, event, invocation, callback);
+      }
       void invoke.call(this, event, invocation).then(
         result => callback(null, result),
         error => callback(error),

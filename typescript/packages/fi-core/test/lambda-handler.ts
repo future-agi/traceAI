@@ -1,3 +1,4 @@
+import type { APIGatewayProxyHandler } from "aws-lambda";
 import { trace } from "@opentelemetry/api";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -26,7 +27,7 @@ if (apiKey && secretKey && projectName) {
 }
 
 const tracer = trace.getTracer("order-handler");
-export const handler = traceLambdaHandler(async () => {
+const applicationHandler: APIGatewayProxyHandler = async () => {
   return tracer.startActiveSpan("prepare-response", async span => {
     try {
       await Promise.resolve();
@@ -35,4 +36,5 @@ export const handler = traceLambdaHandler(async () => {
       span.end();
     }
   });
-}, { provider });
+};
+export const handler: APIGatewayProxyHandler = traceLambdaHandler(applicationHandler, { provider });

@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/aws/aws-lambda-nodejs-runtime-interface-client",
+  "commit": "962ed28eefbc052389c4de4366b1c0c49ee08a13",
+  "license": "Apache-2.0",
+  "files": {
+    "CallbackContext.js": { "source": "src/CallbackContext.js", "sha256": "01dcbfa113ba7a2b7e7f2ec3f5ecdba0460cf90f3dd0e8202433feee805faede" },
+    "BeforeExitListener.js": { "source": "src/BeforeExitListener.js", "sha256": "20a007829c628dc4f8a030d483fa7d3d7f3bb5c38fcaa8aa23a58db10784dd07" },
+    "LICENSE": { "source": "LICENSE", "sha256": "09e8a9bcec8067104652c168685ab0931e7868f9c8284b66f5ae6edae5f1130b" }
+  },
+  "notes": "Unmodified Node 22 callback-completion sources. The test runner stubs only LogPatch diagnostics, wires the real beforeExit listener, and records the runtime response/error boundary. No AWS deployment is implied."
+}

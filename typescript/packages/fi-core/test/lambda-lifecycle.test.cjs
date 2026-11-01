@@ -292,6 +292,31 @@ test('same wrapper is not nested twice; streaming handler identity and marker ar
   assert.equal(traceLambdaHandler(stream, { provider: m.provider }), stream);
 });
 
+for (const flag of [undefined, true]) test(`callback tracing bypass preserves application semantics when event-loop flag is ${flag}`, async () => {
+  const m = memory(); let flushCalls = 0;
+  m.provider.forceFlush = async () => { flushCalls++; };
+  const ctx = { ...invocation(), callbackWaitsForEmptyEventLoop: flag };
+  const event = {}, callback = () => {}, result = {};
+  const owner = { handler: traceLambdaHandler(function(e, c, cb) {
+    assert.equal(this, owner); assert.equal(e, event); assert.equal(c, ctx); assert.equal(cb, callback);
+    return result;
+  }, { provider: m.provider, completion: 'callback' }) };
+  assert.equal(owner.handler(event, ctx, callback), result);
+  const failure = new Error('synthetic');
+  assert.throws(() => traceLambdaHandler(() => { throw failure; }, { provider: m.provider, completion: 'callback' })(event, ctx, callback), error => error === failure);
+  assert.equal(ctx.callbackWaitsForEmptyEventLoop, flag);
+  assert.equal(m.spans().length, 0); assert.equal(flushCalls, 0);
+});
+
+test('a skipped callback invocation still consumes the cold-start flag', async () => {
+  const m = memory();
+  const handler = traceLambdaHandler((_event, _ctx, callback) => callback(null, 42), { provider: m.provider, completion: 'callback' });
+  handler({}, invocation(), () => {});
+  await new Promise(resolve => handler({}, { ...invocation(), callbackWaitsForEmptyEventLoop: false }, resolve));
+  assert.equal(m.spans().length, 1);
+  assert.equal(m.spans()[0].attributes['faas.coldstart'], false);
+});
+
 for (const mode of ['success', 'error', 'throw']) test(`Node 22 callback completion ${mode}`, { skip: Number(process.versions.node.split('.')[0]) !== 22 }, async () => {
   const m = memory(); const failure = new Error('PRIVATE_CALLBACK');
   let completionCalls = 0;
@@ -299,7 +324,7 @@ for (const mode of ['success', 'error', 'throw']) test(`Node 22 callback complet
     if (mode === 'throw') throw failure;
     setImmediate(() => { callback(mode === 'error' ? failure : null, 42); callback(null, 99); });
   }, { provider: m.provider, completion: 'callback' });
-  const outcome = await new Promise(resolve => handler({}, invocation(), (error, result) => {
+  const outcome = await new Promise(resolve => handler({}, { ...invocation(), callbackWaitsForEmptyEventLoop: false }, (error, result) => {
     completionCalls++; resolve({ error, result });
   }));
   await delay(1);

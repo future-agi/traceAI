@@ -14,14 +14,53 @@ const source = fs.readFileSync(path.join(__dirname, 'lambda-handler.ts'), 'utf8'
 const directory = fs.mkdtempSync(path.join(fixture, 'lambda-runtime-'));
 for (const extension of ['cts', 'mts']) fs.writeFileSync(path.join(directory, `handler.${extension}`), source);
 fs.writeFileSync(path.join(directory, 'types.cts'), `
-import type { Handler, Context } from 'aws-lambda';
+import type { Handler, Context, APIGatewayProxyHandler, APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { traceLambdaHandler, type LambdaCallback } from '@traceai/fi-core';
 const promise: Handler = traceLambdaHandler(async (_event: unknown, _context: Context) => ({ statusCode: 200 }), {});
 const callback: Handler = traceLambdaHandler((_event: unknown, _context: Context, cb: LambdaCallback<number>) => cb(null, 1), { completion: 'callback' });
-void promise; void callback;
+const typedAsync: APIGatewayProxyHandler = async event => ({ statusCode: 200, body: event.body ?? 'ready' });
+const inferred = traceLambdaHandler(typedAsync, {});
+const assignable: APIGatewayProxyHandler = inferred;
+const explicit: APIGatewayProxyHandler = traceLambdaHandler(typedAsync, { completion: 'promise' });
+const typedGeneric: Handler<{ value: number }, number> = async event => { await Promise.resolve(); return event.value; };
+export const asyncGeneric = traceLambdaHandler(typedGeneric, {});
+export const failure = new TypeError('synthetic application failure');
+const rejectInput: Handler = async () => { await Promise.resolve(); throw failure; };
+export const rejectHandler = traceLambdaHandler(rejectInput, { completion: 'promise' });
+const typedCallback: Handler<{ value: number }, number> = (event, _context, cb) => cb(null, event.value);
+const generic: Handler<{ value: number }, number> = traceLambdaHandler(typedGeneric, {});
+const callbackInput: Handler<{ value: number }, number> = traceLambdaHandler(typedCallback, { completion: 'callback' });
+async function resultType(event: APIGatewayProxyEvent, context: Context) {
+  const result: APIGatewayProxyResult = await inferred(event, context);
+  const number: number = await traceLambdaHandler(typedGeneric, {} )({ value: 42 }, context);
+  const synchronous: number = await traceLambdaHandler(() => 42, {})({}, context);
+  return { result, number, synchronous };
+}
+void promise; void callback; void assignable; void explicit; void generic; void callbackInput; void resultType;
 `);
-const compile = spawnSync(process.execPath, [load.resolve('typescript/bin/tsc'), '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--strict', '--skipLibCheck', '--types', 'node', '--outDir', path.join(directory, 'out'), ...['handler.cts', 'handler.mts', 'types.cts'].map(f => path.join(directory, f))], { cwd: fixture, encoding: 'utf8' });
+const readme = fs.readFileSync(path.join(__dirname, '../README.md'), 'utf8');
+const callbackSnippet = [...readme.matchAll(/```typescript\n([\s\S]*?)```/g)].map(match => match[1]).find(code => code.includes('const callbackHandler: APIGatewayProxyHandler'));
+assert.ok(callbackSnippet, 'callback example must stay compile-tested');
+fs.writeFileSync(path.join(directory, 'callback.cts'), `import { traceLambdaHandler, type LambdaTracingOptions } from '@traceai/fi-core';
+const provider: LambdaTracingOptions['provider'] = undefined;
+` + callbackSnippet);
+const compile = spawnSync(process.execPath, [load.resolve('typescript/bin/tsc'), '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--strict', '--skipLibCheck', '--types', 'node', '--outDir', path.join(directory, 'out'), ...['handler.cts', 'handler.mts', 'types.cts', 'callback.cts'].map(f => path.join(directory, f))], { cwd: fixture, encoding: 'utf8' });
 assert.equal(compile.status, 0, compile.stdout + compile.stderr);
+
+test('AWS Handler-annotated inputs use returned promises, not callback completion', async () => {
+  const { asyncGeneric, rejectHandler, failure } = require(path.join(directory, 'out/types.cjs'));
+  const context = { getRemainingTimeInMillis: () => 1000 };
+  assert.equal(await asyncGeneric({ value: 42 }, context), 42);
+  await assert.rejects(rejectHandler({}, context), error => error === failure);
+});
+
+test('Node 22 callback example explicitly opts out of event-loop waiting before tracing', { skip: Number(process.versions.node.split('.')[0]) !== 22 }, async () => {
+  const { handler } = require(path.join(directory, 'out/callback.cjs'));
+  const context = { callbackWaitsForEmptyEventLoop: true, getRemainingTimeInMillis: () => 1000 };
+  const result = await new Promise((resolve, reject) => handler({}, context, (error, value) => error ? reject(error) : resolve(value)));
+  assert.equal(context.callbackWaitsForEmptyEventLoop, false);
+  assert.deepEqual(result, { statusCode: 200, body: 'Order accepted' });
+});
 
 for (const format of ['cjs', 'mjs']) for (const mode of ['ready', 'no-api-key', 'no-secret-key', 'no-project', 'invalid-url']) {
   test(`customer snippet via local runtime interface: ${format}, ${mode}`, async () => {
