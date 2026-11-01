@@ -1046,6 +1046,14 @@
           "section": "Documentation"
         }
       ]
+    },
+    "typescript/packages/traceai_huggingface_transformers": {
+      "release-type": "node",
+      "component": "npm-traceai-huggingface-transformers",
+      "package-name": "@traceai/huggingface-transformers",
+      "extra-files": [
+        "src/version.ts"
+      ]
     }
   }
 }
