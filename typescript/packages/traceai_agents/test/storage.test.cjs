@@ -99,6 +99,8 @@ test("profile isolation, destination immutability, policy fencing and bounded pu
   assert.equal(spool.status().logical_bytes, 0);
   const enabled = route();
   enabled.epoch = 2;
+  assert.throws(() => spool.route(enabled), /HELD_POLICY/);
+  enabled.epoch = 3;
   spool.route(enabled);
   assert.equal(spool.admit(route().id, fact()).duplicate, true);
   assert.throws(
@@ -113,6 +115,36 @@ test("profile isolation, destination immutability, policy fencing and bounded pu
       }),
     /HELD_CONTENT_QUALIFICATION/,
   );
+});
+test("re-enable releases pre-disable queue under a new fenced epoch", (t) => {
+  const { spool } = fixture(t);
+  spool.admit(route().id, fact());
+  const old = spool.next(route().id);
+  spool.disable(route().id);
+  assert.equal(spool.getRoute(route().id).epoch, 2);
+  assert.equal(spool.next(route().id), undefined);
+  const enabled = { ...route(), epoch: 3 };
+  spool.route(enabled);
+  const released = spool.next(route().id);
+  assert.equal(released?.id, old.id);
+  assert.equal(released?.epoch, 3);
+  assert.equal(spool.status().held_disabled, 0);
+  assert.throws(
+    () => spool.complete(old.id, old.epoch, { state: "accepted", code: "HTTP_ACCEPTED" }),
+    /STALE_LEASE/,
+  );
+  spool.complete(released.id, released.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  assert.equal(spool.next(route().id), undefined);
+  assert.equal(spool.status().logical_bytes, 0);
+});
+test("re-registration while disabled never releases captured work", (t) => {
+  const { spool } = fixture(t);
+  spool.admit(route().id, fact());
+  spool.disable(route().id);
+  const disabled = { ...route(), enabled: false, epoch: 2 };
+  spool.route(disabled);
+  assert.equal(spool.next(route().id), undefined);
+  assert.equal(spool.status().held_disabled, 1);
 });
 test("accepted bytes are deleted but accounting receipts survive restart", (t) => {
   const dir = fs.mkdtempSync(path.join(base, "restart-"));
