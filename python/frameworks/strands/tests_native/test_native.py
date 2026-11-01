@@ -101,6 +101,56 @@ def test_tool_error_body_cannot_bypass_input_privacy():
     run("--tool-error", "--capture", "--hide", "hide_inputs")
 
 
+@pytest.mark.parametrize("wire", ["protobuf", "json"])
+@pytest.mark.parametrize("gzip", [False, True])
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize(
+    "conventions",
+    [
+        "",
+        "gen_ai_latest_experimental",
+        "gen_ai_latest_experimental,gen_ai_span_attributes_only",
+    ],
+)
+def test_recovered_tool_errors_stay_hidden_in_history(wire, gzip, batch, conventions):
+    run(
+        "--tool-error",
+        "--capture",
+        "--hide",
+        "hide_error_details",
+        "--wire",
+        wire,
+        *(["--gzip"] if gzip else []),
+        *(["--batch"] if batch else []),
+        conventions=conventions,
+    )
+
+
+def test_recovered_tool_error_environment_privacy():
+    run(
+        "--tool-error",
+        "--capture",
+        "--async-stream",
+        environment={"FI_HIDE_ERROR_DETAILS": "true"},
+    )
+
+
+def test_recovered_tool_error_details_can_be_explicitly_captured():
+    run("--tool-error", "--capture")
+
+
+def test_tool_history_projection_is_conservative_and_does_not_mutate_native_spans():
+    result = subprocess.run(
+        [sys.executable, "-I", str(SCENARIO.with_name("history_scenario.py"))],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS tool history privacy" in result.stdout
+
+
 def test_projection_preserves_other_instrumentation_and_exporter_lifecycle():
     result = subprocess.run(
         [sys.executable, "-I", str(SCENARIO.with_name("projection_scenario.py"))],

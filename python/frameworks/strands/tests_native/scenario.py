@@ -428,10 +428,20 @@ else:
             attrs = {a.key: a.value.string_value for a in rs.resource.attributes}
             assert attrs["project_name"] == "offline-strands"
             assert attrs["project_type"] == "observe"
-    if args.tool_error and config.hide_inputs:
-        assert "ERROR-SENTINEL" not in "".join(
-            MessageToJson(req) for req, _ in received
-        ), [MessageToJson(s) for s in spans if "ERROR-SENTINEL" in MessageToJson(s)]
+    if args.tool_error:
+        payload = "".join(MessageToJson(req) for req, _ in received)
+        # The agent recovers and repeats the failed result in later successful
+        # model/cycle spans, including the next turn. Assert the entire wire
+        # payload, not only the failed tool span's status or output.
+        assert "ERROR-SENTINEL" in "".join(s.to_json() for s in originals)
+        if not args.capture or config.hide_error_details:
+            assert "ERROR-SENTINEL" not in payload
+        else:
+            assert "ERROR-SENTINEL" in payload
+        if args.capture and not config.hide_inputs:
+            assert "INPUT-SENTINEL" in payload
+        if args.capture and not config.hide_outputs:
+            assert "OUTPUT-SENTINEL" in payload
     handle.uninstrument()
     try:
         configure_strands_tracing(

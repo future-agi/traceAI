@@ -67,6 +67,8 @@ exporter = StrandsSpanExporter(
 
 When content is disabled, native message events, tool payloads and error details are omitted. When content is enabled, input/output privacy settings apply to both native event-based and attribute-based messages. Because native messages are serialized blobs, a granular input or output hide flag omits that direction's entire content, including tool arguments/results, instead of retaining an unmasked copy. Native content events are projected into attributes, not exported a second time.
 
+With `hide_error_details=True`, failed tool responses are also removed from later message history, even when the agent recovers. Tool responses whose success status is unavailable are omitted from history too; newer Strands semantic conventions discard that status. Successful tool spans still retain their own results when the native status confirms success. This setting does not detect error text that your application or model copies into ordinary messages.
+
 Span names, model/tool identifiers, session/user IDs and application resource attributes are metadata; do not put secrets in them. Unknown custom native attributes and link attributes are omitted. Other instrumentation scopes pass through unchanged: this adapter is not a privacy filter for the whole application. Content opt-in is not automatic credential detection.
 
 ## Migrate existing setup

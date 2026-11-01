@@ -109,6 +109,53 @@ def _messages(span, direction):
     return messages or _decode(legacy)
 
 
+def _redact_tool_results(value):
+    """Remove failed or unverifiable tool responses from decoded message history.
+
+    Legacy content blocks retain toolResult.status; newer OTel parts discard it.
+    Never infer success from the enclosing chat/cycle span: it may have recovered
+    from a tool error. No cross-span state is needed, even across export batches.
+    """
+    if isinstance(value, list):
+        return [
+            clean
+            for item in value
+            if (clean := _redact_tool_results(item)) is not None
+        ]
+    if not isinstance(value, dict):
+        return value
+    if "toolResult" in value:
+        result = value["toolResult"]
+        if not isinstance(result, dict) or result.get("status") != "success":
+            return None
+    if value.get("type") == "tool_call_response" and value.get("status") != "success":
+        return None
+    if value.get("role") == "tool":
+        # Opaque tool messages may contain error text without a status. Retain
+        # only structured calls/results that can be checked below, not raw text.
+        value = {
+            "role": "tool",
+            **{
+                key: [
+                    block
+                    for block in blocks
+                    if isinstance(block, dict)
+                    and (
+                        "toolResult" in block
+                        or block.get("type") in {"tool_call", "tool_call_response"}
+                    )
+                ]
+                for key in ("content", "parts")
+                if isinstance(blocks := value.get(key), list)
+            },
+        }
+    return {
+        key: clean
+        for key, item in value.items()
+        if (clean := _redact_tool_results(item)) is not None
+    }
+
+
 def _kind(span):
     operation = (span.attributes or {}).get("gen_ai.operation.name", "")
     if operation == "chat":
@@ -171,12 +218,19 @@ def _project(span, config, capture_content):
             if (
                 direction == "output"
                 and hide_errors
-                and status_code == StatusCode.ERROR
+                and (
+                    status_code == StatusCode.ERROR
+                    or (kind == "TOOL" and tool_status != "success")
+                )
             ):
                 continue
             if not _content_allowed(config, direction):
                 continue
             messages = _messages(span, direction)
+            if hide_errors and kind != "TOOL":
+                # A tool span carries arguments and a directly verifiable result;
+                # other spans carry history, whose tool statuses must be checked.
+                messages = _redact_tool_results(messages)
             if messages is not None:
                 value = json.dumps(messages, ensure_ascii=False)
                 if len(value) <= _MAX_CONTENT:
