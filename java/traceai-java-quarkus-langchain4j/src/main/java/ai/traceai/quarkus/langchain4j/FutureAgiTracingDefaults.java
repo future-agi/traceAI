@@ -1,4 +1,4 @@
-package ai.traceai.examples.quarkus;
+package ai.traceai.quarkus.langchain4j;
 
 import dev.langchain4j.model.chat.listener.ChatModelErrorContext;
 import dev.langchain4j.observability.api.event.AiServiceErrorEvent;
@@ -17,8 +17,8 @@ import jakarta.inject.Singleton;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Future AGI defaults for the spans Quarkus LangChain4j already creates. Application code: copy this file (and
- * {@link ToolErrorStatus}) into your application. Nothing here creates spans.
+ * CDI-discovered defaults for the spans Quarkus LangChain4j already creates. Install
+ * {@code traceai-java-quarkus-langchain4j}; no application-side helper classes or additional spans are needed.
  *
  * <ol>
  * <li>Failures become {@code ERROR}. Quarkus LangChain4j records the exception on the AI service span and on the

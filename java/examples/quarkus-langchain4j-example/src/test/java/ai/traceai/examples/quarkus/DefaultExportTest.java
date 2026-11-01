@@ -58,6 +58,9 @@ class DefaultExportTest {
         http.forEach(h -> assertTrue(completions.stream().anyMatch(c -> c.spanId().equals(h.parentId()))));
         assertEquals(1, spans.stream().map(ExportedSpan::traceId).distinct().count());
         assertEquals(1, spans.stream().filter(s -> s.parentId().isEmpty()).count(), "one root");
+        assertEquals(6, spans.size(), "the adapter must create no additional spans");
+        assertTrue(spans.stream().allMatch(s -> s.span().getStatus().getCode() == Status.StatusCode.STATUS_CODE_UNSET),
+                "successful calls must not be marked as errors");
     }
 
     @Test

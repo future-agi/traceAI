@@ -6,12 +6,14 @@ on:
       - 'java/**'
       - 'jitpack.yml'
       - '.github/workflows/java-ci.yml'
+      - '.github/workflows/release-java.yml'
   push:
     branches: [dev, main]
     paths:
       - 'java/**'
       - 'jitpack.yml'
       - '.github/workflows/java-ci.yml'
+      - '.github/workflows/release-java.yml'
   workflow_dispatch:
 
 permissions:
