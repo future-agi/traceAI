@@ -1,6 +1,9 @@
 package ai.traceai.azure.search;
 
 import ai.traceai.FITracer;
+import ai.traceai.ContextAttributes;
+import java.util.Map;
+import org.junit.jupiter.params.provider.CsvSource;
 import ai.traceai.SemanticConventions;
 import ai.traceai.TraceConfig;
 import com.azure.core.credential.AzureKeyCredential;
@@ -61,6 +64,7 @@ class TracedSearchClientTest {
         """;
 
     private final AtomicInteger requests = new AtomicInteger();
+    private final List<String> requestBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final InMemorySpanExporter exporter = InMemorySpanExporter.create();
     private final SdkTracerProvider provider = SdkTracerProvider.builder()
         .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
@@ -80,6 +84,7 @@ class TracedSearchClientTest {
             if (nextFailure != null) {
                 return Mono.error(nextFailure);
             }
+            requestBodies.add(request.getBodyAsBinaryData().toString());
             // A transport child must run under the retrieval span, not the later consumer's context.
             Span transport = telemetry.getTracer("transport").spanBuilder("transport").startSpan();
             transport.end();
@@ -112,6 +117,19 @@ class TracedSearchClientTest {
         Iterator<SearchResult> iterator = results.iterator();
         assertThat(iterator.next().getScore()).isEqualTo(2.0);
         assertThat(requests).hasValue(1);
+        var body = com.google.gson.JsonParser.parseString(requestBodies.get(0)).getAsJsonObject();
+        assertThat(body.get("search").getAsString()).isEqualTo("query");
+        if (!mode.equals("text")) {
+            var vector = body.getAsJsonArray("vectorQueries").get(0).getAsJsonObject();
+            assertThat(vector.get("fields").getAsString()).isEqualTo("embedding");
+            assertThat(vector.get("k").getAsInt()).isEqualTo(2);
+            assertThat(vector.getAsJsonArray("vector").get(0).getAsFloat()).isEqualTo(1.0f);
+        } else {
+            assertThat(body.get("top").getAsInt()).isEqualTo(2);
+        }
+        if (mode.equals("filtered")) {
+            assertThat(body.get("filter").getAsString()).isEqualTo("private-filter eq 'secret'");
+        }
         assertThat(iterator.next().getScore()).isEqualTo(1.0);
         assertThat(iterator.hasNext()).isFalse();
         assertThat(requests).hasValue(2);
@@ -119,6 +137,50 @@ class TracedSearchClientTest {
             assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
             assertThat(span.getAttributes().get(AttributeKey.longKey(SemanticConventions.DB_VECTOR_RESULTS_COUNT)))
                 .isEqualTo(1L);
+        });
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void deferredPagesKeepCallerIdentityAndRestoreConsumer(boolean populated, boolean threaded) throws Exception {
+        Span parent = telemetry.getTracer("app").spanBuilder("caller").startSpan();
+        SearchPagedIterable results;
+        Map<String, String> caller;
+        try (Scope ignored = parent.makeCurrent();
+             var session = ContextAttributes.usingSession(populated ? "caller-session" : null);
+             var user = ContextAttributes.usingUser(populated ? "caller-user" : null);
+             var metadata = ContextAttributes.usingMetadata(populated ? Map.of("origin", "caller") : null);
+             var tags = ContextAttributes.usingTags(populated ? List.of("caller-tag") : null)) {
+            caller = ContextAttributes.getAttributesFromContext();
+            results = search("text");
+        } finally {
+            parent.end();
+        }
+        Runnable consume = () -> {
+            try (var session = ContextAttributes.usingSession("consumer-session");
+                 var user = ContextAttributes.usingUser("consumer-user");
+                 var metadata = ContextAttributes.usingMetadata(Map.of("origin", "consumer"));
+                 var tags = ContextAttributes.usingTags(List.of("consumer-tag"))) {
+                var before = ContextAttributes.getAttributesFromContext();
+                var iterator = results.iterator();
+                assertThat(iterator.next().getScore()).isEqualTo(2.0);
+                assertThat(ContextAttributes.getAttributesFromContext()).isEqualTo(before);
+                nextFailure = new IllegalStateException("synthetic failure");
+                assertThatThrownBy(iterator::hasNext).isSameAs(nextFailure);
+                assertThat(ContextAttributes.getAttributesFromContext()).isEqualTo(before);
+                assertThat(Span.current().getSpanContext().isValid()).isFalse();
+            } catch (Exception error) {
+                throw new RuntimeException(error);
+            }
+        };
+        if (threaded) CompletableFuture.runAsync(consume).join(); else consume.run();
+        assertThat(retrievals()).hasSize(2).allSatisfy(span -> {
+            assertThat(span.getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+            for (String key : List.of(SemanticConventions.SESSION_ID, SemanticConventions.GEN_AI_CONVERSATION_ID,
+                    SemanticConventions.USER_ID, SemanticConventions.METADATA, SemanticConventions.TAG_TAGS)) {
+                assertThat(span.getAttributes().get(AttributeKey.stringKey(key))).isEqualTo(caller.get(key));
+            }
+            assertThat(span.getAttributes().asMap().toString()).doesNotContain("consumer");
         });
     }
 

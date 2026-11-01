@@ -28,7 +28,16 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        azure-search-version: ['11.6.2', '11.8.1']
+        include:
+          - azure-search-version: '11.6.2'
+            module: traceai-java-azure-search
+            property: azure-search.version
+          - azure-search-version: '11.8.1'
+            module: traceai-java-azure-search
+            property: azure-search.version
+          - azure-search-version: '12.0.3'
+            module: traceai-java-azure-search-v12
+            property: azure-search-v12.version
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -39,8 +48,8 @@ jobs:
           cache-dependency-path: 'java/**/pom.xml'
       - name: Verify lazy paging and OTLP export without vendor services
         run: >-
-          mvn -B -ntp -f java/pom.xml -pl traceai-java-azure-search -am
-          -Dazure-search.version=${{ matrix.azure-search-version }} test
+          mvn -B -ntp -f java/pom.xml -pl ${{ matrix.module }} -am
+          -D${{ matrix.property }}=${{ matrix.azure-search-version }} test
 
   verify:
     name: Build, test, and validate Central artifacts

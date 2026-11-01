@@ -11,13 +11,15 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
  * Instrumentation wrapper for Azure AI Search (formerly Azure Cognitive Search) operations.
  * Wraps the synchronous Azure SearchClient from azure-search-documents 11.6.2 through 11.8.1.
- * Azure SDK 12.x and SearchAsyncClient are not supported by this wrapper.
+ * For SDK 12.0.3 use the separate traceai-java-azure-search-v12 artifact.
+ * SearchAsyncClient is not supported by this wrapper.
  *
  * <p>Searches stay lazy. Each requested page produces a RETRIEVER span, parented to the
  * context at search creation. Result counts and top scores describe that page, not the
@@ -343,8 +345,9 @@ public class TracedSearchClient {
         // Do not enumerate it here, even to calculate telemetry attributes.
         SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
         io.opentelemetry.context.Context parent = io.opentelemetry.context.Context.current();
+        Map<String, String> callerAttributes = Map.copyOf(ContextAttributes.getAttributesFromContext());
         Function<String, SearchPagedResponse> fetch = token -> {
-            Span span = tracer.startSpan(name, FISpanKind.RETRIEVER, parent);
+            Span span = tracer.startSpan(name, FISpanKind.RETRIEVER, parent, callerAttributes);
             try (Scope scope = span.makeCurrent()) {
                 setCommonAttributes(span, topK, dimensions, mode);
                 span.setAttribute("azure_search.result_scope", "page");
