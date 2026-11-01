@@ -131,12 +131,15 @@ func TestMissingZeroUsageAndCaptureSlotBudget(t *testing.T) {
 		b.Name = "name"
 		b.Arguments = "{}"
 	}
-	r.setUsage(&types.TokenUsage{InputTokens: aws.Int32(0)})
+	r.setUsage(&types.TokenUsage{InputTokens: aws.Int32(0), CacheWriteInputTokens: aws.Int32(0)})
 	r.stop("secret-stop-reason")
 	r.finish(nil, false)
 	a := attrs(llms(e)[0])
 	if a["gen_ai.usage.input_tokens"].Type() != attribute.INT64 || a["gen_ai.usage.input_tokens"].AsInt64() != 0 {
 		t.Fatal("zero lost")
+	}
+	if x := a["gen_ai.usage.cache_write_tokens"]; x.Type() != attribute.INT64 || x.AsInt64() != 0 {
+		t.Fatal("zero cache-write tokens lost")
 	}
 	if _, ok := a["gen_ai.usage.output_tokens"]; ok {
 		t.Fatal("missing output became zero")

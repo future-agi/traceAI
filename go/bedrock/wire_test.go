@@ -102,8 +102,20 @@ func TestCustomerExampleOTLP(t *testing.T) {
 			t.Error("invalid lifetime")
 		}
 		values := map[string]string{}
+		cacheWriteFound := false
 		for _, a := range s.Attributes {
 			values[a.Key] = a.Value.GetStringValue()
+			// This is the cache-write key accepted by Future AGI ingestion,
+			// not the provider's cache_creation_input_tokens payload field.
+			if a.Key == "gen_ai.usage.cache_write_tokens" {
+				cacheWriteFound = a.Value.GetIntValue() == 4
+			}
+			if a.Key == "gen_ai.usage.cache_creation_tokens" {
+				t.Error("unrecognized cache-write attribute on the OTLP wire")
+			}
+		}
+		if !cacheWriteFound {
+			t.Error("canonical cache-write token count missing from OTLP")
 		}
 		if values["gen_ai.span.kind"] != "LLM" || values["session.id"] != "weather-session" || values["gen_ai.request.model"] != model {
 			t.Error("semantic attributes missing")

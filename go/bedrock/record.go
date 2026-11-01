@@ -167,7 +167,7 @@ func (r *record) tokens() {
 	for _, x := range []struct {
 		k string
 		v *int64
-	}{{"input_tokens", r.usage.Input}, {"output_tokens", r.usage.Output}, {"total_tokens", r.usage.Total}, {"cache_read_tokens", r.usage.CacheRead}, {"cache_creation_tokens", r.usage.CacheWrite}} {
+	}{{"input_tokens", r.usage.Input}, {"output_tokens", r.usage.Output}, {"total_tokens", r.usage.Total}, {"cache_read_tokens", r.usage.CacheRead}, {"cache_write_tokens", r.usage.CacheWrite}} {
 		if x.v != nil && *x.v >= 0 {
 			r.span.SetAttributes(attribute.Int64("gen_ai.usage."+x.k, *x.v))
 		}

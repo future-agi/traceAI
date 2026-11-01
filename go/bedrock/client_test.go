@@ -119,7 +119,7 @@ func TestConverseNativeAndSemantic(t *testing.T) {
 	if a["gen_ai.request.model"].AsString() != model || a["session.id"].AsString() != "session-a" {
 		t.Fatal(a)
 	}
-	for k, v := range map[string]int64{"input_tokens": 3, "output_tokens": 2, "total_tokens": 5, "cache_read_tokens": 0, "cache_creation_tokens": 4} {
+	for k, v := range map[string]int64{"input_tokens": 3, "output_tokens": 2, "total_tokens": 5, "cache_read_tokens": 0, "cache_write_tokens": 4} {
 		if x := a["gen_ai.usage."+k]; x.Type() != attribute.INT64 || x.AsInt64() != v {
 			t.Fatalf("%s: %v", k, x)
 		}
@@ -152,7 +152,7 @@ func frame(w io.Writer, typ, payload string) error {
 	return eventstream.NewEncoder().Encode(w, eventstream.Message{Headers: h, Payload: []byte(payload)})
 }
 func converseFrames(w io.Writer) {
-	for _, ev := range [][2]string{{"messageStart", `{"role":"assistant"}`}, {"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hel"}}`}, {"contentBlockStart", `{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"c1","name":"weather"}}}`}, {"contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"city\":"}}}`}, {"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"lo"}}`}, {"contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"\"Paris\"}"}}}`}, {"messageStop", `{"stopReason":"tool_use"}`}, {"metadata", `{"usage":{"inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadInputTokens":0},"metrics":{"latencyMs":2}}`}} {
+	for _, ev := range [][2]string{{"messageStart", `{"role":"assistant"}`}, {"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"hel"}}`}, {"contentBlockStart", `{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"c1","name":"weather"}}}`}, {"contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"city\":"}}}`}, {"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"lo"}}`}, {"contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"\"Paris\"}"}}}`}, {"messageStop", `{"stopReason":"tool_use"}`}, {"metadata", `{"usage":{"inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadInputTokens":0,"cacheWriteInputTokens":4},"metrics":{"latencyMs":2}}`}} {
 		_ = frame(w, ev[0], ev[1])
 	}
 }
@@ -275,6 +275,12 @@ func TestStreamFailuresAndClose(t *testing.T) {
 				if s.Err() == nil {
 					t.Fatal("lost SDK stream error")
 				}
+			}
+			if mode == "cancel-unread" && !errors.Is(s.Err(), context.Canceled) {
+				t.Errorf("lost cancellation error: %v", s.Err())
+			}
+			if mode == "deadline" && !errors.Is(s.Err(), context.DeadlineExceeded) {
+				t.Errorf("lost deadline error: %v", s.Err())
 			}
 			_ = s.Close()
 			spans := llms(e)

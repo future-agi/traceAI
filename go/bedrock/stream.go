@@ -21,29 +21,42 @@ type stream[T any] struct {
 	stopped  chan struct{}
 	once     sync.Once
 	closeErr error
+
+	errMu       sync.Mutex
+	terminalErr error
 }
 
 func observeStream[T any](ctx context.Context, inner reader[T], r *record, observe func(T)) *stream[T] {
 	s := &stream[T]{inner: inner, events: make(chan T), done: make(chan struct{}), stopped: make(chan struct{})}
 	go func() {
-		var err error
 		early := false
-		defer func() { r.finish(err, early); close(s.events); close(s.stopped) }()
+		defer func() {
+			// Closing the SDK reader can suppress its decoder's cancellation
+			// error. Retain the context error at termination, including when
+			// EOF or Close wins the select, but prefer genuine SDK errors.
+			err := inner.Err()
+			if err == nil {
+				err = ctx.Err()
+			}
+			s.errMu.Lock()
+			s.terminalErr = err
+			s.errMu.Unlock()
+			r.finish(err, early)
+			close(s.events)
+			close(s.stopped)
+		}()
 		input := inner.Events()
 		for {
 			select {
 			case <-s.done:
-				err = inner.Err()
 				early = true
 				return
 			case <-ctx.Done():
-				err = ctx.Err()
 				early = true
 				s.closeInner()
 				return
 			case ev, ok := <-input:
 				if !ok {
-					err = inner.Err()
 					return
 				}
 				r.mu.Lock()
@@ -52,11 +65,9 @@ func observeStream[T any](ctx context.Context, inner reader[T], r *record, obser
 				select {
 				case s.events <- ev:
 				case <-s.done:
-					err = inner.Err()
 					early = true
 					return
 				case <-ctx.Done():
-					err = ctx.Err()
 					early = true
 					s.closeInner()
 					return
@@ -67,6 +78,13 @@ func observeStream[T any](ctx context.Context, inner reader[T], r *record, obser
 	return s
 }
 func (s *stream[T]) Events() <-chan T { return s.events }
-func (s *stream[T]) Err() error       { return s.inner.Err() }
-func (s *stream[T]) closeInner()      { s.once.Do(func() { s.closeErr = s.inner.Close(); close(s.done) }) }
-func (s *stream[T]) Close() error     { s.closeInner(); <-s.stopped; return s.closeErr }
+func (s *stream[T]) Err() error {
+	if err := s.inner.Err(); err != nil {
+		return err
+	}
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.terminalErr
+}
+func (s *stream[T]) closeInner()  { s.once.Do(func() { s.closeErr = s.inner.Close(); close(s.done) }) }
+func (s *stream[T]) Close() error { s.closeInner(); <-s.stopped; return s.closeErr }

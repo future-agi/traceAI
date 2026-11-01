@@ -70,7 +70,7 @@ func TestInvokeSyncAndStream(t *testing.T) {
 				t.Fatal(len(spans))
 			}
 			a := attrs(spans[0])
-			for k, v := range map[string]int64{"input_tokens": 0, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4} {
+			for k, v := range map[string]int64{"input_tokens": 0, "output_tokens": 2, "cache_read_tokens": 3, "cache_write_tokens": 4} {
 				if a["gen_ai.usage."+k].Type() != attribute.INT64 || a["gen_ai.usage."+k].AsInt64() != v {
 					t.Fatal(k, a)
 				}
