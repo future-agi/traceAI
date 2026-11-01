@@ -15,6 +15,7 @@ DEFAULT_PROVIDER = FiLLMProviderValues.OPENAI.value
 # Exact API hosts.
 _HOSTS = {
     "api.openai.com": FiLLMProviderValues.OPENAI.value,
+    "ollama.com": "ollama",
     "generativelanguage.googleapis.com": FiLLMProviderValues.GOOGLE.value,
     "api.anthropic.com": FiLLMProviderValues.ANTHROPIC.value,
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
