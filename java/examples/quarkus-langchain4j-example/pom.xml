@@ -8,7 +8,7 @@
     <artifactId>quarkus-langchain4j-example</artifactId>
     <version>1.0.0</version>
     <name>TraceAI Quarkus LangChain4j Example</name>
-    <description>Quarkus LangChain4j exporting its own OpenTelemetry spans to Future AGI. Configuration only, no traceAI module.</description>
+    <description>Quarkus LangChain4j native spans with the packaged TraceAI error and resource contributors</description>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
@@ -16,7 +16,7 @@
         <!--
           Tested pairs (each extension release is built against one Quarkus platform version):
             quarkus-langchain4j 1.14.2 + Quarkus 3.33.3.1   (default, latest stable on Maven Central 2026-10-15)
-            quarkus-langchain4j 1.8.2  + Quarkus 3.27.2     (-Dquarkus-langchain4j.version=1.8.2 -Dquarkus.platform.version=3.27.2)
+            quarkus-langchain4j 1.12.0 + Quarkus 3.33.2     (-Dquarkus-langchain4j.version=1.12.0 -Dquarkus.platform.version=3.33.2)
         -->
         <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
         <quarkus.platform.version>3.33.3.1</quarkus.platform.version>
@@ -91,6 +91,11 @@
                     <groupId>io.quarkus</groupId>
                     <artifactId>quarkus-opentelemetry</artifactId>
                 </dependency>
+                <dependency>
+                    <groupId>com.futureagi</groupId>
+                    <artifactId>traceai-java-quarkus-langchain4j</artifactId>
+                    <version>${project.version}</version>
+                </dependency>
             </dependencies>
         </profile>
         <profile>
@@ -104,34 +109,6 @@
                 <!-- The OTLP tests need the extension; only the packaged app is used in this mode. -->
                 <skipTests>true</skipTests>
             </properties>
-        </profile>
-        <!--
-          The PRD pin (quarkus-langchain4j 1.8.x) predates ToolSpanContributor (added in 1.12.0) and the current gen_ai
-          attribute names (1.11.0). -Dpre112 leaves ToolErrorStatus out so the app still builds; the tests assert the
-          1.14.x attributes, so they are skipped on that line.
-        -->
-        <profile>
-            <id>pre-1.12</id>
-            <activation>
-                <property>
-                    <name>pre112</name>
-                </property>
-            </activation>
-            <properties>
-                <skipTests>true</skipTests>
-            </properties>
-            <build>
-                <plugins>
-                    <plugin>
-                        <artifactId>maven-compiler-plugin</artifactId>
-                        <configuration>
-                            <excludes>
-                                <exclude>**/ToolErrorStatus.java</exclude>
-                            </excludes>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
         </profile>
     </profiles>
 
@@ -158,11 +135,26 @@
                 </configuration>
             </plugin>
             <plugin>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals><goal>integration-test</goal><goal>verify</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${surefire-plugin.version}</version>
                 <configuration>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                        <quarkus-langchain4j.version>${quarkus-langchain4j.version}</quarkus-langchain4j.version>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

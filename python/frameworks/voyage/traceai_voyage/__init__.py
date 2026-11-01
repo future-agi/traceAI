@@ -1,8 +1,8 @@
 """OpenTelemetry instrumentation for the official Voyage AI Python client.
 
 ``VoyageInstrumentor`` wraps ``voyageai.Client`` and ``voyageai.AsyncClient``
-``embed`` (one EMBEDDING span per call) and ``rerank`` (one RERANKER span per
-call). It never sets ``base_url``: the client picks its host from the key.
+embedding methods (one EMBEDDING span per call) and ``rerank`` (one RERANKER
+span per call). It never sets ``base_url``: the client picks its host from the key.
 """
 
 import inspect
@@ -15,25 +15,39 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
-from traceai_voyage._wrappers import EMBED, RERANK, AsyncWrapper, Operation, SyncWrapper
+from traceai_voyage._wrappers import (
+    CONTEXTUALIZED_EMBED,
+    EMBED,
+    MULTIMODAL_EMBED,
+    RERANK,
+    AsyncWrapper,
+    Operation,
+    SyncWrapper,
+)
 from traceai_voyage.package import _instruments
 from traceai_voyage.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# (module, class, method, operation). multimodal_embed and contextualized_embed
-# are deliberately not wrapped in v1 (PRD R-07): they produce no span.
-_TARGETS: Tuple[Tuple[str, str, str, Operation], ...] = (
-    ("voyageai.client", "Client", "embed", EMBED),
-    ("voyageai.client", "Client", "rerank", RERANK),
-    ("voyageai.client_async", "AsyncClient", "embed", EMBED),
-    ("voyageai.client_async", "AsyncClient", "rerank", RERANK),
+# (module, class, method, operation). Wrap public calls, not their HTTP helpers.
+_TARGETS: Tuple[Tuple[str, str, str, Operation], ...] = tuple(
+    (module, client, method, operation)
+    for module, client in (
+        ("voyageai.client", "Client"),
+        ("voyageai.client_async", "AsyncClient"),
+    )
+    for method, operation in (
+        ("embed", EMBED),
+        ("multimodal_embed", MULTIMODAL_EMBED),
+        ("contextualized_embed", CONTEXTUALIZED_EMBED),
+        ("rerank", RERANK),
+    )
 )
 
 
 class VoyageInstrumentor(BaseInstrumentor):  # type: ignore[misc]
-    """Trace Voyage ``embed`` and ``rerank`` on the sync and async clients.
+    """Trace Voyage embeddings and reranking on the sync and async clients.
 
     ``instrument()`` accepts:
 
@@ -43,13 +57,14 @@ class VoyageInstrumentor(BaseInstrumentor):  # type: ignore[misc]
       any captured texts and documents; ``hide_outputs`` (or
       ``FI_HIDE_OUTPUTS``) drops the rerank scores. Hiding inputs keeps the
       scores. ``pii_redaction`` applies to every string attribute and, after
-      the key is removed, to the error status description and the exception
-      event's message and stack trace.
+      the key is removed, to exported error descriptions. Errors from the
+      multimodal and contextualized methods omit the original message because
+      it may echo inputs. Stack traces are never exported.
     * ``capture_content``: ``False`` by default. By default only the rerank
       span records content: the query (``reranker.query`` and a plain-text
-      ``input.value``) and the scores (``output.value``), as PRD J2 / AC-03
-      require; embed spans record none. ``True`` also records the embed texts
-      and the rerank documents. Embedding vectors are never recorded.
+      ``input.value``) and the scores (``output.value``). ``True`` also records
+      embedding text inputs and rerank documents. Nested inputs retain batch
+      boundaries. Media payloads/URLs and embedding vectors are never recorded.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
