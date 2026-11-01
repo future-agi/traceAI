@@ -30,6 +30,9 @@ describe("VLLMInstrumentation", () => {
     it("should create instrumentation with default config", () => {
       const inst = new VLLMInstrumentation();
       expect(inst.instrumentationName).toBe("@traceai/vllm");
+      expect(inst.getConfig().enabled).toBe(true);
+      expect(inst.isEnabled()).toBe(true);
+      inst.disable();
     });
 
     it("should create instrumentation with custom config", () => {

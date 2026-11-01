@@ -187,6 +187,7 @@ export class VLLMInstrumentation extends InstrumentationBase {
     });
     this._traceConfig = config.traceConfig;
     this._baseUrlPattern = config.baseUrlPattern;
+    this.setConfig(config.instrumentationConfig ?? {});
     this.refreshTracer();
     if (config.instrumentationConfig?.enabled !== false) this.enable();
   }
