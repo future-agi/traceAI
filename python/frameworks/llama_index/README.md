@@ -1,81 +1,57 @@
-# Llama Index OpenTelemetry Integration
+# LlamaIndex OpenTelemetry integration
 
-## Overview
-This integration provides support for using OpenTelemetry with the Llama Index framework. It enables tracing and monitoring of applications built with Llama Index.
+Trace LlamaIndex model calls in Future AGI with the maintained `LlamaIndexInstrumentor`.
 
-## Installation
+## Install
 
-1. **Install traceAI Llama Index**
-
-```bash
-pip install traceAI-llamaindex
-```
-
-2. **Install Llama Index**
+Use Python 3.10–3.13. Install the instrumentor and the LlamaIndex components used by this example:
 
 ```bash
-pip install llama-index
+pip install "traceAI-llamaindex>=0.1.10" llama-index-core llama-index-llms-openai
 ```
 
+## Configure credentials
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+Set your Future AGI credentials and your own OpenAI API key in the environment before running Python:
 
-```python
-import os
-
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+```bash
+export FI_API_KEY="<your-future-agi-api-key>"
+export FI_SECRET_KEY="<your-future-agi-secret-key>"
+export OPENAI_API_KEY="<your-openai-api-key>"
 ```
 
-## Quickstart
+## Run a chat request
 
-### Register Tracer Provider
-Set up the trace provider to establish the observability pipeline. The trace provider:
+Register the trace provider and instrument LlamaIndex before creating the model. This example hides prompt and response content while retaining model and token-usage metadata.
 
 ```python
-from fi_instrumentation import register
+from fi_instrumentation import TraceConfig, register
 from fi_instrumentation.fi_types import ProjectType
+from llama_index.core.llms import ChatMessage
+from llama_index.llms.openai import OpenAI
+from traceai_llamaindex import LlamaIndexInstrumentor
 
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="llama_index_app"
+    project_name="llama_index_app",
 )
+LlamaIndexInstrumentor().instrument(
+    tracer_provider=trace_provider,
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
+)
+
+try:
+    llm = OpenAI(model="gpt-4o-mini")
+    response = llm.chat([
+        ChatMessage(role="user", content="Suggest a name for a community garden."),
+    ])
+    print(response.message.content)
+finally:
+    trace_provider.shutdown()
 ```
 
-### Configure Llama Index Instrumentation
-Instrument the Llama Index client to enable telemetry collection. This step ensures that all interactions with the Llama Index SDK are tracked and monitored.
+Open the `llama_index_app` project in Future AGI to inspect the `OpenAI.chat` LLM span, its duration and token usage. Prompt and response content are hidden by the configuration above.
 
-```python
-from traceai_llamaindex import LlamaIndexInstrumentor
+Use one tracing layer for these calls: do not also enable a separate OpenAI instrumentor for the same LlamaIndex model calls if you want to avoid duplicate model spans.
 
-LlamaIndexInstrumentor().instrument(tracer_provider=trace_provider)
-```
-
-### Create Llama Index Components
-Set up your Llama Index client with built-in observability.
-
-```python
-from llama_index.agent.openai import OpenAIAgent
-from llama_index.core import Settings
-from llama_index.core.tools import FunctionTool
-from llama_index.llms.openai import OpenAI
-
-def multiply(a: int, b: int) -> int:
-    """Multiply two integers and return the result."""
-    return a * b
-
-def add(a: int, b: int) -> int:
-    """Add two integers and return the result."""
-    return a + b
-
-multiply_tool = FunctionTool.from_defaults(fn=multiply)
-add_tool = FunctionTool.from_defaults(fn=add)
-agent = OpenAIAgent.from_tools([multiply_tool, add_tool])
-Settings.llm = OpenAI(model="gpt-3.5-turbo")
-
-if __name__ == "__main__":
-    response = agent.query("What is (121 * 3) + 42?")
-    print(response)
-```
-
+For standalone workflow run and step tracing, use the same instrumentor with the [LlamaIndex Workflows guide](https://docs.futureagi.com/docs/integrations/traceai/llamaindex-workflows).
