@@ -143,12 +143,14 @@ class _ChatCompletionAccumulator:
                     message=_ValuesAccumulator(
                         content=_StringAccumulator(),
                         function_call=_ValuesAccumulator(
-                            arguments=_StringAccumulator()
+                            name=_StringAccumulator(),
+                            arguments=_StringAccumulator(),
                         ),
                         tool_calls=_IndexedAccumulator(
                             lambda: _ValuesAccumulator(
                                 function=_ValuesAccumulator(
-                                    arguments=_StringAccumulator()
+                                    name=_StringAccumulator(),
+                                    arguments=_StringAccumulator(),
                                 ),
                             )
                         ),

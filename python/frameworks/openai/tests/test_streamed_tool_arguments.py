@@ -43,7 +43,7 @@ def test_interleaved_tools_and_choices_keep_complete_arguments(usage):
                             "id": f"call_{choice}_{tool}",
                             "type": "function",
                             "function": {
-                                "name": f"lookup_{choice}_{tool}",
+                                "name": "lookup_",
                                 "arguments": '{"query": "',
                             },
                         }
@@ -64,7 +64,10 @@ def test_interleaved_tools_and_choices_keep_complete_arguments(usage):
                     "tool_calls": [
                         {
                             "index": tool,
-                            "function": {"arguments": f"value-{choice}-{tool}" + '"}'},
+                            "function": {
+                                "name": f"{choice}_{tool}",
+                                "arguments": f"value-{choice}-{tool}" + '"}',
+                            },
                         }
                         for tool in (0, 1)
                     ]
