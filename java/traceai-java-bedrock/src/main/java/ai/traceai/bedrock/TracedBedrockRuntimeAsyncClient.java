@@ -20,8 +20,8 @@ import java.util.function.Supplier;
 
 /**
  * Traces non-streaming async Converse and InvokeModel through completion,
- * failure or cancellation. Returns the SDK's original future, preserving its
- * cancellation semantics. Streaming operations are not supported.
+ * failure or cancellation. The returned future completes after tracing finishes
+ * and forwards cancellation to the SDK future. Streaming operations are not supported.
  */
 public final class TracedBedrockRuntimeAsyncClient {
     private final BedrockRuntimeAsyncClient client;
@@ -43,7 +43,7 @@ public final class TracedBedrockRuntimeAsyncClient {
 
     /**
      * @param request the request
-     * @return the unchanged SDK future
+     * @return a future completed after tracing, with cancellation forwarded to the SDK
      */
     public CompletableFuture<ConverseResponse> converse(ConverseRequest request) {
         return execute(request, () -> client.converse(request));
@@ -51,7 +51,7 @@ public final class TracedBedrockRuntimeAsyncClient {
 
     /**
      * @param request the request
-     * @return the unchanged SDK future
+     * @return a future completed after tracing, with cancellation forwarded to the SDK
      */
     public CompletableFuture<InvokeModelResponse> invokeModel(InvokeModelRequest request) {
         return execute(request, () -> client.invokeModel(request));
@@ -75,15 +75,28 @@ public final class TracedBedrockRuntimeAsyncClient {
             }
             throw error;
         }
-        // Observe the original future, not a dependent stage (which does not propagate cancellation).
+        CompletableFuture<T> result = new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                // Let the SDK decide whether cancellation wins. Its completion callback
+                // ends the span before publishing cancellation to application callbacks.
+                return future.cancel(mayInterruptIfRunning);
+            }
+        };
         future.whenComplete((response, error) -> {
             try {
                 if (error == null) tracing.complete(span, response);
                 else tracing.fail(span, error instanceof CompletionException && error.getCause() != null ? error.getCause() : error);
             } finally {
-                span.end();
+                try {
+                    span.end();
+                } finally {
+                    // Preserve the SDK outcome even if telemetry finalization throws.
+                    if (error == null) result.complete(response);
+                    else result.completeExceptionally(error);
+                }
             }
         });
-        return future;
+        return result;
     }
 }
