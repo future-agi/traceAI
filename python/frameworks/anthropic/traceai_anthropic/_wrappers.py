@@ -33,6 +33,7 @@ from fi_instrumentation.fi_types import (
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from traceai_anthropic._stream import _MessagesStream, _Stream
+from traceai_anthropic._utils import _finish_request_error
 from traceai_anthropic._with_span import _WithSpan
 
 if TYPE_CHECKING:
@@ -64,7 +65,7 @@ class _WithTracer(ABC):
                 attributes=attributes,
             )
         except Exception as e:
-            print(f"Error creating span: {e}")
+            logger.warning("Failed to create span")
             span = INVALID_SPAN
         with trace_api.use_span(
             span,
@@ -151,12 +152,8 @@ class _CompletionsWrapper(_BaseWrapper):
                     ),
                 )
 
-            except Exception as exception:
-                print(f"Error in completion: {exception}")
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
 
             streaming = kwargs.get("stream", False)
@@ -219,11 +216,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
             streaming = kwargs.get("stream", False)
@@ -305,11 +299,8 @@ class _MessagesWrapper(_BaseWrapper):
                 # Add I/O to span attributes instead of sending separately
                 self._add_io_to_span_attributes(span=span, output_data=output_content)
 
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
 
             streaming = kwargs.get("stream", False)
@@ -382,11 +373,8 @@ class _AsyncMessagesWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
             streaming = kwargs.get("stream", False)
             if streaming:
@@ -454,11 +442,8 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             try:
                 response = wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
 
             span.set_status(trace_api.StatusCode.OK)
@@ -569,7 +554,7 @@ def _extract_image_data(messages):
             "query": str(eval_input[0]) if eval_input else None,
         }
     except Exception as e:
-        logger.exception(f"Error in _extract_image_data: {e}")
+        logger.warning("Failed to extract image data")
         return {
             "input_images": None,
             "filtered_messages": messages,
@@ -699,17 +684,17 @@ def _get_llm_input_messages(messages: List[Dict[str, str]]) -> Any:
 def _get_tool_use_block(
     block: ToolUseBlock, msg_prefix: str, tool_index: int
 ) -> Iterator[Tuple[str, Any]]:
-    if tool_call_id := block.id:
+    if tool_call_id := (block.get("id") if isinstance(block, Mapping) else block.id):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_ID}",
             tool_call_id,
         )
-    if block_name := block.name:
+    if block_name := (block.get("name") if isinstance(block, Mapping) else block.name):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_NAME}",
             block_name,
         )
-    if block_input := block.input:
+    if block_input := (block.get("input") if isinstance(block, Mapping) else block.input):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
             safe_json_dumps(block_input),

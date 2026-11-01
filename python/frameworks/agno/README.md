@@ -1,229 +1,106 @@
-# TraceAI Agno Instrumentation
+# Trace Agno with Future AGI
 
-OpenTelemetry instrumentation for [Agno](https://github.com/agno-agi/agno), the high-performance AI agent framework.
+Send Agno agent, model, tool, team, and workflow spans to Future AGI using the maintained [OpenInference Agno instrumentor](https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno). Agno's own tracing setup delegates to the same instrumentor; this package configures it rather than adding a second span tree.
 
-## Installation
+## Install
 
-```bash
-pip install traceai-agno
-```
-
-For full functionality, also install the Agno framework and its OpenInference instrumentation:
+Use Python 3.10 or later and Agno 2.7.2 or later. The current OpenInference instrumentor no longer supports the old Agno 2.0 API. The `agno` extra installs the framework and its workflow import dependencies.
 
 ```bash
-pip install agno openinference-instrumentation-agno
+pip install 'traceai-agno[agno]' openai
 ```
 
-## Quick Start
+Set `FI_API_KEY` and `FI_SECRET_KEY` to your Future AGI project credentials, and `OPENAI_API_KEY` to your own OpenAI key. For a self-hosted Future AGI deployment, also set `FI_BASE_URL` to its origin, without `/tracer/v1/traces`.
+
+## Run an agent
+
+Configure tracing once, before running agents. This example uses OTLP/HTTP protobuf with the two Future AGI authentication headers. It hides captured inputs and outputs while retaining model, usage, and span hierarchy.
 
 ```python
-from fi_instrumentation import register
-from fi_instrumentation.fi_types import ProjectType
-from traceai_agno import configure_agno_tracing
+import os
 
-# Setup TraceAI
-trace_provider = register(
-    project_type=ProjectType.OBSERVE,
-    project_name="agno-agent",
-)
-
-# Configure Agno to use TraceAI (call BEFORE creating agents)
-configure_agno_tracing(tracer_provider=trace_provider)
-
-# Now import and use Agno normally
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
+from openinference.instrumentation import TraceConfig
+from traceai_agno import configure_agno_tracing
 
-agent = Agent(
-    model=OpenAIChat(id="gpt-4"),
-    description="A helpful assistant",
+tracing = configure_agno_tracing(
+    otlp_endpoint=os.getenv("FI_BASE_URL", "https://api.futureagi.com").rstrip("/")
+    + "/tracer/v1/traces",
+    otlp_headers={
+        "X-Api-Key": os.environ["FI_API_KEY"],
+        "X-Secret-Key": os.environ["FI_SECRET_KEY"],
+    },
+    project_name="agno-agent",
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
 )
 
-response = agent.run("What is the capital of France?")
-print(response.content)
+try:
+    agent = Agent(model=OpenAIChat(id="gpt-4o-mini"), telemetry=False)
+    response = agent.run("What is the capital of France?")
+    print(response.content)
+    tracing.tracer_provider.force_flush()
+finally:
+    tracing.uninstrument()
 ```
 
-## Configuration Options
+Open **agno-agent** in Future AGI's Observe view and inspect the agent run and its model child span. Inputs and outputs are hidden by the configuration above. Resource attributes identify the project as `observe` and its semantic convention as `openinference`.
 
-### Using fi_instrumentation (Recommended)
+## Use an existing Future AGI provider
+
+If your application already owns a provider, pass it explicitly. It does not need to be the global OpenTelemetry provider. Configure export and project settings on that provider, not again on `configure_agno_tracing`.
 
 ```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
+from fi_instrumentation.otel import SemanticConvention
+from openinference.instrumentation import TraceConfig
 from traceai_agno import configure_agno_tracing
 
-trace_provider = register(
+provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="my-agno-project",
+    project_name="agno-agent",
+    semantic_convention=SemanticConvention.OPENINFERENCE,
 )
-
-configure_agno_tracing(tracer_provider=trace_provider)
-```
-
-### Direct OTLP Configuration
-
-```python
-from traceai_agno import configure_agno_tracing
-
-configure_agno_tracing(
-    otlp_endpoint="https://api.traceai.com/v1/traces",
-    otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
-    project_name="my-agno-project",
+tracing = configure_agno_tracing(
+    tracer_provider=provider,
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
 )
+try:
+    agent = Agent(model=OpenAIChat(id="gpt-4o-mini"), telemetry=False)
+    print(agent.run("What is the capital of France?").content)
+    provider.force_flush()
+finally:
+    tracing.uninstrument()
+    provider.shutdown()
 ```
 
-### Using Custom Tracer Provider
+`uninstrument()` closes providers created by endpoint configuration. It does **not** close a provider you supplied. Shut shared providers down only when the application exits and in-flight runs have finished.
 
-```python
-from traceai_agno import setup_traceai_exporter, configure_agno_tracing
+## Choose what content to capture
 
-# Create a custom tracer provider
-provider = setup_traceai_exporter(
-    endpoint="https://api.traceai.com/v1/traces",
-    headers={"Authorization": "Bearer YOUR_API_KEY"},
-    service_name="my-agno-service",
-    use_batch_processor=True,
-)
+Use `openinference.instrumentation.TraceConfig` or `OPENINFERENCE_*` environment variables. To include inputs and outputs, pass `TraceConfig(hide_inputs=False, hide_outputs=False)`. Without an explicit config, OpenInference uses its environment settings and defaults, which capture content.
 
-configure_agno_tracing(tracer_provider=provider)
-```
+The `FI_HIDE_*` variables do not automatically apply to this upstream instrumentor. Input/output hiding is not a blanket secret scrubber: names, custom metadata, and exception details can still contain sensitive text. Keep secrets out of those fields or apply your application's export filtering policy.
 
-## Features
+## Configuration and helpers
 
-### Agent Tracing
+- Call `configure_agno_tracing` once per process. Repeating the same settings is safe; different settings require `uninstrument()` first.
+- Do not combine it with `agno.tracing.setup_tracing`, a separate `AgnoInstrumentor().instrument()`, or another model instrumentor for the same calls. Use one instrumentation path to avoid duplicate spans.
+- `setup_traceai_exporter(endpoint, headers, ..., project_name=..., set_global=False)` creates a provider without instrumenting Agno. Its historical default is `set_global=True`; use `False` when another library owns the global provider. Flush and shut down the returned provider yourself.
+- `get_agent_attributes`, `get_tool_attributes`, `get_team_attributes`, `get_model_provider`, and `create_trace_context` remain available. They return values for manual use; they do not attach attributes or context to automatically emitted spans.
+- Automatic spans retain OpenInference names such as `openinference.span.kind`, `llm.model_name`, and `llm.token_count.prompt`. The manual helpers' `gen_ai.*` attributes are not an automatic mapper.
 
-Automatically captures:
-- Agent name, type, and configuration
-- Model information (provider, ID, temperature, etc.)
-- Tool count and configuration
-- Memory and knowledge settings
-- Debug mode and markdown settings
+See the [examples](./examples) for agent, tool, team, and workflow applications.
 
-### Tool Tracing
+## Troubleshooting
 
-Tracks tool executions including:
-- Tool name and description
-- Input parameters
-- Execution results
-
-### Team Tracing
-
-For multi-agent setups:
-- Team name
-- Team member agents
-- Inter-agent communication
-
-### Workflow Tracing
-
-For complex workflows:
-- Workflow name
-- Step execution
-- State transitions
-
-## Span Attributes
-
-The instrumentation adds the following attributes to spans:
-
-### LLM Attributes (OpenTelemetry GenAI Semantic Conventions)
-- `gen_ai.system` - Model provider (openai, anthropic, etc.)
-- `gen_ai.request.model` - Requested model ID
-- `gen_ai.request.temperature` - Temperature setting
-- `gen_ai.request.max_tokens` - Max tokens setting
-- `gen_ai.usage.input_tokens` - Input token count
-- `gen_ai.usage.output_tokens` - Output token count
-
-### Agent Attributes
-- `agent.name` - Agent name
-- `agent.type` - Agent type
-- `agent.description` - Agent description
-- `agent.instructions` - Agent instructions
-
-### Agno-Specific Attributes
-- `agno.agent.id` - Agent ID
-- `agno.tool_count` - Number of tools
-- `agno.team.name` - Team name
-- `agno.team.members` - Team member names
-- `agno.workflow.name` - Workflow name
-- `agno.session.id` - Session ID
-- `agno.user.id` - User ID
-- `agno.debug_mode` - Debug mode status
-- `agno.memory.enabled` - Memory enabled status
-- `agno.knowledge.enabled` - Knowledge enabled status
-
-## Helper Functions
-
-### Extract Agent Attributes
-
-```python
-from traceai_agno import get_agent_attributes
-
-agent = Agent(model=OpenAIChat(id="gpt-4"), name="MyAgent")
-attrs = get_agent_attributes(agent)
-# {'agent.name': 'MyAgent', 'agent.type': 'Agent', ...}
-```
-
-### Extract Tool Attributes
-
-```python
-from traceai_agno import get_tool_attributes
-
-def my_tool(query: str) -> str:
-    """Search for information."""
-    return "result"
-
-attrs = get_tool_attributes(my_tool)
-# {'gen_ai.tool.name': 'my_tool', 'gen_ai.tool.description': 'Search for information.'}
-```
-
-### Extract Team Attributes
-
-```python
-from traceai_agno import get_team_attributes
-
-team = Team(name="ResearchTeam", agents=[agent1, agent2])
-attrs = get_team_attributes(team)
-# {'agno.team.name': 'ResearchTeam', 'agno.team.members': 'Agent1, Agent2'}
-```
-
-### Detect Model Provider
-
-```python
-from traceai_agno import get_model_provider
-
-provider = get_model_provider("gpt-4")  # Returns "openai"
-provider = get_model_provider("claude-3-sonnet")  # Returns "anthropic"
-provider = get_model_provider("ollama/llama3")  # Returns "ollama"
-```
-
-### Create Trace Context
-
-```python
-from traceai_agno import create_trace_context
-
-context = create_trace_context(
-    session_id="session-123",
-    user_id="user-456",
-    tags=["production"],
-    metadata={"environment": "prod"},
-)
-```
-
-## Examples
-
-See the [examples](./examples) directory for complete usage examples:
-
-- `basic_agent.py` - Simple agent with tracing
-- `agent_with_tools.py` - Agent with tool calling
-- `team_example.py` - Multi-agent team coordination
-- `workflow_example.py` - Complex workflow tracing
-
-## Requirements
-
-- Python >= 3.10
-- opentelemetry-api >= 1.0.0
-- opentelemetry-sdk >= 1.0.0
-- opentelemetry-exporter-otlp >= 1.0.0
-- fi-instrumentation >= 0.1.0
+- **Setup raises an import or dependency error:** install the `agno` extra and check that Agno and OpenInference satisfy the package requirements. Setup does not report success when the instrumentor is missing.
+- **No spans:** supply either a configured provider or a complete OTLP traces URL. Setting exporter environment variables alone does not create a provider. Flush before exiting.
+- **Authentication fails:** use `/tracer/v1/traces` and both `X-Api-Key` and `X-Secret-Key`. Project names belong to resource attributes, not an `x-project-name` header.
+- **Already instrumented:** remove the other Agno setup call. The wrapper does not replace or take ownership of another instrumentor's configuration.
 
 ## License
 

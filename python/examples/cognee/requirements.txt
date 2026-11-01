@@ -1,0 +1,2 @@
+cognee[tracing]==1.6.5
+traceai-cognee==0.1.0

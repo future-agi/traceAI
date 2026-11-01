@@ -1,5 +1,8 @@
 """Tests for Claude Agent SDK instrumentor."""
 
+import re
+from pathlib import Path
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -255,4 +258,5 @@ class TestPublicExports:
         import traceai_claude_agent_sdk
 
         assert hasattr(traceai_claude_agent_sdk, "__version__")
-        assert traceai_claude_agent_sdk.__version__ == "0.1.0"
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        assert traceai_claude_agent_sdk.__version__ == re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M).group(1)

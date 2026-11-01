@@ -210,22 +210,21 @@ OllamaInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" for chat/generate, "EMBEDDING" for embed |
-| `llm.system` | "ollama" |
-| `llm.provider` | "ollama" |
-| `llm.model` | Model name (llama3.2, etc.) |
-| `llm.input_messages.{n}.role` | Message role |
-| `llm.input_messages.{n}.content` | Message content |
+| `gen_ai.span.kind` | "LLM" for chat/generate, "EMBEDDING" for embed |
+| `gen_ai.provider.name` | "ollama" |
+| `gen_ai.request.model` | Model name (llama3.2, etc.) |
+| `gen_ai.input.messages.{n}.message.role` | Message role |
+| `gen_ai.input.messages.{n}.message.content` | Message content |
 
 ### Response Attributes
 
 | Attribute | Description |
 |-----------|-------------|
-| `llm.token_count.prompt` | Input token count (prompt_eval_count) |
-| `llm.token_count.completion` | Output token count (eval_count) |
-| `llm.token_count.total` | Total token count |
-| `llm.output_messages.{n}.role` | Response role |
-| `llm.output_messages.{n}.content` | Response content |
+| `gen_ai.usage.input_tokens` | Input token count (prompt_eval_count) |
+| `gen_ai.usage.output_tokens` | Output token count (eval_count) |
+| `gen_ai.usage.total_tokens` | Total token count |
+| `gen_ai.output.messages.{n}.message.role` | Response role |
+| `gen_ai.output.messages.{n}.message.content` | Response content |
 | `ollama.total_duration_ns` | Total request duration (nanoseconds) |
 | `ollama.load_duration_ns` | Model load duration |
 | `ollama.prompt_eval_duration_ns` | Prompt evaluation duration |

@@ -9,40 +9,95 @@ import {
   SpanKind,
   SpanStatusCode,
   Attributes,
+  TracerProvider,
 } from "@opentelemetry/api";
+import { types } from "node:util";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.2"; // x-release-please-version
 
+// node-redis generates different client types for standalone, cluster, pool and
+// sentinel clients. Only the public methods below are inspected, not internals.
+type RedisTarget = Record<string, any>;
 type RedisVectorOperation =
-  | "ftSearch"
-  | "ftCreate"
-  | "ftDropIndex"
-  | "ftInfo"
-  | "ftAggregate"
-  | "hSet"
-  | "hGet"
-  | "hGetAll"
-  | "del"
-  | "json.set"
-  | "json.get";
+  | "ftSearch" | "ftCreate" | "ftDropIndex" | "ftInfo" | "ftAggregate"
+  | "hSet" | "hGet" | "hGetAll" | "del" | "json.set" | "json.get";
+const factories = ["createClient", "createCluster", "createClientPool", "createSentinel"];
+const commands: [string | undefined, string, RedisVectorOperation][] = [
+  ["ft", "search", "ftSearch"],
+  ["ft", "create", "ftCreate"],
+  ["ft", "dropIndex", "ftDropIndex"],
+  ["ft", "info", "ftInfo"],
+  ["ft", "aggregate", "ftAggregate"],
+  [undefined, "hSet", "hSet"],
+  [undefined, "hGet", "hGet"],
+  [undefined, "hGetAll", "hGetAll"],
+  [undefined, "del", "del"],
+  ["json", "set", "json.set"],
+  ["json", "get", "json.get"],
+];
 
-let _isPatched = false;
+// Enumerate live targets for disable/re-enable without retaining closed clients.
+class WeakRegistry<T extends object> {
+  private readonly entries = new Set<WeakRef<T>>();
+  private readonly seen = new WeakSet<T>();
+  private readonly cleanup = new FinalizationRegistry<WeakRef<T>>((ref) => {
+    this.entries.delete(ref);
+  });
+
+  add(value: T): void {
+    if (this.seen.has(value)) return;
+    this.seen.add(value);
+    const ref = new WeakRef(value);
+    this.entries.add(ref);
+    this.cleanup.register(value, ref);
+  }
+
+  *values(): IterableIterator<T> {
+    for (const ref of this.entries) {
+      const value = ref.deref();
+      if (value) yield value;
+      else this.entries.delete(ref);
+    }
+  }
+}
+
+interface MethodPatch {
+  target: WeakRef<RedisTarget>;
+  name: string;
+  descriptor?: PropertyDescriptor;
+  original: Function;
+  wrapper: Function;
+  owners: Set<RedisInstrumentation>;
+}
+
+// Share one wrapper across auto/manual setup and instrumentation instances.
+const patches = new WeakMap<object, Map<string, MethodPatch>>();
+const livePatches = new WeakRegistry<MethodPatch>();
 
 export function isPatched(): boolean {
-  return _isPatched;
+  for (const patch of livePatches.values()) {
+    if ([...patch.owners.keys()].some((owner) => owner.isEnabled())) return true;
+  }
+  return false;
 }
 
 export interface RedisInstrumentationConfig extends InstrumentationConfig {
+  /** @deprecated Retained for compatibility; query vectors are never captured. */
   captureQueryVectors?: boolean;
+  /** @deprecated Retained for compatibility; result vectors are never captured. */
   captureResultVectors?: boolean;
 }
 
-export class RedisInstrumentation extends InstrumentationBase {
+export class RedisInstrumentation extends InstrumentationBase<RedisInstrumentationConfig> {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private _redisConfig: RedisInstrumentationConfig;
+  // Lazily initialized: InstrumentationBase calls enable() from its constructor.
+  private modules?: WeakRegistry<RedisTarget>;
+  private clients?: WeakRegistry<RedisTarget>;
+  private ownedPatches?: WeakRegistry<MethodPatch>;
+  private facades?: WeakMap<object, RedisTarget>;
 
   constructor({
     instrumentationConfig,
@@ -51,154 +106,134 @@ export class RedisInstrumentation extends InstrumentationBase {
     instrumentationConfig?: RedisInstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super("@traceai/redis", VERSION, Object.assign({}, instrumentationConfig));
+    super("@traceai/redis", VERSION, { ...instrumentationConfig });
     this._traceConfig = traceConfig;
-    this._redisConfig = instrumentationConfig || {};
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   public override enable(): void {
+    this.refreshTracer();
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    for (const module of this.modules?.values() ?? []) this.patch(module);
+    for (const client of this.clients?.values() ?? []) this.instrumentClient(client);
+  }
+
+  public override disable(): void {
+    super.disable();
+    // Base.disable only knows modules loaded by its hooks, not manual targets.
+    this.restore();
   }
 
   protected init() {
     return new InstrumentationNodeModuleDefinition(
-      "redis",
-      [">=4.0.0"],
-      this.patch.bind(this),
-      this.unpatch.bind(this)
+      "redis", [">=4.0.0 <7"], this.patch.bind(this), this.unpatch.bind(this)
     );
   }
 
-  public manuallyInstrument(redisModule: any): void {
-    this.patch(redisModule);
+  /**
+   * Mutable CommonJS exports are patched in place. For ESM namespaces (whose
+   * bindings cannot be reassigned), use the returned, typed module facade.
+   */
+  public manuallyInstrument<T extends object>(redisModule: T): T {
+    return this.patch(redisModule) as T;
   }
 
-  private patch(moduleExports: any, moduleVersion?: string) {
-    if (_isPatched) {
-      return moduleExports;
+  /** Instrument an already-created client without changing its identity. */
+  public instrumentClient<T extends object>(client: T): T {
+    (this.clients ??= new WeakRegistry()).add(client);
+    if (!this.isEnabled()) return client;
+    const target = client as RedisTarget;
+    for (const [namespace, name, operation] of commands) {
+      const receiver = namespace ? target[namespace] : target;
+      if (!receiver) continue;
+      this.wrap(receiver, name, operation);
+      // node-redis also exposes uppercase command aliases.
+      this.wrap(receiver, name.toUpperCase(), operation);
     }
+    return client;
+  }
 
-    if (!this.fiTracer) {
-      this.fiTracer = new FITracer({
-        tracer: this.tracer,
-        traceConfig: this._traceConfig,
+  private patch(moduleExports: RedisTarget): RedisTarget {
+    const immutable = types.isModuleNamespaceObject(moduleExports) ||
+      !Object.isExtensible(moduleExports) || factories.some((name) => {
+        const descriptor = Object.getOwnPropertyDescriptor(moduleExports, name);
+        return descriptor && !descriptor.configurable && !descriptor.writable;
       });
+    let target = moduleExports;
+    if (immutable) {
+      this.facades ??= new WeakMap();
+      target = this.facades.get(moduleExports) ?? { ...moduleExports };
+      this.facades.set(moduleExports, target);
     }
-
-    // The redis client is typically created via createClient
-    // We'll patch the client prototype methods
-    if (moduleExports.createClient) {
-      const originalCreateClient = moduleExports.createClient;
-      const instrumentation = this;
-
-      moduleExports.createClient = function (...args: any[]) {
-        const client = originalCreateClient.apply(this, args);
-        instrumentation._patchClient(client);
-        return client;
-      };
+    (this.modules ??= new WeakRegistry()).add(target);
+    if (this.isEnabled()) {
+      for (const name of factories) this.wrap(target, name, "factory");
     }
+    return target;
+  }
 
-    _isPatched = true;
+  private unpatch(moduleExports: RedisTarget): RedisTarget {
+    this.restore();
     return moduleExports;
   }
 
-  private unpatch(moduleExports: any, moduleVersion?: string) {
-    _isPatched = false;
+  private wrap(target: RedisTarget, name: string, operation: RedisVectorOperation | "factory"): void {
+    if (typeof target[name] !== "function") return;
+    let methods = patches.get(target);
+    if (!methods) patches.set(target, methods = new Map());
+    let patch = methods.get(name);
+    // A later wrapper may delegate to ours. Rewrapping it would nest two spans.
+    // Leave application replacements alone until the next disable/re-enable.
+    if (!patch) {
+      const descriptor = Object.getOwnPropertyDescriptor(target, name);
+      if (descriptor && !descriptor.configurable && !descriptor.writable) return;
+      const record: MethodPatch = {
+        target: new WeakRef(target), name, descriptor, original: target[name],
+        wrapper: () => undefined, owners: new Set(),
+      };
+      record.wrapper = function (this: unknown, ...args: any[]) {
+        const owners = [...record.owners].filter((owner) => owner.isEnabled());
+        if (operation === "factory") {
+          const client = record.original.apply(this, args);
+          for (const owner of owners) owner.instrumentClient(client);
+          return client;
+        }
+        const owner = owners[0];
+        return owner
+          ? owner._wrapMethod(this, record.original, operation, args)
+          : record.original.apply(this, args);
+      };
+      Object.defineProperty(target, name, descriptor && "value" in descriptor
+        ? { ...descriptor, value: record.wrapper }
+        : { configurable: true, enumerable: descriptor?.enumerable ?? true, writable: true, value: record.wrapper });
+      methods.set(name, patch = record);
+      livePatches.add(record);
+    }
+    patch.owners.add(this);
+    (this.ownedPatches ??= new WeakRegistry()).add(patch);
   }
 
-  private _patchClient(client: any): void {
-    const instrumentation = this;
-
-    // Patch FT.SEARCH (vector search)
-    if (typeof client.ft?.search === "function") {
-      const original = client.ft.search;
-      client.ft.search = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "ftSearch", args);
-      };
-    }
-
-    // Patch FT.CREATE (create index)
-    if (typeof client.ft?.create === "function") {
-      const original = client.ft.create;
-      client.ft.create = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "ftCreate", args);
-      };
-    }
-
-    // Patch FT.DROPINDEX
-    if (typeof client.ft?.dropIndex === "function") {
-      const original = client.ft.dropIndex;
-      client.ft.dropIndex = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "ftDropIndex", args);
-      };
-    }
-
-    // Patch FT.INFO
-    if (typeof client.ft?.info === "function") {
-      const original = client.ft.info;
-      client.ft.info = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "ftInfo", args);
-      };
-    }
-
-    // Patch FT.AGGREGATE
-    if (typeof client.ft?.aggregate === "function") {
-      const original = client.ft.aggregate;
-      client.ft.aggregate = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "ftAggregate", args);
-      };
-    }
-
-    // Patch HSET (used for storing vectors)
-    if (typeof client.hSet === "function") {
-      const original = client.hSet;
-      client.hSet = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "hSet", args);
-      };
-    }
-
-    // Patch HGET
-    if (typeof client.hGet === "function") {
-      const original = client.hGet;
-      client.hGet = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "hGet", args);
-      };
-    }
-
-    // Patch HGETALL
-    if (typeof client.hGetAll === "function") {
-      const original = client.hGetAll;
-      client.hGetAll = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "hGetAll", args);
-      };
-    }
-
-    // Patch DEL
-    if (typeof client.del === "function") {
-      const original = client.del;
-      client.del = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "del", args);
-      };
-    }
-
-    // Patch JSON.SET (for JSON documents with vectors)
-    if (typeof client.json?.set === "function") {
-      const original = client.json.set;
-      client.json.set = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "json.set", args);
-      };
-    }
-
-    // Patch JSON.GET
-    if (typeof client.json?.get === "function") {
-      const original = client.json.get;
-      client.json.get = function (...args: any[]) {
-        return instrumentation._wrapMethod(this, original, "json.get", args);
-      };
+  private restore(): void {
+    for (const patch of this.ownedPatches?.values() ?? []) {
+      patch.owners.delete(this);
+      if (patch.owners.size) continue;
+      const target = patch.target.deref();
+      if (!target) continue;
+      // Do not undo a later wrapper installed by the application or another SDK.
+      if (target[patch.name] === patch.wrapper) {
+        if (patch.descriptor) Object.defineProperty(target, patch.name, patch.descriptor);
+        else delete target[patch.name];
+      }
+      if (patches.get(target)?.get(patch.name) === patch) patches.get(target)?.delete(patch.name);
     }
   }
 
@@ -213,107 +248,50 @@ export class RedisInstrumentation extends InstrumentationBase {
   private _setOperationAttributes(attributes: Attributes, operation: RedisVectorOperation, args: any[]): void {
     switch (operation) {
       case "ftSearch":
-        // FT.SEARCH index query [options]
-        if (args[0]) {
-          attributes["db.redis.index_name"] = args[0];
+        if (typeof args[0] === "string") attributes["db.redis.index_name"] = args[0];
+        // Inspect only the query shape; never serialize query text or PARAMS.
+        if (typeof args[1] === "string" && /\bKNN\b/i.test(args[1])) {
+          attributes["db.operation.type"] = "vector_search";
         }
-        if (args[1]) {
-          // Check for KNN query pattern
-          const query = typeof args[1] === "string" ? args[1] : JSON.stringify(args[1]);
-          if (query.includes("KNN") || query.includes("knn")) {
-            attributes["db.operation.type"] = "vector_search";
-          }
-        }
-        // Look for LIMIT in options
-        if (args[2]?.LIMIT) {
-          attributes["db.vector.query.top_k"] = args[2].LIMIT.size || args[2].LIMIT;
+        if (typeof args[2]?.LIMIT?.size === "number") {
+          attributes["db.vector.query.top_k"] = args[2].LIMIT.size;
         }
         break;
-
       case "ftCreate":
-        if (args[0]) {
-          attributes["db.redis.index_name"] = args[0];
-        }
-        break;
-
       case "ftDropIndex":
       case "ftInfo":
-        if (args[0]) {
-          attributes["db.redis.index_name"] = args[0];
-        }
+      case "ftAggregate":
+        if (typeof args[0] === "string") attributes["db.redis.index_name"] = args[0];
         break;
-
-      case "hSet":
-        if (args[0]) {
-          attributes["db.redis.key"] = args[0];
-        }
-        break;
-
-      case "hGet":
-      case "hGetAll":
-        if (args[0]) {
-          attributes["db.redis.key"] = args[0];
-        }
-        break;
-
       case "del":
         if (Array.isArray(args[0])) {
           attributes["db.operation.batch_size"] = args[0].length;
-        } else if (args[0]) {
-          attributes["db.redis.key"] = args[0];
+          break;
         }
-        break;
-
-      case "json.set":
-      case "json.get":
-        if (args[0]) {
-          attributes["db.redis.key"] = args[0];
-        }
-        break;
+        // Single-key DEL has the same metadata as hash/JSON commands.
+      default:
+        if (typeof args[0] === "string") attributes["db.redis.key"] = args[0];
     }
   }
 
-  private _setResultAttributes(span: any, operation: RedisVectorOperation, result: any): void {
-    switch (operation) {
-      case "ftSearch":
-        if (result?.total !== undefined) {
-          span.setAttribute("db.response.total_count", result.total);
-        }
-        if (result?.documents) {
-          span.setAttribute("db.response.returned_rows", result.documents.length);
-        }
-        break;
-
-      case "ftInfo":
-        if (result?.numDocs !== undefined) {
-          span.setAttribute("db.redis.num_docs", result.numDocs);
-        }
-        break;
+  private _setResultAttributes(span: ReturnType<FITracer["startSpan"]>, operation: RedisVectorOperation, result: any): void {
+    if (operation === "ftSearch") {
+      if (typeof result?.total === "number") span.setAttribute("db.response.total_count", result.total);
+      if (Array.isArray(result?.documents)) span.setAttribute("db.response.returned_rows", result.documents.length);
+    } else if (operation === "ftInfo" && typeof result?.numDocs === "number") {
+      span.setAttribute("db.redis.num_docs", result.numDocs);
     }
   }
 
   private async _wrapMethod(
-    thisArg: any,
-    original: Function,
-    operation: RedisVectorOperation,
-    args: any[]
+    thisArg: unknown, original: Function, operation: RedisVectorOperation, args: any[]
   ): Promise<any> {
     const attributes = this.getCommonAttributes(operation);
     this._setOperationAttributes(attributes, operation, args);
-
-    const span = this.fiTracer.startSpan(`redis ${operation}`, {
-      kind: SpanKind.CLIENT,
-      attributes,
-    });
-
+    const span = this.fiTracer.startSpan(`redis ${operation}`, { kind: SpanKind.CLIENT, attributes });
     try {
-      const result = await context.with(
-        trace.setSpan(context.active(), span),
-        () => original.apply(thisArg, args)
-      );
-
+      const result = await context.with(trace.setSpan(context.active(), span), () => original.apply(thisArg, args));
       this._setResultAttributes(span, operation, result);
-
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (error: any) {

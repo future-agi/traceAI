@@ -20,7 +20,7 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_groq._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_groq._response_attributes_extractor import _ResponseAttributesExtractor
-from traceai_groq._utils import _finish_tracing, _to_dict
+from traceai_groq._utils import _finish_tracing
 from traceai_groq._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -119,8 +119,6 @@ class _CompletionsWrapper(_WithTracer):
         super().__init__(*args, **kwargs)
         self._request_extractor = _RequestAttributesExtractor()
         self._response_extractor = _ResponseAttributesExtractor()
-        self._content: List[str] = []
-        self._raw_data: List[Dict[str, Any]] = []
 
     def __call__(
         self,
@@ -166,17 +164,10 @@ class _CompletionsWrapper(_WithTracer):
             if streaming and isinstance(response, Iterable):
                 # If streaming, wrap the iterator without consuming it
                 def streaming_response_wrapper():
+                    chunks = []  # State belongs to this invocation, not the installed hook.
                     try:
                         for item in response:
-                            raw_chunk = _to_dict(item)
-                            self._raw_data.append(raw_chunk)
-
-                            if isinstance(raw_chunk, dict):
-                                choices = raw_chunk.get("choices", [])
-                                if choices and isinstance(choices[0], dict):
-                                    delta = choices[0].get("delta", {})
-                                    if content := delta.get("content"):
-                                        self._content.append(content)
+                            chunks.append(item)
                             yield item
 
                     except Exception as exception:
@@ -189,27 +180,16 @@ class _CompletionsWrapper(_WithTracer):
                         raise
                     else:
                         try:
-                            output_value = "".join(self._content)
-
-                            # Set the OUTPUT_VALUE span attribute
-                            span._span.set_attribute(
-                                SpanAttributes.OUTPUT_VALUE,
-                                safe_json_dumps(self._raw_data),
-                            )
-                            span._span.set_attribute(
-                                SpanAttributes.OUTPUT_VALUE, output_value
-                            )
-
                             _finish_tracing(
                                 status=trace_api.Status(
                                     status_code=trace_api.StatusCode.OK
                                 ),
                                 with_span=span,
                                 attributes=self._response_extractor.get_attributes(
-                                    response=None, is_streaming=streaming
+                                    response=chunks, is_streaming=streaming
                                 ),
                                 extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=None,
+                                    response=chunks,
                                     request_parameters=request_parameters,
                                     is_streaming=streaming,
                                 ),
@@ -222,8 +202,6 @@ class _CompletionsWrapper(_WithTracer):
                     finally:
                         if span._span.is_recording():
                             span.finish_tracing()
-
-                return streaming_response_wrapper()
 
                 return streaming_response_wrapper()
             else:
@@ -259,8 +237,6 @@ class _AsyncCompletionsWrapper(_WithTracer):
         super().__init__(*args, **kwargs)
         self._request_extractor = _RequestAttributesExtractor()
         self._response_extractor = _ResponseAttributesExtractor()
-        self._content: List[str] = []
-        self._raw_data: List[Dict[str, Any]] = []
 
     async def __call__(
         self,
@@ -306,17 +282,10 @@ class _AsyncCompletionsWrapper(_WithTracer):
             if streaming and hasattr(response, "__aiter__"):
                 # If streaming, wrap the async iterator without consuming it
                 async def streaming_response_wrapper():
+                    chunks = []  # Concurrent streams must never share response data.
                     try:
                         async for item in response:
-                            raw_chunk = _to_dict(item)
-                            self._raw_data.append(raw_chunk)
-
-                            if isinstance(raw_chunk, dict):
-                                choices = raw_chunk.get("choices", [])
-                                if choices and isinstance(choices[0], dict):
-                                    delta = choices[0].get("delta", {})
-                                    if content := delta.get("content"):
-                                        self._content.append(content)
+                            chunks.append(item)
                             yield item
 
                     except Exception as exception:
@@ -329,27 +298,16 @@ class _AsyncCompletionsWrapper(_WithTracer):
                         raise
                     else:
                         try:
-                            output_value = "".join(self._content)
-
-                            # Set the OUTPUT_VALUE span attribute
-                            span._span.set_attribute(
-                                SpanAttributes.OUTPUT_VALUE,
-                                safe_json_dumps(self._raw_data),
-                            )
-                            span._span.set_attribute(
-                                SpanAttributes.OUTPUT_VALUE, output_value
-                            )
-
                             _finish_tracing(
                                 status=trace_api.Status(
                                     status_code=trace_api.StatusCode.OK
                                 ),
                                 with_span=span,
                                 attributes=self._response_extractor.get_attributes(
-                                    response=None, is_streaming=streaming
+                                    response=chunks, is_streaming=streaming
                                 ),
                                 extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=None,
+                                    response=chunks,
                                     request_parameters=request_parameters,
                                     is_streaming=streaming,
                                 ),

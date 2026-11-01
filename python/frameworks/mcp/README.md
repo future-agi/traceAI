@@ -50,3 +50,28 @@ MCPInstrumentor().instrument(tracer_provider=tracer_provider)
 ```
 
 Start your MCP server as usual. TraceAI will automatically trace all MCP requests which will be visible in the FutureAGI platform.
+
+### MCP 1.8.1 dependency compatibility
+
+MCP 1.8.1 uses a private Pydantic API that is absent in Pydantic 2.14.2.
+If you must stay on MCP 1.8.1, pin its compatible Pydantic dependency:
+
+```bash
+pip install "traceAI-mcp" "mcp==1.8.1" "pydantic==2.11.10"
+```
+
+This pin applies only to MCP 1.8.1; do not impose it on newer SDK versions.
+
+### Instrumentation lifecycle
+
+`uninstrument()` disables this instrumentor's per-message propagation on
+already-instrumented open streams as well as on newly opened transports; it
+does not close sessions or remove wrappers installed by other libraries.
+Reinstalling re-enables the existing instrumented streams and instruments new
+transports exactly once. Sessions created while instrumentation is off are
+not retroactively wrapped; reopen them after reinstall to instrument them.
+Queued server messages remain intact across transitions; context captured while
+enabled is attached only if the reader is enabled when it consumes the item.
+An already-running request retains the context under which it started. Native
+MCP SDK tracing remains independent and can continue when this instrumentor is
+off, particularly with MCP 2.x.

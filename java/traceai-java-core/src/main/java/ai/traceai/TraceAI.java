@@ -16,7 +16,10 @@ import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -205,7 +208,16 @@ public final class TraceAI {
      * @return the version string
      */
     public static String getVersion() {
-        return "0.1.0";
+        try (InputStream stream = TraceAI.class.getResourceAsStream("/traceai-version.properties")) {
+            if (stream != null) {
+                Properties properties = new Properties();
+                properties.load(stream);
+                return properties.getProperty("version", "unknown");
+            }
+        } catch (IOException e) {
+            logger.debug("Unable to read TraceAI version", e);
+        }
+        return "unknown";
     }
 
     // Private constructor to prevent instantiation

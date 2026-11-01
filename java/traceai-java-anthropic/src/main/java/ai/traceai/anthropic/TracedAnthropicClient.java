@@ -9,21 +9,30 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
- * Instrumentation wrapper for Anthropic Java client.
- * Wraps the Anthropic client to provide automatic tracing of all API calls.
+ * Legacy instrumentation wrapper for blocking Anthropic message creation.
+ *
+ * <p>For SDKs with native OpenTelemetry tracing, prefer the native client and a
+ * standard OTLP exporter. Do not wrap a native-traced client: both instrumentations
+ * emit a request span and token counts. If retaining this wrapper with a modern
+ * SDK, construct that client with {@code openTelemetry(false)}. Older SDKs without
+ * native tracing do not require that option.</p>
  *
  * <p>Usage:</p>
  * <pre>
- * AnthropicClient anthropic = Anthropic.client();
+ * AnthropicClient anthropic = AnthropicOkHttpClient.builder()
+ *     .apiKey(System.getenv("ANTHROPIC_API_KEY"))
+ *     .openTelemetry(false) // Omit on older SDKs without native tracing.
+ *     .build();
  * TracedAnthropicClient traced = new TracedAnthropicClient(anthropic);
  *
  * Message response = traced.createMessage(
  *     MessageCreateParams.builder()
- *         .model("claude-3-5-sonnet-20241022")
- *         .addMessage(MessageParam.user("Hello!"))
+ *         .model("claude-opus-5-5")
+ *         .addUserMessage("Hello!")
  *         .maxTokens(1024)
  *         .build()
  * );
@@ -89,7 +98,10 @@ public class TracedAnthropicClient {
 
             // Extract temperature
             Object temperature = extractFieldObject(params, "temperature");
-            if (temperature != null) {
+            if (temperature instanceof Optional<?>) {
+                temperature = ((Optional<?>) temperature).orElse(null);
+            }
+            if (temperature instanceof Number) {
                 span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, ((Number) temperature).doubleValue());
             }
 

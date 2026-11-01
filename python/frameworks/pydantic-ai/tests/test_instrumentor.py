@@ -1,5 +1,8 @@
 """Tests for Pydantic AI instrumentor."""
 
+import re
+from pathlib import Path
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -197,11 +200,11 @@ class TestPatchPydanticAi:
         inst = PydanticAIInstrumentor()
         inst._tracer = MagicMock()
 
-        # This should raise or log warning since pydantic_ai is not installed
-        try:
-            inst._patch_pydantic_ai()
-        except ImportError:
-            pass  # Expected when Pydantic AI not installed
+        # Exercise the missing dependency path even when the SDK is installed.
+        import sys
+        with patch.dict(sys.modules, {"pydantic_ai": None}):
+            with pytest.raises(ImportError, match="Could not import pydantic_ai"):
+                inst._patch_pydantic_ai()
 
     @patch("traceai_pydantic_ai._instrumentor.wrap_agent_run")
     @patch("traceai_pydantic_ai._instrumentor.trace_api")
@@ -267,7 +270,8 @@ class TestPublicExports:
         import traceai_pydantic_ai
 
         assert hasattr(traceai_pydantic_ai, "__version__")
-        assert traceai_pydantic_ai.__version__ == "0.1.0"
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        assert traceai_pydantic_ai.__version__ == re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M).group(1)
 
     def test_get_model_provider_exported(self):
         """Test get_model_provider is exported."""

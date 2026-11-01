@@ -1,6 +1,11 @@
 """Tests for AutogenInstrumentor class."""
 
 import sys
+
+# Load dependencies before patch.dict(sys.modules): its rollback otherwise evicts
+# transitive Pydantic modules while cached SDK classes still reference them.
+import autogen_agentchat.agents
+import autogen_agentchat.teams
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -12,7 +17,7 @@ class TestAutoGenInstrumentor:
     def mock_autogen_v02(self):
         """Create mock autogen v0.2 module."""
         mock_module = MagicMock()
-        mock_module.ConversableAgent = MagicMock()
+        mock_module.ConversableAgent = type("ConversableAgent", (), {})
         mock_module.ConversableAgent.generate_reply = MagicMock()
         mock_module.ConversableAgent.initiate_chat = MagicMock()
         mock_module.ConversableAgent.execute_function = MagicMock()
@@ -70,7 +75,7 @@ class TestAutoGenInstrumentor:
             assert instrumentor._v04_original_on_messages == {}
             assert instrumentor._v04_original_team_run == {}
             assert instrumentor._v04_original_team_run_stream == {}
-            assert instrumentor.tracer is None
+            assert instrumentor._tracer is None
 
     def test_instrument_v02_only(self, mock_autogen_v02):
         """Test instrumenting only v0.2."""
@@ -179,7 +184,7 @@ class TestAutoGenInstrumentor:
             instrumentor = AutogenInstrumentor()
             deps = instrumentor.instrumentation_dependencies()
 
-            assert "autogen" in deps
+            assert deps == ("autogen-agentchat>=0.4.0",)
 
 
 class TestInstrumentAutogenFunction:
@@ -188,7 +193,7 @@ class TestInstrumentAutogenFunction:
     def test_instrument_autogen_returns_instrumentor(self):
         """Test that instrument_autogen returns an instrumentor."""
         mock_autogen = MagicMock()
-        mock_autogen.ConversableAgent = MagicMock()
+        mock_autogen.ConversableAgent = type("ConversableAgent", (), {})
         mock_autogen.ConversableAgent.generate_reply = MagicMock()
         mock_autogen.ConversableAgent.initiate_chat = MagicMock()
         mock_autogen.ConversableAgent.execute_function = MagicMock()
@@ -315,26 +320,9 @@ class TestVersionDetection:
 
     def test_v02_detection_when_not_available(self):
         """Test v0.2 detection when autogen is not available."""
-        # Remove autogen from modules if present
-        modules_to_remove = [k for k in sys.modules if k.startswith("autogen")]
-        original_modules = {k: sys.modules[k] for k in modules_to_remove if k in sys.modules}
-
-        try:
-            for k in modules_to_remove:
-                if k in sys.modules:
-                    del sys.modules[k]
-
-            # Patch import_module to raise ImportError
-            with patch("traceai_autogen.import_module", side_effect=ImportError):
-                import importlib
-                import traceai_autogen
-                importlib.reload(traceai_autogen)
-
-                from traceai_autogen import _is_v02_available
-                assert _is_v02_available() is False
-        finally:
-            # Restore modules
-            sys.modules.update(original_modules)
+        from traceai_autogen import _is_v02_available
+        with patch("traceai_autogen.import_module", side_effect=ImportError):
+            assert _is_v02_available() is False
 
     def test_v04_detection_when_available(self):
         """Test v0.4 detection when autogen_agentchat is available."""
@@ -350,22 +338,6 @@ class TestVersionDetection:
 
     def test_v04_detection_when_not_available(self):
         """Test v0.4 detection when autogen_agentchat is not available."""
-        # Ensure autogen_agentchat modules are not in sys.modules
-        modules_to_remove = [k for k in sys.modules if k.startswith("autogen_agentchat")]
-        original_modules = {k: sys.modules[k] for k in modules_to_remove if k in sys.modules}
-
-        try:
-            for k in modules_to_remove:
-                if k in sys.modules:
-                    del sys.modules[k]
-
-            import importlib
-            import traceai_autogen
-            importlib.reload(traceai_autogen)
-
-            from traceai_autogen import _is_v04_available
-            # This might return True or False depending on actual installation
-            # Just verify it returns a boolean
-            assert isinstance(_is_v04_available(), bool)
-        finally:
-            sys.modules.update(original_modules)
+        from traceai_autogen import _is_v04_available
+        with patch("traceai_autogen.import_module", side_effect=ImportError):
+            assert _is_v04_available() is False

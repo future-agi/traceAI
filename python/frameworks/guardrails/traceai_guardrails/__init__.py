@@ -7,6 +7,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_guardrails._wrap_guard_call import (
+    _AsyncPromptCallableWrapper,
     _ParseCallableWrapper,
     _PostValidationWrapper,
     _PromptCallableWrapper,
@@ -38,6 +39,7 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
     __slots__ = (
         "_tracer",
         "_original_guardrails_llm_providers_call",
+        "_original_guardrails_async_llm_providers_call",
         "_original_guardrails_runner_step",
         "_original_guardrails_validation_after_run",
     )
@@ -83,6 +85,15 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                 wrapper=prompt_callable_wrapper,
             )
 
+            self._original_guardrails_async_llm_providers_call = (
+                llm_providers_module.AsyncPromptCallableBase.__call__
+            )
+            wrap_function_wrapper(
+                module=_LLM_PROVIDERS_MODULE,
+                name="AsyncPromptCallableBase.__call__",
+                wrapper=_AsyncPromptCallableWrapper(tracer=self._tracer),
+            )
+
             validation_module = import_module(_VALIDATION_MODULE)
             self._original_guardrails_validation_after_run = (
                 validation_module.ValidatorServiceBase.after_run_validator
@@ -113,6 +124,13 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                     self._original_guardrails_llm_providers_call
                 )
                 self._original_guardrails_llm_providers_call = None
+
+            if getattr(self, "_original_guardrails_async_llm_providers_call", None) is not None:
+                llm_providers = import_module(_LLM_PROVIDERS_MODULE)
+                llm_providers.AsyncPromptCallableBase.__call__ = (
+                    self._original_guardrails_async_llm_providers_call
+                )
+                self._original_guardrails_async_llm_providers_call = None
 
             if (
                 hasattr(self, "_original_guardrails_runner_step")

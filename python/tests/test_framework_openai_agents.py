@@ -165,7 +165,7 @@ class TestFiTracingProcessor:
         
         self.mock_tracer.start_span.assert_called_once_with(
             name="test_trace",
-            attributes={"fi.span.kind": "AGENT"}
+            attributes={"gen_ai.span.kind": "AGENT"}
         )
         assert self.processor._root_spans["trace_123"] == mock_span
 
@@ -297,7 +297,7 @@ class TestFiTracingProcessor:
         
         # Verify response handling
         mock_otel_span.set_attribute.assert_any_call("output.mime_type", "application/json")
-        mock_otel_span.set_attribute.assert_any_call("raw.output", '{"test": "response"}')
+        mock_otel_span.set_attribute.assert_any_call("output.value", '{"test": "response"}')
 
     @patch('traceai_openai_agents._processor._get_attributes_from_generation_span_data')
     def test_on_span_end_generation_span_data(self, mock_get_attributes):

@@ -78,7 +78,7 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
 
             from ._handler import EventHandler
 
-            self._event_handler = EventHandler(tracer=tracer)
+            self._event_handler = EventHandler(tracer=tracer, config=config)
             self._span_handler = self._event_handler._span_handler
             dispatcher = get_dispatcher()
             for span_handler in dispatcher.span_handlers:

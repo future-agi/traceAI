@@ -1,0 +1,4 @@
+traceAI-agent-framework>=0.1.0
+agent-framework>=1.0.0
+fi-instrumentation-otel>=0.1.14
+openai>=1.0.0

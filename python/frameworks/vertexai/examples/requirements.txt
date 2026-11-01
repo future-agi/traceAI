@@ -1,1 +1,2 @@
-vertexai >= 1.49.0
+traceAI-vertexai
+google-cloud-aiplatform==1.101.0

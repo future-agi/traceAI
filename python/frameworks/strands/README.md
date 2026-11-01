@@ -1,288 +1,95 @@
-# TraceAI Strands Agents Integration
+# Trace Strands agents with Future AGI
 
-Comprehensive observability for [AWS Strands Agents](https://strandsagents.com/) with TraceAI.
+Send Strands' native agent, model, event-loop and tool spans to Future AGI with one OpenTelemetry exporter. The adapter preserves the native trace tree, maps content to Future AGI attributes, and counts token usage only on model spans rather than again on agent aggregates.
 
-Strands Agents is an open-source SDK from AWS that enables building AI agents with a model-driven approach. This integration provides seamless tracing by leveraging Strands' built-in OpenTelemetry support.
-
-## Features
-
-- **Zero-config integration**: Works with Strands' native OTEL support
-- **Automatic tracing**: Agent invocations, tool calls, and model interactions
-- **Token tracking**: Input/output tokens and cache metrics (Bedrock)
-- **Session correlation**: Link traces across conversations
-- **Custom callbacks**: Extended event capture for detailed observability
-- **MCP support**: Trace Model Context Protocol tool usage
-
-## Installation
+## Install
 
 ```bash
-pip install traceai-strands
+pip install -U traceai-strands 'strands-agents[otel,openai]' 'fi-instrumentation-otel>=1.2.2'
 ```
 
-For full functionality with Strands:
+Strands Agents 1.0.0 or newer and Python 3.10 or newer are required. The example uses your own OpenAI API key; you can instead use any model supported by Strands.
 
-```bash
-pip install 'strands-agents[otel]'
-```
+## Configure and run
 
-## Quick Start
-
-### Option 1: Using TraceAI with fi_instrumentation
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `OPENAI_API_KEY` in your environment. Configure tracing **before constructing an Agent**, and use one global provider per process.
 
 ```python
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from traceai_strands import configure_strands_tracing
+from fi_instrumentation.otel import HTTPSpanExporter
+from traceai_strands import StrandsSpanExporter
 
-# Setup TraceAI
-trace_provider = register(
+provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="my-strands-agent",
-)
-
-# Configure Strands to use TraceAI
-configure_strands_tracing(tracer_provider=trace_provider)
-
-# Now use Strands normally - traces are sent automatically
-from strands import Agent
-
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    system_prompt="You are a helpful assistant.",
-)
-
-response = agent("Hello!")
-```
-
-### Option 2: Direct OTLP Configuration
-
-```python
-from traceai_strands import configure_strands_tracing
-
-# Configure with OTLP endpoint directly
-configure_strands_tracing(
-    otlp_endpoint="https://api.traceai.com/v1/traces",
-    otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
-    project_name="my-strands-agent",
+    set_global_tracer_provider=True,
+    span_exporter=StrandsSpanExporter(
+        HTTPSpanExporter(),
+        capture_content=True,
+    ),
 )
 
 from strands import Agent
+from strands.models.openai import OpenAIModel
 
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    system_prompt="You are a helpful assistant.",
-)
-
-response = agent("Hello!")
+try:
+    agent = Agent(
+        model=OpenAIModel(model_id="gpt-4o-mini"),
+        trace_attributes={"gen_ai.provider.name": "openai"},
+        callback_handler=None,
+    )
+    print(agent("What is the capital of France?"))
+finally:
+    provider.force_flush()
+    provider.shutdown()
 ```
 
-## Adding Trace Attributes
+This example explicitly enables prompt, response and tool-content capture. Omit `capture_content=True` to export metadata and usage without content. In a long-running service, flush and shut down the provider when the service stops, not after each request.
 
-Add session and user information for better trace correlation:
+Open **Observe** in Future AGI and select `my-strands-agent`. An invocation contains an agent span, an event-loop span and a model span; calls to Strands tools add native tool spans. Token usage belongs to model spans, not the enclosing aggregate spans.
+
+`HTTPSpanExporter()` uses both Future AGI authentication headers and sends to `https://api.futureagi.com/tracer/v1/traces` by default. For self-hosting, set `FI_BASE_URL` to your Future AGI base URL. `register()` supplies the required `project_name` and `project_type` resource attributes. Do not add `StrandsTelemetry.setup_otlp_exporter()` or a second raw exporter to this pipeline: it would export another copy outside the adapter's privacy policy. Future AGI accepts traces, not Strands metrics or logs.
+
+## Control content capture
+
+`StrandsSpanExporter` uses the shared `TraceConfig` and its `FI_HIDE_*` environment settings. You can also pass a config explicitly:
 
 ```python
-from strands import Agent
+from fi_instrumentation import TraceConfig
 
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    system_prompt="You are a helpful assistant.",
-    trace_attributes={
-        "session.id": "user-session-123",
-        "user.id": "user@example.com",
-        "tags": ["production", "chatbot"],
-    },
+exporter = StrandsSpanExporter(
+    HTTPSpanExporter(),
+    capture_content=True,
+    config=TraceConfig(hide_inputs=True, hide_error_details=True),
 )
 ```
 
-Or use the helper function:
+When content is disabled, native message events, tool payloads and error details are omitted. When content is enabled, input/output privacy settings apply to both native event-based and attribute-based messages. Because native messages are serialized blobs, a granular input or output hide flag omits that direction's entire content, including tool arguments/results, instead of retaining an unmasked copy. Native content events are projected into attributes, not exported a second time.
 
-```python
-from traceai_strands import create_traced_agent
+With `hide_error_details=True`, failed tool responses are also removed from later message history, even when the agent recovers. Tool responses whose success status is unavailable are omitted from history too; newer Strands semantic conventions discard that status. Successful tool spans still retain their own results when the native status confirms success.
 
-agent = create_traced_agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    system_prompt="You are a helpful assistant.",
-    session_id="user-session-123",
-    user_id="user@example.com",
-    tags=["production", "chatbot"],
-)
-```
+If message history cannot be decoded as JSON, for example after truncation by `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`, its content is omitted rather than exported as unchecked text. This also omits plain-text non-tool messages, including legacy callbacks, when their structure cannot be verified. Valid JSON text and successful direct tool results are preserved. This setting does not detect error text that your application or model copies into ordinary messages.
 
-## Using Tools
+Span names, model/tool identifiers, session/user IDs and application resource attributes are metadata; do not put secrets in them. Unknown custom native attributes and link attributes are omitted. Other instrumentation scopes pass through unchanged: this adapter is not a privacy filter for the whole application. Content opt-in is not automatic credential detection.
 
-Strands tools are automatically traced when using the `@tool` decorator:
+## Migrate existing setup
 
-```python
-from strands import Agent, tool
-from typing import Annotated
+Keep `traceai-strands` installed. Replace the old `register(...)` plus `configure_strands_tracing(...)` setup with the exporter-wrapped `register(...)` above. Bare `register()` exports native spans but does not perform this adapter's semantic, aggregate-token or privacy conversion.
 
-@tool
-def get_weather(city: Annotated[str, "City name"]) -> str:
-    """Get the current weather for a city."""
-    return f"Weather in {city}: 72°F, Sunny"
+`configure_strands_tracing`, `StrandsInstrumentor`, `create_traced_agent`, attribute helpers and `StrandsCallbackHandler` remain available. Legacy setup now leaves metrics disabled by default and reuses an existing exporter when no OTLP endpoint is configured. If the provider already contains `StrandsSpanExporter`, legacy setup never adds a raw OTLP copy, even with ambient `OTEL_*` settings. The legacy setup helper does not retrofit the adapter onto exporters you already created. When using the adapter, add a separately wrapped console exporter rather than `enable_console_exporter=True`, which would bypass privacy filtering.
 
-@tool
-def calculate(
-    operation: Annotated[str, "add, subtract, multiply, divide"],
-    a: Annotated[float, "First number"],
-    b: Annotated[float, "Second number"],
-) -> float:
-    """Perform a calculation."""
-    ops = {"add": lambda x, y: x + y, "multiply": lambda x, y: x * y}
-    return ops[operation](a, b)
+The optional callback handler is a legacy manual event API, not a replacement for native agent/model/tool tracing. Do not attach it to an Agent just to obtain those spans: Strands already emits them. Applications that explicitly call its `on_agent_*`, `on_model_*`, or `on_tool_*` methods can retain those calls; they create additional application spans and should not duplicate native operations. To stop exporting native traces, shut down the provider at application exit. `uninstrument()` only resets the legacy setup helper; it cannot remove Strands' own tracing or undo OpenTelemetry's global provider.
 
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=[get_weather, calculate],
-)
+## Troubleshoot
 
-response = agent("What's 15 times 7, and what's the weather in Tokyo?")
-```
-
-## Custom Callback Handler
-
-For extended event capture beyond Strands' built-in telemetry:
-
-```python
-from traceai_strands import StrandsCallbackHandler
-
-# Create callback handler
-callback = StrandsCallbackHandler(
-    tracer_provider=trace_provider,
-    capture_input=True,
-    capture_output=True,
-)
-
-# Use with agent
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    callback_handler=callback,
-)
-
-# Lifecycle events are automatically traced
-response = agent("Hello!")
-```
-
-## MCP Integration
-
-Trace Model Context Protocol server tools:
-
-```python
-from strands import Agent
-from strands.tools.mcp import MCPClient
-
-# Connect to MCP server
-mcp_client = MCPClient(
-    server_command=["npx", "@anthropic/mcp-server-calculator"],
-)
-
-# Get MCP tools
-mcp_tools = mcp_client.list_tools_sync()
-
-# Create agent with MCP tools
-agent = Agent(
-    model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-    tools=mcp_tools,
-)
-
-response = agent("Calculate the square root of 144")
-```
-
-## Semantic Attributes
-
-The integration captures these OpenTelemetry GenAI semantic attributes:
-
-### Agent Attributes
-| Attribute | Description |
-|-----------|-------------|
-| `agent.type` | Agent class name |
-| `strands.system_prompt` | Agent's system prompt (truncated) |
-| `strands.tool_count` | Number of tools available |
-| `strands.session.id` | Session identifier |
-| `strands.user.id` | User identifier |
-
-### Model Attributes
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.system` | Model provider (bedrock, openai, etc.) |
-| `gen_ai.request.model` | Model name/ID |
-| `gen_ai.request.temperature` | Temperature setting |
-| `gen_ai.request.max_tokens` | Max tokens setting |
-| `gen_ai.usage.input_tokens` | Input token count |
-| `gen_ai.usage.output_tokens` | Output token count |
-| `strands.cache.read_tokens` | Cache read tokens (Bedrock) |
-| `strands.cache.write_tokens` | Cache write tokens (Bedrock) |
-
-### Tool Attributes
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.tool.name` | Tool function name |
-| `gen_ai.tool.description` | Tool docstring |
-| `gen_ai.tool.parameters` | Tool input parameters |
-| `gen_ai.tool.result` | Tool execution result |
-
-## Environment Variables
-
-Strands respects standard OpenTelemetry environment variables:
-
-```bash
-# OTLP endpoint
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://api.traceai.com/v1/traces"
-
-# OTLP headers (authentication)
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer YOUR_API_KEY"
-
-# Sampling (optional)
-export OTEL_TRACES_SAMPLER="traceidratio"
-export OTEL_TRACES_SAMPLER_ARG="0.5"  # Sample 50%
-```
-
-## Model Provider Support
-
-The integration automatically detects model providers:
-
-| Provider | Model Patterns |
-|----------|---------------|
-| Bedrock | `us.anthropic.*`, `us.amazon.*`, `eu.*` |
-| OpenAI | `gpt-*`, `o1-*`, `text-davinci-*` |
-| Anthropic | `claude-*` |
-| Google | `gemini-*`, `palm-*` |
-| Mistral | `mistral-*`, `mixtral-*` |
-| Meta | `llama-*` |
-| Ollama | `ollama/*` |
-
-## Examples
-
-See the `examples/` directory for complete examples:
-
-- `basic_agent.py` - Simple agent with tracing
-- `agent_with_tools.py` - Tools and function calling
-- `callback_handler.py` - Custom callback handler
-- `mcp_agent.py` - MCP server integration
-
-## How It Works
-
-Strands has native OpenTelemetry support through its `StrandsTelemetry` class. This integration:
-
-1. **Configures OTLP export**: Sets environment variables or configures `StrandsTelemetry` to send traces to TraceAI
-2. **Adds helper functions**: Provides `create_traced_agent()` and attribute helpers
-3. **Optional callbacks**: `StrandsCallbackHandler` for extended event capture
-
-The integration is lightweight because Strands already does the heavy lifting for telemetry.
-
-## Compatibility
-
-- **Strands Agents**: >= 1.0.0
-- **Python**: >= 3.10
-- **OpenTelemetry**: >= 1.0.0
+- **No traces:** install the global provider before creating the first Agent. Restart the process after changing a previously installed global provider; OpenTelemetry does not support replacing it.
+- **Duplicate spans or usage:** configure one wrapped exporter and remove additional raw OTLP exporters and lifecycle callbacks for native operations.
+- **No prompts or responses:** enable `capture_content=True` and check your `FI_HIDE_*` settings. Strands' own content-redaction settings can also remove content before it reaches the adapter.
+- **Authentication errors:** supply both `FI_API_KEY` and `FI_SECRET_KEY`, and check `FI_BASE_URL` for self-hosted deployments.
 
 ## Resources
 
-- [Strands Agents Documentation](https://strandsagents.com/latest/)
-- [Strands GitHub](https://github.com/strands-agents/sdk-python)
-- [OpenTelemetry GenAI Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
-- [TraceAI Documentation](https://docs.futureagi.com/traceai)
-
-## License
-
-Apache-2.0
+- [Strands observability](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/traces/)
+- [Strands model providers](https://strandsagents.com/docs/user-guide/concepts/model-providers/)
+- [Future AGI documentation](https://docs.futureagi.com/)

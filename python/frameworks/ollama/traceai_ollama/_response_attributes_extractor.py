@@ -1,7 +1,8 @@
 import logging
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     MessageAttributes,
@@ -15,6 +16,9 @@ logger.addHandler(logging.NullHandler())
 
 class _ResponseAttributesExtractor:
     """Extract span attributes from Ollama response."""
+
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
 
     def get_attributes(
         self,
@@ -32,8 +36,8 @@ class _ResponseAttributesExtractor:
             yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, response["eval_count"]
 
         # Calculate total tokens
-        prompt_tokens = response.get("prompt_eval_count", 0)
-        completion_tokens = response.get("eval_count", 0)
+        prompt_tokens = response.get("prompt_eval_count") or 0
+        completion_tokens = response.get("eval_count") or 0
         if prompt_tokens or completion_tokens:
             yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, prompt_tokens + completion_tokens
 
@@ -73,8 +77,15 @@ class _ResponseAttributesExtractor:
                 yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{i}.{EmbeddingAttributes.EMBEDDING_VECTOR}", safe_json_dumps(emb[:10])
             yield SpanAttributes.OUTPUT_VALUE, f"[{len(embeddings)} embeddings]"
 
-        # Raw response for reference
-        yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)
+        # Core masks dedicated vector keys, but cannot inspect serialized JSON.
+        # Redact only the copy used for telemetry, never the SDK response itself.
+        output = response
+        if self._config.hide_embedding_vectors:
+            output = {
+                key: REDACTED_VALUE if key in ("embedding", "embeddings") else value
+                for key, value in response.items()
+            }
+        yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output)
 
         # Performance metrics (Ollama-specific)
         if "total_duration" in response:

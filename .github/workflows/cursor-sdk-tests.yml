@@ -1,0 +1,47 @@
+name: Cursor SDK tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_cursor_sdk/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - 'typescript/package.json'
+      - '.github/workflows/cursor-sdk-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cursor-sdk:
+    name: Cursor SDK build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: typescript
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - name: Frozen filtered install
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/cursor-sdk...'
+      - name: Build package and shared dependencies
+        run: pnpm --filter '@traceai/cursor-sdk...' --workspace-concurrency=1 run build
+      - name: Offline tests and real SDK type contract
+        run: |
+          pnpm --filter '@traceai/cursor-sdk' exec jest --runInBand
+          pnpm --filter '@traceai/cursor-sdk' run typecheck:contract
+      - name: Package tarball
+        run: pnpm --filter '@traceai/cursor-sdk' pack --pack-destination "$RUNNER_TEMP/cursor-package"

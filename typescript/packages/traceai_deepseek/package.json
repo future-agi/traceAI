@@ -1,6 +1,6 @@
 {
   "name": "@traceai/deepseek",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for DeepSeek AI",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
@@ -18,7 +18,7 @@
   "scripts": {
     "build": "npm run build:cjs && npm run build:esm",
     "build:cjs": "tsc -p tsconfig.json",
-    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:esm": "tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest --config jest.config.js",
     "test:e2e": "jest --config jest.config.js --testMatch '**/*.e2e.test.ts'",
     "clean": "rimraf dist"
@@ -30,13 +30,15 @@
     "deepseek",
     "llm",
     "observability",
-    "tracing"
+    "tracing",
+    "futureagi"
   ],
-  "author": "FutureAGI",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/future-agi/traceai"
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_deepseek"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -54,6 +56,7 @@
     "openai": "^4.77.0",
     "rimraf": "^6.0.1",
     "ts-jest": "^29.2.5",
+    "tsc-alias": "^1.8.16",
     "typescript": "^5.7.2"
   },
   "peerDependencies": {
@@ -66,5 +69,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
   }
 }

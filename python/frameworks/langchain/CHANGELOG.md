@@ -1,3 +1,16 @@
+## [0.2.1] - 2026-10-26
+### Fixed
+- LangGraph's `configurable.thread_id` is copied to `session.id` on every span, including Deep Agents subagents. Metadata `session_id` and `using_session(...)` retain precedence; blank thread ids set nothing.
+- Chat model token counts prefer the message's `usage_metadata`, so cached prompt tokens are included; provider `llm_output` is a fallback.
+- Failed-run status descriptions use the original exception message, never LangChain's traceback-bearing `run.error`. Stacktraces remain only in exception events when error details are visible. Non-`Exception` errors retain their own traceback and fully qualified type.
+
+### Changed
+- Core `fi-instrumentation-otel>=1.2.0` owns error hiding, including derived content-hide flags and an explicit `hide_error_details=False` override. Hidden failures retain their type but no status description, exception message or stacktrace. On older supported core versions, `hide_inputs` or `hide_outputs` applies the same hiding as a compatibility fallback.
+- Failed-run output attributes (including raw output, messages and function calls) are omitted when error details are hidden: provider error bodies and response headers can echo private content. Session mapping and token usage are retained.
+
+### Added
+- Deep Agents cookbook (`examples/deep_agents.py`) and compatibility tests against the published `deepagents==0.7.21` wheel. No new package or runtime dependency.
+
 ## [0.2.0] - 2026-07-30
 ### Fixed
 - `LangGraphInstrumentor` no longer breaks async graph nodes. The previous build monkey-patched `StateGraph.add_node`/`compile` and wrapped node functions with a sync wrapper, which returned a coroutine from `async def` nodes and raised `INVALID_GRAPH_NODE_RETURN_VALUE`. It also corrupted per-request state under concurrency and traced HITL `interrupt()` pauses as errors.

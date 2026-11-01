@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from traceai_openai._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -61,12 +61,58 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
         if eval_input and len(eval_input) > 0:
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
+            _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input[0])
+    elif isinstance(input_data, str):
+        # A bare prompt (e.g. Responses API ``input="..."``) is already the input
+        # text; JSON-encoding it would wrap it in quotes.
+        span.set_attribute(SpanAttributes.INPUT_VALUE, input_data)
+        span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value)
     else:
         try:
             input_str = json.dumps(input_data, ensure_ascii=False).strip()
         except (TypeError, ValueError):
             input_str = str(input_data).strip()
         span.set_attribute(SpanAttributes.INPUT_VALUE, input_str)
+        _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, input_str)
+
+
+def _set_mime_type(span: _WithSpan, key: str, value: Any) -> None:
+    """Label a value JSON only when it parses as a JSON object or array."""
+    mime = FiMimeTypeValues.TEXT.value
+    if isinstance(value, str) and value[:1] in ("{", "["):
+        try:
+            json.loads(value)
+            mime = FiMimeTypeValues.JSON.value
+        except ValueError:
+            pass
+    span.set_attribute(key, mime)
+
+
+def _json_output_for(output_data: Any) -> Optional[str]:
+    """JSON for responses whose output is not a chat message: the Responses API
+    object as JSON, and a compact summary for embeddings (never the vectors)."""
+    try:
+        from openai.types import CreateEmbeddingResponse
+        from openai.types.responses import Response
+    except ImportError:  # pragma: no cover - SDKs older than the floor
+        return None
+    if isinstance(output_data, Response):
+        # Lead with the answer text (the SDK's `output_text`) so previews show it.
+        body = json.loads(output_data.model_dump_json(exclude_none=True))
+        output_text = getattr(output_data, "output_text", None)
+        if output_text:
+            body = {"output_text": output_text, **body}
+        return json.dumps(body, ensure_ascii=False)
+    if isinstance(output_data, CreateEmbeddingResponse):
+        data = list(output_data.data or [])
+        first = getattr(data[0], "embedding", None) if data else None
+        summary = {
+            "model": output_data.model,
+            "embeddings": len(data),
+            "dimensions": len(first) if isinstance(first, list) else None,
+        }
+        return json.dumps({k: v for k, v in summary.items() if v is not None})
+    return None
 
 
 def add_io_to_span_attributes(
@@ -87,6 +133,14 @@ def add_io_to_span_attributes(
 
         # Process output data if not streaming
         if output_data is not None and not is_streaming:
+            if hasattr(output_data, "parse") and not hasattr(output_data, "model_dump"):
+                output_data = output_data.parse()
+            if (json_output := _json_output_for(output_data)) is not None:
+                span.set_attribute(SpanAttributes.OUTPUT_VALUE, json_output)
+                span.set_attribute(
+                    SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
+                )
+                return
             # Handle APIResponse object
             if hasattr(output_data, "model_dump"):
                 output_data = output_data.model_dump()
@@ -127,12 +181,15 @@ def add_io_to_span_attributes(
                     output_content = " \n ".join(tool_calls)
                 elif "content" in message:
                     output_content = message["content"]
+            elif isinstance(output_data, (dict, list)):
+                output_content = json.dumps(output_data, ensure_ascii=False, default=str)
             else:
                 output_content = str(output_data)
 
             # Set output.value to just the assistant's response content
             if output_content:
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, output_content)
+                _set_mime_type(span, SpanAttributes.OUTPUT_MIME_TYPE, output_content)
 
     except Exception as e:
         logger.exception(f"Error adding I/O to span attributes: {e}")

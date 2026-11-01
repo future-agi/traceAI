@@ -1,0 +1,18 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "module": "commonjs",
+    "rootDir": "../src/__tests__/fixtures",
+    "noEmitOnError": true,
+    "types": ["node"]
+  },
+  "files": [
+    "../src/__tests__/fixtures/messages.ts",
+    "../src/__tests__/fixtures/fakeQuery.ts"
+  ]
+}

@@ -1,0 +1,9 @@
+# Not a traceAI package: these are the example's own dependencies.
+gradio==6.29.1
+openai==3.24.0  # the version the tests ran with
+# register() and the OpenAI instrumentor. The main tests run against this
+# repository's python/fi_instrumentation and python/frameworks/openai at the
+# same version numbers; an opt-in test installs this file from PyPI (see
+# README.md, "Tests").
+fi-instrumentation-otel==1.1.0
+traceAI-openai==0.1.10

@@ -34,9 +34,9 @@ class TestTextGenerationRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "huggingface"
-        assert attributes["llm.model"] == "meta-llama/Llama-2-7b-chat-hf"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "huggingface"
+        assert attributes["gen_ai.request.model"] == "meta-llama/Llama-2-7b-chat-hf"
 
     def test_extract_generation_parameters(self):
         """Test extracting generation parameters."""
@@ -54,8 +54,8 @@ class TestTextGenerationRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert "llm.invocation_parameters" in attributes
-        params = json.loads(attributes["llm.invocation_parameters"])
+        assert "gen_ai.request.parameters" in attributes
+        params = json.loads(attributes["gen_ai.request.parameters"])
         assert params["temperature"] == 0.8
         assert params["max_new_tokens"] == 200
 
@@ -78,8 +78,8 @@ class TestChatCompletionRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "huggingface"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "huggingface"
 
     def test_extract_messages(self):
         """Test extracting messages from request."""
@@ -97,7 +97,7 @@ class TestChatCompletionRequestAttributesExtractor:
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
         # Should have messages
-        assert any("input_messages" in k for k in extra_attrs.keys())
+        assert any("gen_ai.input.messages" in k for k in extra_attrs.keys())
 
     def test_extract_tools(self):
         """Test extracting tools from request."""
@@ -138,8 +138,8 @@ class TestFeatureExtractionRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "EMBEDDING"
-        assert attributes["llm.system"] == "huggingface"
+        assert attributes["gen_ai.span.kind"] == "EMBEDDING"
+        assert attributes["gen_ai.provider.name"] == "huggingface"
 
     def test_extract_multiple_texts(self):
         """Test extracting multiple texts count."""
@@ -148,14 +148,13 @@ class TestFeatureExtractionRequestAttributesExtractor:
         extractor = _FeatureExtractionRequestAttributesExtractor()
         request_params = {
             "model": "sentence-transformers/all-MiniLM-L6-v2",
-            "inputs": ["Hello", "World", "Test"],
+            "text": ["Hello", "World", "Test"],
         }
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Texts count may be stored under different key or embedded in input
-        input_keys = [k for k in extra_attrs.keys() if "input" in k or "text" in k]
-        assert len(input_keys) >= 0  # Flexible assertion
+        assert json.loads(extra_attrs["input.value"]) == request_params["text"]
+        assert extra_attrs["huggingface.texts_count"] == 3
 
 
 class TestTextGenerationResponseAttributesExtractor:
@@ -172,7 +171,11 @@ class TestTextGenerationResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert extra_attrs.get("output.value") == "Paris, the capital of France."
+        # output.value is the serialized provider response; message text is
+        # also retained separately for display and content-level masking.
+        assert json.loads(extra_attrs["output.value"]) == response
+        assert extra_attrs["gen_ai.output.messages.0.message.content"] == "Paris, the capital of France."
+        assert extra_attrs["gen_ai.output.messages.0.message.role"] == "assistant"
 
     def test_extract_token_counts(self):
         """Test extracting token counts from response."""
@@ -189,7 +192,7 @@ class TestTextGenerationResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
 
 class TestChatCompletionResponseAttributesExtractor:
@@ -213,8 +216,8 @@ class TestChatCompletionResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.prompt") == 10
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.input_tokens") == 10
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
     def test_extract_tool_calls(self):
         """Test extracting tool calls from response."""
@@ -293,7 +296,7 @@ class TestRealWorldScenarios:
             "inputs": "What is machine learning?",
         }
         req_attrs = dict(req_extractor.get_attributes_from_request(request_params))
-        assert req_attrs["fi.span.kind"] == "EMBEDDING"
+        assert req_attrs["gen_ai.span.kind"] == "EMBEDDING"
 
         # Response
         resp_extractor = _FeatureExtractionResponseAttributesExtractor()
@@ -315,7 +318,7 @@ class TestRealWorldScenarios:
             "inputs": ["Doc 1", "Doc 2", "Doc 3"],
         }
         embed_attrs = dict(embed_extractor.get_attributes_from_request(embed_params))
-        assert embed_attrs["fi.span.kind"] == "EMBEDDING"
+        assert embed_attrs["gen_ai.span.kind"] == "EMBEDDING"
 
         # Step 2: Generate with context
         chat_extractor = _ChatCompletionRequestAttributesExtractor()
@@ -327,7 +330,7 @@ class TestRealWorldScenarios:
             ],
         }
         chat_attrs = dict(chat_extractor.get_attributes_from_request(chat_params))
-        assert chat_attrs["fi.span.kind"] == "LLM"
+        assert chat_attrs["gen_ai.span.kind"] == "LLM"
 
     def test_multi_turn_conversation_attributes(self):
         """Test attributes for multi-turn conversation."""
@@ -346,6 +349,7 @@ class TestRealWorldScenarios:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Should have 4 messages
-        message_keys = [k for k in extra_attrs.keys() if "input_messages" in k]
-        assert len(message_keys) >= 4
+        for index, message in enumerate(request_params["messages"]):
+            prefix = f"gen_ai.input.messages.{index}"
+            assert extra_attrs[f"{prefix}.message.role"] == message["role"]
+            assert extra_attrs[f"{prefix}.message.content"] == message["content"]

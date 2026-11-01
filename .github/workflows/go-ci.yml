@@ -1,0 +1,122 @@
+name: Go CI
+
+on:
+  pull_request:
+    paths:
+      - 'go/**'
+      - '.github/workflows/go-ci.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'go/**'
+      - '.github/workflows/go-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.module }} / Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [a2a, anthropic, bedrock, eino, genai, lambda, openai]
+        go: ['1.26.0', stable]
+    defaults:
+      run:
+        working-directory: go/${{ matrix.module }}
+    env:
+      # Test each independently consumable module, not a developer's workspace.
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/${{ matrix.module }}/go.sum
+      - name: Check module identity and release portability
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          go mod edit -json | python3 -c '
+          import json, os, sys
+          mod = json.load(sys.stdin)
+          assert mod["Module"]["Path"] == "github.com/future-agi/traceAI/go/" + os.environ["MODULE"]
+          assert mod["Go"] == "1.26.0"
+          assert not any(not r["New"].get("Version") for r in mod.get("Replace") or []), "local replace is not releasable"
+          '
+      - name: Check tidy
+        run: go mod tidy -diff
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+      - name: Build example
+        run: go build -o "$RUNNER_TEMP/traceai-example" ./example
+      - name: Render package documentation
+        run: go doc .
+
+  genai-sdk-compatibility:
+    name: genai / SDK ${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['v1.71.0', 'v1.77.0']
+    defaults:
+      run:
+        working-directory: go/genai
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/genai/go.sum
+      - name: Select SDK version
+        run: go get google.golang.org/genai@${{ matrix.sdk }}
+      - name: Test real SDK transport and OTLP export
+        run: go test -race -count=1 ./...
+
+  bedrock-current:
+    name: bedrock / current AWS / Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26.0', stable]
+    defaults:
+      run:
+        working-directory: go/bedrock
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/bedrock/go.sum
+      - name: Resolve current AWS SDK without changing the declared floor
+        run: |
+          go get github.com/aws/aws-sdk-go-v2/service/bedrockruntime@v1.63.9 github.com/aws/smithy-go/tracing/smithyoteltracing@v1.0.35
+          test "$(go list -m -f '{{.Version}}' github.com/aws/aws-sdk-go-v2/service/bedrockruntime)" = v1.63.9
+      - name: Vet and race tests including OTLP example
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...

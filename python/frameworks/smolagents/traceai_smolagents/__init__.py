@@ -8,6 +8,7 @@ from traceai_smolagents._wrappers import (
     _RunWrapper,
     _StepWrapper,
     _ToolCallWrapper,
+    _TimeoutWrapper,
 )
 from traceai_smolagents.version import __version__
 from wrapt import wrap_function_wrapper
@@ -22,6 +23,7 @@ class SmolagentsInstrumentor(BaseInstrumentor):
         "_original_tool_call_method",
         "_original_model_call_methods",
         "_tracer",
+        "_original_timeout",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -50,36 +52,27 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             wrapper=run_wrapper,
         )
 
-        self._original_step_methods: Optional[
-            dict[type, Optional[Callable[..., Any]]]
-        ] = {}
-        step_wrapper = _StepWrapper(tracer=self._tracer)
-        for step_cls in [CodeAgent, ToolCallingAgent]:
-            self._original_step_methods[step_cls] = getattr(step_cls, "step", None)
-            wrap_function_wrapper(
-                module="smolagents",
-                name=f"{step_cls.__name__}.step",
-                wrapper=step_wrapper,
-            )
+        # Patch the actual execution entry points, not inherited aliases.
+        # Since 1.20 agents call generate/_step_stream; __call__/step delegate.
+        self._original_step_methods = {}
+        for step_cls in (CodeAgent, ToolCallingAgent):
+            method = "_step_stream" if hasattr(step_cls, "_step_stream") else "step"
+            self._original_step_methods[(step_cls, method)] = vars(step_cls).get(method)
+            wrap_function_wrapper(step_cls, method, _StepWrapper(tracer=self._tracer))
 
-        self._original_model_call_methods: Optional[dict[type, Callable[..., Any]]] = {}
-
-        exported_model_subclasses = [
-            attr
-            for _, attr in vars(smolagents).items()
+        self._original_model_call_methods = {}
+        exported_model_subclasses = {
+            attr for attr in vars(smolagents).values()
             if isinstance(attr, type) and issubclass(attr, models.Model)
-        ]
-
+        }
         for model_subclass in exported_model_subclasses:
-            model_subclass_wrapper = _ModelWrapper(tracer=self._tracer)
-            self._original_model_call_methods[model_subclass] = getattr(
-                model_subclass, "__call__"
-            )
-            wrap_function_wrapper(
-                module="smolagents",
-                name=model_subclass.__name__ + ".__call__",
-                wrapper=model_subclass_wrapper,
-            )
+            method = "generate" if hasattr(model_subclass, "generate") else "__call__"
+            # Wrapping inherited methods stacks spans and leaves wrapped aliases
+            # behind on uninstrument. The defining class is already in this set.
+            if method not in vars(model_subclass):
+                continue
+            self._original_model_call_methods[(model_subclass, method)] = vars(model_subclass)[method]
+            wrap_function_wrapper(model_subclass, method, _ModelWrapper(tracer=self._tracer, method_name=method))
 
         tool_call_wrapper = _ToolCallWrapper(tracer=self._tracer)
         self._original_tool_call_method = getattr(Tool, "__call__", None)
@@ -89,25 +82,32 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             wrapper=tool_call_wrapper,
         )
 
+        from smolagents import local_python_executor
+        self._original_timeout = getattr(local_python_executor, "timeout", None)
+        if self._original_timeout is not None:
+            wrap_function_wrapper(local_python_executor, "timeout", _TimeoutWrapper())
+
     def _uninstrument(self, **kwargs: Any) -> None:
         from smolagents import MultiStepAgent, Tool
+
+        if getattr(self, "_original_timeout", None) is not None:
+            from smolagents import local_python_executor
+            local_python_executor.timeout = self._original_timeout
+            self._original_timeout = None
 
         if self._original_run_method is not None:
             MultiStepAgent.run = self._original_run_method
             self._original_run_method = None
 
-        if self._original_step_methods is not None:
-            for step_cls, original_step_method in self._original_step_methods.items():
-                setattr(step_cls, "step", original_step_method)
-            self._original_step_methods = None
-
-        if self._original_model_call_methods is not None:
-            for (
-                model_subclass,
-                original_model_call_method,
-            ) in self._original_model_call_methods.items():
-                setattr(model_subclass, "__call__", original_model_call_method)
-            self._original_model_call_methods = None
+        for originals in (self._original_step_methods, self._original_model_call_methods):
+            if originals is not None:
+                for (cls, method), original in originals.items():
+                    if original is None:
+                        delattr(cls, method)
+                    else:
+                        setattr(cls, method, original)
+        self._original_step_methods = None
+        self._original_model_call_methods = None
 
         if self._original_tool_call_method is not None:
             Tool.__call__ = self._original_tool_call_method

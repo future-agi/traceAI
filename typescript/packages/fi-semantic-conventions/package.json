@@ -1,7 +1,7 @@
 {
   "name": "@traceai/fi-semantic-conventions",
   "version": "1.0.0",
-  "description": "Semantic conventions for OpenTelemetry instrumentation",
+  "description": "Semantic conventions and span attributes for traceAI OpenTelemetry instrumentation.",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
   "esnext": "./dist/esnext/index.js",
@@ -31,9 +31,15 @@
     "opentelemetry",
     "semantic-conventions",
     "typescript",
-    "traceai"
+    "traceai",
+    "futureagi",
+    "instrumentation",
+    "observability",
+    "tracing",
+    "llm",
+    "fi-semantic-conventions"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/future-agi/traceAI.git",
@@ -42,7 +48,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/fi-semantic-conventions#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "uuid": "^11.1.0"
@@ -58,5 +64,6 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

@@ -35,9 +35,9 @@ class TestChatCompletionsRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "together"
-        assert attributes["llm.model"] == "meta-llama/Llama-3-8b-chat-hf"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "together"
+        assert attributes["gen_ai.request.model"] == "meta-llama/Llama-3-8b-chat-hf"
 
     def test_extract_chat_with_system_message(self):
         """Test extracting chat with system message."""
@@ -55,7 +55,7 @@ class TestChatCompletionsRequestAttributesExtractor:
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
         # Should have messages
-        assert any("input_messages" in k for k in extra_attrs.keys())
+        assert any("gen_ai.input.messages" in k for k in extra_attrs.keys())
 
     def test_extract_tools(self):
         """Test extracting tools from request."""
@@ -79,9 +79,7 @@ class TestChatCompletionsRequestAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Tools are stored under llm.tools prefix
-        tool_keys = [k for k in extra_attrs.keys() if "llm.tools" in k]
-        assert len(tool_keys) >= 1
+        assert json.loads(extra_attrs["gen_ai.tool.definitions.0.tool.json_schema"]) == request_params["tools"][0]
 
 
 class TestCompletionsRequestAttributesExtractor:
@@ -100,9 +98,9 @@ class TestCompletionsRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "together"
-        assert attributes["llm.model"] == "meta-llama/Llama-3-8b-hf"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "together"
+        assert attributes["gen_ai.request.model"] == "meta-llama/Llama-3-8b-hf"
 
 
 class TestEmbeddingsRequestAttributesExtractor:
@@ -120,8 +118,8 @@ class TestEmbeddingsRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "EMBEDDING"
-        assert attributes["llm.system"] == "together"
+        assert attributes["gen_ai.span.kind"] == "EMBEDDING"
+        assert attributes["gen_ai.provider.name"] == "together"
 
     def test_extract_texts_count(self):
         """Test extracting texts count."""
@@ -160,8 +158,8 @@ class TestChatCompletionsResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.prompt") == 10
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.input_tokens") == 10
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
     def test_extract_response_content(self):
         """Test extracting response content."""
@@ -176,7 +174,11 @@ class TestChatCompletionsResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert extra_attrs.get("output.value") == "Paris is the capital."
+        # output.value is the serialized provider response; message text is
+        # also retained separately for display and content-level masking.
+        assert json.loads(extra_attrs["output.value"]) == response
+        assert extra_attrs["gen_ai.output.messages.0.message.content"] == "Paris is the capital."
+        assert extra_attrs["gen_ai.output.messages.0.message.role"] == "assistant"
 
     def test_extract_tool_calls(self):
         """Test extracting tool calls from response."""
@@ -257,9 +259,10 @@ class TestRealWorldScenarios:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        # Should have 4 messages
-        message_keys = [k for k in extra_attrs.keys() if "input_messages" in k]
-        assert len(message_keys) >= 4
+        for index, message in enumerate(request_params["messages"]):
+            prefix = f"gen_ai.input.messages.{index}"
+            assert extra_attrs[f"{prefix}.message.role"] == message["role"]
+            assert extra_attrs[f"{prefix}.message.content"] == message["content"]
 
     def test_invocation_parameters(self):
         """Test extraction of invocation parameters."""
@@ -278,8 +281,8 @@ class TestRealWorldScenarios:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert "llm.invocation_parameters" in attributes
-        params = json.loads(attributes["llm.invocation_parameters"])
+        assert "gen_ai.request.parameters" in attributes
+        params = json.loads(attributes["gen_ai.request.parameters"])
         assert params["temperature"] == 0.7
         assert params["max_tokens"] == 500
 
@@ -295,7 +298,7 @@ class TestRealWorldScenarios:
             "input": ["Document 1", "Document 2", "Document 3"],
         }
         req_attrs = dict(req_extractor.get_attributes_from_request(request_params))
-        assert req_attrs["fi.span.kind"] == "EMBEDDING"
+        assert req_attrs["gen_ai.span.kind"] == "EMBEDDING"
 
         # Response
         resp_extractor = _EmbeddingsResponseAttributesExtractor()

@@ -1,4 +1,4 @@
-export { TraceConfigOptions } from "./types";
+export { TraceConfigOptions, TraceConfig } from "./types";
 export {
   FI_BASE64_IMAGE_MAX_LENGTH,
   FI_HIDE_EMBEDDING_VECTORS,
@@ -18,7 +18,25 @@ export {
   FI_HIDE_OUTPUTS,
   FI_HIDE_OUTPUT_MESSAGES,
   FI_HIDE_OUTPUT_TEXT,
+  FI_HIDE_ERROR_DETAILS,
+  HIDE_ERROR_DETAILS_IMPLIED_BY,
   REDACTED_VALUE,
 } from "./constants";
+export { generateTraceConfig } from "./traceConfig";
+export {
+  ERROR_TYPE,
+  ERROR_MESSAGE,
+  ERROR_TYPE_OTHER,
+  ERROR_DETAIL_ATTRIBUTE_KEYS,
+  EXCEPTION_EVENT_NAME,
+  EXCEPTION_TYPE,
+  EXCEPTION_MESSAGE,
+  EXCEPTION_STACKTRACE,
+  EXCEPTION_ESCAPED,
+  getErrorType,
+  getExceptionType,
+  getErrorMessage,
+  stripStackTrace,
+} from "./errorDetails";
 export { FITracer } from "./FITracer";
 export { type FISpan } from "./FISpan";

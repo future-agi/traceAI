@@ -1,0 +1,4 @@
+# MCP 1.8.1 imports a private Pydantic API removed in newer releases.
+# This is a tested floor matrix cell, not a package-wide runtime constraint.
+mcp==1.8.1
+pydantic==2.11.10

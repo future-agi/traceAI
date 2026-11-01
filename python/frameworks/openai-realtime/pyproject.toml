@@ -1,0 +1,50 @@
+[tool.poetry]
+name = "traceAI-openai-realtime"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for OpenAI Realtime WebSocket sessions (client.realtime.connect)"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [
+    { include = "traceai_openai_realtime" }
+]
+keywords = ["opentelemetry", "openai", "realtime", "voice", "tracing", "observability", "traceai", "futureagi", "llm", "openai-realtime"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+]
+
+[tool.poetry.dependencies]
+# fi-instrumentation-otel supports Python >3.9,<3.14; the openai SDK needs >=3.10.
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=0.1.11"
+# client.realtime.connect first appears in openai 2.0.0 (it is not a path in 1.99.0).
+# The realtime extra brings websockets, which the SDK needs to open the socket.
+openai = { version = ">=2.0.0,<4", extras = ["realtime"] }
+wrapt = ">=1.14"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+opentelemetry-sdk = ">=1.25.0"
+
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/openai-realtime"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/openai-realtime/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

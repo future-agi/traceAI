@@ -20,8 +20,15 @@ from fi_instrumentation.settings import (
 class TestEnvironmentVariableGetters:
     """Test environment variable getter functions."""
 
-    def test_get_env_collector_endpoint_default(self, clean_env):
+    def test_collector_urls_point_at_a_closed_local_port_in_every_test(self, request):
+        """conftest.py's autouse fixture keeps every test off the real collector (no clean_env here)."""
+        assert "_collector_at_a_closed_local_port" in request.fixturenames
+        assert os.environ["FI_BASE_URL"] == "http://127.0.0.1:9"
+        assert os.environ["FI_GRPC_URL"] == "http://127.0.0.1:9"
+
+    def test_get_env_collector_endpoint_default(self, clean_env, monkeypatch):
         """Test default collector endpoint."""
+        monkeypatch.delenv("FI_BASE_URL", raising=False)
         result = get_env_collector_endpoint()
         assert result == "https://api.futureagi.com"
 
@@ -31,10 +38,11 @@ class TestEnvironmentVariableGetters:
         result = get_env_collector_endpoint()
         assert result == "https://custom.example.com"
 
-    def test_get_env_grpc_collector_endpoint_default(self, clean_env):
+    def test_get_env_grpc_collector_endpoint_default(self, clean_env, monkeypatch):
         """Test default gRPC collector endpoint."""
+        monkeypatch.delenv("FI_GRPC_URL", raising=False)
         result = get_env_grpc_collector_endpoint()
-        assert result == "https://grpc.futureagi.com:50051"
+        assert result == "https://grpc.futureagi.com"
 
     def test_get_env_grpc_collector_endpoint_custom(self, clean_env):
         """Test custom gRPC collector endpoint from environment."""

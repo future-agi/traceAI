@@ -1,0 +1,54 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "project_name", "value": {"stringValue": "mlflow-recipe-contract"}},
+          {"key": "project_type", "value": {"stringValue": "observe"}},
+          {"key": "service.name", "value": {"stringValue": "mlflow-recipe"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {"name": "mlflow.tracing.fluent"},
+          "spans": [
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "eee19b7ec3c1b174",
+              "parentSpanId": "eee19b7ec3c1b173",
+              "name": "chat gpt-4o-mini",
+              "kind": 3,
+              "startTimeUnixNano": "1759651200000000000",
+              "endTimeUnixNano": "1759651200250000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "12"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "7"}}
+              ],
+              "status": {"code": 1}
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "eee19b7ec3c1b175",
+              "parentSpanId": "eee19b7ec3c1b173",
+              "name": "chat_model",
+              "kind": 1,
+              "startTimeUnixNano": "1759651200300000000",
+              "endTimeUnixNano": "1759651200550000000",
+              "attributes": [
+                {"key": "mlflow.spanType", "value": {"stringValue": "\"CHAT_MODEL\""}},
+                {"key": "gen_ai.request.model", "value": {"stringValue": "\"gpt-4o-mini\""}},
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "\"openai\""}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"stringValue": "12"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"stringValue": "7"}}
+              ],
+              "status": {"code": 1}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

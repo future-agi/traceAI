@@ -41,16 +41,18 @@ class _TextGenerationRequestAttributesExtractor:
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes including prompt."""
-        # The prompt is the first positional argument
+        # System text uses the same input-message privacy path as the prompt.
+        index = 0
+        if "system_prompt" in request_parameters:
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "system"
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", request_parameters["system_prompt"]
+            index = 1
+
         prompt = request_parameters.get("prompt", "")
         if prompt:
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "user"
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", prompt
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "user"
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}", prompt
             yield SpanAttributes.INPUT_VALUE, prompt
-
-        # System prompt if provided
-        if "system_prompt" in request_parameters:
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME_PROMPT, request_parameters.get("system_prompt", "")
 
     def _extract_invocation_parameters(
         self, request_parameters: Mapping[str, Any]

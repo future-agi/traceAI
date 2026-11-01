@@ -14,6 +14,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+from traceai_openai._client_provider import set_client_provider as set_client_provider
 from traceai_openai._request import _AsyncRequest, _Request
 from traceai_openai.package import _instruments
 from traceai_openai.version import __version__
@@ -55,12 +56,12 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
         wrap_function_wrapper(
             module=_MODULE,
             name="OpenAI.request",
-            wrapper=_Request(tracer=tracer, openai=openai),
+            wrapper=_Request(tracer=tracer, openai=openai, config=config),
         )
         wrap_function_wrapper(
             module=_MODULE,
             name="AsyncOpenAI.request",
-            wrapper=_AsyncRequest(tracer=tracer, openai=openai),
+            wrapper=_AsyncRequest(tracer=tracer, openai=openai, config=config),
         )
         if Protect is not None:
             self._original_protect = Protect.protect

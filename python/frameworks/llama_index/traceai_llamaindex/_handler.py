@@ -30,7 +30,7 @@ from typing import (
     Union,
 )
 
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -44,7 +44,22 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from llama_index.core import QueryBundle
-from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
+# Legacy agents were removed in 0.13 in favor of workflow agents. Register
+# whichever real SDK types exist, including both on transitional releases.
+_agent_types = []
+try:
+    from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
+except ModuleNotFoundError as exc:
+    if exc.name not in {"llama_index.core.base.agent", "llama_index.core.base.agent.types"}:
+        raise
+else:
+    _agent_types.extend((BaseAgent, BaseAgentWorker))
+try:
+    from llama_index.core.agent.workflow import BaseWorkflowAgent
+except ImportError:
+    pass  # Not present on the supported 0.10 releases.
+else:
+    _agent_types.append(BaseWorkflowAgent)
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
@@ -60,7 +75,7 @@ from llama_index.core.base.response.schema import (
     Response,
     StreamingResponse,
 )
-from llama_index.core.bridge.pydantic import BaseModel
+from llama_index.core.bridge.pydantic import BaseModel, PrivateAttr
 from llama_index.core.instrumentation.event_handlers import BaseEventHandler
 from llama_index.core.instrumentation.events import BaseEvent
 from llama_index.core.instrumentation.events.agent import (
@@ -114,13 +129,19 @@ from llama_index.core.multi_modal_llms import MultiModalLLM
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryType
 from llama_index.core.tools import BaseTool
 from llama_index.core.types import RESPONSE_TEXT_TYPE
-from llama_index.core.workflow.errors import WorkflowDone
+try:
+    from llama_index.core.workflow.errors import WorkflowDone
+except ModuleNotFoundError as exc:
+    if exc.name not in {"llama_index.core.workflow", "llama_index.core.workflow.errors"}:
+        raise
+    _workflow_done_exceptions = ()
+else:
+    _workflow_done_exceptions = (WorkflowDone,)
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Span, Status, StatusCode, Tracer, set_span_in_context
 from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import PrivateAttr
 from pydantic.v1.json import pydantic_encoder
 from typing_extensions import assert_never
 
@@ -155,8 +176,15 @@ class _StreamingStatus(Enum):
 
 
 class _Span(BaseSpan):
+    if not hasattr(BaseSpan, "model_fields"):
+        class Config:
+            # Pydantic v1 otherwise turns dispatch descriptors into fields.
+            keep_untouched = (singledispatchmethod,)
+
     _otel_span: Span = PrivateAttr()
+    _config: TraceConfig = PrivateAttr()
     _attributes: Dict[str, AttributeValue] = PrivateAttr()
+    _list_attr_len: DefaultDict[str, int] = PrivateAttr()
     _active: bool = PrivateAttr()
     _span_kind: Optional[str] = PrivateAttr()
     _parent: Optional["_Span"] = PrivateAttr()
@@ -169,11 +197,13 @@ class _Span(BaseSpan):
     def __init__(
         self,
         otel_span: Span,
+        config: Optional[TraceConfig] = None,
         span_kind: Optional[str] = None,
         parent: Optional["_Span"] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+        self._config = config if config is not None else TraceConfig()
         self._otel_span = otel_span
         self._active = otel_span.is_recording()
         self._span_kind = span_kind
@@ -458,7 +488,9 @@ class _Span(BaseSpan):
     def _(self, event: LLMCompletionStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[GEN_AI_PROMPTS] = [event.prompt]
+        # The legacy prompt-list attribute is not masked by older core SDKs.
+        if not (self._config.hide_inputs or self._config.hide_input_messages or self._config.hide_input_text):
+            self[GEN_AI_PROMPTS] = [event.prompt]
         self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
@@ -783,10 +815,12 @@ class _ExportQueue:
 
 class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
     _otel_tracer: Tracer = PrivateAttr()
+    _config: TraceConfig = PrivateAttr()
     _export_queue: _ExportQueue = PrivateAttr()
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
         super().__init__()
+        self._config = config if config is not None else TraceConfig()
         self._otel_tracer = tracer
         self._export_queue = _ExportQueue()
 
@@ -811,6 +845,7 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         )
         span = _Span(
             otel_span=otel_span,
+            config=self._config,
             span_kind=_init_span_kind(instance),
             parent=parent,
             id_=id_,
@@ -861,7 +896,7 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         with self.lock:
             span = self.open_spans.get(id_)
         if span:
-            if err and isinstance(err, WorkflowDone):
+            if err and isinstance(err, _workflow_done_exceptions):
                 span.end()
                 return span
             span.end(err)
@@ -873,9 +908,9 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
 class EventHandler(BaseEventHandler, extra="allow"):
     _span_handler: _SpanHandler = PrivateAttr()
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
         super().__init__()
-        self._span_handler = _SpanHandler(tracer=tracer)
+        self._span_handler = _SpanHandler(tracer=tracer, config=config)
 
     def handle(self, event: BaseEvent, **kwargs: Any) -> Any:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
@@ -951,14 +986,12 @@ def _init_span_kind(_: Any) -> Optional[str]:
     return None
 
 
-@_init_span_kind.register
-def _(_: BaseAgent) -> str:
+def _agent_span_kind(_: Any) -> str:
     return AGENT
 
 
-@_init_span_kind.register
-def _(_: BaseAgentWorker) -> str:
-    return AGENT
+for _agent_type in _agent_types:
+    _init_span_kind.register(_agent_type, _agent_span_kind)
 
 
 @_init_span_kind.register
@@ -1089,7 +1122,7 @@ def _to_dict(obj: Any) -> Any:
         return dataclasses.asdict(obj)
     elif isinstance(obj, BaseModel):
         try:
-            return obj.model_dump()
+            return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
         except Exception:
             return str(obj)
     elif hasattr(obj, "__dict__"):

@@ -1,7 +1,7 @@
 {
   "name": "@traceai/fi-core",
-  "version": "1.0.0",
-  "description": "Core OpenTelemetry instrumentation for TypeScript",
+  "version": "1.1.0",
+  "description": "OpenTelemetry tracing for AI applications: tracer setup, span helpers, and exporters for Future AGI.",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
   "esnext": "./dist/esnext/index.js",
@@ -18,6 +18,7 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
+    "test:provider": "node --test test/provider-lifecycle.test.cjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
@@ -36,7 +37,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/fi-core#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "dependencies": {
     "@grpc/grpc-js": "^1.13.4",
     "@grpc/proto-loader": "^0.7.15",
@@ -71,10 +72,17 @@
   "keywords": [
     "opentelemetry",
     "instrumentation",
-    "typescript"
+    "typescript",
+    "traceai",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm",
+    "fi-core"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

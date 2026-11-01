@@ -1,0 +1,79 @@
+name: Release (NuGet)
+on:
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        required: true
+permissions:
+  contents: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      PROJECT: ${{ matrix.project }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Build and pack
+        run: dotnet pack "$PROJECT" --configuration Release --output "$RUNNER_TEMP/dist"
+      - name: Install the exact local nupkg in a clean consumer
+        working-directory: ${{ runner.temp }}
+        run: |
+          dotnet new console --framework net10.0 --output smoke
+          dotnet add smoke package "$NAME" --version "$VERSION" --source "$RUNNER_TEMP/dist" --no-restore
+          dotnet restore smoke --source "$RUNNER_TEMP/dist" --source https://api.nuget.org/v3/index.json
+          dotnet build smoke --no-restore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+      - name: Publish to NuGet
+        if: inputs.publish && !matrix.registry_published
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push "$RUNNER_TEMP/dist/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: Verify the public registry version
+        if: inputs.publish
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.error, urllib.request
+          url = f"https://api.nuget.org/v3-flatcontainer/{os.environ['NAME'].lower()}/index.json"
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response: versions = json.load(response)['versions']
+                  if os.environ['VERSION'] in versions: break
+              except urllib.error.HTTPError as e:
+                  if e.code != 404: raise
+              time.sleep(20)
+          else: raise SystemExit('NuGet has not indexed the uploaded version; rerun once visible')
+          PY
+      - name: Tag and create the GitHub release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/release/github_release.py --install "dotnet add package $NAME --version $VERSION" --dist "$RUNNER_TEMP/dist"

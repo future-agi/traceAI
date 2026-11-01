@@ -1,0 +1,98 @@
+{
+  "type": "post_call_transcription_otel",
+  "event_timestamp": 1760000060,
+  "data": {
+    "conversation_id": "conv_5501k1zph3fkeh5s8xg9z90notxt",
+    "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+    "otlp_traces": {
+      "resourceSpans": [
+        {
+          "resource": {
+            "attributes": [
+              {
+                "key": "service.name",
+                "value": {
+                  "stringValue": "elevenlabs-convai"
+                }
+              },
+              {
+                "key": "elevenlabs.conversation_id",
+                "value": {
+                  "stringValue": "conv_5501k1zph3fkeh5s8xg9z90notxt"
+                }
+              }
+            ]
+          },
+          "scopeSpans": [
+            {
+              "scope": {
+                "name": "elevenlabs.convai",
+                "version": "1.0.0"
+              },
+              "spans": [
+                {
+                  "traceId": "5b8aa5a2d2c872e8321cf37308d69df2",
+                  "spanId": "c000000000000001",
+                  "name": "elevenlabs.conversation",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000200000000000",
+                  "endTimeUnixNano": "1760000200000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.conversation_id",
+                      "value": {
+                        "stringValue": "conv_5501k1zph3fkeh5s8xg9z90notxt"
+                      }
+                    },
+                    {
+                      "key": "time_in_call_secs",
+                      "value": {
+                        "intValue": "7"
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 1
+                  }
+                },
+                {
+                  "traceId": "5b8aa5a2d2c872e8321cf37308d69df2",
+                  "spanId": "c000000000000002",
+                  "name": "elevenlabs.recv.user_transcript",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000200000000000",
+                  "endTimeUnixNano": "1760000200000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.user.text",
+                      "value": {
+                        "stringValue": ""
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 1
+                  },
+                  "parentSpanId": "c000000000000001"
+                },
+                {
+                  "traceId": "5b8aa5a2d2c872e8321cf37308d69df2",
+                  "spanId": "c000000000000003",
+                  "name": "elevenlabs.recv.agent_response",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000200000000000",
+                  "endTimeUnixNano": "1760000200000000000",
+                  "attributes": [],
+                  "status": {
+                    "code": 1
+                  },
+                  "parentSpanId": "c000000000000001"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

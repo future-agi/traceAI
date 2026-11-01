@@ -1,15 +1,19 @@
 {
   "name": "@traceai/fi-instrumentation-pipecat",
-  "version": "0.1.0",
-  "description": "OpenTelemetry instrumentation for Pipecat voice AI pipeline SDK",
-  "main": "dist/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/index.d.ts",
+  "version": "0.1.1",
+  "description": "OpenTelemetry client lifecycle and operation tracing for Pipecat JavaScript",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js"
+    },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "import": "./dist/src/client.js",
+      "require": "./dist/src/client.js"
     }
   },
   "files": [
@@ -20,9 +24,7 @@
     "build:watch": "tsc -w",
     "clean": "rimraf dist",
     "lint": "eslint src --ext .ts",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "node --test test/*.test.cjs",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
@@ -30,17 +32,17 @@
     "tracing",
     "instrumentation",
     "pipecat",
-    "voice",
-    "ai",
-    "pipeline",
+    "client",
     "real-time",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi"
   ],
-  "author": "FutureAGI",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/futureagi/traceai.git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_pipecat"
   },
   "dependencies": {
@@ -50,17 +52,23 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
-    "@opentelemetry/sdk-trace-base": "^1.19.0",
-    "@opentelemetry/sdk-trace-node": "^1.19.0",
-    "@types/jest": "^29.5.11",
+    "@opentelemetry/context-async-hooks": "^1.30.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.57.2",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.57.2",
+    "@opentelemetry/sdk-trace-base": "^1.30.1",
+    "@opentelemetry/sdk-trace-node": "^1.30.1",
+    "@opentelemetry/sdk-trace-web": "1.30.1",
+    "@opentelemetry/resources": "1.30.1",
+    "@opentelemetry/otlp-transformer": "0.57.2",
+    "@pipecat-ai/client-js": "1.16.0",
     "@types/node": "^20.10.0",
-    "jest": "^29.7.0",
+    "esbuild": "0.25.12",
+    "pipecat-floor": "npm:@pipecat-ai/client-js@0.3.0",
     "rimraf": "^5.0.5",
-    "ts-jest": "^29.1.1",
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
-    "@pipecat-ai/client-js": ">=0.2.0"
+    "@pipecat-ai/client-js": "^0.3.0 || ^1.16.0"
   },
   "peerDependenciesMeta": {
     "@pipecat-ai/client-js": {
@@ -69,5 +77,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "homepage": "https://github.com/future-agi/traceAI/tree/dev/typescript/packages/traceai_pipecat#readme",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
   }
 }

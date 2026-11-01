@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "traceai-agno"
 version = "0.1.0"
-description = "TraceAI instrumentation for Agno Agent Framework"
+description = "OpenTelemetry instrumentation for Agno Agent Framework"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -15,48 +15,52 @@ authors = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Monitoring",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
 ]
-keywords = [
-    "traceai",
-    "agno",
-    "agents",
-    "observability",
-    "opentelemetry",
-    "openinference",
-    "tracing",
-    "llm",
-    "ai",
-]
+keywords = ["traceai", "agno", "agents", "observability", "opentelemetry", "openinference", "tracing", "llm", "ai", "futureagi"]
 
 dependencies = [
-    "fi-instrumentation-otel>=0.1.11",
+    "fi-instrumentation-otel>=1.2.2",
     "opentelemetry-api>=1.0.0",
     "opentelemetry-sdk>=1.0.0",
     "opentelemetry-exporter-otlp>=1.0.0",
+    "openinference-instrumentation-agno>=1.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "agno>=2.7.2",
+    "fastapi>=0.115.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.24.0",
+    "mypy>=1.15.0",
+    "openai>=1.0.0",
+    "httpx>=0.27.0",
 ]
 agno = [
-    "agno>=2.0.0",
-    "openinference-instrumentation-agno>=0.1.0",
+    "agno>=2.7.2",
+    # Agno 2.7.x imports FastAPI from agno.workflow.remote.
+    "fastapi>=0.115.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/futureagi/traceai"
-Documentation = "https://docs.futureagi.com/traceai"
-Repository = "https://github.com/futureagi/traceai"
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/agno"
+Changelog = "https://github.com/future-agi/traceAI/releases"
+Issues = "https://github.com/future-agi/traceAI/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["traceai_agno"]
@@ -65,3 +69,5 @@ packages = ["traceai_agno"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

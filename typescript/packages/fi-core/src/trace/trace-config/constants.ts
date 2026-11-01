@@ -25,6 +25,11 @@ export const FI_BASE64_IMAGE_MAX_LENGTH =
   "FI_BASE64_IMAGE_MAX_LENGTH";
 /** Enables regex-based PII redaction on attribute values */
 export const FI_PII_REDACTION = "FI_PII_REDACTION";
+/**
+ * Hides error details (status description, exception message / stacktrace, error.message).
+ * Tri-state: "true" / "false" win; unset derives it from the content-hiding flags.
+ */
+export const FI_HIDE_ERROR_DETAILS = "FI_HIDE_ERROR_DETAILS";
 
 export const DEFAULT_HIDE_INPUTS = false;
 export const DEFAULT_HIDE_OUTPUTS = false;
@@ -39,6 +44,19 @@ export const DEFAULT_HIDE_OUTPUT_TEXT = false;
 export const DEFAULT_HIDE_EMBEDDING_VECTORS = false;
 export const DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32000;
 export const DEFAULT_PII_REDACTION = false;
+
+/**
+ * The content-hiding flags that turn `hideErrorDetails` on when it is not set explicitly.
+ * Error text (exception messages, provider error bodies) can quote the hidden content.
+ */
+export const HIDE_ERROR_DETAILS_IMPLIED_BY = [
+  "hideInputs",
+  "hideOutputs",
+  "hideInputMessages",
+  "hideOutputMessages",
+  "hideInputText",
+  "hideOutputText",
+] as const;
 
 /** When a value is hidden, it will be replaced by this redacted value */
 export const REDACTED_VALUE = "__REDACTED__";
@@ -100,6 +118,11 @@ export const traceConfigMetadata: Readonly<
     envKey: FI_PII_REDACTION,
     type: "boolean",
   },
+  hideErrorDetails: {
+    default: undefined,
+    envKey: FI_HIDE_ERROR_DETAILS,
+    type: "optionalBoolean",
+  },
 };
 
 export const DefaultTraceConfig: TraceConfig = {
@@ -113,4 +136,6 @@ export const DefaultTraceConfig: TraceConfig = {
   hideEmbeddingVectors: DEFAULT_HIDE_EMBEDDING_VECTORS,
   base64ImageMaxLength: DEFAULT_BASE64_IMAGE_MAX_LENGTH,
   piiRedaction: DEFAULT_PII_REDACTION,
+  // Derived: every content-hiding flag is off by default, so error details are kept.
+  hideErrorDetails: false,
 };

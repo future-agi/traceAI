@@ -34,28 +34,15 @@ class TestAutogenFramework:
     @pytest.fixture(autouse=True) 
     def setup_trace_provider(self):
         """Set up trace provider for Autogen testing."""
-        eval_tags = [
-            EvalTag(
-                eval_name=EvalName.TOXICITY,
-                value=EvalSpanKind.AGENT,
-                type=EvalTagType.OBSERVATION_SPAN,
-                model=ModelChoices.TURING_LARGE,
-                mapping={"input": "messages"},
-                custom_eval_name="autogen_test_eval"
-            )
-        ]
-        
-        with patch('fi_instrumentation.otel.check_custom_eval_config_exists') as mock_check:
-            mock_check.return_value = False
-            self.trace_provider = register(
-                project_type=ProjectType.EXPERIMENT,
-                eval_tags=eval_tags,
-                project_name="autogen_framework_test",
-                project_version_name="v1.0",
-                verbose=False
-            )
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        self.exporter = InMemorySpanExporter()
+        self.trace_provider = TracerProvider()
+        self.trace_provider.add_span_processor(SimpleSpanProcessor(self.exporter))
         yield
-        
+        self.trace_provider.shutdown()
+
     @pytest.fixture
     def mock_autogen_module(self):
         """Mock the autogen module and ConversableAgent."""
@@ -90,8 +77,10 @@ class TestAutogenFramework:
         
         mock_autogen.ConversableAgent = MockConversableAgent
         
-        with patch('importlib.import_module') as mock_import:
-            mock_import.return_value = mock_autogen
+        from importlib import import_module
+        def load(name):
+            return mock_autogen if name == "autogen" else import_module(name)
+        with patch("traceai_autogen.import_module", side_effect=load):
             yield mock_autogen
     
     def test_autogen_import(self):
@@ -128,7 +117,11 @@ class TestAutogenFramework:
             
             # Verify response
             assert response == "This is a generated reply from the agent."
-            
+            span, = self.exporter.get_finished_spans()
+            assert span.attributes["gen_ai.span.kind"] == "AGENT"
+            assert json.loads(span.attributes["output.value"]) == response
+            assert json.loads(span.attributes["input.value"]) == [{"role": "user", "content": "Hello, how are you?"}]
+
             # Verify original methods are stored
             assert instrumentor._original_generate is not None
             assert instrumentor._original_initiate_chat is not None  
@@ -348,7 +341,7 @@ class TestAutogenFramework:
         """Test instrumentation dependencies."""
         instrumentor = AutogenInstrumentor()
         deps = instrumentor.instrumentation_dependencies()
-        assert "autogen" in deps
+        assert deps == ("autogen-agentchat>=0.4.0",)
     
     def test_autogen_uninstrument_before_instrument(self, mock_autogen_module):
         """Test uninstrument behavior when called before instrument."""
@@ -472,4 +465,5 @@ class TestAutogenFramework:
     def test_autogen_version_and_module(self):
         """Test module version and constants."""
         from traceai_autogen import __version__
-        assert __version__ == "0.1.0" 
+        from importlib.metadata import version
+        assert __version__ == version("traceAI-autogen")

@@ -1,96 +1,52 @@
-"""Pytest configuration for AutoGen tests."""
+"""Use real OpenTelemetry/FITracer and fail any non-loopback network access."""
 
+import ipaddress
+import socket
 import sys
-from unittest.mock import MagicMock
-from enum import Enum
+
+# The upstream legacy SDK cannot be installed on 3.13; AgentChat still can.
+collect_ignore = ["test_sdk_legacy.py"] if sys.version_info >= (3, 13) else []
+
 import pytest
 
-# Mock opentelemetry first
-mock_otel = MagicMock()
-mock_otel_trace = MagicMock()
-mock_otel_instrumentation = MagicMock()
-mock_otel_instrumentation_instrumentor = MagicMock()
 
-# Create mock classes
-class MockStatusCode(Enum):
-    OK = 1
-    ERROR = 2
-    UNSET = 0
+@pytest.fixture(autouse=True)
+def offline(monkeypatch):
+    def check(host):
+        if host in (None, "", "localhost"):
+            return
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return
+        except ValueError:
+            pass
+        raise AssertionError(f"AutoGen tests cannot access external host {host!r}")
 
-class MockSpanKind(Enum):
-    INTERNAL = 0
-    CLIENT = 1
-    SERVER = 2
-    PRODUCER = 3
-    CONSUMER = 4
-
-mock_otel_trace.StatusCode = MockStatusCode
-mock_otel_trace.SpanKind = MockSpanKind
-mock_otel_trace.Status = MagicMock
-mock_otel_trace.Link = MagicMock
-mock_otel_trace.SpanContext = MagicMock
-mock_otel_trace.get_tracer = MagicMock(return_value=MagicMock())
-mock_otel_trace.get_tracer_provider = MagicMock(return_value=MagicMock())
-mock_otel_trace.get_current_span = MagicMock(return_value=MagicMock())
-mock_otel_trace.set_span_in_context = MagicMock()
-
-# Create BaseInstrumentor mock
-class MockBaseInstrumentor:
-    def __init__(self):
-        pass
-
-    def instrument(self, **kwargs):
-        self._instrument(**kwargs)
-
-    def uninstrument(self, **kwargs):
-        self._uninstrument(**kwargs)
-
-    def _instrument(self, **kwargs):
-        pass
-
-    def _uninstrument(self, **kwargs):
-        pass
-
-mock_otel_instrumentation_instrumentor.BaseInstrumentor = MockBaseInstrumentor
-
-# Register opentelemetry mocks
-sys.modules["opentelemetry"] = mock_otel
-sys.modules["opentelemetry.trace"] = mock_otel_trace
-sys.modules["opentelemetry.instrumentation"] = mock_otel_instrumentation
-sys.modules["opentelemetry.instrumentation.instrumentor"] = mock_otel_instrumentation_instrumentor
-
-# Mock fi_instrumentation
-mock_fi = MagicMock()
-
-# Create a proper FITracer mock that doesn't cause spec issues
-class MockFITracer:
-    def __init__(self, tracer, config=None):
-        self.tracer = tracer
-        self.config = config
-
-    def start_as_current_span(self, *args, **kwargs):
-        return MagicMock()
-
-mock_fi.FITracer = MockFITracer
-mock_fi.TraceConfig = type("TraceConfig", (), {})
-mock_fi.fi_types = MagicMock()
-
-# Set up SpanAttributes with commonly used attributes
-class MockSpanAttributes:
-    GEN_AI_SPAN_KIND = "fi.span_kind"
-    INPUT_VALUE = "fi.raw_input"
-    INPUT_VALUE = "fi.input_value"
-    INPUT_MIME_TYPE = "fi.input_mime_type"
-    OUTPUT_VALUE = "fi.raw_output"
-    OUTPUT_VALUE = "fi.output_value"
-    OUTPUT_MIME_TYPE = "fi.output_mime_type"
-    GEN_AI_TOOL_NAME = "fi.tool_name"
-    TOOL_PARAMETERS = "fi.tool_parameters"
-    TOOL_CALL_FUNCTION_ARGUMENTS = "fi.tool_call_function_arguments"
-    TOOL_CALL_FUNCTION_NAME = "fi.tool_call_function_name"
-
-mock_fi.fi_types.SpanAttributes = MockSpanAttributes
-
-# Register fi_instrumentation mocks
-sys.modules["fi_instrumentation"] = mock_fi
-sys.modules["fi_instrumentation.fi_types"] = mock_fi.fi_types
+    for method in ("connect", "connect_ex"):
+        original = getattr(socket.socket, method)
+        def guarded(sock, address, *args, _original=original, **kwargs):
+            if isinstance(address, tuple):
+                check(address[0])
+            return _original(sock, address, *args, **kwargs)
+        monkeypatch.setattr(socket.socket, method, guarded)
+    original_sendto = socket.socket.sendto
+    def sendto(sock, *args, **kwargs):
+        address = args[-1]
+        if isinstance(address, tuple):
+            check(address[0])
+        return original_sendto(sock, *args, **kwargs)
+    monkeypatch.setattr(socket.socket, "sendto", sendto)
+    original_dns = socket.getaddrinfo
+    def dns(host, *args, **kwargs):
+        check(host)
+        return original_dns(host, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "http://127.0.0.1:9")
+    yield
+    # Tests reload this module to exercise discovery. Restore the latest
+    # instrumentor before the next test instead of leaving real SDK hooks behind.
+    import traceai_autogen
+    instrumentor = traceai_autogen.AutogenInstrumentor()
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()
