@@ -74,13 +74,14 @@ class Transport(str, Enum):
 
 class SemanticConvention(str, Enum):
     """
-    Semantic convention standard to use for span attributes.
+    Semantic convention selector recorded on the provider's resource.
 
-    This determines how trace attributes are named and structured:
-    - FI: FutureAGI native convention (default) - uses fi.* namespace
-    - OTEL_GENAI: OpenTelemetry GenAI SIG convention - uses gen_ai.* namespace
-    - OPENINFERENCE: Arize Phoenix convention - uses openinference.* namespace
-    - OPENLLMETRY: Traceloop convention - uses traceloop.* namespace
+    This describes the convention emitted by the application or framework; it
+    does not rewrite, rename, or add span attributes.
+    - FI: Future AGI native convention (default)
+    - OTEL_GENAI: OpenTelemetry GenAI SIG convention
+    - OPENINFERENCE: OpenInference convention
+    - OPENLLMETRY: OpenLLMetry convention
     """
     FI = "fi"
     OTEL_GENAI = "otel_genai"
@@ -129,7 +130,8 @@ def register(
         headers (dict): Extra headers sent to the collector.
         verbose (bool): Print configuration details to stdout.
         transport (Transport): HTTP (default) or gRPC.
-        semantic_convention (SemanticConvention): Attribute naming convention.
+        semantic_convention (SemanticConvention): Resource selector describing the
+            emitted convention; does not convert span attributes.
 
         Batch processor tuning (ignored unless `batch=True`):
         max_queue_size (int): Max spans buffered before overflow drops

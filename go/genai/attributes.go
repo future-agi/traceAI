@@ -13,7 +13,7 @@ const (
 	ResourceProjectType = "project_type"
 
 	// GenAISpanKind types a span in Future AGI (LLM, TOOL, AGENT, CHAIN, ...).
-	// This package sets it to SpanKindLLM, as traceai-google-genai does.
+	// This package uses SpanKindLLM for generation and SpanKindEmbedding for embeddings.
 	GenAISpanKind = "gen_ai.span.kind"
 
 	// GenAI semantic conventions.
@@ -31,6 +31,7 @@ const (
 	GenAIResponseID              = "gen_ai.response.id"
 	GenAIResponseModel           = "gen_ai.response.model"
 	GenAIResponseFinishReasons   = "gen_ai.response.finish_reasons"
+	GenAIEmbeddingDimensionCount = "gen_ai.embeddings.dimension.count"
 	GenAIUsageInputTokens        = "gen_ai.usage.input_tokens"
 	GenAIUsageOutputTokens       = "gen_ai.usage.output_tokens"
 	GenAIToolName                = "gen_ai.tool.name"
@@ -40,6 +41,10 @@ const (
 	GenAISystemInstructions      = "gen_ai.system_instructions"
 	HTTPResponseStatusCode       = "http.response.status_code"
 	ErrorType                    = "error.type"
+
+	// Embedding metadata. Vector values are never captured.
+	EmbeddingModelName = "embedding.model_name"
+	EmbeddingCount     = "embedding.count"
 
 	// traceAI names (shared with Python/TypeScript/Java traceAI).
 	GenAIUsageTotalTokens         = "gen_ai.usage.total_tokens"
@@ -75,16 +80,18 @@ const (
 
 // Values of [GenAISpanKind] (fi_instrumentation.fi_types.FiSpanKindValues).
 const (
-	SpanKindLLM   = "LLM"
-	SpanKindTool  = "TOOL"
-	SpanKindAgent = "AGENT"
-	SpanKindChain = "CHAIN"
+	SpanKindEmbedding = "EMBEDDING"
+	SpanKindLLM       = "LLM"
+	SpanKindTool      = "TOOL"
+	SpanKindAgent     = "AGENT"
+	SpanKindChain     = "CHAIN"
 )
 
 const (
-	// OperationGenerateContent is gen_ai.operation.name on every span this
-	// package starts.
+	// OperationGenerateContent is gen_ai.operation.name for generation spans.
 	OperationGenerateContent = "generate_content"
+	// OperationEmbeddings is gen_ai.operation.name for embedding spans.
+	OperationEmbeddings = "embeddings"
 	// ProviderGoogle is gen_ai.provider.name, the value traceai-google-genai
 	// (Python) and traceai-java-google-genai write.
 	ProviderGoogle = "google"
