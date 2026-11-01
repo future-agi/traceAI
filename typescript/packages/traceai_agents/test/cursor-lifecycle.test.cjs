@@ -2,11 +2,13 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const Database = require("better-sqlite3");
 const base = path.resolve(__dirname, "../../../../../t");
 fs.mkdirSync(base, { recursive: true, mode: 0o700 });
 const {
   Spool,
   OBSERVED_TURN_WINDOW_MS,
+  TERMINAL_GRACE_MS,
 } = require("../dist/src/storage/store.js");
 const { decodeTraces } = require("../dist/src/export/otlp.js");
 const {
@@ -172,4 +174,59 @@ test("v3 pending Cursor root survives foundation schema upgrade and observed sto
   const parent = take(spool);
   assert.equal(outcome(parent), "success");
   assert.equal(parent.spanId, child.parentSpanId);
+});
+
+// Backend-contract holds can suppress next() indefinitely. Admission itself must
+// enforce the terminal grace; a late child cannot rewrite an unexported root.
+test("post-grace tool cannot widen an unswept terminal root", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook());
+  const firstRow = spool.next(route.id);
+  assert.ok(firstRow);
+  spool.complete(firstRow.id, firstRow.epoch, { state: "held", code: "HELD_AUTH" });
+  admit(spool, hook("stop"));
+  clock += TERMINAL_GRACE_MS + 1;
+  assert.equal(spool.next(route.id), undefined, "a backend hold skips the export sweep");
+  assert.throws(
+    () => admit(spool, { ...hook(), tool_use_id: "late-tool" }),
+    /HELD_TURN_FINALIZED/,
+  );
+  spool.releaseAuth(route.id);
+  const parent = take(spool);
+  const first = take(spool);
+  assert.equal(outcome(parent), "success");
+  assert.equal(first.parentSpanId, parent.spanId);
+  assert.equal(spool.next(route.id), undefined);
+});
+
+test("expired observed windows reclaim after retained receipts while live roots survive", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const prior = (event) => ({ ...hook(event), generation_id: "prior-turn" });
+  admit(spool, prior());
+  take(spool);
+  admit(spool, prior("stop"));
+  clock += TERMINAL_GRACE_MS;
+  take(spool);
+  const dbPath = path.join(spool.root, "spool.db");
+  // Use the same explicit fixture clock for simulated retention, not an
+  // unbounded wait or a real agent-home reader.
+  clock += 8 * 86_400_000;
+  const live = { ...hook(), generation_id: "live-turn" };
+  admit(spool, live);
+  take(spool);
+  for (let i = 0; i < 4; i++) spool.expire();
+  const db = new Database(dbPath, { readonly: true });
+  assert.equal(db.prepare("SELECT count(*) n FROM observed_turns").get().n, 1);
+  assert.equal(db.prepare("SELECT count(*) n FROM records WHERE state='pending-turn'").get().n, 1);
+  db.close();
+  // Replaying a retained live child must still be bounded by the same parent.
+  admit(spool, { ...live, tool_use_id: "live-second" });
+  take(spool);
+  admit(spool, { ...live, hook_event_name: "stop" });
+  clock += TERMINAL_GRACE_MS;
+  assert.equal(outcome(take(spool)), "success");
 });

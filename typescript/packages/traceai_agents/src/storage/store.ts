@@ -69,6 +69,7 @@ export class Spool {
   private gcOrphans = false;
   private usageCursor = 0;
   private planCursor = 0;
+  private turnCursor = 0;
   private gcRestartPending = false;
   constructor(
     private readonly root: string,
@@ -309,7 +310,7 @@ export class Spool {
       throw new AgentError("INVALID_OBSERVATION_CLOCK", 2);
     // Finalization precedes admission, so an overdue/finished turn cannot acquire
     // new children or change its already immutable root. Replays still dedupe.
-    if (observedTurns) this.finalizeTurns(routeId, fact.turnId);
+    if (observedTurns) this.finalizeTurns(routeId);
     return this.write(() => {
       const terminal = observedTurns
         ? this.observeTurn(route, fact, cursor)
@@ -562,16 +563,16 @@ export class Spool {
       return { ...receipt, duplicate: !!window?.terminal };
   }
   /** Only an observed stop can close a root; a quiet live process is not dead. */
-  finalizeTurns(routeId: string, observedWork?: string): number {
+  finalizeTurns(routeId: string): number {
     const route = this.getRoute(routeId);
     if (!route.enabled) return 0;
     const due = this.db
       .prepare(
         `SELECT r.id FROM records r JOIN observed_turns t
       ON r.binding=t.binding AND r.work=t.work WHERE r.route=? AND r.epoch=?
-      AND r.state='pending-turn' AND t.terminal IS NOT NULL AND t.deadline<=? AND r.work!=? LIMIT 128`,
+      AND r.state='pending-turn' AND t.terminal IS NOT NULL AND t.deadline<=? LIMIT 128`,
       )
-      .all(routeId, route.epoch, Date.now(), observedWork ?? "") as {
+      .all(routeId, route.epoch, Date.now()) as {
       id: number;
     }[];
     if (!due.length) return 0;
@@ -699,8 +700,13 @@ export class Spool {
   /** Examine at most `limit` candidates, not `limit` successful deletions.
    * Persisting the cursor is unnecessary: a restart begins a new bounded
    * sweep, and a live process advances until it reaches the orphan tail. */
-  private collectOrphans(table: "usage" | "plans", limit: number): boolean {
-    const cursor = table === "usage" ? this.usageCursor : this.planCursor;
+  private collectOrphans(
+    table: "usage" | "plans" | "observed_turns",
+    limit: number,
+  ): boolean {
+    const cursor = table === "usage"
+      ? this.usageCursor
+      : table === "plans" ? this.planCursor : this.turnCursor;
     const rows = this.db.prepare(
       `SELECT rowid FROM ${table} WHERE rowid>? ORDER BY rowid LIMIT ?`,
     ).all(cursor, limit) as { rowid: number }[];
@@ -710,15 +716,21 @@ export class Spool {
         this.db.prepare(`DELETE FROM usage WHERE rowid>? AND rowid<=?
           AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=usage.binding AND r.work=usage.work)`)
           .run(cursor, last);
-      else
+      else if (table === "plans")
         this.db.prepare(`DELETE FROM plans WHERE rowid>? AND rowid<=?
           AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=plans.binding AND r.plan=plans.id)
           AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=plans.binding AND r.legacy_unknown=1)`)
           .run(cursor, last);
+      else
+        this.db.prepare(`DELETE FROM observed_turns WHERE rowid>? AND rowid<=?
+          AND CAST(end_ns AS INTEGER)<?
+          AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=observed_turns.binding AND r.work=observed_turns.work)`)
+          .run(cursor, last, BigInt(Date.now() - 7 * 86_400_000) * 1_000_000n);
     }
     const more = rows.length === limit;
     if (table === "usage") this.usageCursor = more ? rows[rows.length - 1].rowid : 0;
-    else this.planCursor = more ? rows[rows.length - 1].rowid : 0;
+    else if (table === "plans") this.planCursor = more ? rows[rows.length - 1].rowid : 0;
+    else this.turnCursor = more ? rows[rows.length - 1].rowid : 0;
     return more;
   }
   /** Retain pending roots for at most 24 hours from their first observation.
@@ -730,12 +742,13 @@ export class Spool {
     ).run(cutoff, limit).changes;
     if (removed || this.gcOrphans) {
       // A receipt deleted behind a running sweep needs one more full sweep.
-      if (removed && (this.usageCursor || this.planCursor))
+      if (removed && (this.usageCursor || this.planCursor || this.turnCursor))
         this.gcRestartPending = true;
       const factsMore = this.collectOrphans("usage", limit);
       const plansMore = this.collectOrphans("plans", limit);
-      const completed = !factsMore && !plansMore;
-      this.gcOrphans = factsMore || plansMore || this.gcRestartPending;
+      const turnsMore = this.collectOrphans("observed_turns", limit);
+      const completed = !factsMore && !plansMore && !turnsMore;
+      this.gcOrphans = factsMore || plansMore || turnsMore || this.gcRestartPending;
       if (completed) this.gcRestartPending = false;
     }
     this.db.prepare(

@@ -445,7 +445,7 @@ test("v2 unknown-plan receipts pin old plans only until receipt expiry", (t) => 
     old.close();
     spool = new Spool(dir, "0.1.1");
     const migrated = new Database(path.join(dir, "spool.db"), { readonly: true });
-    assert.equal(migrated.pragma("user_version", { simple: true }), 3);
+    assert.equal(migrated.pragma("user_version", { simple: true }), 4);
     assert.equal(migrated.prepare("SELECT legacy_unknown FROM records WHERE work=?").get(source("legacy-turn", "turn").sourceWorkId).legacy_unknown, 1);
     migrated.close();
     const age = new Database(path.join(dir, "spool.db"));
@@ -475,7 +475,7 @@ test("v2 unknown-plan receipts pin old plans only until receipt expiry", (t) => 
     spool = new Spool(dir, "0.1.2");
     assert.equal(spool.admit(route().id, source("new-turn", "turn")).duplicate, true);
     const forward = new Database(path.join(dir, "spool.db"), { readonly: true });
-    assert.equal(forward.pragma("user_version", { simple: true }), 3);
+    assert.equal(forward.pragma("user_version", { simple: true }), 4);
     forward.close();
   } finally {
     spool.close();
@@ -550,4 +550,27 @@ test("authentication holds persist without disabling capture or another binding"
   assert.ok(spool.next(other.id));
   assert.equal(spool.releaseAuth(route().id), 1);
   assert.equal(spool.next(route().id).id, row.id);
+});
+
+test("bounded expiry reclaims hundreds of old observed-turn windows and terminal blobs", (t) => {
+  const { spool, dir } = fixture(t);
+  const db = new Database(path.join(dir, "spool.db"));
+  const age = Date.now() - 8 * 86_400_000;
+  const record = db.prepare(`INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created)
+    VALUES(?,?,?,?,?,?,NULL,0,1,'accepted',?)`);
+  const window = db.prepare(`INSERT INTO observed_turns(binding,work,route,epoch,start_ns,end_ns,deadline,terminal)
+    VALUES(?,?,?,1,?,?,?,?)`);
+  db.transaction(() => {
+    for (let i = 0; i < 320; i++) {
+      const id = i.toString(16).padStart(64, "0");
+      record.run(route().id, route().binding.id, id, id.slice(32), id.slice(48), id, age);
+      window.run(route().binding.id, id, route().id, String(BigInt(age) * 1_000_000n), String(BigInt(age) * 1_000_000n), age, JSON.stringify({ outcome: "success", id }));
+    }
+  })();
+  db.close();
+  for (let i = 0; i < 5; i++) spool.expire();
+  const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+  assert.equal(check.prepare("SELECT count(*) n FROM records").get().n, 0);
+  assert.equal(check.prepare("SELECT count(*) n FROM observed_turns").get().n, 0);
+  check.close();
 });
