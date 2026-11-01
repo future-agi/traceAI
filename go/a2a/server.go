@@ -54,15 +54,18 @@ type serverStateKey struct{}
 
 // Before extracts incoming context and starts a protocol SERVER span.
 func (i *ServerInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, req *a2asrv.Request) (context.Context, any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Even untraced nested calls need a state boundary: their After must not
+	// finalize the outer call's span inherited through the executor context.
+	ctx = context.WithValue(ctx, serverStateKey{}, (*callState)(nil))
 	if callCtx == nil || req == nil {
 		return ctx, nil, nil
 	}
 	info, ok := methods[callCtx.Method()]
 	if !ok {
 		return ctx, nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	config := i.config
 	parent := trace.SpanContextFromContext(ctx)
@@ -93,8 +96,10 @@ func (i *ServerInterceptor) After(ctx context.Context, callCtx *a2asrv.CallConte
 	if ctx == nil || callCtx == nil || resp == nil {
 		return nil
 	}
+	// The SDK reuses CallContext for nested in-process calls, mutating Method.
+	// Only the context returned by Before identifies this call's state.
 	st, _ := ctx.Value(serverStateKey{}).(*callState)
-	if st != nil && st.method == callCtx.Method() {
+	if st != nil {
 		st.recordResponse(resp.Payload, resp.Err)
 	}
 	return nil
