@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [a2a, anthropic, eino, genai, lambda, openai]
+        module: [a2a, anthropic, bedrock, eino, genai, lambda, openai]
         go: ['1.26.0', stable]
     defaults:
       run:
@@ -90,3 +90,33 @@ jobs:
         run: go get google.golang.org/genai@${{ matrix.sdk }}
       - name: Test real SDK transport and OTLP export
         run: go test -race -count=1 ./...
+
+  bedrock-current:
+    name: bedrock / current AWS / Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26.0', stable]
+    defaults:
+      run:
+        working-directory: go/bedrock
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/bedrock/go.sum
+      - name: Resolve current AWS SDK without changing the declared floor
+        run: |
+          go get github.com/aws/aws-sdk-go-v2/service/bedrockruntime@v1.63.9 github.com/aws/smithy-go/tracing/smithyoteltracing@v1.0.35
+          test "$(go list -m -f '{{.Version}}' github.com/aws/aws-sdk-go-v2/service/bedrockruntime)" = v1.63.9
+      - name: Vet and race tests including OTLP example
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
