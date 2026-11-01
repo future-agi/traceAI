@@ -1,9 +1,11 @@
-"""Failed, timed-out and cancelled standalone workflows must not export as OK.
+"""Failed, timed-out and cancelled workflows must not export as OK.
 
-Workflows before 2.16 end the run span from the handler's done callback with
-``result=None`` and never call ``span_drop``. From 2.16 Workflows reports
-cancellation with ``SpanCancelledEvent`` and exits the span normally. These
-tests run the real SDK offline on whichever version is installed.
+Standalone Workflows before 2.16 end the run span from the handler's done
+callback with ``result=None`` and never call ``span_drop``. From 2.16 Workflows
+reports cancellation with ``SpanCancelledEvent`` and exits the span normally.
+The Workflow class embedded in llama-index-core before 0.12.43 exits a
+user-cancelled run with ``result=None`` from core 0.12.2. These tests run the
+real SDK offline on whichever version is installed.
 """
 
 import asyncio
@@ -15,11 +17,21 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from traceai_llamaindex import LlamaIndexInstrumentor
-from workflows import Workflow, step
-from workflows.errors import WorkflowCancelledByUser, WorkflowTimeoutError
-from workflows.events import StartEvent, StopEvent
+
+try:
+    from workflows import Workflow, step
+    from workflows.errors import WorkflowCancelledByUser, WorkflowTimeoutError
+    from workflows.events import StartEvent, StopEvent
+except ImportError:
+    # llama-index-core before 0.12.43 embeds Workflow; the 0.10.43 floor has none.
+    pytest.importorskip("llama_index.core.workflow")
+    from llama_index.core.workflow import StartEvent, StopEvent, Workflow, step
+    from llama_index.core.workflow.errors import WorkflowCancelledByUser, WorkflowTimeoutError
 
 CANCELLED = "llama_index.cancelled"
+# The embedded class names spans after the defining class, so a subclass's
+# run span is "Workflow.run"; standalone Workflows uses the subclass name.
+EMBEDDED = Workflow.__module__.startswith("llama_index.core.")
 
 
 class Boom(Workflow):
@@ -58,6 +70,10 @@ def exporter():
         provider.shutdown()
 
 
+def run_name(workflow_class):
+    return "Workflow.run" if EMBEDDED else f"{workflow_class.__name__}.run"
+
+
 def spans_by_name(exporter):
     spans = exporter.get_finished_spans()
     by_name = {span.name: span for span in spans}
@@ -88,10 +104,10 @@ def test_failed_step_marks_run_error(exporter):
     with pytest.raises(Exception, match="synthetic step failure"):
         asyncio.run(main())
     by_name = spans_by_name(exporter)
-    assert set(by_name) <= {"Boom.run", "Boom.go", "Boom._done"}
+    assert set(by_name) <= {run_name(Boom), "Boom.go", "Boom._done", "Workflow._done"}
     assert_failed(by_name["Boom.go"])
-    assert_failed(by_name["Boom.run"])
-    assert "synthetic step failure" in by_name["Boom.run"].status.description
+    assert_failed(by_name[run_name(Boom)])
+    assert "synthetic step failure" in by_name[run_name(Boom)].status.description
 
 
 def test_timeout_marks_run_error_and_step_cancelled(exporter):
@@ -101,8 +117,8 @@ def test_timeout_marks_run_error_and_step_cancelled(exporter):
     with pytest.raises(WorkflowTimeoutError):
         asyncio.run(main())
     by_name = spans_by_name(exporter)
-    assert_failed(by_name["Slow.run"])
-    exception, = by_name["Slow.run"].events
+    assert_failed(by_name[run_name(Slow)])
+    exception, = by_name[run_name(Slow)].events
     assert exception.attributes["exception.type"].endswith("WorkflowTimeoutError")
     assert_cancelled(by_name["Slow.go"])
 
@@ -117,7 +133,7 @@ def test_user_cancel_marks_run_and_step_cancelled(exporter):
 
     asyncio.run(main())
     by_name = spans_by_name(exporter)
-    assert_cancelled(by_name["Slow.run"])
+    assert_cancelled(by_name[run_name(Slow)])
     assert_cancelled(by_name["Slow.go"])
 
 
@@ -135,7 +151,7 @@ def test_concurrent_runs_keep_their_own_outcome(exporter):
     assert (first, third) == ("first", "third")
     assert "synthetic step failure" in str(second)
     spans = exporter.get_finished_spans()
-    roots = {span.context.span_id: span for span in spans if span.name == "Echo.run"}
+    roots = {span.context.span_id: span for span in spans if span.name == run_name(Echo)}
     steps = [span for span in spans if span.name == "Echo.go"]
     assert len(roots) == len(steps) == 3
     # Each run reports its own step's outcome, not a neighbour's.
@@ -163,16 +179,21 @@ def test_run_is_patched_only_before_workflows_2_16_and_restored():
     import re
     from importlib.metadata import version
 
-    import workflows.workflow as module
     from traceai_llamaindex._handler import instrument_workflow_runs
 
-    major, minor = map(int, re.match(r"(\d+)\.(\d+)", version("llama-index-workflows")).groups())
-    original = module.Workflow.__dict__["run"]
+    if EMBEDDED:
+        legacy = True
+    else:
+        major, minor = map(
+            int, re.match(r"(\d+)\.(\d+)", version("llama-index-workflows")).groups()
+        )
+        legacy = (major, minor) < (2, 16)
+    original = Workflow.__dict__["run"]
     instrumentor = LlamaIndexInstrumentor()
     instrumentor.instrument(tracer_provider=TracerProvider())
     try:
-        patched = module.Workflow.__dict__["run"]
-        if (major, minor) < (2, 16):
+        patched = Workflow.__dict__["run"]
+        if legacy:
             assert patched is not original
             assert patched.__wrapped__ is original
         else:
@@ -180,7 +201,7 @@ def test_run_is_patched_only_before_workflows_2_16_and_restored():
             assert patched is original
         # A second patch pass must not stack another wrapper.
         assert instrument_workflow_runs() == []
-        assert module.Workflow.__dict__["run"] is patched
+        assert Workflow.__dict__["run"] is patched
     finally:
         instrumentor.uninstrument()
-    assert module.Workflow.__dict__["run"] is original
+    assert Workflow.__dict__["run"] is original

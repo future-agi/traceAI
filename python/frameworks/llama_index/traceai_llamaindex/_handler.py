@@ -290,6 +290,9 @@ class _Span(BaseSpan):
         if not self._active:
             return
         self._active = False
+        # A workflow run's handler holds the run's Context; release it on
+        # every way the span ends, including span_drop.
+        self._run_handler = None
         if exception is None and self._cancelled:
             self[LLAMA_INDEX_CANCELLED] = True
             if self._cancel_reason:
@@ -939,8 +942,8 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         span.process_instance(instance)
         span.process_input(instance, bound_args)
         if (capture := _workflow_run_capture.get()) is not None:
-            workflow, prefix, captured = capture
-            if not captured and instance is workflow and id_.startswith(prefix):
+            workflow, prefixes, captured = capture
+            if not captured and instance is workflow and id_.startswith(prefixes):
                 span._workflow_run = True
                 captured.append(span)
         return span
@@ -1017,8 +1020,6 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if exception is None:
             span.process_output(instance, result)
         span.finish(exception)
-        # The handler holds the run's Context; drop it once the outcome is read.
-        span._run_handler = None
         return span
 
     def _finish_workflow_run(self, span: _Span, source: "asyncio.Future[Any]") -> None:
@@ -1028,7 +1029,6 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if exception is None:
             span.process_output(None, source.result())
         span.finish(exception)
-        span._run_handler = None
 
 
 def _run_outcome_source(handler: Any) -> "Optional[asyncio.Future[Any]]":
@@ -1047,9 +1047,10 @@ def _run_outcome_exception(source: "Optional[asyncio.Future[Any]]") -> Optional[
     return source.exception()
 
 
-# (workflow instance, span id prefix, captured spans) for the run() call in
+# (workflow instance, span id prefixes, captured spans) for the run() call in
 # progress, so new_span can tag the run span that call creates.
-_workflow_run_capture: "ContextVar[Optional[Tuple[Any, str, List[_Span]]]]" = ContextVar(
+_RunCapture = Tuple[Any, Tuple[str, ...], List[_Span]]
+_workflow_run_capture: "ContextVar[Optional[_RunCapture]]" = ContextVar(
     "traceai_llamaindex_workflow_run_capture", default=None
 )
 
@@ -1058,14 +1059,19 @@ def _wrap_workflow_run(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> A
     if instance is None:
         return wrapped(*args, **kwargs)
     captured: List[_Span] = []
-    token = _workflow_run_capture.set(
-        (instance, f"{type(instance).__name__}.{wrapped.__name__}-", captured)
+    # Standalone Workflows names the span after the subclass ("MyFlow.run-");
+    # the class embedded in core before 0.12.43 uses the function's qualname
+    # ("Workflow.run-").
+    prefixes = (
+        f"{type(instance).__name__}.{wrapped.__name__}-",
+        f"{wrapped.__qualname__}-",
     )
+    token = _workflow_run_capture.set((instance, prefixes, captured))
     try:
         handler = wrapped(*args, **kwargs)
     finally:
         _workflow_run_capture.reset(token)
-    if captured:
+    if captured and captured[0]._active:
         # The span exits from a done callback, which the event loop runs
         # after this returns, so the handler is attached in time.
         captured[0]._run_handler = handler
