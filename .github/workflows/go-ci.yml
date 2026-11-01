@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [a2a, anthropic, eino, genai, openai]
+        module: [a2a, anthropic, eino, genai, lambda, openai]
         go: ['1.26.0', stable]
     defaults:
       run:
