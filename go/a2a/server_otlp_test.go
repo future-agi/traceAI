@@ -82,8 +82,16 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 			if _, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: "missing"}); err == nil {
 				t.Fatal("expected protocol error")
 			}
-			if len(requests) != 4 {
-				t.Fatalf("want two client/server pairs, got %d exports", len(requests))
+			authClient := serverClient(t, "jsonrpc", endsIn(a2a.TaskStateAuthRequired, marker), tp, traceaia2a.TraceConfig{HideInputs: true, HideOutputs: true})
+			result, err := authClient.SendMessage(context.Background(), userMessage("authorize"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task, ok := result.(*a2a.Task); !ok || task.Status.State != a2a.TaskStateAuthRequired {
+				t.Fatalf("expected auth-required snapshot, got %v", result)
+			}
+			if len(requests) != 6 {
+				t.Fatalf("want three client/server pairs, got %d exports", len(requests))
 			}
 			byID := map[string]*tracepb.Span{}
 			serverCount := 0
@@ -105,10 +113,21 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 					}
 				}
 			}
-			if len(byID) != 4 || serverCount != 2 {
+			if len(byID) != 6 || serverCount != 3 {
 				t.Fatalf("unexpected wire span counts: %d total, %d server", len(byID), serverCount)
 			}
 			for _, s := range byID {
+				if s.Name == "a2a.SendMessage" {
+					redacted := false
+					for _, attr := range s.Attributes {
+						if attr.Key == traceaia2a.OutputValue && attr.Value.GetStringValue() == "__REDACTED__" {
+							redacted = true
+						}
+					}
+					if !redacted || s.Status.Code != tracepb.Status_STATUS_CODE_OK {
+						t.Fatal("wire auth-required snapshot must retain redacted output and OK status")
+					}
+				}
 				if s.Kind != tracepb.Span_SPAN_KIND_SERVER {
 					continue
 				}

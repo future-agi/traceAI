@@ -15,7 +15,7 @@ with one server span per call, without copying context extraction into your appl
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/a2a` (package `traceaia2a`) |
-| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.5.0 or later (the `go.mod` minimum) |
+| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.7.0 or later (the `go.mod` minimum) |
 | Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Transports | JSON-RPC, HTTP+JSON (REST) and gRPC (`a2agrpc/v1`), each tested against a2a-go's own server |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and a2a-go. No exporter is built in. |
@@ -84,7 +84,12 @@ go run ./example -stream -fail
 
 ## Trace the receiving agent
 
-Use the same tracer provider and content settings with the official server hook:
+Use the same tracer provider and content settings with the official server hook.
+Keep a2a-go at v2.7.0 or later: earlier versions skip the completion hook on required-extension
+rejections, leaving unary server spans open or incorrectly marked as canceled.
+The module's dependency minimum selects the fixed SDK automatically.
+
+Attach the interceptor when creating your handler:
 
 ```go
 handler := a2asrv.NewHandler(executor,
@@ -129,7 +134,8 @@ A stream is one span. Every streamed event is a span event named `a2a.event` (wi
 `gen_ai.a2a.event.type`, and the task state or artifact type when the event has one), and the span
 ends at the agent's reply message or when the task reaches a terminal state (`completed`,
 `failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream. `auth-required` does not close
-an active stream: later events and its final result remain on the same span.
+an active stream: later events and its final result remain on the same span. Unary task snapshots
+include their current status message in `output.value`, including an authorization prompt.
 
 ## Attributes
 
@@ -147,7 +153,7 @@ an active stream: later events and its final result remain on the same span.
 | `user.id` | the id from `ContextWithUserID` |
 | `gen_ai.a2a.stream.event_count` (Go only) | streamed calls |
 | `input.value` | the text and data parts you send (content) |
-| `output.value` | artifact text, then the reply message or the final status message (content) |
+| `output.value` | artifact text, then the reply or status message (current snapshot for unary calls, final status for streams; content) |
 | `error.type`, `error.message` | on errors, see below |
 
 Python `traceai-a2a` writes `gen_ai.span.kind=A2A_CLIENT` and lower-case v0.3 state names

@@ -344,7 +344,9 @@ func (s *callState) applyTask(t *a2a.Task) {
 	for _, a := range t.Artifacts {
 		s.addArtifact(a)
 	}
-	if endsStream(t.Status.State) && t.Status.Message != nil {
+	// A unary snapshot returns its current status message, including an auth
+	// prompt. Only streaming calls wait for a stream-ending state.
+	if t.Status.Message != nil && (!s.streaming || endsStream(t.Status.State)) {
 		s.final = partsText(t.Status.Message.Parts)
 	}
 }

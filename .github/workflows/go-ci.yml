@@ -64,10 +64,3 @@ jobs:
         run: go build -o "$RUNNER_TEMP/traceai-example" ./example
       - name: Render package documentation
         run: go doc .
-      - name: Test A2A current SDK compatibility
-        if: matrix.module == 'a2a'
-        run: |
-          # The preceding checks use the v2.5.0 floor from go.mod.
-          go get github.com/a2aproject/a2a-go/v2@v2.7.0
-          go mod tidy
-          go test -race -count=1 ./...

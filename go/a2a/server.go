@@ -14,6 +14,9 @@ import (
 // It covers the same five methods as [Interceptor], with one SERVER span per
 // call or stream, and never modifies a request, response or error.
 //
+// Requires a2a-go v2.7.0 or later (the module minimum): older SDKs skip After
+// when rejecting unary calls for missing required extensions.
+//
 // The default propagator extracts W3C trace context from HTTP headers or gRPC
 // metadata. If transport middleware has already started a local span, that span
 // remains the parent so the transport and protocol spans form a single tree.
@@ -76,8 +79,7 @@ func (i *ServerInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallCont
 		trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attrs...))
 	config.tc.SetAttributes(st.span, content...)
 
-	// Watch every inbound call: the SDK may reject a request after Before
-	// without running After (e.g. a required extension was not requested).
+	// Watch for cancellation even if later middleware short-circuits After.
 	// Synchronize with an already-canceled request before publishing the stop fn.
 	spanCtx := ctx
 	st.mu.Lock()
