@@ -9,6 +9,7 @@ exactly as it does on the register() path.
 import asyncio
 import json
 import logging
+import time
 
 import pytest
 from fi_instrumentation import TraceConfig
@@ -209,11 +210,37 @@ def test_chat_at_any_core_logs_no_handler_errors(trace, caplog):
     assert not errors, [r.getMessage() for r in errors]
 
 
+def test_chat_engine_stream_logs_no_handler_errors(trace, caplog):
+    from llama_index.core.chat_engine import SimpleChatEngine
+
+    exporter = trace()
+    caplog.set_level(logging.WARNING, logger=HANDLER_LOGGER)
+    response = SimpleChatEngine.from_defaults(llm=MockLLM(max_tokens=2)).stream_chat(QUERY)
+    # Older cores yield a trailing space.
+    assert "".join(response.response_gen).strip() == "text text"
+
+    # The engine writes the reply to its history, and emits StreamChatEndEvent,
+    # on a background thread.
+    def history_spans():
+        return [
+            s for s in exporter.get_finished_spans()
+            if s.name.endswith(".write_response_to_history")
+        ]
+
+    deadline = time.monotonic() + 5
+    while not history_spans() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    span, = history_spans()
+    assert span.status.status_code == StatusCode.OK
+    errors = [r for r in caplog.records if r.name == HANDLER_LOGGER and r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
+
+
 def _workflow_classes():
     from traceai_llamaindex import _handler
 
     if _handler.SpanCancelledEvent is None:
-        pytest.skip("SpanCancelledEvent is emitted from llama-index-workflows 2")
+        pytest.skip("SpanCancelledEvent is emitted from llama-index-workflows 2.16.0")
     from workflows import Workflow, step
     from workflows.events import StartEvent, StopEvent
 

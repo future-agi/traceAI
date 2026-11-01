@@ -138,7 +138,7 @@ except ModuleNotFoundError as exc:
 else:
     _workflow_done_exceptions = (WorkflowDone,)
 try:
-    # llama-index-workflows 2 emits this when a step or a run is cancelled.
+    # llama-index-workflows 2.16.0 and later emit this when a step or a run is cancelled.
     from workflows.runtime.types.step_function import SpanCancelledEvent
 except ImportError:
     SpanCancelledEvent = None
@@ -472,7 +472,7 @@ class _Span(BaseSpan):
     def _(self, event: StreamChatEndEvent) -> None:
         self[OUTPUT_VALUE] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
-        self._stream_content.clear()
+        self._stream_content = ""
         self._stream_chunks.clear()
 
     @_process_event.register

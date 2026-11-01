@@ -7,12 +7,14 @@ on:
       - 'python/frameworks/llama_index/**'
       - 'python/fi_instrumentation/**'
       - '.github/workflows/llamaindex-workflows-tests.yml'
+      - '.github/scripts/llamaindex_core_floor.py'
   push:
     branches: [dev]
     paths:
       - 'python/frameworks/llama_index/**'
       - 'python/fi_instrumentation/**'
       - '.github/workflows/llamaindex-workflows-tests.yml'
+      - '.github/scripts/llamaindex_core_floor.py'
 
 permissions:
   contents: read
@@ -46,6 +48,14 @@ jobs:
               'llama-index-core==0.14.25'
               'llama-index-workflows==2.26.1'
               'llama-index-llms-openai==0.8.3'
+          # The lowest fi-instrumentation-otel the package declares, from PyPI
+          # instead of this repo's core, with the latest LlamaIndex.
+          - name: core-floor
+            core: declared-floor
+            packages: >-
+              'llama-index-core==0.14.25'
+              'llama-index-workflows==2.26.1'
+              'llama-index-llms-openai==0.8.3'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,10 +64,20 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install integration and framework
-        run: >-
-          python -m pip install -e python -e python/frameworks/llama_index
-          ${{ matrix.packages }}
-          'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
+        env:
+          CORE: ${{ matrix.core }}
+        run: |
+          if [ "$CORE" = declared-floor ]; then
+            floor=$(python -I .github/scripts/llamaindex_core_floor.py)
+            core="fi-instrumentation-otel==$floor"
+          else
+            core="-e python"
+          fi
+          echo "core: $core"
+          python -m pip install $core -e python/frameworks/llama_index \
+            ${{ matrix.packages }} \
+            'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
+          python -m pip show fi-instrumentation-otel
       - name: Test real workflow and OTLP contract without outbound connections
         run: >-
           python -I -m pytest python/frameworks/llama_index/tests
