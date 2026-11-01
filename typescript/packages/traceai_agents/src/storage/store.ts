@@ -55,6 +55,9 @@ export class Spool {
   private db: Database.Database;
   private paused: string | undefined;
   private gcOrphans = false;
+  private usageCursor = 0;
+  private planCursor = 0;
+  private gcRestartPending = false;
   constructor(
     private readonly root: string,
     private readonly runtimeVersion: string,
@@ -101,7 +104,7 @@ export class Spool {
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
       const existingVersion = this.db.pragma("user_version", { simple: true });
-      if (existingVersion !== 0 && existingVersion !== 1 && existingVersion !== 2)
+      if (existingVersion !== 0 && existingVersion !== 1 && existingVersion !== 2 && existingVersion !== 3)
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
         this.db.exec(`
@@ -112,7 +115,7 @@ export class Spool {
       CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY,route TEXT NOT NULL,binding TEXT NOT NULL,work TEXT NOT NULL,
         trace TEXT NOT NULL,span TEXT NOT NULL,hash TEXT NOT NULL,bytes BLOB,encrypted INTEGER NOT NULL,epoch INTEGER NOT NULL,
         state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,
-        plan TEXT,UNIQUE(binding,work),UNIQUE(binding,trace,span));
+        plan TEXT,legacy_unknown INTEGER NOT NULL DEFAULT 0,UNIQUE(binding,work),UNIQUE(binding,trace,span));
       CREATE INDEX IF NOT EXISTS pending ON records(route,state,next_at,id);
       CREATE INDEX IF NOT EXISTS terminal_age ON records(created,id) WHERE bytes IS NULL;
       CREATE TABLE IF NOT EXISTS cursors (route TEXT NOT NULL,stream TEXT NOT NULL,coordinate TEXT NOT NULL,
@@ -122,12 +125,10 @@ export class Spool {
       const version = this.db
         .prepare("SELECT value FROM meta WHERE key=?")
         .get("schema") as { value: string } | undefined;
-      if (version && !["1", "2"].includes(version.value))
+      if (version && !["1", "2", "3"].includes(version.value))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       if (existingVersion === 1 || version?.value === "1")
         this.write(() => {
-          // Legacy receipts lack a plan coordinate: keep old plans while any
-          // legacy receipt for the binding survives, then collect the orphans.
           if (existingVersion === 1) {
             this.db.exec("ALTER TABLE records ADD COLUMN plan TEXT");
             this.db.exec("ALTER TABLE cursors ADD COLUMN updated INTEGER NOT NULL DEFAULT 0");
@@ -136,12 +137,26 @@ export class Spool {
           this.db.prepare("INSERT OR REPLACE INTO meta VALUES (?,?)").run("schema", "2");
           this.db.pragma("user_version=2");
         });
+      if (existingVersion === 1 || existingVersion === 2 || version?.value === "1" || version?.value === "2")
+        this.write(() => {
+          // V1/v2 NULL-plan receipts may contain unknown legacy owners. We
+          // cannot distinguish these from old non-additive receipts, so retain
+          // them conservatively until their seven-day receipt expiry. New
+          // non-additive observations never set this migration-only marker.
+          this.db.exec("ALTER TABLE records ADD COLUMN legacy_unknown INTEGER NOT NULL DEFAULT 0");
+          this.db.exec("UPDATE records SET legacy_unknown=1 WHERE plan IS NULL");
+          this.db.prepare("INSERT OR REPLACE INTO meta VALUES (?,?)").run("schema", "3");
+          this.db.pragma("user_version=3");
+        });
       else if (!version)
         this.write(() => {
-          this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "2");
-          this.db.pragma("user_version=2");
+          this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "3");
+          this.db.pragma("user_version=3");
         });
-      this.write(() => this.db.exec("CREATE INDEX IF NOT EXISTS record_plans ON records(binding,plan)"));
+      this.write(() => this.db.exec(`
+        CREATE INDEX IF NOT EXISTS record_plans ON records(binding,plan);
+        CREATE INDEX IF NOT EXISTS legacy_plan_refs ON records(binding) WHERE legacy_unknown=1;
+      `));
     } catch (e) {
       this.db.close();
       if (exclusiveOwner && (e as { code?: string }).code === "SQLITE_BUSY")
@@ -470,6 +485,31 @@ export class Spool {
       return result.changes;
     });
   }
+  /** Examine at most `limit` candidates, not `limit` successful deletions.
+   * Persisting the cursor is unnecessary: a restart begins a new bounded
+   * sweep, and a live process advances until it reaches the orphan tail. */
+  private collectOrphans(table: "usage" | "plans", limit: number): boolean {
+    const cursor = table === "usage" ? this.usageCursor : this.planCursor;
+    const rows = this.db.prepare(
+      `SELECT rowid FROM ${table} WHERE rowid>? ORDER BY rowid LIMIT ?`,
+    ).all(cursor, limit) as { rowid: number }[];
+    if (rows.length) {
+      const last = rows[rows.length - 1].rowid;
+      if (table === "usage")
+        this.db.prepare(`DELETE FROM usage WHERE rowid>? AND rowid<=?
+          AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=usage.binding AND r.work=usage.work)`)
+          .run(cursor, last);
+      else
+        this.db.prepare(`DELETE FROM plans WHERE rowid>? AND rowid<=?
+          AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=plans.binding AND r.plan=plans.id)
+          AND NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=plans.binding AND r.legacy_unknown=1)`)
+          .run(cursor, last);
+    }
+    const more = rows.length === limit;
+    if (table === "usage") this.usageCursor = more ? rows[rows.length - 1].rowid : 0;
+    else this.planCursor = more ? rows[rows.length - 1].rowid : 0;
+    return more;
+  }
   /** Called inside the single storage writer transaction. Do not delete live
    * queue bytes or a plan/fact while any receipt can still reference it. */
   private collectReceipts(limit: number): number {
@@ -480,17 +520,14 @@ export class Spool {
       )
       .run(cutoff, limit).changes;
     if (removed || this.gcOrphans) {
-      const facts = this.db
-        .prepare(
-          "DELETE FROM usage WHERE rowid IN (SELECT u.rowid FROM usage u WHERE NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=u.binding AND r.work=u.work) LIMIT ?)",
-        )
-        .run(limit).changes;
-      const plans = this.db
-        .prepare(
-          "DELETE FROM plans WHERE rowid IN (SELECT p.rowid FROM plans p WHERE NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=p.binding AND (r.plan=p.id OR r.plan IS NULL)) LIMIT ?)",
-        )
-        .run(limit).changes;
-      this.gcOrphans = facts === limit || plans === limit;
+      // A receipt deleted behind a running sweep needs one more full sweep.
+      if (removed && (this.usageCursor || this.planCursor))
+        this.gcRestartPending = true;
+      const factsMore = this.collectOrphans("usage", limit);
+      const plansMore = this.collectOrphans("plans", limit);
+      const completed = !factsMore && !plansMore;
+      this.gcOrphans = factsMore || plansMore || this.gcRestartPending;
+      if (completed) this.gcRestartPending = false;
     }
     this.db
       .prepare(
