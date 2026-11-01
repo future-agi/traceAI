@@ -1,10 +1,10 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.futureagi.compatibility</groupId><artifactId>spring-ai-consumer</artifactId><version>1.0.0</version>
+  <groupId>com.futureagi.compatibility</groupId><artifactId>spring-ai-consumer</artifactId><version>1.0.1</version>
   <!-- Deliberately outside the reactor: tests the installed JAR, never module classes. -->
   <properties>
     <maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <traceai.version>1.0.0</traceai.version><!-- x-release-please-version -->
+    <traceai.version>1.0.1</traceai.version><!-- x-release-please-version -->
     <spring-ai.version>1.1.8</spring-ai.version><spring-boot.version>3.5.15</spring-boot.version>
     <factory.source>src/spring1/java</factory.source>
   </properties>

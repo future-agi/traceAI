@@ -84,6 +84,29 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(by["@traceai/openai"]["declared"], {"src/mcp/patch.ts": "0.1.0", "src/version.ts": "0.1.13"})
         self.assertEqual(release_plan.consistency_problems([by["@traceai/openai"]]), ["typescript/packages/traceai_openai/src/mcp/patch.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
 
+    def test_java_consumer_pinned_to_the_reactor_version(self):
+        # A consumer outside the reactor that pins the SDK resolves the last published JAR if it drifts.
+        write(self.repo.root / "java/pom.xml", '<project xmlns="http://maven.apache.org/POM/4.0.0"><groupId>com.futureagi</groupId>'
+              '<artifactId>traceai-java-parent</artifactId><version>1.0.1</version></project>\n')
+        consumer = self.repo.root / "java/compatibility/spring-ai/pom.xml"
+        write(consumer, '<project><version>1.0.0</version>\n  <traceai.version>1.0.0</traceai.version><!-- x-release-please-version -->\n</project>\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"java": {"release-type": "maven", "extra-files": [
+            {"type": "generic", "path": "compatibility/spring-ai/pom.xml"}]}}}))
+        write(self.repo.root / ".release-please-manifest.json", json.dumps({"java": "1.0.1"}))
+        java = release_plan.other_packages(self.repo.root)[:1]
+        self.assertEqual(java[0]["declared"], {"compatibility/spring-ai/pom.xml": "1.0.0"})
+        self.assertEqual(release_plan.consistency_problems(java), [
+            "java/compatibility/spring-ai/pom.xml: the marked traceAI version is 1.0.0 but java/pom.xml says 1.0.1"])
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, java), [])
+        write(consumer, '<project><version>1.0.1</version>\n  <traceai.version>1.0.1</traceai.version><!-- x-release-please-version -->\n</project>\n')
+        java = release_plan.other_packages(self.repo.root)[:1]
+        self.assertEqual(release_plan.consistency_problems(java), [])
+        # The extra-file path is relative to the package directory, as release-please resolves it.
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"java": {"release-type": "maven", "extra-files": [
+            {"type": "generic", "path": "java/compatibility/spring-ai/pom.xml"}]}}}))
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, java), [
+            "java/compatibility/spring-ai/pom.xml: missing release-please extra-file"])
+
     def test_npm_runtime_version_needs_marker_and_extra_file(self):
         pkg = self.repo.root / "typescript/packages/traceai_openai"
         write(pkg / "src/version.ts", 'export const VERSION = "0.1.13";\n')
