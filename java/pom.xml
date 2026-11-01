@@ -1,21 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-parent</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>pom</packaging>
 
     <name>TraceAI Java SDK</name>
     <description>Enterprise-grade AI observability for Java applications</description>
     <url>https://github.com/future-agi/traceAI/tree/main/java</url>
 
-    <scm child.scm.connection.inherit.append.path="false"
-         child.scm.developerConnection.inherit.append.path="false"
-         child.scm.url.inherit.append.path="false">
+    <scm child.scm.connection.inherit.append.path="false" child.scm.developerConnection.inherit.append.path="false" child.scm.url.inherit.append.path="false">
         <connection>scm:git:https://github.com/future-agi/traceAI.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/future-agi/traceAI.git</developerConnection>
         <url>https://github.com/future-agi/traceAI</url>
@@ -69,6 +65,7 @@
 
         <!-- Frameworks -->
         <module>traceai-langchain4j</module>
+        <module>traceai-java-quarkus-langchain4j</module>
         <module>traceai-spring-ai</module>
         <module>traceai-spring-boot-starter</module>
         <module>traceai-java-semantic-kernel</module>
