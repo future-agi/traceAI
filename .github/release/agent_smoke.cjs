@@ -67,7 +67,7 @@ const assert = require("node:assert/strict");
       assert.equal(
         JSON.parse(fs.readFileSync(path.join(root, "profiles/copilot.json")))
           .release_state,
-        "qualification-only",
+        "cli-preview-opt-in-vscode-held",
       );
       for (const surface of ["cli", "vscode"]) {
         const doctor = spawnSync(
