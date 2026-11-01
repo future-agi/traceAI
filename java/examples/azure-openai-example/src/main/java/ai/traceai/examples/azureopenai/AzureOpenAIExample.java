@@ -79,9 +79,9 @@ public class AzureOpenAIExample {
 
         // ============================================================
         // Step 3: Wrap with TracedAzureOpenAIClient
-        // This wrapper traces its three blocking methods: chat completions,
-        // embeddings, and legacy completions. Streaming, async, and unwrap()
-        // calls bypass the wrapper's semantic tracing.
+        // This wrapper traces blocking chat, embeddings, text completions,
+        // and chat/text streams. For Mono/Flux use TracedAzureOpenAIAsyncClient.
+        // Calls made through unwrap() bypass semantic tracing.
         // ============================================================
         TracedAzureOpenAIClient traced = new TracedAzureOpenAIClient(azureClient);
 
