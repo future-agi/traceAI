@@ -28,7 +28,7 @@ describe("BeeAIInstrumentation", () => {
 
   describe("VERSION", () => {
     it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
+      expect(VERSION).toBe(require("../../package.json").version);
     });
   });
 
