@@ -16,6 +16,8 @@ import static org.mockito.Mockito.*;
 import com.ibm.watsonx.ai.chat.ChatRequest;
 import com.ibm.watsonx.ai.chat.ChatResponse;
 import com.ibm.watsonx.ai.chat.ChatService;
+import com.ibm.watsonx.ai.chat.model.AssistantMessage;
+import com.ibm.watsonx.ai.chat.model.ChatParameters;
 import com.ibm.watsonx.ai.chat.model.UserMessage;
 import com.ibm.watsonx.ai.embedding.EmbeddingResponse;
 import com.ibm.watsonx.ai.embedding.EmbeddingService;
@@ -243,6 +245,30 @@ class WatsonxTransportTest {
     }
 
     @Test
+    void otlpWireCarriesLastChatUserInputAndCompletionLimit() throws Exception {
+        List<ExportTraceServiceRequest> wire = new CopyOnWriteArrayList<>();
+        try (SdkTracerProvider otlp = wireProvider(wire)) {
+            FITracer wireTracer = new FITracer(otlp.get("wire"), TraceConfig.builder().build());
+            ChatRequest request = ChatRequest.builder()
+                .messages(List.of(UserMessage.text("earlier prompt"), UserMessage.text("offline prompt"),
+                    AssistantMessage.text("earlier answer")))
+                .parameters(ChatParameters.builder().maxCompletionTokens(256).build())
+                .build();
+            new TracedWatsonxAI(service(ChatService.builder(), ChatService.class), wireTracer).chat(request);
+            otlp.forceFlush().join(5, TimeUnit.SECONDS);
+            assertThat(wire).hasSize(1);
+            var attributes = wire.get(0).getResourceSpans(0).getScopeSpans(0).getSpans(0).getAttributesList();
+            assertThat(attributes).anySatisfy(attribute -> {
+                assertThat(attribute.getKey()).isEqualTo(SemanticConventions.INPUT_VALUE);
+                assertThat(attribute.getValue().getStringValue()).isEqualTo("offline prompt");
+            }).anySatisfy(attribute -> {
+                assertThat(attribute.getKey()).isEqualTo(SemanticConventions.LLM_REQUEST_MAX_TOKENS);
+                assertThat(attribute.getValue().getIntValue()).isEqualTo(256);
+            });
+        }
+    }
+
+    @Test
     void otlpWireHidesContentIncludingEmbeddingEchoAndErrors() throws Exception {
         List<ExportTraceServiceRequest> wire = new CopyOnWriteArrayList<>();
         try (SdkTracerProvider otlp = wireProvider(wire)) {
@@ -276,12 +302,20 @@ class WatsonxTransportTest {
 
     @Test
     void messageHidingAlsoHidesChatRawPayloads() throws Exception {
-        FITracer privateTracer = new FITracer(provider.get("test"), TraceConfig.builder()
-            .hideInputMessages(true).hideOutputMessages(true).build());
-        new TracedWatsonxAI(service(ChatService.builder(), ChatService.class), privateTracer)
-            .chat(ChatRequest.builder().messages(List.of(UserMessage.text("offline prompt"))).build());
-        assertThat(exporter.getFinishedSpanItems().get(0).getAttributes().toString())
-            .doesNotContain("offline prompt", "offline answer");
+        List<ExportTraceServiceRequest> wire = new CopyOnWriteArrayList<>();
+        try (SdkTracerProvider otlp = wireProvider(wire)) {
+            FITracer privateTracer = new FITracer(otlp.get("wire"), TraceConfig.builder()
+                .hideInputMessages(true).hideOutputMessages(true).build());
+            new TracedWatsonxAI(service(ChatService.builder(), ChatService.class), privateTracer)
+                .chat(ChatRequest.builder().messages(List.of(UserMessage.text("offline prompt"))).build());
+            otlp.forceFlush().join(5, TimeUnit.SECONDS);
+            assertThat(wire).hasSize(1);
+            var attributes = wire.get(0).getResourceSpans(0).getScopeSpans(0).getSpans(0).getAttributesList();
+            assertThat(attributes.toString()).doesNotContain("offline prompt", "offline answer");
+            assertThat(attributes).noneMatch(attribute ->
+                attribute.getKey().equals(SemanticConventions.INPUT_VALUE)
+                    || attribute.getKey().equals(SemanticConventions.RAW_INPUT));
+        }
     }
 
     SdkTracerProvider wireProvider(List<ExportTraceServiceRequest> wire) {

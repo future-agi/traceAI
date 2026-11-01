@@ -24,16 +24,22 @@ final class WatsonxAttributes {
         Object parameters = explicitParameters != null ? explicitParameters : field(request, "parameters");
         text(span, SemanticConventions.LLM_REQUEST_MODEL, field(parameters, "modelId"));
         text(span, SemanticConventions.LLM_MODEL_NAME, field(parameters, "modelId"));
-        number(span, SemanticConventions.LLM_REQUEST_MAX_TOKENS, first(field(parameters, "maxNewTokens"), field(parameters, "maxTokens")));
+        number(span, SemanticConventions.LLM_REQUEST_MAX_TOKENS,
+            first(field(parameters, "maxNewTokens"), first(field(parameters, "maxCompletionTokens"), field(parameters, "maxTokens"))));
         decimal(span, SemanticConventions.LLM_REQUEST_TEMPERATURE, field(parameters, "temperature"));
         decimal(span, SemanticConventions.LLM_REQUEST_TOP_P, field(parameters, "topP"));
         if (request instanceof ChatRequest) {
             if (!tracer.getConfig().isHideInputMessages()) {
                 List<Map<String, String>> messages = new ArrayList<>();
+                String lastUserContent = null;
                 for (Object message : list(field(request, "messages"))) {
-                    messages.add(FITracer.message(string(field(message, "role")), content(field(message, "content"))));
+                    String role = string(field(message, "role"));
+                    String messageContent = content(field(message, "content"));
+                    messages.add(FITracer.message(role, messageContent));
+                    if ("user".equalsIgnoreCase(role)) lastUserContent = messageContent;
                 }
                 tracer.setInputMessages(span, messages);
+                tracer.setInputValue(span, lastUserContent);
                 tracer.setRawInput(span, request);
             }
         } else {
