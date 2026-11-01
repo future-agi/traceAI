@@ -370,6 +370,53 @@ test("retention scans bounded candidates without killing the storage child", asy
   check.close();
 });
 
+test("storage-child restart resumes unfinished orphan-index windows", async (t) => {
+  const { StorageClient } = require("../dist/src/runtime/storage-client.js");
+  const dir = fs.mkdtempSync(path.join(base, "gc-restart-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const spool = new Spool(dir, "0.1.0");
+  spool.route(route());
+  for (let i = 0; i < 64; i++) {
+    const observation = fact(`gc-restart-${i}`);
+    observation.usage.factIds = ["input", "output", "total"].map(
+      (metric) => require("node:crypto").createHash("sha256")
+        .update(observation.sourceWorkId + metric).digest("hex"),
+    );
+    spool.admit(route().id, observation);
+    const row = spool.next(route().id);
+    spool.complete(row.id, row.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  }
+  spool.close();
+  const db = new Database(path.join(dir, "spool.db"));
+  db.prepare("UPDATE records SET created=?").run(Date.now() - 8 * 86400000);
+  db.close();
+  const count = (table) => {
+    const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+    try { return check.prepare(`SELECT count(*) n FROM ${table}`).get().n; }
+    finally { check.close(); }
+  };
+  const child = path.resolve(__dirname, "../dist/src/runtime/storage-child.js");
+  let client = new StorageClient(child);
+  try {
+    await client.call("init", { root: dir, version: "0.1.0" });
+    assert.equal(await client.call("expire"), 0);
+  } finally {
+    await client.close();
+  }
+  assert.equal(count("records"), 0);
+  assert.equal(count("usage"), 64); // one 128-candidate window remains
+  client = new StorageClient(child);
+  try {
+    await client.call("init", { root: dir, version: "0.1.0" });
+    for (let i = 0; i < 4; i++) await client.call("expire");
+    assert.equal((await client.call("status")).state, "ready");
+  } finally {
+    await client.close();
+  }
+  assert.equal(count("usage"), 0);
+  assert.equal(count("plans"), 0);
+});
+
 test("new non-additive receipts cannot pin expired accounting plans", (t) => {
   const { spool, dir } = fixture(t);
   const source = (id, unit) => reference.normalize(
