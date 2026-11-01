@@ -1,0 +1,56 @@
+{
+  "name": "@traceai/elevenlabs",
+  "version": "0.1.0",
+  "description": "OpenTelemetry tracing for ElevenLabs TypeScript speech synthesis and transcription",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && node scripts/esm.cjs",
+    "test": "node --test test/*.test.cjs",
+    "lint": "eslint src",
+    "typecheck:contract": "tsc -p test/tsconfig.json",
+    "prepare": "pnpm run build"
+  },
+  "files": ["dist", "README.md", "!**/*.tsbuildinfo"],
+  "engines": { "node": ">=20.19.0" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_elevenlabs"
+  },
+  "bugs": { "url": "https://github.com/future-agi/traceAI/issues" },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "author": "Future AGI",
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
+  "keywords": ["elevenlabs", "opentelemetry", "speech", "tts", "stt", "traceai"],
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.1",
+    "@opentelemetry/instrumentation": "^0.202.0",
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
+  },
+  "peerDependencies": { "@elevenlabs/elevenlabs-js": ">=2.67.0 <3.0.0" },
+  "devDependencies": {
+    "@elevenlabs/elevenlabs-js": "2.75.0",
+    "@elevenlabs/sdk-floor": "npm:@elevenlabs/elevenlabs-js@2.67.0",
+    "@opentelemetry/context-async-hooks": "^2.0.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.202.0",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/sdk-trace-node": "^2.0.1",
+    "@types/node": "^22.15.29",
+    "eslint": "^9.39.1",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.46.2"
+  }
+}

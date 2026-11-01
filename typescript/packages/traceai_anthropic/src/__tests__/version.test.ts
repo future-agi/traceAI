@@ -11,7 +11,7 @@ describe('Version', () => {
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('should be version 0.1.0', () => {
-    expect(VERSION).toBe('0.1.0');
+  it('should match the package version', () => {
+    expect(VERSION).toBe(require("../../package.json").version);
   });
 });
