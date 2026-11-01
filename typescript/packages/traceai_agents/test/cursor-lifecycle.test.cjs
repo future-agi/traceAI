@@ -144,3 +144,32 @@ test("preview retention documentation discloses the pending cap and unrecoverabl
   assert.match(readme, /expiry irreversibly drops their bytes/i);
   assert.match(readme, /cannot recover an expired root/i);
 });
+
+test("v3 pending Cursor root survives foundation schema upgrade and observed stop", (t) => {
+  const Database = require("better-sqlite3");
+  const dir = fs.mkdtempSync(path.join(base, "cursor-v3-upgrade-"));
+  let spool = new Spool(dir, "0.1.0");
+  t.after(() => {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  spool.route(route);
+  admit(spool, hook());
+  const child = take(spool);
+  spool.close();
+  const db = new Database(path.join(dir, "spool.db"));
+  db.exec("DROP INDEX record_plans; DROP INDEX terminal_age");
+  db.exec("ALTER TABLE records DROP COLUMN plan");
+  db.exec("ALTER TABLE cursors DROP COLUMN updated");
+  db.prepare("UPDATE meta SET value='3' WHERE key='schema'").run();
+  db.pragma("user_version=3");
+  db.close();
+  spool = new Spool(dir, "0.1.1");
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook("stop"));
+  clock += 2_000;
+  const parent = take(spool);
+  assert.equal(outcome(parent), "success");
+  assert.equal(parent.spanId, child.parentSpanId);
+});
