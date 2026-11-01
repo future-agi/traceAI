@@ -44,6 +44,7 @@ parser.add_argument("--hide", default="")
 parser.add_argument("--batch", action="store_true")
 parser.add_argument("--error", action="store_true")
 parser.add_argument("--tool-error", action="store_true")
+parser.add_argument("--long-tool-error", action="store_true")
 parser.add_argument("--readme", action="store_true")
 parser.add_argument("--async-stream", action="store_true")
 args = parser.parse_args()
@@ -242,7 +243,7 @@ class OfflineModel(Model):
 def echo(text: str) -> str:
     """Echo synthetic text."""
     if args.tool_error:
-        raise RuntimeError("ERROR-SENTINEL")
+        raise RuntimeError("ERROR-SENTINEL" + ("x" * 4096 if args.long_tool_error else ""))
     return text
 
 
@@ -339,6 +340,24 @@ else:
         assert args.error
     provider.force_flush()
     originals = raw.get_finished_spans()
+    if args.long_tool_error:
+        # Prove the real SDK truncated the serialized error, not merely that a
+        # short/well-formed tool result was removed by the existing redactor.
+        truncated = [
+            value
+            for span in originals
+            for attrs in [span.attributes, *(event.attributes for event in span.events)]
+            for value in (attrs or {}).values()
+            if isinstance(value, str) and len(value) == 512 and "ERROR-SENTINEL" in value
+        ]
+        assert truncated, "SDK truncation was not exercised"
+        for value in truncated:
+            try:
+                json.loads(value)
+            except ValueError:
+                break
+        else:
+            raise AssertionError("Expected truncated, undecodable native JSON")
     spans = [
         s
         for req, _ in received

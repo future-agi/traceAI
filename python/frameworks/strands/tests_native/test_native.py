@@ -126,6 +126,33 @@ def test_recovered_tool_errors_stay_hidden_in_history(wire, gzip, batch, convent
     )
 
 
+@pytest.mark.parametrize("wire", ["protobuf", "json"])
+@pytest.mark.parametrize("gzip", [False, True])
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize(
+    "conventions",
+    [
+        "",
+        "gen_ai_latest_experimental",
+        "gen_ai_latest_experimental,gen_ai_span_attributes_only",
+    ],
+)
+def test_sdk_truncated_tool_errors_stay_hidden(wire, gzip, batch, conventions):
+    run(
+        "--tool-error",
+        "--long-tool-error",
+        "--capture",
+        "--hide",
+        "hide_error_details",
+        "--wire",
+        wire,
+        *(["--gzip"] if gzip else []),
+        *(["--batch"] if batch else []),
+        conventions=conventions,
+        environment={"OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT": "512"},
+    )
+
+
 def test_recovered_tool_error_environment_privacy():
     run(
         "--tool-error",

@@ -83,6 +83,57 @@ for direction in ("input", "output"):
                 assert original.to_json() == before
                 assert projected.attributes[key] == projected.attributes[f"{direction}.value"]
 
+# Invalid JSON must not become trusted text when history needs redaction. Cover
+# both native conventions, legacy callbacks, and an incomplete JSON string.
+for direction in ("input", "output"):
+    for source in ("attribute", "event", "content", "legacy"):
+        for invalid in (
+            '[{"toolResult":{"content":"PRIVATE-ERROR',
+            '"PRIVATE-ERROR',
+            'PRIVATE-ERROR',
+        ):
+            key = f"gen_ai.{direction}.messages"
+            attributes = {"gen_ai.operation.name": "chat"}
+            if source == "attribute":
+                attributes[key] = invalid
+            elif source == "legacy":
+                attributes["gen_ai.prompt" if direction == "input" else "gen_ai.completion"] = invalid
+            with tracer.start_as_current_span("chat", attributes=attributes) as span:
+                if source == "event":
+                    span.add_event("gen_ai.client.inference.operation.details", {key: invalid})
+                elif source == "content":
+                    span.add_event(
+                        "gen_ai.user.message" if direction == "input" else "gen_ai.choice",
+                        {"content" if direction == "input" else "message": invalid},
+                    )
+            original = raw.get_finished_spans()[-1]
+            before = original.to_json()
+            for hide in (False, True):
+                sink = InMemorySpanExporter()
+                StrandsSpanExporter(
+                    sink, capture_content=True, config=TraceConfig(hide_error_details=hide)
+                ).export([original])
+                (projected,) = sink.get_finished_spans()
+                assert ("PRIVATE-ERROR" not in projected.to_json()) == hide, (direction, source)
+                assert original.to_json() == before
+
+# Successfully decoded JSON text is not a decode failure, even if the text looks
+# like malformed JSON. Do not recursively parse ordinary user/model text.
+for content in ('SAFE-TEXT', '[{"toolResult":"SAFE-TEXT', '"SAFE-TEXT'):
+    with tracer.start_as_current_span(
+        "chat",
+        attributes={
+            "gen_ai.operation.name": "chat",
+            "gen_ai.input.messages": json.dumps(content),
+        },
+    ):
+        pass
+    sink = InMemorySpanExporter()
+    StrandsSpanExporter(
+        sink, capture_content=True, config=TraceConfig(hide_error_details=True)
+    ).export([raw.get_finished_spans()[-1]])
+    assert json.loads(sink.get_finished_spans()[0].attributes["input.value"]) == content
+
 # Tool-span inputs are arguments, not historical tool responses. Successful
 # direct outputs carry a reliable native tool status even if their JSON is opaque.
 for status_key in ("tool.status", "gen_ai.tool.status"):
@@ -96,7 +147,7 @@ for status_key in ("tool.status", "gen_ai.tool.status"):
             },
         ) as span:
             span.add_event("gen_ai.tool.message", {"content": '{"text":"SAFE-ARGUMENT"}'})
-            span.add_event("gen_ai.choice", {"message": '"DIRECT-RESULT"'})
+            span.add_event("gen_ai.choice", {"message": "DIRECT-RESULT"})
         sink = InMemorySpanExporter()
         StrandsSpanExporter(
             sink, capture_content=True, config=TraceConfig(hide_error_details=True)
@@ -104,6 +155,10 @@ for status_key in ("tool.status", "gen_ai.tool.status"):
         (projected,) = sink.get_finished_spans()
         assert "SAFE-ARGUMENT" in projected.to_json()
         assert ("DIRECT-RESULT" in projected.to_json()) == (status == "success")
+    if status == "success":
+        assert json.loads(projected.attributes["output.value"]) == [
+            {"role": "tool", "content": "DIRECT-RESULT"}
+        ]
 
 provider.shutdown()
 print("PASS tool history privacy")

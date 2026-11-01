@@ -55,26 +55,28 @@ _USAGE = {
 _MAX_CONTENT = 1_000_000
 
 
-def _decode(value):
+def _decode(value, *, require_json=False):
     if not isinstance(value, str) or len(value) > _MAX_CONTENT:
         return None
     try:
         return json.loads(value)
     except (ValueError, RecursionError):
-        return value
+        # SDK attribute limits can truncate JSON before this export boundary.
+        # Do not turn an undecodable history into trusted text during redaction.
+        return None if require_json else value
 
 
-def _messages(span, direction):
+def _messages(span, direction, *, require_json=False):
     """Read both native event conventions and the newer attribute-only opt-in."""
     key = f"gen_ai.{direction}.messages"
     attrs = span.attributes or {}
     if key in attrs:
-        return _decode(attrs[key])
+        return _decode(attrs[key], require_json=require_json)
     messages = []
     for event in span.events:
         values = event.attributes or {}
         if key in values:
-            decoded = _decode(values[key])
+            decoded = _decode(values[key], require_json=require_json)
             messages.extend(decoded if isinstance(decoded, list) else [decoded])
         elif (
             direction == "input"
@@ -90,7 +92,7 @@ def _messages(span, direction):
             messages.append(
                 {
                     "role": event.name.split(".")[1],
-                    "content": _decode(values["content"]),
+                    "content": _decode(values["content"], require_json=require_json),
                 }
             )
         elif (
@@ -101,12 +103,12 @@ def _messages(span, direction):
             messages.append(
                 {
                     "role": "tool" if _kind(span) == "TOOL" else "assistant",
-                    "content": _decode(values["message"]),
+                    "content": _decode(values["message"], require_json=require_json),
                 }
             )
     # Legacy callbacks use prompt/completion instead of native events.
     legacy = attrs.get("gen_ai.prompt" if direction == "input" else "gen_ai.completion")
-    return messages or _decode(legacy)
+    return messages or _decode(legacy, require_json=require_json)
 
 
 def _redact_tool_results(value):
@@ -226,8 +228,9 @@ def _project(span, config, capture_content):
                 continue
             if not _content_allowed(config, direction):
                 continue
-            messages = _messages(span, direction)
-            if hide_errors and kind != "TOOL":
+            redact_history = hide_errors and kind != "TOOL"
+            messages = _messages(span, direction, require_json=redact_history)
+            if redact_history:
                 # A tool span carries arguments and a directly verifiable result;
                 # other spans carry history, whose tool statuses must be checked.
                 messages = _redact_tool_results(messages)
