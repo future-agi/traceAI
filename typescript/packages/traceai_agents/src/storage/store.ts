@@ -157,6 +157,26 @@ export class Spool {
         CREATE INDEX IF NOT EXISTS record_plans ON records(binding,plan);
         CREATE INDEX IF NOT EXISTS legacy_plan_refs ON records(binding) WHERE legacy_unknown=1;
       `));
+      const savedGc = this.db.prepare("SELECT value FROM meta WHERE key='receipt_gc'").get() as
+        | { value: string }
+        | undefined;
+      // Older spools have no sweep marker. Start a bounded sweep so an
+      // interrupted pre-upgrade collection cannot strand orphan indexes.
+      if (savedGc) {
+        let state: unknown;
+        try { state = JSON.parse(savedGc.value); }
+        catch { throw new AgentError("HELD_STORAGE_SCHEMA"); }
+        const gc = state as Record<string, unknown>;
+        if (!gc || typeof gc !== "object" ||
+          typeof gc.needed !== "boolean" || typeof gc.restart !== "boolean" ||
+          !Number.isSafeInteger(gc.usage) || (gc.usage as number) < 0 ||
+          !Number.isSafeInteger(gc.plans) || (gc.plans as number) < 0)
+          throw new AgentError("HELD_STORAGE_SCHEMA");
+        this.gcOrphans = gc.needed;
+        this.gcRestartPending = gc.restart;
+        this.usageCursor = gc.usage as number;
+        this.planCursor = gc.plans as number;
+      } else this.gcOrphans = true;
     } catch (e) {
       this.db.close();
       if (exclusiveOwner && (e as { code?: string }).code === "SQLITE_BUSY")
@@ -486,8 +506,8 @@ export class Spool {
     });
   }
   /** Examine at most `limit` candidates, not `limit` successful deletions.
-   * Persisting the cursor is unnecessary: a restart begins a new bounded
-   * sweep, and a live process advances until it reaches the orphan tail. */
+   * The cursor and sweep state are committed with receipt deletions: a child
+   * restart must resume beyond already inspected live candidate windows. */
   private collectOrphans(table: "usage" | "plans", limit: number): boolean {
     const cursor = table === "usage" ? this.usageCursor : this.planCursor;
     const rows = this.db.prepare(
@@ -528,6 +548,13 @@ export class Spool {
       const completed = !factsMore && !plansMore;
       this.gcOrphans = factsMore || plansMore || this.gcRestartPending;
       if (completed) this.gcRestartPending = false;
+      this.db.prepare("INSERT INTO meta(key,value) VALUES('receipt_gc',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(JSON.stringify({
+          needed: this.gcOrphans,
+          restart: this.gcRestartPending,
+          usage: this.usageCursor,
+          plans: this.planCursor,
+        }));
     }
     this.db
       .prepare(

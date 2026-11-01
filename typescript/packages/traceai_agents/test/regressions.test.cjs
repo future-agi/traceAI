@@ -353,31 +353,41 @@ async function restartAfterKill(t, delayStorageDisconnect = false) {
   const exited = once(child, "exit");
   child.kill("SIGKILL");
   await exited;
-  const successors = [0, 1].map(
-    () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
-  );
-  const ownsStorage = [false, false];
-  for (const [index, runtime] of successors.entries()) {
-    const initialize = runtime.initializeStorage.bind(runtime);
-    runtime.initializeStorage = async () => {
-      await initialize();
-      ownsStorage[index] = true;
-    };
-  }
-  const starts = await Promise.allSettled(successors.map((r) => r.start()));
-  assert.equal(
-    starts.filter((r) => r.status === "fulfilled").length,
-    1,
-    JSON.stringify({
-      starts,
-      ownsStorage,
-      orphanDisconnected: fs.existsSync(
-        path.join(p.state, "orphan-disconnected"),
-      ),
-      orphanExited: fs.existsSync(path.join(p.state, "orphan-exited")),
-    }),
-  );
-  const winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
+  // The storage child can hold its lock briefly after the daemon exits. Retry
+  // contenders until it exits, while never allowing two live owners.
+  let winner;
+  let starts;
+  let ownsStorage;
+  const deadline = Date.now() + 5000;
+  do {
+    const successors = [0, 1].map(
+      () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
+    );
+    ownsStorage = [false, false];
+    for (const [index, runtime] of successors.entries()) {
+      const initialize = runtime.initializeStorage.bind(runtime);
+      runtime.initializeStorage = async () => {
+        await initialize();
+        ownsStorage[index] = true;
+      };
+    }
+    starts = await Promise.allSettled(successors.map((r) => r.start()));
+    const accepted = starts.filter((r) => r.status === "fulfilled");
+    assert.ok(accepted.length <= 1, JSON.stringify(starts));
+    if (accepted.length) {
+      winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
+      break;
+    }
+    assert.ok(starts.every((r) => r.status === "rejected" &&
+      r.reason?.code === "RUNTIME_OWNERSHIP_CONFLICT"), JSON.stringify(starts));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  assert.ok(winner, JSON.stringify({
+    starts,
+    ownsStorage,
+    orphanDisconnected: fs.existsSync(path.join(p.state, "orphan-disconnected")),
+    orphanExited: fs.existsSync(path.join(p.state, "orphan-exited")),
+  }));
   cleanup(t, () => winner.stop());
   assert.equal((await submit(p, "before-crash")).reason_code, "DUPLICATE");
   assert.equal((await submit(p, "after-crash")).durable, true);
