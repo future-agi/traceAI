@@ -133,13 +133,26 @@ export function spanObject(f: CanonicalFact): object {
     [A.FI_CAPTURE_MISSING_REASON]: f.content ? undefined : "disabled_by_policy",
   };
   const u = f.usage;
-  if (u)
+  if (u) values[A.FI_USAGE_SCOPE] = u.scope;
+  if (u && u.contribution !== "none")
     Object.assign(values, {
-      [A.FI_USAGE_SCOPE]: u.scope,
       [A.FI_USAGE_PLAN_ID]: u.planId,
       [A.FI_USAGE_FACT_ID]: JSON.stringify(u.factIds),
+    });
+  if (u)
+    Object.assign(values, {
       [A.FI_USAGE_INCLUSIONS]: u.inclusions,
       [A.FI_USAGE_COMPLETE]: u.complete,
+    });
+  if (u && u.contribution === "none")
+    Object.assign(values, {
+      "fi.source.summary.gen_ai.usage.input_tokens": u.input,
+      "fi.source.summary.gen_ai.usage.output_tokens": u.output,
+      "fi.source.summary.gen_ai.usage.total_tokens": u.total,
+      "fi.source.summary.gen_ai.usage.cache_read_tokens": u.cacheRead,
+      "fi.source.summary.gen_ai.usage.cache_write_tokens": u.cacheWrite,
+      "fi.source.summary.gen_ai.usage.output_tokens.reasoning": u.reasoning,
+      "fi.source.summary.gen_ai.cost.total": u.costUsd,
     });
   if (u && u.contribution !== "none")
     Object.assign(values, {
