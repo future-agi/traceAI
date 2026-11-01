@@ -54,7 +54,6 @@ function semanticHash(bytes: Buffer): string {
 export class Spool {
   private db: Database.Database;
   private paused: string | undefined;
-  private admissionsSinceGc = 0;
   private gcOrphans = false;
   constructor(
     private readonly root: string,
@@ -262,13 +261,8 @@ export class Spool {
     )
       throw new AgentError("INVALID_CURSOR", 2);
     return this.write(() => {
-      // Amortize bounded GC across admissions so sustained traffic cannot fill
-      // the page limit after local receipts age out. The backend remains the
-      // immutable authority after this seven-day local cache is reclaimed.
-      if (++this.admissionsSinceGc >= 128) {
-        this.collectReceipts(128);
-        this.admissionsSinceGc = 0;
-      }
+      // Hot-path admission never performs retention maintenance; the runtime's
+      // background drain runs bounded expiry independently of agent callbacks.
       const old = this.db
         .prepare(
           "SELECT id,hash,work,bytes FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
