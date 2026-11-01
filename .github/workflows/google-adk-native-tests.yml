@@ -1,0 +1,59 @@
+name: Google ADK native tracing
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/google-adk/**'
+      - '.github/workflows/google-adk-native-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/google-adk/**'
+      - '.github/workflows/google-adk-native-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            adk: '1.2.1'
+            genai: '1.75.0'
+            schema: '1'
+          - python: '3.12'
+            adk: '2.13.0'
+            genai: '2.34.0'
+            schema: '1'
+          - python: '3.12'
+            adk: '2.13.0'
+            genai: '2.34.0'
+            schema: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install the wheel with normal dependency resolution
+        run: |
+          python -m pip install 'build==1.3.0' 'pytest==8.4.2' 'pytest-asyncio==0.24.0'
+          python -m build python/frameworks/google-adk --outdir "$RUNNER_TEMP/adk-dist"
+          python -m pip install "$RUNNER_TEMP"/adk-dist/*.whl 'google-adk==${{ matrix.adk }}' 'google-genai==${{ matrix.genai }}'
+          python -m pip check
+      - name: Test native tracing and OTLP with only loopback networking
+        env:
+          ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN: ${{ matrix.schema }}
+        run: |
+          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
+          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          python -I -m pytest python/frameworks/google-adk/tests -q
