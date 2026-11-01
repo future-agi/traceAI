@@ -773,28 +773,19 @@ importers:
 
   packages/traceai_fireworks:
     dependencies:
+      '@traceai/openai':
+        specifier: workspace:^
+        version: link:../traceai_openai
+    devDependencies:
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
-      '@opentelemetry/core':
-        specifier: ^1.29.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/instrumentation':
-        specifier: ^0.56.0
-        version: 0.56.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
         specifier: workspace:^
         version: link:../fi-core
-      '@traceai/fi-semantic-conventions':
-        specifier: workspace:^
-        version: link:../fi-semantic-conventions
-    devDependencies:
-      '@opentelemetry/sdk-trace-base':
-        specifier: ^1.29.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-trace-node':
-        specifier: ^1.29.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
       '@types/jest':
         specifier: ^29.5.14
         version: 29.5.14
@@ -1190,6 +1181,9 @@ importers:
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
+      '@opentelemetry/core':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/instrumentation':
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)

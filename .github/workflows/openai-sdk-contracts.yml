@@ -79,7 +79,8 @@ jobs:
             node packages/traceai_openai/node_modules/jest/bin/jest.js \
             --config packages/traceai_openai/jest.config.js --runInBand --runTestsByPath \
             packages/traceai_openai/src/__tests__/providerHostsWire.test.ts \
-            packages/traceai_openai/src/__tests__/provider.test.ts
+            packages/traceai_openai/src/__tests__/provider.test.ts \
+            packages/traceai_openai/src/__tests__/patchOwnership.test.ts
       - name: Run and typecheck the ESM README recipe
         if: matrix.sdk != '4.0.0'
         env:
