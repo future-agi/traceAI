@@ -123,9 +123,9 @@ class ExtensionTests(unittest.TestCase):
             self.assertEqual(gh.call_count, 1)
 
     def test_completion_does_not_acknowledge_go_tag_until_proxy_serves_version(self):
-        package = {'ecosystem': 'go', 'name': 'example/module', 'version': '0.1.0', 'tag': 'go/module/v0.1.0'}
-        pending = [{'number': 1, 'headRefName': 'release-please--branches--main'}]
-        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': package['tag']}]]]), patch.object(complete_release, 'python_packages', return_value=[]), patch.object(complete_release, 'typescript_packages', return_value=[]), patch.object(complete_release, 'other_packages', return_value=[package]), patch.object(complete_release, 'load_config', return_value={'skip': {}}), patch.object(complete_release, 'published_versions', return_value=None), patch('subprocess.run') as run:
+        package = {'ecosystem': 'go', 'name': 'example/module', 'version': '0.1.0', 'tag': 'go/module/v0.1.0', 'dir': 'go/module'}
+        pending = [{'number': 1, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'm'}}]
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': package['tag']}]]]), patch.object(complete_release, 'changed_release_paths', return_value={'go/module': '0.1.0'}), patch.object(complete_release, 'python_packages', return_value=[]), patch.object(complete_release, 'typescript_packages', return_value=[]), patch.object(complete_release, 'other_packages', return_value=[package]), patch.object(complete_release, 'load_config', return_value={'skip': {}}), patch.object(complete_release, 'published_versions', return_value=None), patch('subprocess.run') as run:
             complete_release.main()
             run.assert_not_called()
 
@@ -198,6 +198,25 @@ class ExtensionTests(unittest.TestCase):
             complete_release.main()
         edits = [c.args[0][3] for c in run.call_args_list if c.args[0][:3] == ['gh', 'pr', 'edit']]
         self.assertEqual(edits, ['8'])
+
+    def test_completion_keeps_a_release_pr_pending_when_its_versions_cannot_be_read(self):
+        # #8 released 0.1.1, which never shipped; its lookup fails while #9's 0.1.2 is released.
+        package = {'ecosystem': 'python', 'name': 'a', 'version': '0.1.2', 'tag': 'a-v0.1.2', 'dir': 'python/frameworks/a'}
+        pending = [{'number': 9, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'n'}},
+                   {'number': 8, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'o'}}]
+        changed = {9: {'python/frameworks/a': '0.1.2'}, 8: None}
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': 'a-v0.1.2'}]]]), \
+             patch.object(complete_release, 'changed_release_paths', side_effect=lambda repo, pr: changed[pr['number']]), \
+             patch.object(complete_release, 'python_packages', return_value=[package]), \
+             patch.object(complete_release, 'typescript_packages', return_value=[]), \
+             patch.object(complete_release, 'other_packages', return_value=[]), \
+             patch.object(complete_release, 'load_config', return_value={'skip': {}}), \
+             patch.object(complete_release, 'published_versions', return_value={'0.1.2'}), \
+             patch('subprocess.run') as run:
+            complete_release.main()
+        edits = [c.args[0][3] for c in run.call_args_list if c.args[0][:3] == ['gh', 'pr', 'edit']]
+        self.assertEqual(edits, ['9'])
 
     def test_with_version_rewrites_every_tag_style(self):
         for tag, version, want in (('traceai-a-v0.1.2', '0.1.1', 'traceai-a-v0.1.1'), ('npm-traceai-x-v1.2.0', '1.1.9', 'npm-traceai-x-v1.1.9'),

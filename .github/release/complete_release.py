@@ -71,12 +71,12 @@ def main():
         # Each release PR is complete once the versions it changed are released, checked at the
         # version it released (a later bump on main may have moved past it). A first-time package
         # still waiting on its registry does not hold back unrelated release PRs. If a PR's changes
-        # cannot be read, require every package at its current version.
+        # cannot be read, it stays pending: the current checkout says nothing about what it released.
         changed = changed_release_paths(repo, pr)
         if changed is None:
-            required = packages
-        else:
-            required = [with_version(p, changed[path]) for p in packages if (path := p.get("release_path", p["dir"])) in changed]
+            print(f"Still pending: release PR #{pr['number']}: could not read the versions it released")
+            continue
+        required = [with_version(p, changed[path]) for p in packages if (path := p.get("release_path", p["dir"])) in changed]
         reason = unreleased(required, tags, skip)
         if reason:
             print(f"Still pending: release PR #{pr['number']}: {reason}")
