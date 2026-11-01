@@ -14,8 +14,11 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tomllib
 
+# Support isolated invocation without importing from the caller's working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release_plan import REPO_ROOT, _get_json, load_config
 
 BASELINE = "35f2e3dc364676fa5bdab1e71ae500daf9efc00c"
