@@ -213,15 +213,17 @@ def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any
     return _job_id(None, kwargs)
 
 
-def _formats(kwargs: Mapping[str, Any], method_name: str) -> list[str]:
+def _formats(kwargs: Mapping[str, Any], method_name: str, async_batch: bool = False) -> list[str]:
     """Names of the requested formats. A format object's prompt or schema is
     content, so only its ``type`` is kept."""
     from firecrawl.v2.types import ScrapeFormats
 
-    scrape_options = kwargs.get("scrape_options")
+    # Async batch accepts options=ScrapeOptions and ignores top-level formats;
+    # the sync batch facade instead exposes formats directly.
+    scrape_options = kwargs.get("options" if async_batch else "scrape_options")
     # The SDK ignores convenience formats when scrape_options is supplied.
     # Search has no supported top-level formats argument.
-    if scrape_options is not None or method_name == "search":
+    if scrape_options is not None or method_name == "search" or async_batch:
         if isinstance(scrape_options, Mapping):
             formats = scrape_options.get("formats")
         else:
@@ -314,7 +316,10 @@ class _BaseWrapper:
             if host:
                 attributes["server.address"] = host
         if self._method_name in _FORMAT_METHODS:
-            formats = _formats(kwargs, self._method_name)
+            formats = _formats(
+                kwargs, self._method_name,
+                async_batch=isinstance(self, AsyncOperationWrapper) and self._method_name in _BATCH_METHODS,
+            )
             if formats:
                 attributes[_FORMATS] = formats
         if self._method_name in _CRAWL_METHODS:
@@ -380,13 +385,18 @@ class _BaseWrapper:
         if job_status is not None:
             span.set_attribute(_STATUS, job_status)
         job_failed = self._method_name in _JOB_OUTCOME_METHODS and job_status in _ERROR_JOB_STATUSES
+        # Unlike status polls, blocking extract/agent return processing only
+        # when their SDK wait expires; the operation did not complete.
+        incomplete = self._method_name in {"extract", "agent"} and job_status in {"processing", "scraping"}
         if job_failed and job_status == "cancelled":
             span.set_attribute(_CANCELLED, True)
         rejected = self._method_name in _SUCCESS_METHODS and getattr(result, "success", None) is False
         exit_code = getattr(result, "exit_code", None) if self._method_name == "browser_execute" else None
-        execution_failed = isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0
-        if job_failed or rejected or execution_failed:
-            reason = job_status if job_failed else ("failed" if rejected else "execution_failed")
+        execution_failed = (
+            self._method_name == "browser_execute" and getattr(result, "killed", None) is True
+        ) or (isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0)
+        if job_failed or incomplete or rejected or execution_failed:
+            reason = job_status if job_failed or incomplete else ("failed" if rejected else "execution_failed")
             span.set_status(Status(StatusCode.ERROR, reason))
         else:
             span.set_status(Status(StatusCode.OK))

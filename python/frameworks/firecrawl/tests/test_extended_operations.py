@@ -354,12 +354,67 @@ def test_formats_only_not_prompt_or_schema(api, is_async, method):
     from fi_instrumentation.instrumentation import TraceConfig
 
     formats = [{"type": "json", "prompt": PRIVATE, "schema": {"type": "object"}}]
-    kwargs = {"formats": formats} if "batch" in method else {
-        "prompt": PRIVATE, "scrape_options": ScrapeOptions(formats=formats),
-    }
+    payloads = []
+    if "batch" in method:
+        api.routes[("POST", "/v2/batch/scrape")] = (200, lambda body: (
+            payloads.append(body) or {"success": True, "id": "batch-1", "url": URLS[0]}
+        ))
+        # Sync exposes convenience formats; async forwards only options to _prepare.
+        kwargs = {"options": ScrapeOptions(formats=formats), "formats": ["html"]} if is_async else {"formats": formats}
+    else:
+        kwargs = {"prompt": PRIVATE, "scrape_options": ScrapeOptions(formats=formats)}
     with trace_calls(TraceConfig(hide_inputs=True, hide_outputs=True)) as (exporter, _, _):
         invoke(api, is_async, [(method, [URLS], kwargs)])
         (span,) = exporter.get_finished_spans()
     assert span.attributes["firecrawl.formats"] == ("json",)
+    if payloads:
+        assert [item["type"] if isinstance(item, dict) else item for item in payloads[0]["formats"]] == ["json"]
     assert "input.value" not in span.attributes and "output.value" not in span.attributes
     assert PRIVATE not in span.to_json()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_killed_browser_execution_is_failure_even_without_exit_code(api, is_async):
+    api.routes[("POST", "/v2/browser/browser-1/execute")] = (200, {
+        "success": True, "killed": True, "exitCode": None, "output": PRIVATE,
+    })
+    with trace_calls() as (exporter, _, _):
+        result = invoke(api, is_async, [("browser_execute", ["browser-1", PRIVATE], {})])[0]
+        (span,) = exporter.get_finished_spans()
+    assert result.success is True and result.killed is True and result.exit_code is None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "execution_failed"
+    assert PRIVATE not in span.to_json()
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("method,job", [("extract", "extract-1"), ("agent", "agent-1")])
+def test_blocking_job_exhausted_wait_is_not_success(api, is_async, method, job):
+    api.routes[("GET", f"/v2/{method}/{job}")] = (200, {
+        "success": True, "id": job, "status": "processing", "data": {"secret": PRIVATE},
+    })
+    with trace_calls() as (exporter, _, _):
+        result, poll = invoke(api, is_async, [
+            (method, [URLS], {"prompt": PRIVATE, "timeout": 0}),
+            (f"get_{method}_status", [job], {}),
+        ])
+        span, poll_span = exporter.get_finished_spans()
+    assert result.status == poll.status == "processing"
+    assert span.attributes["firecrawl.status"] == "processing"
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "processing"
+    assert poll_span.status.status_code == StatusCode.OK
+    assert PRIVATE not in span.to_json() and PRIVATE not in poll_span.to_json()
+
+
+@pytest.mark.parametrize("method", ["start_batch_scrape", "batch_scrape"])
+def test_async_batch_ignores_top_level_formats_without_options(api, method):
+    payloads = []
+    api.routes[("POST", "/v2/batch/scrape")] = (200, lambda body: (
+        payloads.append(body) or {"success": True, "id": "batch-1", "url": URLS[0]}
+    ))
+    with trace_calls() as (exporter, _, _):
+        invoke(api, True, [(method, [URLS], {"formats": ["json"], "poll_interval": 0})])
+        (span,) = exporter.get_finished_spans()
+    assert "formats" not in payloads[0]
+    assert "firecrawl.formats" not in span.attributes
