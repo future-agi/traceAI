@@ -35,7 +35,7 @@ Create each index once. The example returns at most 25 documents, ordered by dis
 The original constructors, `unwrap()`, and convenience methods remain available:
 
 - `vectorSearch(index, vector, topK[, filter])` uses the field from a successful `createIndex` call on the same wrapper. For an externally created index, it defaults to `embedding`; supply the explicit-field overload for another field.
-- `addDocument(key, vector, metadata)` uses `embedding` before any index is created, or the sole vector field shared by indexes created through the wrapper. If those indexes use different fields, supply the explicit-field overload. Field discovery is local to the wrapper, not a Redis schema lookup.
+- `addDocument(key, vector, metadata)` uses the sole vector field shared by indexes created through the wrapper. With no known index or with indexes using different fields, it writes `embedding` to preserve legacy behavior; supply the explicit-field overload to write to a particular custom index. Field discovery is local to the wrapper, not a Redis schema lookup.
 - Metadata must not use the vector field's name. This prevents metadata from replacing the binary vector.
 - An optional filter is a native Redis Search expression. Fields in that filter must already be indexed; the convenience `createIndex` method only creates the vector field. Use Jedis to define a richer schema.
 
@@ -50,10 +50,10 @@ Query query = new Query("*").limit(0, 25).returnFields("title").dialect(2);
 var results = traced.search("products", query);
 ```
 
-`search` passes the same query to Jedis without rewriting it. It records the index and result count but does not infer vector dimensions or top-K from arbitrary query text. Use the returned `SearchResult` normally. The application owns the Jedis client's lifecycle.
+`search` passes the same query to Jedis without rewriting it. It records a generic `Redis Search` span (`UNKNOWN`) with the index and returned-document count, not vector or retriever attributes, because Jedis queries can also be nonvector. Use the returned `SearchResult` normally. The application owns the Jedis client's lifecycle.
 
 ## Inspect traces
 
-Open your project in Future AGI. Searches appear as `Redis Vector Search` (`RETRIEVER`); index creation, document writes and deletion use `VECTOR_DB` spans. Convenience searches include the vector field, dimensions and requested top-K.
+Open your project in Future AGI. Convenience vector searches appear as `Redis Vector Search` (`RETRIEVER`); arbitrary Jedis queries appear as `Redis Search` (`UNKNOWN`). Index creation, document writes and deletion use `VECTOR_DB` spans. Convenience searches include the vector field, dimensions and requested top-K.
 
 Vector values, document metadata and native query text/parameters are not recorded. Convenience filter expressions and document keys are omitted when the tracer's `hideInputs` setting is enabled. Configure `hideErrorDetails` to omit exception messages and stack traces as well.

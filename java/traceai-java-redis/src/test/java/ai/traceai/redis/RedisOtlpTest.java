@@ -57,6 +57,7 @@ class RedisOtlpTest {
             var traced = new TracedRedisVectorSearch(jedis, tracer);
             Span parent = otelTracer.spanBuilder("application").startSpan();
             String successId;
+            String genericId;
             String errorId;
             try (Scope scope = parent.makeCurrent()) {
                 traced.createIndex("products", "product_vector", 2, "COSINE", "HNSW");
@@ -65,6 +66,7 @@ class RedisOtlpTest {
                         .isSameAs(jedis.result);
                 successId = jedis.currentSpanId;
                 traced.search("products", new Query("@title:sensitive-query").addParam("secret", "sensitive-param"));
+                genericId = jedis.currentSpanId;
                 jedis.failure = new IllegalStateException("sensitive-error");
                 assertThatThrownBy(() -> traced.vectorSearch("products", new float[]{1, 2}, 25))
                         .hasCause(jedis.failure);
@@ -101,11 +103,17 @@ class RedisOtlpTest {
             assertThat(attributes(success).get("redis.vector_field").getStringValue()).isEqualTo("product_vector");
             assertThat(attributes(success).get(SemanticConventions.DB_VECTOR_RESULTS_COUNT).getIntValue()).isEqualTo(1);
             assertThat(attributes(success).get("redis.top_score").getDoubleValue()).isEqualTo(0.25);
-            // Generic queries retain their own paging: count returned documents, not all matches.
-            children.stream().filter(span -> span.getName().equals("Redis Vector Search")
-                    && span.getStatus().getCode() == Status.StatusCode.STATUS_CODE_OK)
-                    .forEach(span -> assertThat(attributes(span).get(SemanticConventions.DB_VECTOR_RESULTS_COUNT)
-                            .getIntValue()).isEqualTo(1));
+            // A native nonvector query is a generic Redis Search operation on the wire.
+            var generic = children.stream().filter(span -> HexFormat.of().formatHex(span.getSpanId().toByteArray())
+                    .equals(genericId)).findFirst().orElseThrow();
+            assertThat(generic.getName()).isEqualTo("Redis Search");
+            assertThat(attributes(generic).get(SemanticConventions.FI_SPAN_KIND).getStringValue())
+                    .isEqualTo("UNKNOWN");
+            assertThat(attributes(generic).get("redis.index_name").getStringValue()).isEqualTo("products");
+            assertThat(attributes(generic).get("redis.results.count").getIntValue()).isEqualTo(1);
+            assertThat(attributes(generic)).doesNotContainKeys(SemanticConventions.DB_VECTOR_INDEX_NAME,
+                    SemanticConventions.DB_VECTOR_RESULTS_COUNT, SemanticConventions.RETRIEVER_TOP_K,
+                    SemanticConventions.EMBEDDING_DIMENSIONS, "redis.vector_field");
             var error = children.stream().filter(span -> HexFormat.of().formatHex(span.getSpanId().toByteArray())
                     .equals(errorId)).findFirst().orElseThrow();
             assertThat(error.getStatus().getCode()).isEqualTo(Status.StatusCode.STATUS_CODE_ERROR);

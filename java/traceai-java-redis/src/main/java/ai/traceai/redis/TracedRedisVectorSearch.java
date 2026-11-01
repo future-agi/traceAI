@@ -183,20 +183,26 @@ public class TracedRedisVectorSearch {
 
     private SearchResult executeSearch(String indexName, Query query, String vectorField,
                                         int dimensions, int topK, String filter) {
-        Span span = tracer.startSpan("Redis Vector Search", FISpanKind.RETRIEVER);
+        boolean vectorSearch = vectorField != null;
+        Span span = tracer.startSpan(vectorSearch ? "Redis Vector Search" : "Redis Search",
+                vectorSearch ? FISpanKind.RETRIEVER : FISpanKind.UNKNOWN);
         try (Scope scope = span.makeCurrent()) {
-            setIndexAttributes(span, indexName);
-            if (vectorField != null) {
+            if (vectorSearch) {
+                setIndexAttributes(span, indexName);
                 span.setAttribute("redis.vector_field", vectorField);
                 span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) dimensions);
                 if (filter != null && !tracer.getConfig().isHideInputs()) {
                     span.setAttribute("redis.filter", filter);
                 }
+            } else {
+                span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
+                span.setAttribute("redis.index_name", indexName);
             }
             SearchResult result = jedis.ftSearch(indexName, query);
-            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) result.getDocuments().size());
-            if (vectorField != null && !result.getDocuments().isEmpty()) {
+            span.setAttribute(vectorSearch ? SemanticConventions.DB_VECTOR_RESULTS_COUNT : "redis.results.count",
+                    (long) result.getDocuments().size());
+            if (vectorSearch && !result.getDocuments().isEmpty()) {
                 Document firstDoc = result.getDocuments().get(0);
                 Object score = firstDoc.get("score");
                 if (score != null) {
@@ -212,7 +218,7 @@ public class TracedRedisVectorSearch {
             return result;
         } catch (Exception e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Redis vector search failed", e);
+            throw new RuntimeException(vectorSearch ? "Redis vector search failed" : "Redis search failed", e);
         } finally {
             span.end();
         }
@@ -220,18 +226,17 @@ public class TracedRedisVectorSearch {
 
     /**
      * Adds a HASH document using the sole vector field known to this wrapper, or
-     * {@code embedding} before any index has been created. If created indexes use
-     * different fields, use the explicit-field overload to avoid writing the wrong field.
+     * {@code embedding} if no fields are known or different indexes use different fields.
+     * This preserves the legacy embedding write when the index is ambiguous; use the
+     * explicit-field overload to write to a particular custom index.
      * @param key the document key (use the {@code doc:} prefix for convenience indexes)
      * @param vector the FLOAT32 vector
      * @param metadata additional HASH fields; must not overwrite the vector field
      */
     public void addDocument(String key, float[] vector, Map<String, String> metadata) {
         Set<String> fields = new HashSet<>(indexVectorFields.values());
-        if (fields.size() > 1) {
-            throw new IllegalStateException("Indexes use different vector fields; specify vectorField in addDocument");
-        }
-        addDocument(key, fields.isEmpty() ? DEFAULT_VECTOR_FIELD : fields.iterator().next(), vector, metadata);
+        addDocument(key, fields.size() == 1 ? fields.iterator().next() : DEFAULT_VECTOR_FIELD,
+                vector, metadata);
     }
 
     /**

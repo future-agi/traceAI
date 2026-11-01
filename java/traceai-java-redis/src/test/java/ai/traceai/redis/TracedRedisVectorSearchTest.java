@@ -113,11 +113,31 @@ class TracedRedisVectorSearchTest {
         assertThat(arguments(jedis.query).get(1)).contains("@external_vector ");
         traced.vectorSearch("external", "external_vector", new float[]{1, 2}, 25);
         assertThat(arguments(jedis.query).get(1)).startsWith("*=>");
-        assertThatThrownBy(() -> traced.addDocument("doc:1", new float[]{1, 2}, null))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("specify vectorField");
-        assertThat(jedis.writeCalls).isZero();
+        // Legacy writes must still target embedding when indexes disagree.
+        traced.addDocument("doc:1", new float[]{1, 2}, null);
+        assertThat(jedis.hash).containsOnlyKeys("embedding");
+        assertThat(jedis.writeCalls).isEqualTo(1);
         traced.addDocument("doc:1", "external_vector", new float[]{1, 2}, null);
         assertThat(jedis.hash).containsOnlyKeys("external_vector");
+    }
+
+    @Test
+    void legacyWriteStillTargetsEmbeddingWithMixedIndexes() {
+        traced.createIndex("old-index", "embedding", 2, "COSINE", "FLAT");
+        traced.createIndex("new-index", "custom_vector", 2, "COSINE", "FLAT");
+        traced.addDocument("doc:legacy", new float[]{1, 2}, null);
+        assertThat(jedis.hash).containsOnlyKeys("embedding");
+        traced.addDocument("doc:custom", "custom_vector", new float[]{1, 2}, null);
+        assertThat(jedis.hash).containsOnlyKeys("custom_vector");
+    }
+
+    @Test
+    void genericQueryErrorsDoNotClaimVectorSearch() {
+        jedis.failure = new IllegalStateException("search failed");
+        assertThatThrownBy(() -> traced.search("index", new Query("*")))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("Redis search failed")
+                .hasCause(jedis.failure);
     }
 
     @Test
