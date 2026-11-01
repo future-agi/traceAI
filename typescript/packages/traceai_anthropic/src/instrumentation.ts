@@ -205,7 +205,13 @@ async function processInstrumentationStream(
     });
     // A cancellation is not a failure and not a completed call: leave the status unset,
     // as the SDK's native tracing does. The attributes hold what arrived before it.
-    if (!canceled) {
+    // A stream that ends before message_stop without a cancellation was cut short: the
+    // application sees a normal end, so only the span records the failure.
+    if (canceled) {
+      // Leave the status unset.
+    } else if (!sawMessageStop) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "The stream ended before message_stop." });
+    } else {
       span.setStatus({ code: SpanStatusCode.OK });
     }
   } catch (streamProcessingError: unknown) {
@@ -329,21 +335,30 @@ export class AnthropicInstrumentation extends InstrumentationBase{
             }
             ended = true;
             const messageResponse = result as Anthropic.Message;
-            span.setAttributes({
-              ...getAnthropicOutputMessagesAttributes(messageResponse),
-              ...getAnthropicUsageAttributes(messageResponse),
-              [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
-              [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
-              [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
-              [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
-                ? JSON.stringify([messageResponse.stop_reason]) : "[]",
-              [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
-              [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",
-            });
+            // The call succeeded. Recording its output must not change what the application
+            // receives (the SDK resolves an empty body, such as HTTP 204, as null) and must
+            // not leave the span open. The SDK's native tracing also only logs this.
+            try {
+              if (messageResponse !== null && typeof messageResponse === "object") {
+                span.setAttributes({
+                  ...getAnthropicOutputMessagesAttributes(messageResponse),
+                  ...getAnthropicUsageAttributes(messageResponse),
+                  [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
+                  [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
+                    ? JSON.stringify([messageResponse.stop_reason]) : "[]",
+                  [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
+                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",
+                });
+              }
+            } catch (attributeError: unknown) {
+              diag.error("Error recording the Anthropic response on its span", attributeError);
+            }
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
-            return messageResponse;
+            return result;
           };
 
           let result: unknown;

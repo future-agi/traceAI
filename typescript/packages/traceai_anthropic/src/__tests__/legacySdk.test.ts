@@ -48,6 +48,10 @@ const syntheticFetch = async (_url: unknown, init: any) => {
       { status: 400, headers: { ...headers, "content-type": "application/json" } },
     );
   }
+  if (body.model === "synthetic-empty") {
+    // A valid HTTP response with no body: the SDK resolves the call with null.
+    return new Response(null, { status: 204, headers });
+  }
   if (!body.stream) {
     return new Response(JSON.stringify(message), { status: 200, headers: { ...headers, "content-type": "application/json" } });
   }
@@ -56,6 +60,8 @@ const syntheticFetch = async (_url: unknown, init: any) => {
   const stream = new ReadableStream({
     async start(controller) {
       for (let i = 0; i < events.length; i++) {
+        // "synthetic-truncated": the server closes the body cleanly before message_stop.
+        if (body.model === "synthetic-truncated" && i === 3) break;
         if (mode === "stall" && i === 2) {
           await new Promise<void>((resolve) => {
             if (signal?.aborted) resolve();
@@ -175,6 +181,35 @@ describe("legacy SDK 0.27.3 (declared peer)", () => {
     stream.controller.abort();
     const [span] = await finishedSpans();
     expect(span.status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it("marks a stream that ends before message_stop without an abort as ERROR", async () => {
+    const stream = await client.messages.create({ ...params, model: "synthetic-truncated", stream: true });
+    const received = [];
+    for await (const event of stream) received.push(event);
+    expect(received).toHaveLength(3);
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status).toEqual({ code: SpanStatusCode.ERROR, message: "The stream ended before message_stop." });
+    expect(spans[0].attributes["gen_ai.response.finish_reasons"]).toBeUndefined();
+    expect(spans[0].attributes["output.value"]).toBe("PART1_");
+  });
+
+  it("returns the SDK's null result for an empty response and still ends the span", async () => {
+    await expect(client.messages.create({ ...params, model: "synthetic-empty" })).resolves.toBeNull();
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.OK);
+    expect(spans[0].attributes["output.value"]).toBeUndefined();
+  });
+
+  it("returns the SDK's null result through withResponse() and still ends the span", async () => {
+    const { data, response } = await client.messages.create({ ...params, model: "synthetic-empty" }).withResponse();
+    expect(data).toBeNull();
+    expect(response.status).toBe(204);
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.OK);
   });
 
   it("records API errors and keeps the SDK error type", async () => {

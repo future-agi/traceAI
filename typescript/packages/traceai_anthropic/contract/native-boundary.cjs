@@ -54,6 +54,14 @@ const fetch = async (_url, init) => {
     return new Response(stalledStream(init.signal), { status: 200,
       headers: { 'content-type': 'text/event-stream', 'request-id': 'req_synthetic' } });
   }
+  if (body.model === 'synthetic-empty') {
+    return new Response(null, { status: 204, headers: { 'request-id': 'req_synthetic' } });
+  }
+  if (body.model === 'synthetic-truncated') {
+    // A clean close before message_stop, with no abort.
+    return new Response(events.slice(0, 3).map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      { status: 200, headers: { 'content-type': 'text/event-stream', 'request-id': 'req_synthetic' } });
+  }
   if (body.model === 'synthetic-error') {
     return new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'SYNTHETIC_ERROR_DETAIL' } }),
       { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_error' } });
@@ -171,6 +179,18 @@ async function main() {
         abort.abort();
         while (!(await iterator.next()).done);
       }, 1, SpanStatusCode.UNSET);
+      // The application sees a normal end; only the span records the cut-short stream.
+      const truncated = await run('stream ends before message_stop', async () => {
+        const stream = await client.messages.create({ ...params, model: 'synthetic-truncated', stream: true });
+        const received = [];
+        for await (const event of stream) received.push(event);
+        assert.equal(received.length, 3);
+      }, 1, SpanStatusCode.ERROR);
+      assert.equal(truncated[0].status.message, 'The stream ended before message_stop.');
+      // The SDK resolves an empty body as null; recording it must not turn that into an error.
+      await run('empty response stays null', async () => {
+        assert.equal(await client.messages.create({ ...params, model: 'synthetic-empty' }), null);
+      });
       await run('API error remains typed', async () => {
         await assert.rejects(client.messages.create({ ...params, model: 'synthetic-error' }), Anthropic.BadRequestError);
       }, 1, SpanStatusCode.ERROR);
