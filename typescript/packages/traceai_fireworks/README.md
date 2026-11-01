@@ -7,14 +7,14 @@ Trace Fireworks AI with [`@traceai/openai`](../traceai_openai/README.md). Firewo
 ## Set up Fireworks tracing
 
 ```bash
-npm install @traceai/openai @traceai/fi-core openai
+npm install @traceai/openai @traceai/fi-core@1.1.0 openai@7.47.0
 export FIREWORKS_API_KEY="your-fireworks-api-key"
 export FIREWORKS_MODEL="accounts/fireworks/models/your-model-id"
 export FI_API_KEY="your-futureagi-api-key"
 export FI_SECRET_KEY="your-futureagi-secret-key"
 ```
 
-Choose a model available to your Fireworks account. Save as `fireworks.mts` and run `node fireworks.mts` with Node.js 22.18 or later:
+Choose a model available to your Fireworks account. Save as `fireworks.mts` and run `node fireworks.mts` with Node.js 22.23.4 or later:
 
 ```typescript
 import OpenAI from "openai";
