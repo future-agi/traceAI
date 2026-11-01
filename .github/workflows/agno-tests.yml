@@ -55,4 +55,5 @@ jobs:
           sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
           trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
           python -I -m mypy --follow-imports=silent --ignore-missing-imports python/frameworks/agno/traceai_agno/_instrumentor.py
-          python -I -m pytest python/frameworks/agno/tests -q
+          # Pytest's default prepend mode otherwise imports the checkout, even with -I.
+          python -I -m pytest python/frameworks/agno/tests --import-mode=importlib --require-installed-package -q

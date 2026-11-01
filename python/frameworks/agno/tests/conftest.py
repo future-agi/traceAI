@@ -3,7 +3,9 @@
 import pytest
 
 import gzip
+import sysconfig
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 import httpx
@@ -17,6 +19,31 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from traceai_agno import AgnoInstrumentorWrapper
 from unittest.mock import MagicMock, patch
 from typing import Any, Dict, List, Optional
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--require-installed-package",
+        action="store_true",
+        help="Fail if traceai_agno is imported from outside this environment's site-packages.",
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def require_installed_package(request):
+    if not request.config.getoption("--require-installed-package"):
+        return
+
+    import traceai_agno
+
+    imported = Path(traceai_agno.__file__).resolve()
+    expected = (
+        Path(sysconfig.get_path("purelib")) / "traceai_agno" / "__init__.py"
+    ).resolve()
+    assert imported == expected, (
+        f"Expected installed traceai_agno at {expected}, imported {imported}. "
+        "Run pytest with --import-mode=importlib to prevent checkout shadowing."
+    )
 
 
 class MockModel:
