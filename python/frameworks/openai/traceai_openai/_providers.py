@@ -20,6 +20,7 @@ _HOSTS = {
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
+    "api.z.ai": "zai",
     "api.together.ai": "together",
     "inference.baseten.co": "baseten",
     "dashscope.aliyuncs.com": "dashscope",
@@ -30,6 +31,8 @@ _HOSTS = {
     "api.anannas.ai": "anannas",
     "anannas.ai": "anannas",
     "api.doubleword.ai": "doubleword",
+    # Identify the gateway, not the upstream provider it may select or fall back to.
+    "ai-gateway.vercel.sh": "vercel",
 }
 
 # Vendors that give every resource, workspace or endpoint its own subdomain.
