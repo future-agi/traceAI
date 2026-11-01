@@ -45,7 +45,7 @@ jobs:
           else
             artifact=$(find "$RUNNER_TEMP/agno-dist" -name '*.tar.gz' -print -quit)
           fi
-          python -m pip install "${artifact}[agno,dev]" "agno==$AGNO_VERSION" 'openinference-instrumentation-agno==1.1.0'
+          python -m pip install "${artifact}[dev]" "agno==$AGNO_VERSION" 'openinference-instrumentation-agno==1.1.0'
           python -m pip check
       - name: Test with outbound network denied
         env:

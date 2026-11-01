@@ -40,6 +40,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "agno>=2.7.2",
+    "fastapi>=0.115.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.24.0",
