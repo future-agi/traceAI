@@ -20,6 +20,7 @@ _HOSTS = {
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
+    "api.z.ai": "zai",
     "api.together.ai": "together",
     "inference.baseten.co": "baseten",
     "dashscope.aliyuncs.com": "dashscope",
