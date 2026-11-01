@@ -74,6 +74,8 @@ async function exported() {
 }
 before(async () => {
   server = http.createServer(async (req, res) => {
+    // SDK responses expose transport headers; keep baseline comparisons independent of wall time.
+    res.sendDate = false;
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
