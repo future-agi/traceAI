@@ -21,6 +21,7 @@ const HOSTS: Readonly<Record<string, string>> = {
   "api.anannas.ai": "anannas",
   "anannas.ai": "anannas",
   "api.doubleword.ai": "doubleword",
+  "api.fireworks.ai": "fireworks",
 };
 
 const SUFFIXES: ReadonlyArray<readonly [string, string]> = [
