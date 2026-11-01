@@ -350,3 +350,69 @@ test("telemetry failures log only a static diagnostic without content or secrets
     diag.disable();
   }
 });
+
+test("Interactions preserves version-specific promise helpers and unread raw responses", async () => {
+  reset();
+  const ai = client();
+  const handle = instrumentGoogleGenAI(ai);
+  handler = (req, res) => json(res, interaction());
+  const pending = ai.interactions.create({
+    model: "gemini-test",
+    input: "helpers",
+    automatic_continuation: false,
+  });
+  if (typeof pending.withResponse !== "function") {
+    // Newer GoogleGenAI versions deliberately return a plain Promise instead.
+    assert.equal((await pending).id, "i-1");
+    assert.equal(spans().length, 1);
+    handle.dispose();
+    return;
+  }
+  const envelope = await pending.withResponse();
+  assert.equal(envelope.data.id, "i-1");
+  assert.equal(envelope.response.status, 200);
+  assert.equal(await pending, envelope.data);
+  assert.equal(spans().length, 1);
+  const raw = await ai.interactions
+    .create({
+      model: "gemini-test",
+      input: "raw",
+      automatic_continuation: false,
+    })
+    .asResponse();
+  assert.equal(
+    raw.bodyUsed,
+    false,
+    "instrumentation must not eagerly consume a raw response",
+  );
+  assert.equal((await raw.json()).id, "i-1");
+  assert.equal(spans().length, 2);
+  assert.equal(
+    spans()[1].attributes["google.genai.response_capture"],
+    "request_only",
+  );
+  handler = (req, res) =>
+    sse(res, [
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "text", text: "hello" },
+      },
+      { event_type: "interaction.complete", interaction: interaction() },
+    ]);
+  const streaming = ai.interactions.create({
+    model: "gemini-test",
+    input: "stream",
+    stream: true,
+    automatic_continuation: false,
+  });
+  const { data } = await streaming.withResponse();
+  assert.equal(data, await streaming);
+  assert.equal(spans().length, 2);
+  let count = 0;
+  for await (const event of data) count++;
+  assert.equal(count, 2);
+  assert.equal(spans().length, 3);
+  assert.equal(requests.length, 3);
+  handle.dispose();
+});

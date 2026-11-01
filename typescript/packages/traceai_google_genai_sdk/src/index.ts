@@ -18,6 +18,7 @@ import {
 import { SemanticConventions as S } from "@traceai/fi-semantic-conventions";
 import { Capture, record } from "./capture.js";
 import { VERSION } from "./version.js";
+import { wrapAPIPromise } from "./promise.js";
 export { VERSION } from "./version.js";
 
 export interface GoogleGenAITracingOptions {
@@ -188,6 +189,7 @@ export function instrumentGoogleGenAI(
               span?.setStatus({ code: SpanStatusCode.ERROR });
           });
         };
+        const resolvedStreams = new WeakMap<object, object>();
         const resolve = (value: unknown): unknown => {
           try {
             if (
@@ -195,16 +197,26 @@ export function instrumentGoogleGenAI(
               typeof Reflect.get(Object(value), Symbol.asyncIterator) ===
                 "function"
             ) {
+              const existingStream = resolvedStreams.get(value as object);
+              if (existingStream) return existingStream;
               watchAbort(record(record(value).controller).signal, true);
-              return wrapStream(value as object, child, observe, finish, () => {
-                safely(() =>
-                  span?.setAttribute(
-                    "google.genai.stream_capture",
-                    "request_only",
-                  ),
-                );
-                finish();
-              });
+              const wrappedStream = wrapStream(
+                value as object,
+                child,
+                observe,
+                finish,
+                () => {
+                  safely(() =>
+                    span?.setAttribute(
+                      "google.genai.stream_capture",
+                      "request_only",
+                    ),
+                  );
+                  finish();
+                },
+              );
+              resolvedStreams.set(value as object, wrappedStream);
+              return wrappedStream;
             }
           } catch {
             /* Fall back to the original value if instrumentation cannot wrap it. */
@@ -217,11 +229,33 @@ export function instrumentGoogleGenAI(
           const result = context.with(child, () =>
             Reflect.apply(original, this, args),
           );
-          if (result && typeof record(result).then === "function")
-            return Promise.resolve(result).then(resolve, (error) => {
+          if (result && typeof record(result).then === "function") {
+            const reject = (error: unknown): never => {
               finish(true);
               throw error;
-            });
+            };
+            if (
+              typeof record(result).withResponse === "function" ||
+              typeof record(result).asResponse === "function"
+            ) {
+              return wrapAPIPromise(
+                result as object,
+                child,
+                resolve,
+                reject,
+                () => {
+                  safely(() =>
+                    span?.setAttribute(
+                      "google.genai.response_capture",
+                      "request_only",
+                    ),
+                  );
+                  finish();
+                },
+              );
+            }
+            return Promise.resolve(result).then(resolve, reject);
+          }
           return resolve(result);
         } catch (error) {
           finish(true);
