@@ -44,35 +44,45 @@ class RedisInstrumentor(BaseInstrumentor):
         )
         self._originals = []
         try:
-            import redisvl.index as redisvl_index
-        except ImportError:
-            logger.debug("RedisVL not available, skipping instrumentation")
-        else:
-            for class_name in ("SearchIndex", "AsyncSearchIndex"):
-                cls = getattr(redisvl_index, class_name, None)
-                if cls is not None:
-                    for method, wrapper in (
-                        ("search", SearchIndexSearchWrapper),
-                        ("load", SearchIndexLoadWrapper),
-                        ("query", SearchIndexQueryWrapper),
-                    ):
-                        self._patch(
-                            cls,
-                            method,
-                            wrapper(tracer, is_async=class_name.startswith("Async")),
-                        )
+            try:
+                import redisvl.index as redisvl_index
+            except ImportError:
+                logger.debug("RedisVL not available, skipping instrumentation")
+            else:
+                for class_name in ("SearchIndex", "AsyncSearchIndex"):
+                    cls = getattr(redisvl_index, class_name, None)
+                    if cls is not None:
+                        for method, wrapper in (
+                            ("search", SearchIndexSearchWrapper),
+                            ("load", SearchIndexLoadWrapper),
+                            ("query", SearchIndexQueryWrapper),
+                        ):
+                            self._patch(
+                                cls,
+                                method,
+                                wrapper(
+                                    tracer, is_async=class_name.startswith("Async")
+                                ),
+                            )
 
-        from redis.commands.search import AsyncSearch, Search
+            from redis.commands.search import AsyncSearch, Search
 
-        # AsyncSearch inherits Search before AsyncSearchCommands in its MRO.
-        # Capture the async methods before a patch on Search can shadow them.
-        for cls in (AsyncSearch, Search):
-            for method, wrapper in (
-                ("search", FTSearchWrapper),
-                ("create_index", FTCreateWrapper),
-                ("dropindex", FTDropIndexWrapper),
-            ):
-                self._patch(cls, method, wrapper(tracer, is_async=cls is AsyncSearch))
+            # AsyncSearch inherits Search before AsyncSearchCommands in its MRO.
+            # Capture the async methods before a patch on Search can shadow them.
+            for cls in (AsyncSearch, Search):
+                for method, wrapper in (
+                    ("search", FTSearchWrapper),
+                    ("create_index", FTCreateWrapper),
+                    ("dropindex", FTDropIndexWrapper),
+                ):
+                    self._patch(
+                        cls, method, wrapper(tracer, is_async=cls is AsyncSearch)
+                    )
+        except BaseException:
+            # BaseInstrumentor records an unsuccessful instrument() as inactive.
+            # Undo earlier patches before re-raising, including interruption.
+            self._uninstrument()
+            raise
 
     def _patch(self, cls: type, method: str, wrapper: Any) -> None:
         # Preserve whether the attribute was inherited. Restoring an inherited

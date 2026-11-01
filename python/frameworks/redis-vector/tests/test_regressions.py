@@ -160,6 +160,81 @@ def test_real_redis_search_apis(telemetry, clients, asynchronous, method):
     assert spans[0].status.status_code is trace.StatusCode.OK
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_independent_nested_search_is_traced(telemetry, monkeypatch, asynchronous):
+    instrumentor, provider, exporter = telemetry
+    cls = AsyncSearchIndex if asynchronous else SearchIndex
+    index = cls.from_dict(SCHEMA)
+
+    def search(self, *args, **kwargs):
+        return []
+
+    async def asearch(self, *args, **kwargs):
+        await asyncio.sleep(0)
+        return []
+
+    def load(self, *args, **kwargs):
+        assert self.search(Query("*")) == []
+        return ["doc:1"]
+
+    async def aload(self, *args, **kwargs):
+        assert await self.search(Query("*")) == []
+        return ["doc:1"]
+
+    monkeypatch.setattr(cls, "search", asearch if asynchronous else search)
+    monkeypatch.setattr(cls, "load", aload if asynchronous else load)
+    instrumentor.instrument(tracer_provider=provider)
+    result = index.load([{"content": "safe"}])
+    if asynchronous:
+        result = asyncio.run(result)
+    assert result == ["doc:1"]
+    child, parent = exporter.get_finished_spans()
+    assert child.name == "redis vector_search"
+    assert parent.name == "redis load"
+    assert child.parent.span_id == parent.context.span_id
+
+
+def test_partial_instrumentation_failure_restores_patches(telemetry, monkeypatch):
+    instrumentor, provider, _ = telemetry
+    search = vars(SearchIndex)["search"]
+    monkeypatch.delattr(SearchIndex, "query")
+    with pytest.raises(AttributeError):
+        instrumentor.instrument(tracer_provider=provider)
+    assert not instrumentor.is_instrumented_by_opentelemetry
+    assert vars(SearchIndex)["search"] is search
+    assert not instrumentor._originals
+    monkeypatch.setattr(SearchIndex, "query", lambda self, *args: [], raising=False)
+    instrumentor.instrument(tracer_provider=provider)
+    instrumentor.uninstrument()
+    assert vars(SearchIndex)["search"] is search
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("knn", [False, True])
+def test_direct_redis_py_knn_classification_on_wire(
+    telemetry, clients, asynchronous, knn
+):
+    instrumentor, provider, _ = telemetry
+    query = Query(
+        "*=>[KNN 2 @embedding $vec AS score]" if knn else "synthetic-private-query-123"
+    ).dialect(2)
+    with wire_exporter() as (exporter, payloads):
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        instrumentor.instrument(tracer_provider=provider)
+        result = clients[int(asynchronous)].ft("documents").search(query)
+        if asynchronous:
+            result = asyncio.run(result)
+        assert isinstance(result, Result)
+        assert len(payloads) == 1
+        assert SECRET.encode() not in payloads[0]
+        request = ExportTraceServiceRequest.FromString(payloads[0])
+        (span,) = request.resource_spans[0].scope_spans[0].spans
+        attributes = {a.key: a.value for a in span.attributes}
+        assert ("db.vector.query.type" in attributes) is knn
+        if knn:
+            assert attributes["db.vector.query.type"].string_value == "knn"
+
+
 @pytest.mark.parametrize(
     "result", [Result([0], hascontent=True), [], {}, None, object()]
 )

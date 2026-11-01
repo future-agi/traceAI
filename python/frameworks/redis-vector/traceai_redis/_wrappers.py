@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from typing import Any
@@ -15,6 +16,7 @@ from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 
 logger = logging.getLogger(__name__)
 _VECTOR_SPAN_KEY = context_api.create_key("traceai_redis_vector_span")
+_KNN_QUERY = re.compile(r"\[\s*KNN\s+(?:\d+|\$[A-Za-z_]\w*)\s+@", re.IGNORECASE)
 
 
 def _collection_size(value: Any) -> int | None:
@@ -68,6 +70,17 @@ class BaseWrapper:
 
                 if isinstance(query, VectorQuery):
                     attributes["db.vector.query.type"] = "knn"
+                elif self.operation == "ft_search":
+                    from redis.commands.search.query import Query
+
+                    # redis-py Query stores the original expression here; inspect
+                    # its KNN syntax without exporting the expression or vectors.
+                    if isinstance(query, Query):
+                        expression = getattr(query, "_query_string", None)
+                        if isinstance(expression, str) and _KNN_QUERY.search(
+                            expression
+                        ):
+                            attributes["db.vector.query.type"] = "knn"
         except Exception:  # noqa: BLE001 - telemetry accessors must not break the call
             # Do not log the exception/traceback: accessors may include query data.
             logger.debug("Redis span metadata extraction failed")
@@ -105,13 +118,25 @@ class BaseWrapper:
         if not self.enabled or context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             yield None
             return
-        # A RedisVL query calls search, which calls redis-py FT.SEARCH. Only the
-        # outer vector operation owns a span. Suppress maintained command tracing
-        # at the FT boundary, not around RedisVL/user preprocessing work.
+        # RedisVL query calls search on the same index, then redis-py FT.SEARCH.
+        # Do not suppress independent nested operations such as load -> search.
+        # Suppress maintained command tracing only at the FT boundary.
         commands = (
             suppress_instrumentation() if self.suppress_commands else nullcontext()
         )
-        if context_api.get_value(_VECTOR_SPAN_KEY):
+        parent = context_api.get_value(_VECTOR_SPAN_KEY)
+        internal_search = (
+            self.operation == "search"
+            and parent is not None
+            and parent[0] == "query"
+            and parent[1] is instance
+        )
+        internal_ft_search = (
+            self.operation == "ft_search"
+            and parent is not None
+            and parent[0] in ("query", "search")
+        )
+        if internal_search or internal_ft_search:
             with commands:
                 yield None
             return
@@ -120,7 +145,9 @@ class BaseWrapper:
             kind=SpanKind.CLIENT,
             attributes=self._attributes(instance, args, kwargs),
         ) as span:
-            token = context_api.attach(context_api.set_value(_VECTOR_SPAN_KEY, True))
+            token = context_api.attach(
+                context_api.set_value(_VECTOR_SPAN_KEY, (self.operation, instance))
+            )
             try:
                 with commands:
                     yield span
