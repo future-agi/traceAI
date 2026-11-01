@@ -57,11 +57,12 @@ class _WithTracer(ABC):
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
     ) -> Iterator[_WithSpan]:
-        # Because OTEL has a default limit of 128 attributes, we split our attributes into
-        # two tiers, where the addition of "extra_attributes" is deferred until the end
-        # and only after the "attributes" are added.
+        # Keep primary attributes so finalization can restore them after optional
+        # details: OTel's bounded attribute map evicts the oldest entries.
+        initial_attributes = {}
         try:
-            span = self._tracer.start_span(name=span_name, attributes=dict(attributes))
+            initial_attributes = dict(attributes)
+            span = self._tracer.start_span(name=span_name, attributes=initial_attributes)
         except Exception:
             logger.exception("Failed to start span")
             span = INVALID_SPAN
@@ -73,6 +74,7 @@ class _WithTracer(ABC):
         ) as span:
             yield _WithSpan(
                 span=span,
+                initial_attributes=initial_attributes,
                 context_attributes=dict(context_attributes),
                 extra_attributes=dict(extra_attributes),
             )
