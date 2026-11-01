@@ -23,6 +23,8 @@ for (const [, specifier] of source.matchAll(/from "([^"]+)"/g)) {
     `README must explicitly install ${packageName(specifier)}`);
 }
 assert.ok(dependencies.some((dep) => packageName(dep) === "tsx"), "README must install its TypeScript runner");
+// ChatOpenAI 1.x ignores the old openAIApiKey alias; only apiKey reaches the client.
+assert.doesNotMatch(source, /\bopenAIApiKey\b/, "README must pass the OpenAI key as apiKey");
 for (const name of ["FI_API_KEY", "FI_SECRET_KEY", "OPENAI_API_KEY"]) {
   assert.match(setup, new RegExp(`^export ${name}=`, "m"), `README must export ${name}`);
 }
