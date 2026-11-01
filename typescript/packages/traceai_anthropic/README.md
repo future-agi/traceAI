@@ -54,6 +54,10 @@ The `module` setting can be `"commonjs"`, `"esnext"`, or any other module system
 
 ## Quick Start
 
+Native ESM imports are not intercepted by the CommonJS automatic instrumentation hook. After importing the legacy SDK, call `manuallyInstrument(Anthropic)` before creating a client. This also works in CommonJS when automatic instrumentation has already patched the SDK; it does not add a second wrapper.
+
+This example uses top-level `await` for ESM. For CommonJS, use `require()` for the imports and run the awaited setup and request inside an async function.
+
 ```typescript
 // export Future AGI API KEYS
 // export FI_API_KEY=your_api_key
@@ -81,8 +85,9 @@ registerInstrumentations({
   tracerProvider: tracerProvider,
 });
 
-// 3. Dynamically import Anthropic SDK AFTER instrumentation is registered
+// 3. Import and explicitly instrument the legacy SDK (required for native ESM)
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
+anthropicInstrumentation.manuallyInstrument(Anthropic);
 const client = new Anthropic();
 
 // 4. Use Anthropic as normal
@@ -120,7 +125,7 @@ FI_SECRET_KEY=your_secret_key
 - Support for both streaming and non-streaming requests
 - Captures token usage and response metadata
 - Tracks tool usage in conversations
-- No manual instrumentation required
+- One-time SDK setup; no per-request tracing code required
 - Integration with TraceAI's observability platform
 
 ## Peer Dependencies

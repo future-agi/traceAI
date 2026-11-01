@@ -73,4 +73,7 @@ jobs:
               "$RUNNER_TEMP/anthropic-contract" "$sdk" \
               packages/traceai_anthropic/dist/src/instrumentation.js
           done
+          sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
+            env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \
+            "$node_bin" packages/traceai_anthropic/contract/readme-quickstart.cjs
           git diff --exit-code -- pnpm-lock.yaml
