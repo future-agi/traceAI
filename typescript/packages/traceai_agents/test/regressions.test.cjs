@@ -348,16 +348,29 @@ test("runtime restarts after SIGKILL without stealing a live owner's socket", as
   const exited = once(child, "exit");
   child.kill("SIGKILL");
   await exited;
-  const successors = [0, 1].map(
-    () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
-  );
-  const starts = await Promise.allSettled(successors.map((r) => r.start()));
-  assert.equal(
-    starts.filter((r) => r.status === "fulfilled").length,
-    1,
-    JSON.stringify(starts),
-  );
-  const winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
+  // The forked storage child is a separate process: the parent's exit event
+  // does not imply that its SQLite lock has already been released. Contenders
+  // may both refuse while that orphan is still shutting down. Retry the pair
+  // until ownership is released, without ever accepting two live winners.
+  let winner;
+  let starts;
+  const deadline = Date.now() + 5000;
+  do {
+    const successors = [0, 1].map(
+      () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
+    );
+    starts = await Promise.allSettled(successors.map((r) => r.start()));
+    const accepted = starts.filter((r) => r.status === "fulfilled");
+    assert.ok(accepted.length <= 1, JSON.stringify(starts));
+    if (accepted.length) {
+      winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
+      break;
+    }
+    assert.ok(starts.every((r) => r.status === "rejected" &&
+      r.reason?.code === "RUNTIME_OWNERSHIP_CONFLICT"), JSON.stringify(starts));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  assert.ok(winner, JSON.stringify(starts));
   cleanup(t, () => winner.stop());
   assert.equal((await submit(p, "before-crash")).reason_code, "DUPLICATE");
   assert.equal((await submit(p, "after-crash")).durable, true);
