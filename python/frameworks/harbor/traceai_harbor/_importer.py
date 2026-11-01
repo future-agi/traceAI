@@ -50,12 +50,14 @@ def _manifest(root_fd, destination):
             )
             os.close(state)
             state = child
-        lock = os.open(
-            "lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-            0o600,
-            dir_fd=state,
-        )
+        flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+        # On macOS, concurrent O_CREAT|O_NOFOLLOW can spuriously return ENOENT.
+        # Create exclusively, or open the existing inode without O_CREAT. Never
+        # unlink a lock file: another importer may still hold its inode's lock.
+        try:
+            lock = os.open("lock", flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=state)
+        except FileExistsError:
+            lock = os.open("lock", flags, dir_fd=state)
         info = os.fstat(lock)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ArtifactError("unsafe_lock")
@@ -184,7 +186,13 @@ def _import(
                     except (OSError, ValueError, TypeError, KeyError, OverflowError):
                         summary.failed += 1
                         errors["invalid_artifact_or_state"] += 1
-    except (OSError, ValueError, TypeError, KeyError):
+    except ArtifactError as exc:
+        summary.failed += 1
+        errors[str(exc)] += 1
+    except OSError as exc:
+        summary.failed += 1
+        errors[f"job_io_errno_{exc.errno}"] += 1
+    except (ValueError, TypeError, KeyError):
         summary.failed += 1
         errors["invalid_job_or_state"] += 1
     summary.errors = dict(errors)
