@@ -144,13 +144,11 @@ beforeEach(() => {
       },
     },
   );
-  connectSpy = jest
-    .spyOn(ConnectionGRPC, "use")
-    .mockResolvedValue({
-      connection,
-      dbVersionSupport: support,
-      dbVersionProvider: {},
-    });
+  connectSpy = jest.spyOn(ConnectionGRPC, "use").mockResolvedValue({
+    connection,
+    dbVersionSupport: support,
+    dbVersionProvider: {},
+  });
   configure();
 });
 afterEach(async () => {
@@ -424,6 +422,85 @@ it("does not duplicate spans across instrumentation instances", async () => {
     expect(isPatched()).toBe(true);
     await (await client()).collections.get("Articles").query.fetchObjects();
     expect(exporter.getFinishedSpans()).toHaveLength(2);
+  } finally {
+    second.disable();
+  }
+});
+
+it("hands existing and new collections to a co-owner when the first disables", async () => {
+  const otherExporter = new InMemorySpanExporter();
+  const otherProvider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(otherExporter)],
+  });
+  const second = new WeaviateInstrumentation();
+  second.setTracerProvider(otherProvider);
+  const factory = sdk.default.client;
+  const c = await client();
+  const existing = c.collections.get("Articles").withTenant("tenant-a");
+  const saved = existing.query.fetchObjects;
+  second.manuallyInstrument(sdk);
+  try {
+    await existing.query.fetchObjects();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+    expect(otherExporter.getFinishedSpans()).toHaveLength(0);
+    instrumentation.disable();
+    expect(isPatched()).toBe(true);
+    expect(sdk.default.client).toBe(factory);
+    expect(existing.query.fetchObjects).toBe(saved);
+    await saved.call(existing.query);
+    await c.collections.get("Articles").query.fetchObjects();
+    await (await client()).collections.get("Articles").query.fetchObjects();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+    expect(otherExporter.getFinishedSpans()).toHaveLength(3);
+    second.disable();
+    expect(isPatched()).toBe(false);
+    expect(sdk.default.client).not.toBe(factory);
+    expect(existing.query.fetchObjects).not.toBe(saved);
+    await existing.query.fetchObjects();
+    expect(otherExporter.getFinishedSpans()).toHaveLength(3);
+  } finally {
+    second.disable();
+    await otherProvider.shutdown();
+  }
+});
+
+it("restores only the disabled owner's unrelated module patches", async () => {
+  const separate = { client: sdk.default.client };
+  instrumentation.manuallyInstrument(separate);
+  const second = new WeaviateInstrumentation();
+  second.setTracerProvider(provider);
+  second.manuallyInstrument(sdk);
+  const extraFactory = separate.client;
+  try {
+    instrumentation.disable();
+    expect(separate.client).not.toBe(extraFactory);
+    expect(isPatched()).toBe(true);
+    await (await client()).collections.get("Articles").query.fetchObjects();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+  } finally {
+    second.disable();
+  }
+});
+
+it("transfers an in-flight client to the remaining co-owner", async () => {
+  const second = new WeaviateInstrumentation();
+  second.setTracerProvider(provider);
+  second.manuallyInstrument(sdk);
+  let finish!: (value: any) => void;
+  const original = connectSpy.getMockImplementation()!;
+  connectSpy.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  try {
+    const pending = client();
+    instrumentation.disable();
+    finish(await original());
+    const c = await pending;
+    await c.collections.get("Articles").query.fetchObjects();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
   } finally {
     second.disable();
   }

@@ -47,9 +47,15 @@ const AGGREGATES = [
   "nearObject",
   "hybrid",
 ];
-// Shared only for duplicate detection, not a global gate that skips other module copies.
-const wrappers = new WeakSet<Function>();
-const patchedInstances = new WeakSet<WeaviateInstrumentation>();
+// All instances patching one SDK export share its wrappers and lifecycle. This also
+// lets an enabled instance take over existing clients when another disables.
+type PatchGroup = {
+  owners: Set<WeaviateInstrumentation>;
+  targets: Set<WeakRef<Target>>;
+  finalizer: FinalizationRegistry<WeakRef<Target>>;
+};
+const roots = new WeakMap<Target, PatchGroup>();
+const patches = new WeakMap<Target, Map<string, Patch>>();
 let patchCount = 0;
 
 export function isPatched(): boolean {
@@ -63,7 +69,11 @@ export interface WeaviateInstrumentationConfig extends InstrumentationConfig {
 }
 
 type Target = Record<string, any>;
-type Patch = { descriptor?: PropertyDescriptor; wrapper: Function };
+type Patch = {
+  descriptor?: PropertyDescriptor;
+  wrapper: Function;
+  group: PatchGroup;
+};
 
 function documentProperties(object: Target | undefined): unknown {
   if (!object || typeof object !== "object") return undefined;
@@ -78,9 +88,7 @@ function documentProperties(object: Target | undefined): unknown {
 export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrumentationConfig> {
   private _traceConfig?: TraceConfigOptions;
   // Lazy initialization: InstrumentationBase can call enable/patch in super().
-  private targets?: Set<WeakRef<Target>>;
-  private patches?: WeakMap<Target, Map<string, Patch>>;
-  private finalizer?: FinalizationRegistry<WeakRef<Target>>;
+  private groups?: Set<PatchGroup>;
   private generation?: number;
 
   constructor({
@@ -118,53 +126,89 @@ export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrum
   }
 
   private patch(moduleExports: Target) {
-    if (!this.isEnabled()) return moduleExports;
+    if (!this.isEnabled() || !moduleExports) return moduleExports;
+    const defaultExport = moduleExports.default;
+    const primary = roots.get(moduleExports);
+    const secondary =
+      defaultExport && typeof defaultExport === "object"
+        ? roots.get(defaultExport)
+        : undefined;
+    // Retired wrappers held by callers must never spring back to life on re-enable.
+    const group =
+      [primary, secondary].find((candidate) => candidate?.owners.size) ??
+      this.newGroup();
     let patched = false;
     // CJS namespace, ESM namespace (read-only named exports), or the default object.
-    for (const target of new Set([moduleExports, moduleExports?.default])) {
+    for (const target of new Set([moduleExports, defaultExport])) {
       for (const name of FACTORIES) {
         patched =
-          this.wrapFactory(target, name, (client) =>
-            this.patchClient(client),
+          this.wrapFactory(target, name, group, (owner, client) =>
+            owner.patchClient(client, group),
           ) || patched;
       }
     }
-    if (patched && !patchedInstances.has(this)) {
-      patchedInstances.add(this);
-      patchCount++;
+    if (patched) {
+      if (!this.groups?.size) patchCount++;
+      this.groups ??= new Set();
+      this.groups.add(group);
+      group.owners.add(this);
+      roots.set(moduleExports, group);
+      if (defaultExport && typeof defaultExport === "object")
+        roots.set(defaultExport, group);
     }
     return moduleExports;
   }
 
+  private newGroup(): PatchGroup {
+    const group: PatchGroup = {
+      owners: new Set(),
+      targets: new Set(),
+      finalizer: new FinalizationRegistry((ref) => group.targets.delete(ref)),
+    };
+    return group;
+  }
+
   private unpatch(moduleExports?: Target) {
-    // Invalidate saved wrappers and in-flight factories before restoring properties.
+    // Invalidate in-flight factories; an active co-owner keeps shared wrappers.
     this.generation = (this.generation ?? 0) + 1;
-    for (const ref of this.targets ?? []) {
-      const target = ref.deref();
-      if (target) {
-        for (const [name, patch] of this.patches?.get(target) ?? []) {
-          if (target[name] !== patch.wrapper) continue; // Do not clobber another owner.
-          if (patch.descriptor)
-            Object.defineProperty(target, name, patch.descriptor);
-          else delete target[name];
+    for (const group of this.groups ?? []) {
+      group.owners.delete(this);
+      if (group.owners.size) continue;
+      for (const ref of group.targets) {
+        const target = ref.deref();
+        if (target) {
+          const entries = patches.get(target);
+          for (const [name, patch] of entries ?? []) {
+            if (patch.group !== group) continue;
+            if (target[name] === patch.wrapper) {
+              if (patch.descriptor)
+                Object.defineProperty(target, name, patch.descriptor);
+              else delete target[name];
+            }
+            entries?.delete(name);
+          }
+          if (!entries?.size) patches.delete(target);
         }
+        group.finalizer.unregister(ref);
       }
-      this.finalizer?.unregister(ref);
+      group.targets.clear();
     }
-    this.targets?.clear();
-    this.patches = new WeakMap();
-    if (patchedInstances.delete(this)) patchCount--;
+    if (this.groups?.size) patchCount--;
+    this.groups?.clear();
     return moduleExports;
   }
 
   private wrap(
     target: Target | undefined,
     name: string,
+    group: PatchGroup,
     makeWrapper: (original: Function) => Function,
   ): boolean {
     const original = target?.[name];
-    if (!target || typeof original !== "function" || wrappers.has(original))
-      return false;
+    if (!target || typeof original !== "function") return false;
+    const existing = patches.get(target)?.get(name);
+    if (existing && original === existing.wrapper)
+      return existing.group === group;
     const descriptor = Object.getOwnPropertyDescriptor(target, name);
     // ESM namespaces have non-configurable exports. Their mutable default object is supported.
     if (
@@ -190,42 +234,48 @@ export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrum
     } catch {
       return false;
     }
-    wrappers.add(wrapper);
-    this.patches ??= new WeakMap();
-    let entries = this.patches.get(target);
+    let entries = patches.get(target);
     if (!entries) {
-      this.patches.set(target, (entries = new Map()));
-      this.targets ??= new Set();
-      this.finalizer ??= new FinalizationRegistry((ref) =>
-        this.targets?.delete(ref),
-      );
+      patches.set(target, (entries = new Map()));
       const ref = new WeakRef(target);
-      this.targets.add(ref);
-      this.finalizer.register(target, ref, ref);
+      group.targets.add(ref);
+      group.finalizer.register(target, ref, ref);
+    } else if (
+      !Array.from(entries.values()).some((patch) => patch.group === group)
+    ) {
+      const ref = new WeakRef(target);
+      group.targets.add(ref);
+      group.finalizer.register(target, ref, ref);
     }
-    entries.set(name, { descriptor, wrapper });
+    entries.set(name, { descriptor, wrapper, group });
     return true;
   }
 
   private wrapFactory(
     target: Target | undefined,
     name: string,
-    instrument: (value: any) => void,
+    group: PatchGroup,
+    instrument: (owner: WeaviateInstrumentation, value: any) => void,
   ): boolean {
-    const generation = this.generation ?? 0;
-    const instrumentation = this;
     return this.wrap(
       target,
       name,
+      group,
       (original) =>
         function (this: unknown, ...args: any[]) {
+          const owner = Array.from(group.owners).find((entry) =>
+            entry.isEnabled(),
+          );
+          const generation = owner?.generation ?? 0;
           const result = original.apply(this, args);
           const finish = (value: any) => {
-            if (
-              instrumentation.isEnabled() &&
-              generation === (instrumentation.generation ?? 0)
-            )
-              instrument(value);
+            const current =
+              owner?.isEnabled() &&
+              group.owners.has(owner) &&
+              generation === (owner.generation ?? 0)
+                ? owner
+                : Array.from(group.owners).find((entry) => entry.isEnabled());
+            if (current) instrument(current, value);
             return value;
           };
           // get/use/withTenant/withConsistency must remain synchronous.
@@ -236,7 +286,7 @@ export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrum
     );
   }
 
-  private patchClient(client: Target) {
+  private patchClient(client: Target, group: PatchGroup) {
     for (const name of [
       "get",
       "use",
@@ -244,17 +294,17 @@ export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrum
       "createFromSchema",
       "createFromJson",
     ]) {
-      this.wrapFactory(client?.collections, name, (collection) =>
-        this.patchCollection(collection),
+      this.wrapFactory(client?.collections, name, group, (owner, collection) =>
+        owner.patchCollection(collection, group),
       );
     }
   }
 
-  private patchCollection(collection: Target) {
+  private patchCollection(collection: Target, group: PatchGroup) {
     if (!collection) return;
     for (const name of ["withTenant", "withConsistency"]) {
-      this.wrapFactory(collection, name, (variant) =>
-        this.patchCollection(variant),
+      this.wrapFactory(collection, name, group, (owner, variant) =>
+        owner.patchCollection(variant, group),
       );
     }
     const collectionName =
@@ -266,20 +316,17 @@ export class WeaviateInstrumentation extends InstrumentationBase<WeaviateInstrum
       [collection.aggregate?.groupBy, AGGREGATES, "aggregate.groupBy."],
     ] as const) {
       for (const method of methods) {
-        const instrumentation = this;
-        const generation = this.generation ?? 0;
         this.wrap(
           target,
           method,
+          group,
           (original) =>
             function (this: unknown, ...args: any[]) {
-              if (
-                !instrumentation.isEnabled() ||
-                generation !== (instrumentation.generation ?? 0)
-              ) {
-                return original.apply(this, args);
-              }
-              return instrumentation.traceOperation(
+              const owner = Array.from(group.owners).find((entry) =>
+                entry.isEnabled(),
+              );
+              if (!owner) return original.apply(this, args);
+              return owner.traceOperation(
                 this,
                 original,
                 `${prefix}${method}`,
