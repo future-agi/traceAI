@@ -116,6 +116,66 @@ describe("installed OpenAI SDK compatibility", () => {
     }
   });
 
+  it("respects environment-only hideInputs and explicit overrides for embeddings", async () => {
+    const sdk = require("openai");
+    (instrumentation as unknown as { unpatch: (sdk: unknown) => void }).unpatch(sdk);
+    const previous = process.env.FI_HIDE_INPUTS;
+    process.env.FI_HIDE_INPUTS = "true";
+    const fetch: typeof globalThis.fetch = async () => new Response(JSON.stringify({ object: "list", model: "grok-embedding", data: [{ object: "embedding", index: 0, embedding: [0.1] }] }), { status: 200, headers: { "content-type": "application/json" } });
+    let active: XAIInstrumentation | undefined;
+    try {
+      for (const [config, shouldHide] of [[undefined, true], [{ hideInputs: false }, false]] as const) {
+        const hidden = new XAIInstrumentation({ traceConfig: config });
+        hidden.setTracerProvider(provider);
+        hidden.enable();
+        hidden.manuallyInstrument(sdk);
+        active = hidden;
+        bodies.length = 0;
+        const client = new OpenAI({ apiKey: "synthetic", baseURL: "https://api.x.ai/v1", fetch });
+        await client.embeddings.create({ model: "grok-embedding", input: "DO_NOT_EXPORT_INPUT" });
+        await provider.forceFlush();
+        const wire = Buffer.concat(bodies).toString("utf8");
+        if (shouldHide) expect(wire).not.toContain("DO_NOT_EXPORT_INPUT");
+        else expect(wire).toContain("DO_NOT_EXPORT_INPUT");
+        (hidden as unknown as { unpatch: (sdk: unknown) => void }).unpatch(sdk);
+        active = undefined;
+      }
+    } finally {
+      if (active) (active as unknown as { unpatch: (sdk: unknown) => void }).unpatch(sdk);
+      if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+      else process.env.FI_HIDE_INPUTS = previous;
+      instrumentation.manuallyInstrument(sdk);
+    }
+  });
+
+  it("retains the SDK stream API for iteration, tee, readable conversion and abort", async () => {
+    const chunk = { id: "stream-api", model: "grok-test", choices: [{ index: 0, delta: { content: "hello" }, finish_reason: "stop" }] };
+    const fetch: typeof globalThis.fetch = async () => new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const client = new OpenAI({ apiKey: "synthetic", baseURL: "https://api.x.ai/v1", fetch });
+    const request = { model: "grok-test", messages: [{ role: "user" as const, content: "hi" }], stream: true as const };
+    const stream = await client.chat.completions.create(request);
+    expect(typeof stream.controller.abort).toBe("function");
+    expect(typeof stream.tee).toBe("function");
+    expect(typeof stream.toReadableStream).toBe("function");
+    const [left, right] = stream.tee();
+    const leftIds: string[] = [];
+    const rightIds: string[] = [];
+    for await (const item of left) leftIds.push(item.id);
+    for await (const item of right) rightIds.push(item.id);
+    expect(leftIds).toEqual(["stream-api"]);
+    expect(rightIds).toEqual(["stream-api"]);
+    const readable = (await client.chat.completions.create(request)).toReadableStream();
+    const reader = readable.getReader();
+    const line = await reader.read();
+    expect(new TextDecoder().decode(line.value)).toContain("stream-api");
+    await reader.cancel();
+    const aborted = await client.chat.completions.create(request);
+    aborted.controller.abort();
+    for await (const _ of aborted) { /* SDK treats abort as normal cancellation */ }
+    await provider.forceFlush();
+    expect(exporter.getFinishedSpans().filter(s => s.attributes[SemanticConventions.GEN_AI_RESPONSE_ID] === "stream-api")).toHaveLength(2);
+  });
+
   it("aggregates streamed tool fragments and ends on early break", async () => {
     const chunks = [
       { id: "stream-1", model: "grok-test", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "weather", arguments: '{"city":' } }] }, finish_reason: null }] },

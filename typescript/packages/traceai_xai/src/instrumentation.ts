@@ -26,6 +26,7 @@ import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  generateTraceConfig,
 } from "@traceai/fi-core";
 
 const MODULE_NAME = "openai";
@@ -220,6 +221,7 @@ function traceSDKPromise<T>(
 export class XAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private hideInputs = false;
 
   constructor({
     instrumentationConfig,
@@ -238,7 +240,9 @@ export class XAIInstrumentation extends InstrumentationBase {
 
   public override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    const traceConfig = generateTraceConfig(this._traceConfig);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
+    this.hideInputs = traceConfig.hideInputs;
   }
 
   public readonly instrumentationName = "@traceai/xai";
@@ -293,10 +297,12 @@ export class XAIInstrumentation extends InstrumentationBase {
     // Ensure fiTracer uses the most up-to-date tracer
     if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
         (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
+      const traceConfig = generateTraceConfig(instrumentation._traceConfig);
       instrumentation.fiTracer = new FITracer({
         tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
+        traceConfig,
       });
+      instrumentation.hideInputs = traceConfig.hideInputs;
     }
 
     // The SDK instantiates resource classes; chat and embeddings are not
@@ -392,7 +398,7 @@ export class XAIInstrumentation extends InstrumentationBase {
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
           } else if (isStreamResponse(result)) {
-            return wrapChatStream(result, span);
+            return instrumentChatStream(result, span);
           }
           return result;
         });
@@ -428,7 +434,7 @@ export class XAIInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.XAI,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-              ...(!instrumentation._traceConfig?.hideInputs ? getEmbeddingInputAttributes(inputTexts) : {}),
+              ...(!instrumentation.hideInputs ? getEmbeddingInputAttributes(inputTexts) : {}),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
@@ -518,6 +524,22 @@ function isStreamResponse<T>(
   response: T | StreamResponse<T>,
 ): response is StreamResponse<T> {
   return typeof (response as StreamResponse<T>)[Symbol.asyncIterator] === "function";
+}
+
+/** Preserve the SDK Stream instance (and its controller, tee and readable helpers).
+ * Both v4 and v7 route these helpers through the instance's iterator factory.
+ * Replacing only that factory records whichever consumption path the caller uses.
+ */
+function instrumentChatStream<T extends StreamResponse<ChatCompletion>>(stream: T, span: Span): T {
+  const sdkStream = stream as T & { iterator?: () => AsyncIterator<ChatCompletion> };
+  if (typeof sdkStream.iterator === "function") {
+    const originalIterator = sdkStream.iterator.bind(sdkStream);
+    sdkStream.iterator = () => wrapChatStream({ [Symbol.asyncIterator]: originalIterator }, span);
+  } else {
+    const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+    stream[Symbol.asyncIterator] = () => wrapChatStream({ [Symbol.asyncIterator]: originalIterator }, span);
+  }
+  return stream;
 }
 
 /**
