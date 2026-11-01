@@ -222,7 +222,10 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
         error => callback(error),
       );
     }
-    : function(this: unknown, event: Event, invocation: C) { return invoke.call(this, event, invocation); };
+    // AWS classifies the exported function, not its returned Promise. Keep this
+    // natively async (including CJS build output), or an unsettled invocation can
+    // become a successful null response when the event loop empties.
+    : async function(this: unknown, event: Event, invocation: C) { return invoke.call(this, event, invocation); };
   wrappedHandlers.add(wrapped);
   return wrapped;
 }
