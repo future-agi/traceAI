@@ -41,6 +41,7 @@ _HOSTS = {
 # Vendors that give every resource, workspace or endpoint its own subdomain.
 _SUFFIXES = (
     (".openai.azure.com", FiLLMProviderValues.AZURE.value),
+    (".openai.azure.us", FiLLMProviderValues.AZURE.value),
     (".services.ai.azure.com", FiLLMProviderValues.AZURE.value),
     (".cognitiveservices.azure.com", FiLLMProviderValues.AZURE.value),
     ("-aiplatform.googleapis.com", FiLLMProviderValues.VERTEXAI.value),
