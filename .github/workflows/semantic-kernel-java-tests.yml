@@ -81,13 +81,19 @@ jobs:
           mvn -B -ntp -pl traceai-java-semantic-kernel -am install -DskipTests
           mvn -B -ntp dependency:get -Dartifact=com.microsoft.semantic-kernel:semantickernel-api:1.3.0 -Dtransitive=false
           mvn -B -ntp dependency:get -Dartifact=com.microsoft.semantic-kernel:semantickernel-aiservices-openai:1.3.0 -Dtransitive=false
+          mvn -B -ntp dependency:get -Dartifact=com.microsoft.semantic-kernel:semantickernel-api:1.4.5 -Dtransitive=false
+          mvn -B -ntp dependency:get -Dartifact=com.microsoft.semantic-kernel:semantickernel-aiservices-openai:1.4.5 -Dtransitive=false
           mvn -B -ntp -pl traceai-java-semantic-kernel dependency:build-classpath \
             -Dmdep.outputFile=target/compat.classpath
       - name: Compile consumers against each published ABI and run without outbound network
         run: |
           base="$(cat traceai-java-semantic-kernel/target/compat.classpath)"
           for version in 1.3.0 1.4.5 1.5.0; do
-            deps="$(printf '%s' "$base" | sed -E "s#(semantickernel-[^/:]+)/1\\.5\\.0(/semantickernel-[^/:]+-)1\\.5\\.0(\\.jar)#\\1/$version\\2$version\\3#g")"
+            api="$HOME/.m2/repository/com/microsoft/semantic-kernel/semantickernel-api/$version/semantickernel-api-$version.jar"
+            openai="$HOME/.m2/repository/com/microsoft/semantic-kernel/semantickernel-aiservices-openai/$version/semantickernel-aiservices-openai-$version.jar"
+            test -f "$api" && test -f "$openai"
+            # Put the selected ABI first even when Maven's classpath includes provided 1.5 jars.
+            deps="$api:$openai:$base"
             mkdir -p "traceai-java-semantic-kernel/target/consumer-$version"
             cp="traceai-java-semantic-kernel/target/classes:traceai-java-core/target/classes:$deps"
             javac -cp "$cp" -d "traceai-java-semantic-kernel/target/consumer-$version" \
