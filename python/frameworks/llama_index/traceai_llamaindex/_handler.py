@@ -1,14 +1,18 @@
+import asyncio
 import copy
 import dataclasses
 import inspect
 import json
 import logging
+import re
 import weakref
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
-from functools import singledispatch, singledispatchmethod
-from importlib.metadata import version
+from functools import partial, singledispatch, singledispatchmethod
+from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from queue import SimpleQueue
 from threading import RLock, Thread
 from time import sleep, time, time_ns
@@ -137,6 +141,34 @@ except ModuleNotFoundError as exc:
     _workflow_done_exceptions = ()
 else:
     _workflow_done_exceptions = (WorkflowDone,)
+
+
+def _cancelled_by_user_types() -> Tuple[type, ...]:
+    """WorkflowCancelledByUser from standalone Workflows and old core, if present."""
+    types: List[type] = []
+    for module_name in ("workflows.errors", "llama_index.core.workflow.errors"):
+        try:
+            cancel_type = getattr(import_module(module_name), "WorkflowCancelledByUser")
+        except (ImportError, AttributeError):
+            continue
+        if cancel_type not in types:
+            types.append(cancel_type)
+    return tuple(types)
+
+
+_cancelled_by_user_exceptions = _cancelled_by_user_types()
+
+# Workflows 2.16+ reports cancellation and step/run output through these
+# instrumentation events. Older releases do not define them.
+try:
+    from workflows.runtime.types.step_function import (
+        SpanCancelledEvent,
+        WorkflowRunOutputEvent,
+        WorkflowStepOutputEvent,
+    )
+except ImportError:
+    SpanCancelledEvent = WorkflowRunOutputEvent = WorkflowStepOutputEvent = None
+
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Span, Status, StatusCode, Tracer, set_span_in_context
@@ -144,9 +176,16 @@ from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic.v1.json import pydantic_encoder
 from typing_extensions import assert_never
+from wrapt import FunctionWrapper
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# Cancellation is not an exception: the span is ERROR "cancelled" with these
+# attributes and no exception event, like the other traceAI integrations.
+LLAMA_INDEX_CANCELLED = "llama_index.cancelled"
+LLAMA_INDEX_CANCEL_REASON = "llama_index.cancel_reason"
+WORKFLOW_CANCELLED_BY_USER = "workflow cancelled by user"
 
 LLAMA_INDEX_VERSION = tuple(map(int, version("llama-index-core").split(".")[:3]))
 
@@ -193,6 +232,10 @@ class _Span(BaseSpan):
     _last_updated_at: float = PrivateAttr()
     _stream_chunks: List[str] = PrivateAttr()
     _stream_content: str = PrivateAttr()
+    _cancelled: bool = PrivateAttr()
+    _cancel_reason: Optional[str] = PrivateAttr()
+    _workflow_run: bool = PrivateAttr()
+    _run_handler: Any = PrivateAttr()
 
     def __init__(
         self,
@@ -215,6 +258,10 @@ class _Span(BaseSpan):
         self._list_attr_len: DefaultDict[str, int] = defaultdict(int)
         self._stream_chunks = []
         self._stream_content = ""
+        self._cancelled = False
+        self._cancel_reason = None
+        self._workflow_run = False
+        self._run_handler = None
 
     def __setitem__(self, key: str, value: AttributeValue) -> None:
         self._attributes[key] = value
@@ -222,11 +269,33 @@ class _Span(BaseSpan):
     def record_exception(self, exception: BaseException) -> None:
         self._otel_span.record_exception(exception)
 
+    def cancel(self, reason: Optional[str] = None) -> None:
+        """Mark the span cancelled; ``end()`` then exports ERROR "cancelled"."""
+        self._cancelled = True
+        if reason and not self._cancel_reason:
+            self._cancel_reason = reason
+
+    def finish(self, exception: Optional[BaseException] = None) -> None:
+        """End the span, treating cancellation exceptions as cancellation."""
+        if isinstance(exception, (asyncio.CancelledError, *_cancelled_by_user_exceptions)):
+            self.cancel(
+                WORKFLOW_CANCELLED_BY_USER
+                if isinstance(exception, _cancelled_by_user_exceptions)
+                else None
+            )
+            exception = None
+        self.end(exception)
+
     def end(self, exception: Optional[BaseException] = None) -> None:
         if not self._active:
             return
         self._active = False
-        if exception is None:
+        if exception is None and self._cancelled:
+            self[LLAMA_INDEX_CANCELLED] = True
+            if self._cancel_reason:
+                self[LLAMA_INDEX_CANCEL_REASON] = self._cancel_reason
+            status = Status(status_code=StatusCode.ERROR, description="cancelled")
+        elif exception is None:
             status = Status(status_code=StatusCode.OK)
         else:
             self._otel_span.record_exception(exception)
@@ -358,7 +427,23 @@ class _Span(BaseSpan):
 
     @singledispatchmethod
     def _process_event(self, event: BaseEvent) -> None:
-        logger.warning(f"Unhandled event of type {event.__class__.__qualname__}")
+        # LlamaIndex packages add event types over time; ignoring one is not
+        # a problem the application needs to see.
+        logger.debug("Unhandled event of type %s", event.__class__.__qualname__)
+
+    if SpanCancelledEvent is not None:
+
+        @_process_event.register(SpanCancelledEvent)
+        def _(self, event: Any) -> None:
+            self.cancel(event.reason)
+
+    if WorkflowStepOutputEvent is not None:
+
+        @_process_event.register(WorkflowStepOutputEvent)
+        @_process_event.register(WorkflowRunOutputEvent)
+        def _(self, event: Any) -> None:
+            # The step or run result already reaches prepare_to_exit_span.
+            ...
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
@@ -853,6 +938,11 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         )
         span.process_instance(instance)
         span.process_input(instance, bound_args)
+        if (capture := _workflow_run_capture.get()) is not None:
+            workflow, prefix, captured = capture
+            if not captured and instance is workflow and id_.startswith(prefix):
+                span._workflow_run = True
+                captured.append(span)
         return span
 
     def prepare_to_exit_span(
@@ -867,6 +957,8 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             span = self.open_spans.get(id_)
+        if span and span._workflow_run:
+            return self._exit_workflow_run(span, instance, result)
         if span:
             if isinstance(instance, (BaseLLM, MultiModalLLM)) and (
                 isinstance(result, Generator)
@@ -899,10 +991,138 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             if err and isinstance(err, _workflow_done_exceptions):
                 span.end()
                 return span
-            span.end(err)
+            span.finish(err)
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
+
+    def _exit_workflow_run(self, span: _Span, instance: Any, result: Any) -> Optional[_Span]:
+        """End a run span of Workflows < 2.16 with the run's real outcome.
+
+        Those releases exit the run span with ``result=None`` when the run
+        fails, times out or is cancelled, and never drop it. The handler
+        returned by ``run()`` still holds the outcome, so read it from there.
+        """
+        handler = span._run_handler
+        if handler is None and _run_outcome_source(result) is not None:
+            # Workflows 2.14.0 and 2.14.1 return a handler that is not a
+            # Future, so the span exits before the run starts. Keep it open
+            # until the run finishes so steps nest under it.
+            handler = span._run_handler = result
+        source = _run_outcome_source(handler)
+        if source is not None and not source.done():
+            source.add_done_callback(partial(self._finish_workflow_run, span))
+            return None
+        exception = _run_outcome_exception(source)
+        if exception is None:
+            span.process_output(instance, result)
+        span.finish(exception)
+        return span
+
+    def _finish_workflow_run(self, span: _Span, source: "asyncio.Future[Any]") -> None:
+        with self.lock:
+            self.open_spans.pop(span.id_, None)
+        exception = _run_outcome_exception(source)
+        if exception is None:
+            span.process_output(None, source.result())
+        span.finish(exception)
+
+
+def _run_outcome_source(handler: Any) -> "Optional[asyncio.Future[Any]]":
+    """Return the Future that completes with the workflow run's outcome."""
+    for source in (getattr(handler, "_result_task", None), handler):
+        if isinstance(source, asyncio.Future):
+            return source
+    return None
+
+
+def _run_outcome_exception(source: "Optional[asyncio.Future[Any]]") -> Optional[BaseException]:
+    if source is None or not source.done():
+        return None
+    if source.cancelled():
+        return asyncio.CancelledError()
+    return source.exception()
+
+
+# (workflow instance, span id prefix, captured spans) for the run() call in
+# progress, so new_span can tag the run span that call creates.
+_workflow_run_capture: "ContextVar[Optional[Tuple[Any, str, List[_Span]]]]" = ContextVar(
+    "traceai_llamaindex_workflow_run_capture", default=None
+)
+
+
+def _wrap_workflow_run(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+    if instance is None:
+        return wrapped(*args, **kwargs)
+    captured: List[_Span] = []
+    token = _workflow_run_capture.set(
+        (instance, f"{type(instance).__name__}.{wrapped.__name__}-", captured)
+    )
+    try:
+        handler = wrapped(*args, **kwargs)
+    finally:
+        _workflow_run_capture.reset(token)
+    if captured:
+        # The span exits from a done callback, which the event loop runs
+        # after this returns, so the handler is attached in time.
+        captured[0]._run_handler = handler
+    return handler
+
+
+def _workflows_version() -> Optional[Tuple[int, int]]:
+    try:
+        match = re.match(r"(\d+)\.(\d+)", version("llama-index-workflows"))
+    except PackageNotFoundError:
+        return None
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _legacy_workflow_classes() -> List[type]:
+    """Workflow classes whose run span ignores the run's outcome.
+
+    Workflows 2.16 manages the run span itself and drops it on failure, so
+    only older standalone releases and the old core-embedded class need help.
+    """
+    classes: List[type] = []
+    workflows_version = _workflows_version()
+    if workflows_version is not None and workflows_version < (2, 16):
+        try:
+            from workflows.workflow import Workflow
+        except ImportError:
+            pass
+        else:
+            classes.append(Workflow)
+    try:
+        from llama_index.core.workflow.workflow import Workflow as CoreWorkflow
+    except ImportError:
+        pass
+    else:
+        if CoreWorkflow not in classes and not CoreWorkflow.__module__.startswith("workflows."):
+            classes.append(CoreWorkflow)
+    return classes
+
+
+def _is_run_wrapper(attr: Any) -> bool:
+    return isinstance(attr, FunctionWrapper) and attr._self_wrapper is _wrap_workflow_run
+
+
+def instrument_workflow_runs() -> List[Tuple[type, str]]:
+    patched = []
+    for cls in _legacy_workflow_classes():
+        for name in ("run", "run_from"):
+            attr = cls.__dict__.get(name)
+            if attr is None or _is_run_wrapper(attr):
+                continue
+            setattr(cls, name, FunctionWrapper(attr, _wrap_workflow_run))
+            patched.append((cls, name))
+    return patched
+
+
+def uninstrument_workflow_runs(patched: Iterable[Tuple[type, str]]) -> None:
+    for cls, name in patched:
+        attr = cls.__dict__.get(name)
+        if _is_run_wrapper(attr):
+            setattr(cls, name, attr.__wrapped__)
 
 
 class EventHandler(BaseEventHandler, extra="allow"):
