@@ -201,7 +201,7 @@ def _get_json(url: str) -> dict | None:
         raise  # Authentication failures, rate limits and server errors must never mean 'not published'.
 
 
-def published_versions(p: dict) -> set[str] | None:
+def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
@@ -219,16 +219,27 @@ def published_versions(p: dict) -> set[str] | None:
         return {p["version"]} if d else None
     if eco == "java":
         # Query canonical repository files rather than the eventually consistent search index.
-        # One reactor publishes together; do not skip if any module is missing.
-        for artifact in p["artifacts"]:
+        # Verification (strict) needs every reactor artifact served. The plan's skip decision
+        # (strict=False) needs only the parent: the reactor is one Central deployment, Central never
+        # accepts a second upload of a published version, and a module added later ships with the
+        # next reactor version.
+        def on_central(artifact):
             url = f"https://repo.maven.apache.org/maven2/{p['group'].replace('.', '/')}/{artifact}/{p['version']}/{artifact}-{p['version']}.pom"
             try:
                 with urllib.request.urlopen(url, timeout=30):
-                    pass
+                    return True
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return None
+                    return False
                 raise
+        parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
+        if not on_central(parent):
+            return None
+        later = [a for a in modules if not on_central(a)]
+        if later and strict:
+            return None
+        if later:
+            print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
@@ -247,14 +258,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
         if not offline:
-            have = published_versions(p)
+            have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have
             if published and not include_published:
                 out["skipped"].append({"name": p["name"], "reason": f"{p['version']} is already published"})
                 continue
             p = {**p, "first_release": have is None, "registry_published": published}
             if p["ecosystem"] == "python":
-                p["pypi_bootstrap"] = have is None and p["name"] in set(config.get("pypi_bootstrap_token", []))
+                p["pypi_bootstrap"] = p["name"] in set(config.get("pypi_bootstrap_token", []))
         out[p["ecosystem"]].append({k: v for k, v in p.items() if k not in ("declared", "ecosystem")})
     for eco in ECOSYSTEMS:
         out[eco].sort(key=lambda e: (not e["core"], e["name"].lower()))
