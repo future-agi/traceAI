@@ -32,9 +32,11 @@ jobs:
           - name: standalone-floor
             core: '0.13.0'
             workflows: '1.0.1'
+            openai: '0.5.6'
           - name: current
             core: '0.14.25'
             workflows: '2.26.1'
+            openai: '0.8.3'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +49,7 @@ jobs:
           python -m pip install -e python -e python/frameworks/llama_index
           'llama-index-core==${{ matrix.core }}'
           'llama-index-workflows==${{ matrix.workflows }}'
+          'llama-index-llms-openai==${{ matrix.openai }}'
           'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
       - name: Test real workflow and OTLP contract without outbound connections
         run: >-
