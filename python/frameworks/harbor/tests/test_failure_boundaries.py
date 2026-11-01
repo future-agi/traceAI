@@ -182,7 +182,9 @@ def test_plugin_failure_is_observational(job, receiver, monkeypatch, caplog):
         await plugin.on_job_start(
             SimpleNamespace(job_dir=job, on_trial_ended=callbacks.append)
         )
-        await callbacks[0](SimpleNamespace(trial_name="trial-1"))
+        await callbacks[0](
+            SimpleNamespace(trial_name="trial-1", config=SimpleNamespace(job_id=None))
+        )
         await plugin.on_job_end(None)
         return plugin
 

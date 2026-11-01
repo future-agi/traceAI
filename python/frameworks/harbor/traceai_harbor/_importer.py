@@ -11,7 +11,7 @@ from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from harbor.models.job.result import JobResult
 
@@ -126,16 +126,25 @@ def import_job(
 
 
 def _import(
-    job_dir: str | Path, settings: Settings, trial_name: str | None = None
+    job_dir: str | Path,
+    settings: Settings,
+    trial_name: str | None = None,
+    *,
+    live_job_id: UUID | None = None,
 ) -> ImportSummary:
     summary = ImportSummary()
     errors = Counter()
     try:
         with directory(Path(job_dir)) as root:
-            job = JobResult.model_validate(read_json(root, "result.json"))
-            job_id = str(job.id)
-            if trial_name is None and not job.finished_at:
-                raise ArtifactError("job_not_finished")
+            if trial_name is not None and live_job_id is not None:
+                # Harbor rewrites job/result.json in place on parallel trial hooks.
+                # The public hook config carries the durable ID without that race.
+                job_id = str(live_job_id)
+            else:
+                job = JobResult.model_validate(read_json(root, "result.json"))
+                job_id = str(job.id)
+                if trial_name is None and not job.finished_at:
+                    raise ArtifactError("job_not_finished")
             with _manifest(root, settings.destination) as state:
                 if trial_name is not None:
                     names = [trial_name]

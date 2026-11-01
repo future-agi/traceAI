@@ -43,7 +43,11 @@ class FutureAGIPlugin(BaseJobPlugin):
         # per plugin; Harbor bounds concurrent waiting trials. No background flush.
         async with self._lock:
             result = await asyncio.to_thread(
-                _import, self._job_dir, self._settings, event.trial_name
+                _import,
+                self._job_dir,
+                self._settings,
+                event.trial_name,
+                live_job_id=event.config.job_id,
             )
         if not result.ok:
             _LOG.warning(

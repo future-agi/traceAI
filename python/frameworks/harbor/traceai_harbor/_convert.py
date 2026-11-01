@@ -139,6 +139,8 @@ def convert_trial(
     if not isinstance(data, dict) or not data.get("id"):
         raise ArtifactError("missing_trial_identity")
     result = TrialResult.model_validate(data)
+    if result.config.job_id is not None and str(result.config.job_id) != job_id:
+        raise ArtifactError("mismatched_job_identity")
     if result.trial_name != trial_name or not result.finished_at:
         raise ArtifactError("unfinished_or_mismatched_trial")
     begin, end = nanos(result.started_at), nanos(result.finished_at)

@@ -33,7 +33,11 @@ def test_cancelled_hook_flushes_without_duplicate(job, receiver, monkeypatch):
             SimpleNamespace(job_dir=job, on_trial_ended=callbacks.append)
         )
         callback = asyncio.create_task(
-            callbacks[0](SimpleNamespace(trial_name="trial-1"))
+            callbacks[0](
+                SimpleNamespace(
+                    trial_name="trial-1", config=SimpleNamespace(job_id=None)
+                )
+            )
         )
         assert await asyncio.to_thread(entered.wait, 5)
         callback.cancel()
@@ -43,7 +47,9 @@ def test_cancelled_hook_flushes_without_duplicate(job, receiver, monkeypatch):
         # Final reconciliation waits on its file lock, then sees the saved ACK.
         release.set()
         await plugin.on_job_end(None)
-        await callbacks[0](SimpleNamespace(trial_name="trial-1"))
+        await callbacks[0](
+            SimpleNamespace(trial_name="trial-1", config=SimpleNamespace(job_id=None))
+        )
         return plugin
 
     plugin = asyncio.run(run())
