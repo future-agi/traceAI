@@ -47,6 +47,17 @@ from traceai_anthropic import AnthropicInstrumentor
 AnthropicInstrumentor().instrument(tracer_provider=trace_provider)
 ```
 
+### Anthropic SDK native tracing
+Anthropic SDK 1.14.0 and later can trace Messages calls themselves. To send those spans to Future AGI without this instrumentor, pass the provider to the client:
+
+```python
+client = anthropic.Anthropic(open_telemetry={"tracer_provider": trace_provider})
+```
+
+The SDK's spans include model, timing and token usage, and include prompts and responses only with `"traces": {"content_mode": "content"}`. `TraceConfig` and `FI_HIDE_*` settings don't apply to them.
+
+When the SDK's spans reach the same tracer provider as `AnthropicInstrumentor` (because you pass it to the client, or because it is the global provider), the instrumentor leaves `messages.create` and `messages.count_tokens` calls to the SDK, so each call is recorded once. To keep this instrumentor's spans and privacy controls instead, create the client with `open_telemetry=False`.
+
 ### Create Anthropic Components
 Set up your Anthropic client with built-in observability.
 

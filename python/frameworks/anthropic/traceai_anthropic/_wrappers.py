@@ -32,6 +32,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
+from traceai_anthropic._native import _NativeTracing
 from traceai_anthropic._stream import _MessagesStream, _Stream
 from traceai_anthropic._utils import _finish_request_error
 from traceai_anthropic._with_span import _WithSpan
@@ -48,10 +49,20 @@ class _WithTracer(ABC):
     Base class for wrappers that need a tracer.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        native_tracing: Optional[_NativeTracing] = None,
+        **kwargs: Any,
+    ) -> None:
 
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._native_tracing = native_tracing
+
+    def _native_tracing_owns(self, instance: Any) -> bool:
+        return self._native_tracing is not None and self._native_tracing.owns(instance)
 
     @contextmanager
     def _start_as_current_span(
@@ -243,7 +254,9 @@ class _MessagesWrapper(_BaseWrapper):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or self._native_tracing_owns(instance):
             return wrapped(*args, **kwargs)
 
         arguments = kwargs
@@ -335,7 +348,9 @@ class _AsyncMessagesWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or self._native_tracing_owns(instance):
             return await wrapped(*args, **kwargs)
 
         arguments = kwargs
@@ -407,7 +422,9 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
         args,
         kwargs,
     ):
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or self._native_tracing_owns(instance):
             return wrapped(*args, **kwargs)
 
         arguments = kwargs
