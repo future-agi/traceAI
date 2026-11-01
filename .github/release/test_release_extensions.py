@@ -180,6 +180,25 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(seen, ['0.1.1'])
         self.assertTrue(any(c.args[0][:3] == ['gh', 'pr', 'edit'] for c in run.call_args_list))
 
+    def test_each_pending_release_pr_is_completed_on_its_own_versions(self):
+        # Two pending release PRs for the same package: only the one whose version is released completes.
+        package = {'ecosystem': 'python', 'name': 'a', 'version': '0.1.2', 'tag': 'a-v0.1.2', 'dir': 'python/frameworks/a'}
+        pending = [{'number': 9, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'n'}},
+                   {'number': 8, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'o'}}]
+        changed = {9: {'python/frameworks/a': '0.1.2'}, 8: {'python/frameworks/a': '0.1.1'}}
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': 'a-v0.1.1'}]]]), \
+             patch.object(complete_release, 'changed_release_paths', side_effect=lambda repo, pr: changed[pr['number']]), \
+             patch.object(complete_release, 'python_packages', return_value=[package]), \
+             patch.object(complete_release, 'typescript_packages', return_value=[]), \
+             patch.object(complete_release, 'other_packages', return_value=[]), \
+             patch.object(complete_release, 'load_config', return_value={'skip': {}}), \
+             patch.object(complete_release, 'published_versions', return_value={'0.1.1'}), \
+             patch('subprocess.run') as run:
+            complete_release.main()
+        edits = [c.args[0][3] for c in run.call_args_list if c.args[0][:3] == ['gh', 'pr', 'edit']]
+        self.assertEqual(edits, ['8'])
+
     def test_with_version_rewrites_every_tag_style(self):
         for tag, version, want in (('traceai-a-v0.1.2', '0.1.1', 'traceai-a-v0.1.1'), ('npm-traceai-x-v1.2.0', '1.1.9', 'npm-traceai-x-v1.1.9'),
                                    ('java-v1.0.2', '1.0.1', 'java-v1.0.1'), ('go/openai/v0.1.2', '0.1.1', 'go/openai/v0.1.1')):
