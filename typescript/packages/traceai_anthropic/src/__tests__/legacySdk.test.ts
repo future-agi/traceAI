@@ -221,6 +221,18 @@ describe("legacy SDK 0.27.3 (declared peer)", () => {
     expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
   });
 
+  // Jest turns an unhandled rejection into a test failure, so it cannot host the dropped-call
+  // cases: contract/native-boundary.cjs checks those against the real floor and latest SDKs.
+  it("records an awaited asResponse() failure once and keeps the SDK error type", async () => {
+    await expect(client.messages.create({ ...params, model: "synthetic-error" }).asResponse()).rejects.toBeInstanceOf(
+      Anthropic.BadRequestError,
+    );
+    const spans = await finishedSpans();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(memory.getFinishedSpans()).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+  });
+
   it("records API errors once when the application uses withResponse()", async () => {
     const promise = client.messages.create({ ...params, model: "synthetic-error" });
     promise.catch(() => {});

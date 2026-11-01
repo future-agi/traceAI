@@ -100,9 +100,20 @@ function instrumentAPIPromise(
   onError: (error: unknown) => void,
   onRawResponse: () => void,
 ): APIPromiseLike {
-  // Request and API errors reject here, whichever helper the application uses.
-  // The handler only observes the rejection; the application still receives it.
-  apiPromise.responsePromise?.then(undefined, onError);
+  // Request and API errors reject here, whichever helper the application uses. Chain the
+  // observer into the promise the SDK reads, and rethrow, instead of attaching a side
+  // handler: a side handler would mark the rejection handled, so an application that
+  // drops a failing call would no longer get Node's unhandled rejection.
+  // _thenUnwrap() reads responsePromise, so replace it first.
+  if (apiPromise.responsePromise) {
+    apiPromise.responsePromise = apiPromise.responsePromise.then(
+      (value) => value,
+      (error) => {
+        onError(error);
+        throw error;
+      },
+    );
+  }
 
   const instrumented = apiPromise._thenUnwrap(onResult);
   let parseRequested = false;
@@ -120,12 +131,13 @@ function instrumentAPIPromise(
     instrumented.asResponse = function (this: APIPromiseLike) {
       const response = originalAsResponse.call(this);
       // withResponse() parses first; asResponse() alone leaves the body unread.
-      if (!parseRequested) {
-        response.then(() => {
-          if (!parseRequested) onRawResponse();
-        }, onError);
-      }
-      return response;
+      // Return the chained promise so a dropped failure still reaches the application.
+      // The responsePromise chain above already records errors.
+      if (parseRequested) return response;
+      return response.then((raw) => {
+        if (!parseRequested) onRawResponse();
+        return raw;
+      });
     };
   }
   return instrumented;

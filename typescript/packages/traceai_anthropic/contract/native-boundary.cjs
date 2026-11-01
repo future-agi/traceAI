@@ -18,6 +18,9 @@ const Anthropic = req(sdkPackage).default;
 const sdkVersion = JSON.parse(require('node:fs').readFileSync(path.join(path.dirname(req.resolve(sdkPackage)), 'package.json'), 'utf8')).version;
 const native = 'openTelemetry' in Anthropic.prototype;
 const warnings = [];
+// Node reports a dropped failing call as an unhandled rejection. Instrumentation must not hide it.
+const unhandled = [];
+process.on('unhandledRejection', reason => unhandled.push(reason));
 diag.setLogger({ warn: message => warnings.push(message), error() {}, info() {}, debug() {}, verbose() {} });
 const params = { model: 'synthetic-model', max_tokens: 32,
   messages: [{ role: 'user', content: 'PRIVATE_INPUT_CANARY' }] };
@@ -113,12 +116,17 @@ async function main() {
     }
     const client = new Anthropic({ apiKey: 'not-a-real-key', baseURL: 'https://offline.invalid', maxRetries: 0,
       fetch, ...(native ? { openTelemetry: { tracerProvider: provider, traces: { contentMode: 'metadata_only' } } } : {}) });
-    async function run(label, operation, count = 1, status = SpanStatusCode.OK) {
+    async function run(label, operation, count = 1, status = SpanStatusCode.OK, unhandledCount = 0) {
       memory.reset();
       wire.length = 0;
+      const unhandledBefore = unhandled.length;
       await operation();
       // The legacy instrumentor ends a stream span after its own copy of the stream drains.
       for (let i = 0; i < 100 && memory.getFinishedSpans().length < count; i++) await new Promise(r => setTimeout(r, 5));
+      await new Promise(r => setTimeout(r, 20));
+      const reasons = unhandled.slice(unhandledBefore);
+      assert.equal(reasons.length, unhandledCount, label + ' unhandled rejections');
+      for (const reason of reasons) assert.ok(reason instanceof Anthropic.BadRequestError, label + ' unhandled reason');
       await provider.forceFlush();
       const spans = memory.getFinishedSpans();
       assert.equal(spans.length, count, label);
@@ -194,6 +202,21 @@ async function main() {
       await run('API error remains typed', async () => {
         await assert.rejects(client.messages.create({ ...params, model: 'synthetic-error' }), Anthropic.BadRequestError);
       }, 1, SpanStatusCode.ERROR);
+      await run('API error through withResponse', async () => {
+        await assert.rejects(client.messages.create({ ...params, model: 'synthetic-error' }).withResponse(),
+          Anthropic.BadRequestError);
+      }, 1, SpanStatusCode.ERROR);
+      await run('API error through asResponse', async () => {
+        await assert.rejects(client.messages.create({ ...params, model: 'synthetic-error' }).asResponse(),
+          Anthropic.BadRequestError);
+      }, 1, SpanStatusCode.ERROR);
+      // Without instrumentation, a failing call the application never awaits is an unhandled rejection.
+      await run('dropped failing call stays unhandled', async () => {
+        client.messages.create({ ...params, model: 'synthetic-error' });
+      }, 1, SpanStatusCode.ERROR, 1);
+      await run('dropped failing asResponse stays unhandled', async () => {
+        client.messages.create({ ...params, model: 'synthetic-error' }).asResponse();
+      }, 1, SpanStatusCode.ERROR, 1);
       // CommonJS hook path: the module object, not the default export.
       instrumentation.manuallyInstrument(req(sdkPackage));
       await run('module object adds no second wrapper', async () => { await client.messages.create(params); });
@@ -233,6 +256,12 @@ async function main() {
       }, 1, SpanStatusCode.ERROR);
       const errorWireContainsDetail = JSON.stringify(wire).includes('SYNTHETIC_ERROR_DETAIL');
       cases[cases.length - 1].errorWireContainsDetail = errorWireContainsDetail;
+      await run('dropped failing call stays unhandled', async () => {
+        client.messages.create({ ...params, model: 'synthetic-error' });
+      }, 1, SpanStatusCode.ERROR, 1);
+      await run('dropped failing asResponse stays unhandled', async () => {
+        client.messages.create({ ...params, model: 'synthetic-error' }).asResponse();
+      }, 1, SpanStatusCode.ERROR, 1);
       await run('native disabled remains disabled', async () => {
         const quiet = new Anthropic({ apiKey: 'not-a-real-key', baseURL: 'https://offline.invalid', maxRetries: 0, fetch, openTelemetry: false });
         const result = await quiet.messages.create(params).withResponse();
