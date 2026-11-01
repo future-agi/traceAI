@@ -13,6 +13,9 @@ import (
 // Attach it once, before other interceptors, with a2asrv.WithCallInterceptors.
 // It covers the same five methods as [Interceptor], with one SERVER span per
 // call or stream, and never modifies a request, response or error.
+// Use [ServerInterceptor.Wrap] for other interceptors that can return an After
+// error: the SDK otherwise skips the tracing After, leaving only cancellation
+// to finish the span without the rejection error.
 //
 // Requires a2a-go v2.7.0 or later (the module minimum): older SDKs skip After
 // when rejecting unary calls for missing required extensions.
@@ -46,6 +49,30 @@ var _ a2asrv.CallInterceptor = (*ServerInterceptor)(nil)
 // privacy defaults as [NewInterceptor]. It does not register global telemetry.
 func NewServerInterceptor(opts ...Option) *ServerInterceptor {
 	return &ServerInterceptor{config: NewInterceptor(opts...)}
+}
+
+// Wrap observes errors returned by another interceptor's After, which otherwise
+// stop the SDK from calling the tracing After. Register i first, then i.Wrap(policy)
+// in the same a2asrv.WithCallInterceptors list. Wrap each interceptor that can
+// reject a response this way. The wrapped interceptor's Before, response changes,
+// returned error and SDK callback ordering are preserved; no extra span is created.
+func (i *ServerInterceptor) Wrap(interceptor a2asrv.CallInterceptor) a2asrv.CallInterceptor {
+	return &serverResponseObserver{CallInterceptor: interceptor, tracing: i}
+}
+
+type serverResponseObserver struct {
+	a2asrv.CallInterceptor
+	tracing *ServerInterceptor
+}
+
+func (o *serverResponseObserver) After(ctx context.Context, callCtx *a2asrv.CallContext, resp *a2asrv.Response) error {
+	err := o.CallInterceptor.After(ctx, callCtx, resp)
+	if err != nil {
+		// The SDK discards the payload on rejection. Observe that outcome without
+		// changing the response or allowing earlier policy callbacks to run.
+		_ = o.tracing.After(ctx, callCtx, &a2asrv.Response{Err: err})
+	}
+	return err
 }
 
 // Separate state keys keep outbound calls from an executor from overwriting

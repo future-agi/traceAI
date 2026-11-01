@@ -3,6 +3,7 @@ package traceaia2a_test
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	traceaia2a "github.com/future-agi/traceAI/go/a2a"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -27,7 +29,7 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 			name = "gzip"
 		}
 		t.Run(name, func(t *testing.T) {
-			requests := make(chan *collectortrace.ExportTraceServiceRequest, 8)
+			requests := make(chan *collectortrace.ExportTraceServiceRequest, 10)
 			sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/traces" || r.Header.Get("Content-Type") != "application/x-protobuf" {
 					t.Error("wrong OTLP endpoint or content type")
@@ -90,8 +92,22 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 			if task, ok := result.(*a2a.Task); !ok || task.Status.State != a2a.TaskStateAuthRequired {
 				t.Fatalf("expected auth-required snapshot, got %v", result)
 			}
-			if len(requests) != 6 {
-				t.Fatalf("want three client/server pairs, got %d exports", len(requests))
+			tracing := traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp))
+			policy := responsePolicy{after: func(context.Context, *a2asrv.CallContext, *a2asrv.Response) error {
+				return a2a.NewError(a2a.ErrUnsupportedOperation, "policy rejection "+marker)
+			}}
+			policyClient := serverClient(t, "jsonrpc", repliesWithMessage(), tp, traceaia2a.TraceConfig{HideInputs: true, HideOutputs: true},
+				a2asrv.WithCallInterceptors(tracing.Wrap(policy)))
+			if _, err := policyClient.SendMessage(context.Background(), userMessage(marker)); !errors.Is(err, a2a.ErrUnsupportedOperation) {
+				t.Fatalf("want policy rejection, got %v", err)
+			}
+			for _, err := range policyClient.SendStreamingMessage(context.Background(), userMessage(marker)) {
+				if !errors.Is(err, a2a.ErrUnsupportedOperation) {
+					t.Fatalf("want streamed policy rejection, got %v", err)
+				}
+			}
+			if len(requests) != 10 {
+				t.Fatalf("want five client/server pairs, got %d exports", len(requests))
 			}
 			byID := map[string]*tracepb.Span{}
 			serverCount := 0
@@ -113,10 +129,30 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 					}
 				}
 			}
-			if len(byID) != 6 || serverCount != 3 {
+			if len(byID) != 10 || serverCount != 5 {
 				t.Fatalf("unexpected wire span counts: %d total, %d server", len(byID), serverCount)
 			}
+			policyErrors := 0
 			for _, s := range byID {
+				if s.Kind == tracepb.Span_SPAN_KIND_SERVER {
+					p := byID[string(s.ParentSpanId)]
+					if p == nil || p.Kind != tracepb.Span_SPAN_KIND_CLIENT || string(p.TraceId) != string(s.TraceId) {
+						t.Fatal("OTLP parent chain broken")
+					}
+				}
+				rejected := false
+				for _, attr := range s.Attributes {
+					if attr.Key == traceaia2a.ErrorType && attr.Value.GetStringValue() == "UNSUPPORTED_OPERATION" {
+						rejected = true
+					}
+				}
+				if rejected {
+					policyErrors++
+					if s.Status.Code != tracepb.Status_STATUS_CODE_ERROR || len(s.Events) != 0 {
+						t.Fatal("policy rejection lost or rejected output recorded")
+					}
+					continue
+				}
 				if s.Name == "a2a.SendMessage" {
 					redacted := false
 					for _, attr := range s.Attributes {
@@ -131,16 +167,15 @@ func TestServerOTLPWirePrivacy(t *testing.T) {
 				if s.Kind != tracepb.Span_SPAN_KIND_SERVER {
 					continue
 				}
-				p := byID[string(s.ParentSpanId)]
-				if p == nil || p.Kind != tracepb.Span_SPAN_KIND_CLIENT || string(p.TraceId) != string(s.TraceId) {
-					t.Fatal("OTLP parent chain broken")
-				}
 				if s.Name == "a2a.SendStreamingMessage" && (len(s.Events) != 4 || s.Status.Code != tracepb.Status_STATUS_CODE_OK) {
 					t.Fatal("wire stream shape changed")
 				}
 				if s.Name == "a2a.GetTask" && s.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
 					t.Fatal("wire error status missing")
 				}
+			}
+			if policyErrors != 4 {
+				t.Fatalf("want four client/server policy errors, got %d", policyErrors)
 			}
 		})
 	}

@@ -20,7 +20,7 @@ import (
 func TestServerNestedInProcessCalls(t *testing.T) {
 	for _, transport := range []string{"direct", "jsonrpc", "rest", "grpc"} {
 		for _, method := range []string{"SendMessage", "SendStreamingMessage"} {
-			for _, nested := range []string{"traced", "uninstrumented", "untraced-error", "untraced-success", "same-method"} {
+			for _, nested := range []string{"traced", "uninstrumented", "untraced-error", "untraced-success", "same-method", "policy-error", "untraced-policy-error"} {
 				for _, privacy := range []string{"visible", "redacted"} {
 					t.Run(transport+"/"+method+"/"+nested+"/"+privacy, func(t *testing.T) {
 						tp, rec := serverRecorder(t)
@@ -30,8 +30,14 @@ func TestServerNestedInProcessCalls(t *testing.T) {
 						if nested != "uninstrumented" {
 							opts = append(opts, a2asrv.WithCallInterceptors(interceptor))
 						}
-						if nested == "untraced-success" {
+						if nested == "untraced-success" || nested == "untraced-policy-error" {
 							opts = append(opts, a2asrv.WithExtendedAgentCard(&a2a.AgentCard{Name: "nested " + marker}))
+						}
+						if nested == "policy-error" || nested == "untraced-policy-error" {
+							policy := responsePolicy{after: func(context.Context, *a2asrv.CallContext, *a2asrv.Response) error {
+								return a2a.NewError(a2a.ErrUnsupportedOperation, "nested policy "+marker)
+							}}
+							opts = append(opts, a2asrv.WithCallInterceptors(interceptor.Wrap(policy)))
 						}
 						inner := a2asrv.NewHandler(repliesWithMessage(), opts...)
 						exec := repliesWithMessage()
@@ -42,13 +48,19 @@ func TestServerNestedInProcessCalls(t *testing.T) {
 							case "untraced-error":
 								_, err = inner.GetExtendedAgentCard(ctx, &a2a.GetExtendedAgentCardRequest{})
 								wantErr = a2a.ErrExtendedCardNotConfigured
-							case "untraced-success":
+							case "untraced-success", "untraced-policy-error":
 								_, err = inner.GetExtendedAgentCard(ctx, &a2a.GetExtendedAgentCardRequest{})
+								if nested == "untraced-policy-error" {
+									wantErr = a2a.ErrUnsupportedOperation
+								}
 							case "same-method":
 								_, err = inner.SendMessage(ctx, userMessage("nested "+marker))
 							default:
 								_, err = inner.GetTask(ctx, &a2a.GetTaskRequest{ID: "synthetic-missing"})
 								wantErr = a2a.ErrTaskNotFound
+								if nested == "policy-error" {
+									wantErr = a2a.ErrUnsupportedOperation
+								}
 							}
 							if !errors.Is(err, wantErr) {
 								t.Errorf("nested call error = %v, want %v", err, wantErr)
@@ -70,7 +82,7 @@ func TestServerNestedInProcessCalls(t *testing.T) {
 							send, stream = client.SendMessage, client.SendStreamingMessage
 							wantSpans++
 						}
-						if nested == "traced" || nested == "same-method" {
+						if nested == "traced" || nested == "same-method" || nested == "policy-error" {
 							wantSpans++
 						}
 						// No cancellation: a completed direct call must end its own span.
@@ -117,8 +129,14 @@ func TestServerNestedInProcessCalls(t *testing.T) {
 							if child.Parent().SpanID() != outer.SpanContext().SpanID() || child.SpanContext().TraceID() != outer.SpanContext().TraceID() || child.Parent().IsRemote() {
 								t.Error("nested server span lost its local parent")
 							}
-							if nested == "traced" && (child.Name() != "a2a.GetTask" || child.Status().Code != codes.Error || str(attrs(child), traceaia2a.ErrorType) != "TASK_NOT_FOUND") {
-								t.Error("nested error was not recorded on its own span")
+							if nested == "traced" || nested == "policy-error" {
+								wantType := "TASK_NOT_FOUND"
+								if nested == "policy-error" {
+									wantType = "UNSUPPORTED_OPERATION"
+								}
+								if child.Name() != "a2a.GetTask" || child.Status().Code != codes.Error || str(attrs(child), traceaia2a.ErrorType) != wantType {
+									t.Error("nested error was not recorded on its own span")
+								}
 							}
 						}
 						input, output := "outer "+marker, "hello outer "+marker

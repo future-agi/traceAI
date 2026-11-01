@@ -30,5 +30,7 @@
 // [ServerInterceptor] attaches to a2asrv.WithCallInterceptors and traces the
 // same methods as SERVER spans. It extracts W3C context from incoming service
 // parameters and passes the span context to the executor. Existing local
-// transport spans remain parents. No application tracing glue is required.
+// transport spans remain parents. Use [ServerInterceptor.Wrap] for additional
+// middleware that can reject a response by returning an error from After, so
+// the rejection ends the server span even when the SDK skips subsequent hooks.
 package traceaia2a

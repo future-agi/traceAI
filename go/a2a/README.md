@@ -32,7 +32,11 @@ differences.
 
 ```sh
 go get github.com/future-agi/traceAI/go/a2a@latest
+go get go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.47.0 go.opentelemetry.io/otel/sdk@v1.47.0
 ```
+
+The second command installs the exporter and SDK used by the setup below and resolves their
+`go.sum` entries. The integration itself does not create an exporter.
 
 ## Use
 
@@ -104,6 +108,22 @@ For REST use `a2asrv.NewRESTHandler(handler)`; for gRPC use
 Attach the interceptor once, first in the list. It traces protocol calls, not agent-card
 requests, transport parsing/authentication failures that occur before the hook, or separate
 executor lifetimes. A background task may outlive a nonblocking request's span.
+
+When you add middleware that can reject a response by returning an error from `After`,
+wrap each such interceptor with `tracing.Wrap`. For example, with your existing `outputPolicy`:
+
+```go
+tracing := traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp))
+handler := a2asrv.NewHandler(executor,
+	a2asrv.WithCallInterceptors(tracing, tracing.Wrap(outputPolicy)))
+```
+
+The SDK stops the remaining `After` callbacks on rejection. The wrapper records the error
+and ends the server span before returning the same error; it does not change the response,
+run skipped policy callbacks or add another span. Without the wrapper, a rejected call can
+leave its server span open until cancellation, which cannot recover the policy error.
+Middleware that instead sets `resp.Err`, clears `resp.Payload` and returns `nil` does not
+short-circuit the callbacks and needs no wrapper.
 
 The executor receives a context containing the server span. Start any application/model
 spans from that context; do not re-extract `traceparent` or add a second A2A server span.
