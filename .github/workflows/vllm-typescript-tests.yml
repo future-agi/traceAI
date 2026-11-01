@@ -44,13 +44,15 @@ jobs:
           pnpm run build:deps
           pnpm --filter @traceai/vllm run build
       - name: Test real resources and OTLP with loopback only
-        working-directory: typescript
+        working-directory: typescript/packages/traceai_vllm
         env:
           OPENAI_MODULE: ${{ runner.temp }}/vllm-sdk/node_modules/openai/index.js
         run: |
+          # Invoke installed executables directly: root has a different Corepack cache.
           sudo --preserve-env=PATH,OPENAI_MODULE unshare --net bash -c '
             set -e
             ip link set lo up
-            pnpm --filter @traceai/vllm test --runInBand
-            pnpm --filter @traceai/vllm test:contract
+            node node_modules/jest/bin/jest.js --config jest.config.js --runInBand
+            node --test test/real-sdk.cjs
+            node test/automatic.cjs
           '
