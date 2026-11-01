@@ -28,7 +28,7 @@ test(
   async () => {
     const { spawn } = require("node:child_process");
     const path = require("node:path");
-    const driver = `const {runAgent}=require(${JSON.stringify(path.resolve("/Volumes/nik-ext-1/tmp/coding-agent-tracing-20261031/build/github-copilot/v3-round6/typescript/packages/traceai_agents/dist/src/cli/run.js"))});runAgent({launch:async()=>{console.log('launched');return {executable:process.execPath,args:['-e','setInterval(()=>{},1000)'],env:{}}}},{},[],false,{signalDelivery:'dedicated-wrapper-group'}).catch(e=>{console.log('refused:'+e.message)})`;
+    const driver = `const {runAgent}=require(${JSON.stringify(path.resolve(__dirname, "../dist/src/cli/run.js"))});runAgent({launch:async()=>{console.log('launched');return {executable:process.execPath,args:['-e','setInterval(()=>{},1000)'],env:{}}}},{},[],false,{signalDelivery:'dedicated-wrapper-group'}).catch(e=>{console.log('refused:'+e.message)})`;
     const wrapper = spawn(process.execPath, ["-e", driver], {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
