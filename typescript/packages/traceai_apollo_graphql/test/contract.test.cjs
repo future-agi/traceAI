@@ -70,14 +70,16 @@ for (const content of [false, true]) test(`real Apollo OTLP wire, captureContent
     assert.equal(result.forceFlushed, true);
     assert.equal(result.flushed, true); assert.equal(result.repeatedShutdown, true);
     assert.ok(result.shutdownMs < 3000); assert.match(result.meter, /Noop|Proxy/);
-    assert.equal(result.replies.length, 10);
+    assert.equal(result.replies.length, 12);
+    assert.deepEqual(result.replies[10], { data: { decision: true } });
+    assert.deepEqual(result.replies[11], { data: { decision: false } });
     assert.equal(result.replies[0].data.hello, 'world');
     assert.equal(result.replies[5].errors.length, 1);
     assert.equal(result.replies[6].data.partial.name, 'Ada');
     const spans = c.spans();
     const httpSpans = spans.filter(s => s.scope === '@opentelemetry/instrumentation-http' && s.kind === 2);
-    assert.equal(httpSpans.length, 10, 'exactly one HTTP server span per request');
-    for (const name of ['Hello', 'Profile', 'Literal', 'Boom', 'Partial', 'Remote']) {
+    assert.equal(httpSpans.length, 12, 'exactly one HTTP server span per request');
+    for (const name of ['Hello', 'Profile', 'Literal', 'Boom', 'Partial', 'Remote', 'LiteralKinds', 'BlockLiteral']) {
       const ops = operation(spans, name);
       assert.equal(ops.length, ['Hello', 'Profile'].includes(name) ? 2 : 1);
       for (const op of ops) {
@@ -107,6 +109,17 @@ for (const content of [false, true]) test(`real Apollo OTLP wire, captureContent
       'url.full', 'server.address', 'user_agent.original', 'process.command_args', 'process.owner']) {
       assert.ok(!wire.includes(secret), `must not export ${secret}`);
     }
+    const sources = spans.map(span => span.attrs['graphql.source']).filter(value => typeof value === 'string');
+    const sourceText = sources.join('\n');
+    for (const literal of ['PRIVATE_STRING', 'PRIVATE_BLOCK_STRING', '92841', '928.41']) {
+      assert.ok(!sourceText.includes(literal), `upstream must mask string/number literal ${literal}`);
+    }
+    // Name tokens (enum, Boolean and null literals) are deliberately not covered
+    // by upstream masking. Content capture must remain an explicit opt-in.
+    for (const literal of ['PRIVATE_ENUM', 'flag: true', 'flag: false', 'absent: null']) {
+      assert.equal(sourceText.includes(literal), content, `literal policy for ${literal}`);
+    }
+    assert.equal(wire.includes('PRIVATE_ENUM'), content);
     assert.equal(wire.includes('graphql.source'), content);
     assert.equal(wire.includes('PRIVATE_ERROR'), content);
     assert.ok(wire.includes('exception.type'));

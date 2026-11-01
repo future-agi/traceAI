@@ -57,6 +57,14 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/apollo-consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP"/apollo-dist/*.tgz "@apollo/server@$APOLLO" "graphql@$GRAPHQL"
           cp -R typescript/packages/traceai_apollo_graphql/test "$RUNNER_TEMP/apollo-consumer/test"
+      - name: Install unsupported GraphQL for the startup rejection contract
+        if: matrix.apollo == '5.5.1' && matrix.node == '22.23.4'
+        run: |
+          # Bypass peers only in this negative test, never in a supported setup.
+          mkdir -p "$RUNNER_TEMP/apollo-graphql17"
+          npm install --prefix "$RUNNER_TEMP/apollo-graphql17" --ignore-scripts --no-audit --no-fund --legacy-peer-deps \
+            "$RUNNER_TEMP"/apollo-dist/*.tgz '@apollo/server@5.5.1' 'graphql@17.0.2'
+          cp typescript/packages/traceai_apollo_graphql/test/unsupported-graphql.cjs "$RUNNER_TEMP/apollo-graphql17/"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ matrix.node }}
@@ -67,3 +75,9 @@ jobs:
           sudo --preserve-env=APOLLO_MAJOR unshare --net -- bash -c \
             'ip link set lo up; exec "$1" --test "$2"/test/*.test.cjs' \
             _ "$(command -v node)" "$RUNNER_TEMP/apollo-consumer"
+      - name: Reject GraphQL 17 with only loopback networking
+        if: matrix.apollo == '5.5.1' && matrix.node == '22.23.4'
+        run: |
+          sudo unshare --net -- bash -c \
+            'ip link set lo up; exec "$1" "$2"/unsupported-graphql.cjs' \
+            _ "$(command -v node)" "$RUNNER_TEMP/apollo-graphql17"

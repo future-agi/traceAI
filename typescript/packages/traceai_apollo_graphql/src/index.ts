@@ -1,4 +1,5 @@
 import { syncBuiltinESMExports } from 'node:module';
+import { dirname, join } from 'node:path';
 import { diag, ProxyTracerProvider, SpanStatusCode, trace } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace';
@@ -30,6 +31,14 @@ let configured = false;
 /** Call once, before importing Apollo or graphql. Owns this process's tracing SDK. */
 export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
   if (configured) throw new Error('Apollo tracing is already configured');
+  // Read metadata only: loading GraphQL itself here would defeat instrumentation.
+  // Peer constraints can be bypassed by installers; do not silently lose spans.
+  // GraphQL 17 does not export the package.json subpath.
+  const graphqlVersion: string = require(join(dirname(require.resolve('graphql')), 'package.json')).version;
+  const supportedVersion = /^16\.(\d+)\.\d+$/.exec(graphqlVersion);
+  if (!supportedVersion || Number(supportedVersion[1]) < 11) {
+    throw new Error('Apollo tracing requires GraphQL >=16.11.0 <17 (stable); install graphql@16');
+  }
   if (Object.keys(require.cache).some(path => /[/\\]graphql[/\\](index|graphql)\.js$/.test(path))) {
     throw new Error('Initialize Apollo tracing before importing graphql or Apollo; use node --import');
   }

@@ -15,6 +15,8 @@ export FI_PROJECT_NAME=my-graphql-api
 # export FI_BASE_URL=https://your-futureagi-origin
 ```
 
+GraphQL 17 is not supported by this adapter, Apollo Server 5's peer range or the upstream GraphQL instrumentation. Keep `graphql@16`; do not bypass peer dependency checks to install 17. `configure()` rejects unsupported GraphQL versions before starting tracing.
+
 Create `instrumentation.mjs`:
 
 ```js
@@ -80,6 +82,8 @@ An HTTP server span parents parsing, validation and operation execution. Apollo'
 
 The HTTP/GraphQL exporter allowlist keeps operation and field metadata, HTTP method/status, timing, trace identity and exception type. It removes query source, error/status messages, stacks, URLs, peers, unknown attributes, unknown events and link attributes. Operation names, schema field names and paths remain visible; do not put secrets in those names.
 
-With `captureContent: true`, masked query source and exception/status messages are also exported. Literal values remain masked by upstream `allowValues: false`; variable values and stack traces remain excluded. Error messages may contain arbitrary application data, so enable content only when appropriate.
+With `captureContent: true`, query source and exception/status messages are also exported. The upstream `allowValues: false` setting masks string (including block-string), integer and float literals only; enum, Boolean and null literals remain visible. For example, `decision(flag: true, value: PRIVATE_ENUM)` retains both argument values. This is partial masking, not full query redaction. Variable-value attributes and stack traces remain excluded, but error messages may contain arbitrary application data, including argument or variable values. Keep content capture off if query literals or error messages can contain sensitive data.
+
+`FiSanitizingExporter` forwards opted-in source as supplied; it does not mask literals itself. If you wrap your own exporter instead of using `configure()`, configure source masking in your instrumentation too.
 
 Application-created spans and spans from other instrumentations are **not filtered**. Configure their privacy independently. Sanitization failure drops the affected export batch instead of sending the original payload.

@@ -5,11 +5,14 @@ import { trace, metrics } from '@opentelemetry/api';
 const tracer = trace.getTracer('application');
 const server = new ApolloServer({
   stopOnTerminationSignals: false,
-  typeDefs: `type Query { hello: String, profile(id: ID!): Profile, boom: String, partial: Profile }
+  typeDefs: `type Query { hello: String, profile(id: ID!): Profile, boom: String, partial: Profile,
+      decision(flag: Boolean, value: Decision, text: String, count: Int, ratio: Float, absent: String): Boolean }
+    enum Decision { PRIVATE_ENUM }
     type Profile { name: String, bad: String }`,
   resolvers: {
     Query: {
       hello: () => 'world',
+      decision: (_, { flag }) => flag,
       profile: () => tracer.startActiveSpan('load-profile', async span => {
         try {
           span.setAttribute('application.owned', 'KEEP_APP_ATTRIBUTE');
@@ -49,6 +52,12 @@ if (process.env.SIGNAL_TEST) {
   }));
   replies.push(await post('query Invalid { doesNotExist }'));
   replies.push(await post('query Syntax {'));
+  replies.push(await post(`query LiteralKinds {
+    decision(flag: true, value: PRIVATE_ENUM, text: "PRIVATE_STRING", count: 92841, ratio: 928.41, absent: null)
+  }`));
+  replies.push(await post(`query BlockLiteral {
+    decision(flag: false, text: """PRIVATE_BLOCK_STRING""")
+  }`));
   const forceFlushed = process.env.TEST_FORCE_FLUSH ? await globalThis.telemetry.forceFlush() : undefined;
   await server.stop();
   const start = Date.now();

@@ -3,7 +3,12 @@ import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace';
 
 export interface PrivacyOptions {
-  /** Include masked query source and error messages, but never stacks or variable values. */
+  /**
+   * Include upstream query source and error messages. configure() masks string and
+   * numeric literals only; enum, Boolean and null literals remain visible.
+   * Never includes stacks or variable-value attributes. Error messages may contain data.
+   * When wrapping your own exporter, source masking is your instrumentation's responsibility.
+   */
   captureContent?: boolean;
 }
 
