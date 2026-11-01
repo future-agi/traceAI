@@ -40,6 +40,7 @@ var tracedEmbeddings = new TracedTextEmbeddingGenerationService(embeddingService
 ```
 
 - For native unary chat, the service boundary is a `CHAIN` span containing input/output content. Semantic Kernel's native `LLM` spans describe each model round, including rounds before an automatic tool call. The chain does not repeat their token counts.
+- On 1.4.5 and 1.5.0, functions that Semantic Kernel calls automatically for the model (`ToolCallBehavior` auto-invoke) become `TOOL` spans in the same trace, with the same privacy settings. The adapter does this with a pre-tool-call hook that runs after your own pre-tool-call hooks, so it traces the function your hooks choose.
 - For custom chat services without native telemetry, the boundary remains an `LLM` span and reads usage from returned message metadata when available.
 - Streaming uses one `LLM` span for the subscription. Chunks pass through unchanged. Captured text is bounded to 32,000 characters, with `semantic_kernel.output_truncated=true` when truncated. Token counts are not inferred for streaming.
 - Embedding calls use `EMBEDDING` spans with input count, vector count and dimensions when available. Vector values are not recorded.

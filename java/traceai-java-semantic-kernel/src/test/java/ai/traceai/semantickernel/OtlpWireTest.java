@@ -3,6 +3,10 @@ package ai.traceai.semantickernel;
 import ai.traceai.FITracer;
 import ai.traceai.TraceConfig;
 import com.microsoft.semantickernel.Kernel;
+import com.microsoft.semantickernel.orchestration.InvocationContext;
+import com.microsoft.semantickernel.orchestration.ToolCallBehavior;
+import com.microsoft.semantickernel.plugin.KernelPluginFactory;
+import com.microsoft.semantickernel.semanticfunctions.annotations.DefineKernelFunction;
 import com.microsoft.semantickernel.services.chatcompletion.ChatCompletionService;
 import com.microsoft.semantickernel.services.textembedding.TextEmbeddingGenerationService;
 import com.sun.net.httpserver.HttpServer;
@@ -72,6 +76,36 @@ class OtlpWireTest {
             assertThat(span.getStatus().getCode()).isEqualTo(Status.StatusCode.STATUS_CODE_ERROR);
             assertThat(span.getStatus().getMessage()).isEmpty();
         });
+    }
+
+    @Test
+    void automaticToolErrorsAreHiddenOnTheWire() throws Exception {
+        List<Span> spans = exportHidden(tracer -> {
+            try (LocalOpenAi openAi = new LocalOpenAi().mode(LocalOpenAi.Mode.TOOL).tool("local-failing")) {
+                Kernel kernel = Kernel.builder()
+                    .withPlugin(KernelPluginFactory.createFromObject(new FailingPlugin(), "local")).build();
+                InvocationContext context = InvocationContext.builder()
+                    .withToolCallBehavior(ToolCallBehavior.allowAllKernelFunctions(true)).build();
+                new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer)
+                    .getChatMessageContentsAsync(PROMPT, kernel, context).block();
+            }
+        });
+        List<Span> tools = spans.stream()
+            .filter(span -> span.getName().startsWith("function_invocation")).collect(Collectors.toList());
+        assertThat(tools).hasSize(1);
+        Span tool = tools.get(0);
+        assertThat(attribute(tool, "fi.span.kind")).isEqualTo("TOOL");
+        assertThat(tool.getStatus().getCode()).isEqualTo(Status.StatusCode.STATUS_CODE_ERROR);
+        assertThat(tool.getStatus().getMessage()).isEmpty();
+        assertThat(tool.getEventsList()).allSatisfy(event -> assertThat(event.getAttributesList())
+            .extracting(KeyValue::getKey).doesNotContain("exception.message", "exception.stacktrace"));
+    }
+
+    public static class FailingPlugin {
+        @DefineKernelFunction(name = "failing", returnType = "java.lang.String")
+        public String failing() {
+            throw new IllegalStateException(LocalOpenAi.ERROR_DETAIL);
+        }
     }
 
     @Test

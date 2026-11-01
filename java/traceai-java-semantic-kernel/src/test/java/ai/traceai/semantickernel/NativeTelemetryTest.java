@@ -252,6 +252,115 @@ class NativeTelemetryTest {
     }
 
     @Test
+    void automaticToolCallIsOneTraceAiToolSpanWithHiddenErrorDetails() {
+        DelayedPlugin plugin = new DelayedPlugin();
+        openAi.mode(LocalOpenAi.Mode.TOOL).tool("local-failing");
+
+        // Semantic Kernel reports the tool failure to the model and asks again.
+        List<SpanData> spans = runToolRound(plugin, tracer(TraceConfig.builder().hideErrorDetails(true).build()))
+            .getFinishedSpanItems();
+
+        assertThat(plugin.failingCalls).hasValue(1);
+        SpanData chain = only(spans, "CHAIN");
+        SpanData tool = onlyFunctionSpan(spans);
+        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+        assertThat(tool.getTraceId()).isEqualTo(chain.getTraceId());
+        assertThat(spanIds(spans)).contains(tool.getParentSpanId());
+        assertThat(tool.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(tool.getStatus().getDescription()).isEmpty();
+        assertThat(tool.getEvents()).allSatisfy(event -> {
+            assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.message"))).isNull();
+            assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.stacktrace"))).isNull();
+        });
+        assertThat(tool.toString()).doesNotContain(LocalOpenAi.ERROR_DETAIL);
+    }
+
+    @Test
+    void automaticToolCallUsesTheTraceAiTracerWithoutGlobalTelemetry() {
+        // A tool span that only appeared through GlobalOpenTelemetry would vanish here.
+        GlobalOpenTelemetry.resetForTest();
+        DelayedPlugin plugin = new DelayedPlugin();
+        openAi.mode(LocalOpenAi.Mode.TOOL);
+
+        List<SpanData> spans = runToolRound(plugin, tracer()).getFinishedSpanItems();
+
+        SpanData tool = onlyFunctionSpan(spans);
+        assertThat(tool.getName()).isEqualTo("function_invocation local-immediate");
+        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+        assertThat(tool.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        assertThat(tool.getTraceId()).isEqualTo(only(spans, "CHAIN").getTraceId());
+        assertThat(spans.stream().filter(span -> "LLM".equals(span.getAttributes().get(FI_KIND)))).hasSize(2);
+    }
+
+    @Test
+    void cancellingDuringAnAutomaticToolCallEndsTheToolSpan() throws Exception {
+        DelayedPlugin plugin = new DelayedPlugin();
+        openAi.mode(LocalOpenAi.Mode.TOOL).tool("local-hanging");
+        Kernel kernel = Kernel.builder().withPlugin(KernelPluginFactory.createFromObject(plugin, "local")).build();
+        var chat = new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer());
+
+        Disposable subscription = chat.getChatMessageContentsAsync("Say hello", kernel, autoInvoke()).subscribe();
+        assertThat(plugin.hangingStarted.await(10, TimeUnit.SECONDS)).isTrue();
+        subscription.dispose();
+
+        SpanData tool = onlyFunctionSpan(exporter.getFinishedSpanItems());
+        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+        assertThat(tool.getAttributes().get(CANCELLED)).isTrue();
+        assertThat(tool.getStatus().getStatusCode()).isNotEqualTo(StatusCode.OK);
+    }
+
+    @Test
+    void userPreToolCallHooksStillRunBeforeTheToolIsTraced() {
+        DelayedPlugin plugin = new DelayedPlugin();
+        openAi.mode(LocalOpenAi.Mode.TOOL).tool("local-failing");
+        Kernel kernel = Kernel.builder().withPlugin(KernelPluginFactory.createFromObject(plugin, "local")).build();
+        KernelFunction<?> replacement = kernel.getFunction("local", "immediate");
+        var hooks = new com.microsoft.semantickernel.hooks.KernelHooks();
+        hooks.addPreToolCallHook(event -> new com.microsoft.semantickernel.hooks.PreToolCallEvent(
+            replacement.getName(), event.getArguments(), replacement,
+            new com.microsoft.semantickernel.contextvariables.ContextVariableTypes()));
+        var context = com.microsoft.semantickernel.orchestration.InvocationContext.builder()
+            .withToolCallBehavior(com.microsoft.semantickernel.orchestration.ToolCallBehavior.allowAllKernelFunctions(true))
+            .withKernelHooks(hooks)
+            .build();
+        var chat = new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer());
+
+        chat.getChatMessageContentsAsync("Say hello", kernel, context).block();
+
+        assertThat(plugin.failingCalls).hasValue(0);
+        SpanData tool = onlyFunctionSpan(exporter.getFinishedSpanItems());
+        assertThat(tool.getName()).isEqualTo("function_invocation local-immediate");
+        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+    }
+
+    private InMemorySpanExporter runToolRound(DelayedPlugin plugin, FITracer tracer) {
+        Kernel kernel = Kernel.builder().withPlugin(KernelPluginFactory.createFromObject(plugin, "local")).build();
+        var chat = new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer);
+        var result = chat.getChatMessageContentsAsync("Say hello", kernel, autoInvoke()).block();
+        assertThat(result).isNotEmpty();
+        assertThat(openAi.requests).hasValue(2);
+        return exporter;
+    }
+
+    private static com.microsoft.semantickernel.orchestration.InvocationContext autoInvoke() {
+        return com.microsoft.semantickernel.orchestration.InvocationContext.builder()
+            .withToolCallBehavior(com.microsoft.semantickernel.orchestration.ToolCallBehavior.allowAllKernelFunctions(true))
+            .build();
+    }
+
+    private static SpanData onlyFunctionSpan(List<SpanData> spans) {
+        List<SpanData> functions = spans.stream()
+            .filter(span -> span.getName().startsWith("function_invocation"))
+            .collect(Collectors.toList());
+        assertThat(functions).as("function spans in %s", names(spans)).hasSize(1);
+        return functions.get(0);
+    }
+
+    private static List<String> spanIds(List<SpanData> spans) {
+        return spans.stream().map(SpanData::getSpanId).collect(Collectors.toList());
+    }
+
+    @Test
     void realStreamingServicePreservesContentWithoutInventingUsage() {
         openAi.mode(LocalOpenAi.Mode.STREAM);
         var chat = new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer());
@@ -292,6 +401,20 @@ class NativeTelemetryTest {
     }
 
     public static class DelayedPlugin {
+        final java.util.concurrent.atomic.AtomicInteger failingCalls = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.CountDownLatch hangingStarted = new java.util.concurrent.CountDownLatch(1);
+
+        @DefineKernelFunction(name = "failing", returnType = "java.lang.String")
+        public String failing() {
+            failingCalls.incrementAndGet();
+            throw new IllegalStateException(LocalOpenAi.ERROR_DETAIL);
+        }
+
+        @DefineKernelFunction(name = "hanging", returnType = "java.lang.String")
+        public Mono<String> hanging() {
+            return Mono.<String>never().doOnSubscribe(ignored -> hangingStarted.countDown());
+        }
+
         @DefineKernelFunction(name = "delayed", returnType = "java.lang.String")
         public Mono<String> delayed() {
             return Mono.just("later").delayElement(Duration.ofMillis(20));

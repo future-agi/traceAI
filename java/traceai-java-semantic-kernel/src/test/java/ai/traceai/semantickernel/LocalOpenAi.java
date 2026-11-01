@@ -35,9 +35,16 @@ final class LocalOpenAi implements AutoCloseable {
     final CountDownLatch cancelled = new CountDownLatch(1);
     final AtomicInteger requests = new AtomicInteger();
     private volatile Mode mode = Mode.OK;
+    private volatile String tool = "local-immediate";
 
     LocalOpenAi mode(Mode mode) {
         this.mode = mode;
+        return this;
+    }
+
+    /** The plugin function, as {@code plugin-function}, that the first TOOL response asks for. */
+    LocalOpenAi tool(String tool) {
+        this.tool = tool;
         return this;
     }
 
@@ -80,7 +87,7 @@ final class LocalOpenAi implements AutoCloseable {
                     "{\"id\":\"chatcmpl-tool\",\"object\":\"chat.completion\",\"created\":1700000000,"
                         + "\"model\":\"gpt-local\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
                         + "\"content\":null,\"tool_calls\":[{\"id\":\"call_local\",\"type\":\"function\","
-                        + "\"function\":{\"name\":\"local-immediate\",\"arguments\":\"{}\"}}]},"
+                        + "\"function\":{\"name\":\"" + tool + "\",\"arguments\":\"{}\"}}]},"
                         + "\"finish_reason\":\"tool_calls\"}],"
                         + "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}"));
             }

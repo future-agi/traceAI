@@ -2,8 +2,18 @@ package ai.traceai.semantickernel;
 
 import ai.traceai.FISpanKind;
 import ai.traceai.SemanticConventions;
+import com.microsoft.semantickernel.Kernel;
+import com.microsoft.semantickernel.contextvariables.ContextVariableType;
+import com.microsoft.semantickernel.contextvariables.ContextVariableTypes;
+import com.microsoft.semantickernel.hooks.KernelHook.PreToolCallHook;
+import com.microsoft.semantickernel.hooks.KernelHooks;
+import com.microsoft.semantickernel.hooks.PreToolCallEvent;
 import com.microsoft.semantickernel.implementation.telemetry.SemanticKernelTelemetry;
+import com.microsoft.semantickernel.orchestration.FunctionResult;
 import com.microsoft.semantickernel.orchestration.InvocationContext;
+import com.microsoft.semantickernel.orchestration.InvocationReturnMode;
+import com.microsoft.semantickernel.semanticfunctions.KernelArguments;
+import com.microsoft.semantickernel.semanticfunctions.KernelFunction;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
@@ -18,6 +28,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.annotation.Nullable;
+import reactor.core.publisher.Mono;
 
 /**
  * Routes Semantic Kernel's own spans for one traced invocation through the traceAI tracer.
@@ -45,26 +56,94 @@ final class NativeTelemetry {
         return new SemanticKernelTelemetry(new InvocationTracer(invocation), null);
     }
 
-    /** Uses this invocation's telemetry without changing any other invocation setting. */
+    /**
+     * Uses this invocation's telemetry, including for functions the model calls automatically,
+     * without changing any other invocation setting.
+     */
     static InvocationContext route(@Nullable InvocationContext context, TracedInvocation invocation) {
-        return new RoutedInvocationContext(context, invocation.telemetry());
+        return new RoutedInvocationContext(context, invocation);
     }
 
     private static boolean isCompletion(String name) {
         return name.startsWith("chat.completions") || name.startsWith("text.completions");
     }
 
+    /**
+     * Sets this invocation's telemetry and tool hook as real fields, so a context Semantic Kernel
+     * copies keeps them.
+     */
     private static final class RoutedInvocationContext extends InvocationContext {
-        private final SemanticKernelTelemetry telemetry;
+        RoutedInvocationContext(@Nullable InvocationContext source, TracedInvocation invocation) {
+            super(
+                KernelHooks.merge(source == null ? null : source.getKernelHooks(), toolHooks(invocation)),
+                source == null ? null : source.getPromptExecutionSettings(),
+                source == null ? null : source.getToolCallBehavior(),
+                source == null ? null : source.getFunctionChoiceBehavior(),
+                source == null ? null : source.getContextVariableTypes(),
+                source == null ? InvocationReturnMode.NEW_MESSAGES_ONLY : source.returnMode(),
+                invocation.telemetry());
+        }
+    }
 
-        RoutedInvocationContext(@Nullable InvocationContext source, SemanticKernelTelemetry telemetry) {
-            super(source);
-            this.telemetry = telemetry;
+    private static final String TOOL_HOOK = "traceai.semantic-kernel.tool-telemetry";
+
+    /**
+     * Semantic Kernel's OpenAI connector runs automatic tool calls without forwarding the caller's
+     * telemetry, so their function spans would otherwise go to the global OpenTelemetry tracer and
+     * skip traceAI's span kinds and privacy settings. The connector lets a pre-tool-call hook
+     * replace the function it is about to run.
+     */
+    private static KernelHooks toolHooks(TracedInvocation invocation) {
+        KernelHooks hooks = new KernelHooks();
+        hooks.addHook(TOOL_HOOK, new RouteToolCall(invocation));
+        return hooks;
+    }
+
+    private static final class RouteToolCall implements PreToolCallHook {
+        private final TracedInvocation invocation;
+
+        RouteToolCall(TracedInvocation invocation) {
+            this.invocation = invocation;
         }
 
         @Override
-        public SemanticKernelTelemetry getTelemetry() {
-            return telemetry;
+        public PreToolCallEvent apply(PreToolCallEvent event) {
+            KernelFunction<?> function = event.getFunction();
+            if (function == null || (function instanceof RoutedFunction
+                    && ((RoutedFunction<?>) function).invocation == invocation)) {
+                return event;
+            }
+            // The connector reads only the function and arguments from the returned event.
+            return new PreToolCallEvent(function.getName(), event.getArguments(),
+                RoutedFunction.wrap(function, invocation), new ContextVariableTypes());
+        }
+
+        @Override
+        public int getPriority() {
+            // Run after the caller's hooks, so the function they choose is the one traced.
+            return Integer.MAX_VALUE;
+        }
+    }
+
+    /** Runs a tool function with this invocation's telemetry; otherwise identical to it. */
+    private static final class RoutedFunction<T> extends KernelFunction<T> {
+        private final KernelFunction<T> delegate;
+        private final TracedInvocation invocation;
+
+        private RoutedFunction(KernelFunction<T> delegate, TracedInvocation invocation) {
+            super(delegate.getMetadata(), delegate.getExecutionSettings());
+            this.delegate = delegate;
+            this.invocation = invocation;
+        }
+
+        static <T> RoutedFunction<T> wrap(KernelFunction<T> function, TracedInvocation invocation) {
+            return new RoutedFunction<>(function, invocation);
+        }
+
+        @Override
+        public Mono<FunctionResult<T>> invokeAsync(Kernel kernel, @Nullable KernelArguments arguments,
+                @Nullable ContextVariableType<T> variableType, @Nullable InvocationContext invocationContext) {
+            return delegate.invokeAsync(kernel, arguments, variableType, route(invocationContext, invocation));
         }
     }
 
