@@ -47,21 +47,30 @@ def provider():
     return tp
 
 
-def _chat(fake, stream: bool = False):
-    from openai import AsyncOpenAI
-    from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion, OpenAIChatPromptExecutionSettings
+def _chat(fake, stream: bool = False, azure: bool = False):
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+    from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion, OpenAIChatCompletion
     from semantic_kernel.contents import ChatHistory
 
-    client = AsyncOpenAI(api_key="placeholder", base_url=fake.base_url, max_retries=0)
-    service = OpenAIChatCompletion(ai_model_id="gpt-4o-mini", async_client=client)
+    if azure:
+        client = AsyncAzureOpenAI(
+            api_key="placeholder", base_url=fake.base_url, api_version="2024-10-21", max_retries=0
+        )
+        service = AzureChatCompletion(deployment_name="gpt-4o-mini", async_client=client)
+    else:
+        client = AsyncOpenAI(api_key="placeholder", base_url=fake.base_url, max_retries=0)
+        service = OpenAIChatCompletion(ai_model_id="gpt-4o-mini", async_client=client)
     history = ChatHistory(system_message="Be brief.")
     history.add_user_message(PROMPT)
-    settings = OpenAIChatPromptExecutionSettings()
+    settings = service.get_prompt_execution_settings_class()()
 
     async def run():
-        if not stream:
-            return await service.get_chat_message_contents(history, settings)
-        return [chunk async for chunk in service.get_streaming_chat_message_contents(history, settings)]
+        try:
+            if not stream:
+                return await service.get_chat_message_contents(history, settings)
+            return [chunk async for chunk in service.get_streaming_chat_message_contents(history, settings)]
+        finally:
+            await client.close()
 
     return asyncio.run(run())
 
@@ -72,11 +81,12 @@ def _chat_span(provider):
     return dict(spans[0].attributes)
 
 
+@pytest.mark.parametrize("azure", [False, True], ids=["openai", "azure-openai"])
 @pytest.mark.parametrize("stream", [False, True], ids=["unary", "streaming"])
-def test_sensitive_chat_span_carries_prompt_and_completion(instrumentor, provider, stream):
+def test_sensitive_chat_span_carries_prompt_and_completion(instrumentor, provider, stream, azure):
     instrumentor.instrument(tracer_provider=provider, sensitive=True)
     with FakeOpenAI(text_reply=REPLY) as fake:
-        _chat(fake, stream=stream)
+        _chat(fake, stream=stream, azure=azure)
     attrs = _chat_span(provider)
 
     inputs = json.loads(attrs["gen_ai.input.messages"])
@@ -93,6 +103,7 @@ def test_sensitive_chat_span_carries_prompt_and_completion(instrumentor, provide
     assert attrs["input.mime_type"] == attrs["output.mime_type"] == "application/json"
 
 
+@pytest.mark.parametrize("azure", [False, True], ids=["openai", "azure-openai"])
 @pytest.mark.parametrize(
     "env, hidden, kept",
     [
@@ -101,12 +112,12 @@ def test_sensitive_chat_span_carries_prompt_and_completion(instrumentor, provide
     ],
     ids=["hide_inputs", "hide_outputs"],
 )
-def test_hide_flags_apply_to_chat_content(instrumentor, provider, monkeypatch, env, hidden, kept):
+def test_hide_flags_apply_to_chat_content(instrumentor, provider, monkeypatch, env, hidden, kept, azure):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     instrumentor.instrument(tracer_provider=provider, sensitive=True)
     with FakeOpenAI(text_reply=REPLY) as fake:
-        _chat(fake)
+        _chat(fake, azure=azure)
     attrs = _chat_span(provider)
     for key in hidden:
         assert key not in attrs, key
@@ -116,13 +127,15 @@ def test_hide_flags_apply_to_chat_content(instrumentor, provider, monkeypatch, e
     assert marker not in str(attrs)
 
 
-def test_not_sensitive_leaves_the_logger_and_spans_alone(instrumentor, provider):
+@pytest.mark.parametrize("azure", [False, True], ids=["openai", "azure-openai"])
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "streaming"])
+def test_not_sensitive_leaves_the_logger_and_spans_alone(instrumentor, provider, azure, stream):
     module = importlib.import_module(DECORATORS)
     original = module.logger
     instrumentor.instrument(tracer_provider=provider, sensitive=False)
     assert module.logger is original
     with FakeOpenAI(text_reply=REPLY) as fake:
-        _chat(fake)
+        _chat(fake, azure=azure, stream=stream)
     attrs = _chat_span(provider)
     assert not {"gen_ai.input.messages", "gen_ai.output.messages", "input.value", "output.value"} & set(attrs)
 

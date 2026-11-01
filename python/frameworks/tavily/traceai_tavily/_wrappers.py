@@ -1,4 +1,4 @@
-"""wrapt wrappers for TavilyClient / AsyncTavilyClient search and extract.
+"""wrapt wrappers for supported TavilyClient / AsyncTavilyClient operations.
 
 Everything the wrapper does for itself (reading the client, reading the
 arguments, starting and ending the span, reading the result, recording an
@@ -12,6 +12,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import logging
+import re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
@@ -163,7 +164,7 @@ class _Operation:
     def _query(
         self, wrapped: Any, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
     ) -> Optional[str]:
-        """The search query, or extract's optional rerank query, bound by name.
+        """The query, research prompt or research request ID, bound by name.
 
         None when there is none, or when the arguments cannot be bound to the
         method's signature or the value cannot be printed.
@@ -178,7 +179,10 @@ class _Operation:
             bound = signature.bind_partial(
                 *((instance,) if instance is not None else ()), *args, **kwargs
             )
-            value = bound.arguments.get("query")
+            parameter = {"research": "input", "get_research": "request_id"}.get(
+                self._method, "query"
+            )
+            value = bound.arguments.get(parameter)
             return None if value is None else str(value)
         except Exception:
             logger.debug("Could not read the %s query", self._span_name, exc_info=True)
@@ -192,7 +196,11 @@ class _Operation:
         kwargs: Mapping[str, Any],
     ) -> Dict[str, Any]:
         attributes: Dict[str, Any] = {_SPAN_KIND: self._kind, _TOOL_NAME: self._span_name}
-        if query is not None:
+        if self._method == "get_research":
+            identifier = self._identifier(query, keys)
+            if identifier is not None:
+                attributes["tavily.request_id"] = identifier
+        elif query is not None:
             value = _safe_text(query, keys)
             if value is not None:
                 attributes[_INPUT_VALUE] = value
@@ -203,7 +211,47 @@ class _Operation:
             urls = _url_count(args, kwargs)
             if urls is not None:
                 attributes[_URL_COUNT] = urls
+        elif self._method in ("map", "crawl"):
+            url = kwargs.get("url", args[0] if args else None)
+            if isinstance(url, str):
+                attributes[_URL_COUNT] = 1
         return attributes
+
+    def _identifier(self, value: Any, keys: Optional[Sequence[str]]) -> Optional[str]:
+        # IDs are metadata, not free text. Never accept URLs, payloads or keys;
+        # hide_inputs also opts out of cross-call research correlation.
+        if self._hide_inputs or keys is None or not isinstance(value, str):
+            return None
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", value):
+            return None
+        if any(key in value for key in keys):
+            return None
+        return _safe_text(value, keys, pii=self._pii)
+
+    def _request_id(self, span: Span, result: Any, keys: Optional[Sequence[str]]) -> None:
+        if self._method in ("search", "extract"):
+            return  # Preserve the existing search/extract attribute contract.
+        try:
+            if isinstance(result, Mapping):
+                identifier = self._identifier(result.get("request_id"), keys)
+                if identifier is not None:
+                    span.set_attribute("tavily.request_id", identifier)
+        except Exception:
+            logger.debug("Could not read the Tavily request ID", exc_info=True)
+
+    def _result(
+        self, span: Span, result: Any, keys: Optional[Sequence[str]], query: Optional[str]
+    ) -> Any:
+        if self._method == "research":
+            from traceai_tavily._streams import _AsyncResearchStream, _SyncResearchStream
+
+            if inspect.isgenerator(result):
+                return _SyncResearchStream(result, self, span, keys, query)
+            if inspect.isasyncgen(result):
+                return _AsyncResearchStream(result, self, span, keys, query)
+        self._request_id(span, result, keys)
+        self._finish_ok(span, result)
+        return result
 
     def _start(
         self,
@@ -278,6 +326,12 @@ class _Operation:
         query: Optional[str],
     ) -> None:
         name = type(error).__name__
+        if self._method in ("map", "crawl", "research", "get_research"):
+            # SDK/HTTP errors can echo URLs, schema, prompts and streamed output.
+            # Type-only events keep the expanded surface private even on core 1.1.
+            span.set_status(Status(StatusCode.ERROR, name))
+            span.add_event("exception", {"exception.type": name})
+            return
         try:
             hidden = self._hidden_query(query, keys)
             message = _safe_text(str(error), keys, hidden, self._pii)
@@ -355,8 +409,7 @@ class SyncWrapper(_Operation):
             self._finish_error(span, error, keys, query)
             raise
         _detach(token)
-        self._finish_ok(span, result)
-        return result
+        return self._result(span, result, keys, query)
 
 
 class AsyncWrapper(_Operation):
@@ -382,5 +435,4 @@ class AsyncWrapper(_Operation):
             self._finish_error(span, error, keys, query)
             raise
         _detach(token)
-        self._finish_ok(span, result)
-        return result
+        return self._result(span, result, keys, query)

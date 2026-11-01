@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traceAI-openwebui"
+version = "0.1.0"
+description = "Trace real Open WebUI model calls with a maintained Pipe Function"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+  "pydantic>=2.9,<3",
+  "starlette>=0.40,<1",
+  "packaging>=24,<27",
+  "certifi>=2024.7.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1", "build>=1.2,<2", "ruff>=0.14,<1", "mypy>=1.18,<2", "types-requests>=2.32"]
+
+[project.scripts]
+traceai-openwebui = "traceai_openwebui.cli:main"
+
+[project.urls]
+Repository = "https://github.com/future-agi/traceAI"
+Documentation = "https://docs.futureagi.com/docs/integrations/no-code/open-webui"
+
+[tool.hatch.build.targets.wheel]
+packages = ["traceai_openwebui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

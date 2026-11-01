@@ -1,6 +1,6 @@
 # traceAI for Go
 
-OpenTelemetry instrumentation for Go model clients and agents. Keep your existing SDK, add its middleware or callback, and export traces to Future AGI with the standard OTLP exporter.
+OpenTelemetry instrumentation for Go model clients and agents. Keep your existing SDK, add its middleware, callback or client adapter, and export traces to Future AGI with the standard OTLP exporter.
 
 ## Choose a module
 
@@ -10,9 +10,11 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 | --- | --- | --- | --- |
 | [OpenAI](openai/README.md) | `traceaiopenai` | `openai-go/v3` middleware | Chat Completions, including streaming and tool calls |
 | [Anthropic](anthropic/README.md) | `traceaianthropic` | `anthropic-sdk-go` middleware | Messages, including streaming and tool calls |
+| [Amazon Bedrock](bedrock/README.md) | `traceaibedrock` | AWS SDK v2 typed client adapter | Converse sync/stream; Anthropic Messages InvokeModel sync/stream |
 | [Google Gen AI](genai/README.md) | `traceaigenai` | HTTP transport | Gemini Developer API content generation and streaming |
 | [Eino](eino/README.md) | `traceaieino` | Eino callbacks | Agents, graphs, models, tools, retrieval and embedding components |
 | [A2A](a2a/README.md) | `traceaia2a` | `a2a-go/v2` client interceptor | Remote-agent calls over JSON-RPC, REST and gRPC |
+| [AWS Lambda](lambda/README.md) | `traceailambda` | Maintained `otellambda` adapter | Invocation spans, HTTP-v2 parents and bounded flushing |
 
 The provider modules are not interchangeable: the OpenAI module does not trace the Responses API or embeddings, and the Gen AI module does not claim Vertex AI support. See each module's limitations before choosing it. Instrumentors use the tracer provider you supply (or the OpenTelemetry global provider); none configures an exporter automatically.
 
@@ -29,6 +31,7 @@ go get github.com/future-agi/traceAI/go/openai@dev
 ```sh
 go get github.com/future-agi/traceAI/go/openai@latest
 go get github.com/future-agi/traceAI/go/anthropic@latest
+go get github.com/future-agi/traceAI/go/bedrock@latest
 go get github.com/future-agi/traceAI/go/genai@latest
 go get github.com/future-agi/traceAI/go/eino@latest
 go get github.com/future-agi/traceAI/go/a2a@latest

@@ -380,6 +380,14 @@
         "traceai_ollama/version.py"
       ]
     },
+    "python/frameworks/openwebui": {
+      "release-type": "python",
+      "component": "traceai-openwebui",
+      "package-name": "traceAI-openwebui",
+      "extra-files": [
+        "traceai_openwebui/__init__.py"
+      ]
+    },
     "python/frameworks/openai": {
       "release-type": "python",
       "component": "traceai-openai",
@@ -943,7 +951,10 @@
       "release-type": "maven",
       "component": "java",
       "package-name": "com.futureagi:traceai-java-parent",
-      "skip-snapshot": true
+      "skip-snapshot": true,
+      "extra-files": [
+        {"type": "generic", "path": "java/compatibility/spring-ai/pom.xml"}
+      ]
     },
     "go/a2a": {
       "release-type": "go",
@@ -970,6 +981,13 @@
       "release-type": "go",
       "component": "go/genai",
       "package-name": "github.com/future-agi/traceAI/go/genai",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/lambda": {
+      "release-type": "go",
+      "component": "go/lambda",
+      "package-name": "github.com/future-agi/traceAI/go/lambda",
       "tag-separator": "/",
       "initial-version": "0.1.0"
     },
@@ -1036,6 +1054,19 @@
         {
           "type": "docs",
           "section": "Documentation"
+        }
+      ]
+    },
+    "go/bedrock": {
+      "release-type": "go",
+      "component": "go/bedrock",
+      "package-name": "github.com/future-agi/traceAI/go/bedrock",
+      "tag-separator": "/",
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "client.go"
         }
       ]
     }
