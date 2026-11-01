@@ -1,9 +1,11 @@
 """Wrapper classes for Fireworks AI instrumentation."""
 
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Tuple
+from urllib.parse import urlsplit
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
@@ -52,11 +54,23 @@ def _is_fireworks_client(instance: Any) -> bool:
         if hasattr(instance, "_client"):
             client = instance._client
             if hasattr(client, "base_url"):
-                base_url = str(client.base_url)
-                return FIREWORKS_BASE_URL in base_url
+                host = urlsplit(str(client.base_url)).hostname
+                return bool(host and host.lower().rstrip(".") == FIREWORKS_BASE_URL)
     except Exception:
         pass
     return False
+
+
+def _shared_instrumentor_enabled() -> bool:
+    """Let the request-level instrumentor own spans when both routes are enabled.
+
+    Do not import the optional package here: legacy users can keep openai 1.0,
+    which predates the shared instrumentor's supported SDK floor. Inspect live
+    state on each call so either installation/uninstallation order works.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
 def _get_input_attributes(
@@ -67,7 +81,6 @@ def _get_input_attributes(
     """Extract input attributes from request parameters."""
     attributes: Dict[str, AttributeValue] = {
         SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.LLM.value,
-        SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
@@ -175,12 +188,19 @@ def _get_stream_output_attributes(
 
         if hasattr(last_chunk, "usage") and last_chunk.usage:
             usage = last_chunk.usage
-            if hasattr(usage, "prompt_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-            if hasattr(usage, "completion_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-            if hasattr(usage, "total_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+            # OpenAI 1.0 exposes Fireworks' extra streaming usage as a dict.
+            for field, attribute in (
+                ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+                ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+                ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+            ):
+                value = (
+                    usage.get(field)
+                    if isinstance(usage, dict)
+                    else getattr(usage, field, None)
+                )
+                if value is not None:
+                    attributes[attribute] = value
 
     # Add raw output
     try:
@@ -203,8 +223,8 @@ class _CompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is a Fireworks client
-        if not _is_fireworks_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_fireworks_client(instance):
             return wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -274,8 +294,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is a Fireworks client
-        if not _is_fireworks_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_fireworks_client(instance):
             return await wrapped(*args, **kwargs)
 
         # Extract parameters

@@ -196,6 +196,8 @@ class StrandsInstrumentor:
         return cls._instance
 
     def __init__(self):
+        if hasattr(self, "_tracer_provider"):
+            return
         self._tracer_provider: Optional[TracerProvider] = None
         self._original_methods: Dict[str, Any] = {}
 
@@ -205,7 +207,7 @@ class StrandsInstrumentor:
         otlp_endpoint: Optional[str] = None,
         otlp_headers: Optional[Dict[str, str]] = None,
         enable_console_exporter: bool = False,
-        enable_metrics: bool = True,
+        enable_metrics: bool = False,
     ) -> "StrandsInstrumentor":
         """Configure Strands to send traces to TraceAI.
 
@@ -253,7 +255,7 @@ class StrandsInstrumentor:
     def _configure_strands_telemetry(
         self,
         enable_console_exporter: bool = False,
-        enable_metrics: bool = True,
+        enable_metrics: bool = False,
     ) -> None:
         """Configure Strands' StrandsTelemetry class.
 
@@ -273,8 +275,26 @@ class StrandsInstrumentor:
         # Set up exporters. Skip Strands' OTLP exporter when it would only send copies of what the
         # provider already sends, such as the Future AGI exporter of the provider register()
         # returns: a second exporter there would send every span twice.
-        duplicated_url = _strands_otlp_exporter_duplicates(self._tracer_provider)
-        if duplicated_url is not None:
+        exporters = _span_exporters(self._tracer_provider)
+        # A provider with an exporter is already configured. Do not implicitly
+        # create a second localhost exporter, or bypass a StrandsSpanExporter's
+        # privacy projection through ambient OTEL_* settings. Explicit legacy
+        # endpoint/header configuration still supports a separate collector.
+        adapted = any(getattr(exporter, "_traceai_strands_adapter", False) is True
+                      for exporter in exporters)
+        endpoint_configured = any(os.environ.get(name) for name in (
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        ))
+        already_exporting = bool(exporters) and (adapted or not endpoint_configured)
+        if adapted and enable_console_exporter:
+            raise ValueError(
+                "Wrap ConsoleSpanExporter with StrandsSpanExporter explicitly; "
+                "enable_console_exporter would bypass the adapter's privacy policy."
+            )
+        duplicated_url = None if already_exporting else _strands_otlp_exporter_duplicates(self._tracer_provider)
+        if already_exporting:
+            logger.debug("Using the provider's existing span exporter")
+        elif duplicated_url is not None:
             logger.info(
                 "traceai-strands: the tracer provider already exports spans to %s with the same "
                 "headers; not adding Strands' OTLP exporter, which would send every span there "
@@ -320,70 +340,26 @@ def configure_strands_tracing(
     otlp_headers: Optional[Dict[str, str]] = None,
     project_name: Optional[str] = None,
     enable_console_exporter: bool = False,
-    enable_metrics: bool = True,
+    enable_metrics: bool = False,
 ) -> StrandsInstrumentor:
-    """Configure Strands Agents to send traces to TraceAI.
+    """Legacy Strands telemetry setup; prefer StrandsSpanExporter on register().
 
-    This is the main entry point for integrating TraceAI with Strands.
-    It configures Strands' built-in OpenTelemetry support to use TraceAI
-    as the backend.
+    The supplied provider must be global before constructing an Agent. An
+    existing exporter is reused when no OTLP endpoint is configured, and a
+    StrandsSpanExporter is always reused (never bypassed with raw copies).
+    Metrics are disabled by default; Future AGI accepts traces, not metrics.
 
-    Example usage:
-
-        from fi_instrumentation import register
-        from fi_instrumentation.fi_types import ProjectType
-        from traceai_strands import configure_strands_tracing
-
-        # Option 1: Use with fi_instrumentation. Spans go to Future AGI through
-        # register()'s exporter; no OTEL_EXPORTER_OTLP_* setting is needed for
-        # that. Strands' own OTLP exporter is still added, for the endpoint
-        # those variables resolve to (localhost:4318 when unset).
-        trace_provider = register(
-            project_type=ProjectType.OBSERVE,
-            project_name="strands-agent",
-        )
-        configure_strands_tracing(tracer_provider=trace_provider)
-
-        # Option 2: Configure directly with endpoint. otlp_endpoint is a base
-        # URL: "https://api.traceai.com/v1/traces" would export to .../v1/traces/v1/traces.
-        configure_strands_tracing(
-            otlp_endpoint="https://api.traceai.com",
-            otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
-            project_name="strands-agent",
-        )
-
-        # Now create and use Strands agents normally
-        from strands import Agent
-        agent = Agent(
-            model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-            system_prompt="You are a helpful assistant."
-        )
-        response = agent("Hello!")
-
-    Args:
-        tracer_provider: Optional OpenTelemetry tracer provider. If not
-            provided, uses the global tracer provider.
-        otlp_endpoint: OTLP endpoint URL for trace export, stored in the
-            OTEL_EXPORTER_OTLP_ENDPOINT environment variable: a base URL that
-            Strands' exporter appends /v1/traces to, unless
-            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is set. If not provided, the
-            OTEL_EXPORTER_OTLP_* environment variables apply. Strands' OTLP
-            exporter is not added when the tracer provider already exports to
-            the same traces URL with exactly the headers it would send, and keeps
-            that exporter when another processor is added (for example register()'s
-            Future AGI exporter on fi-instrumentation-otel releases with the
-            TH-8727 fix), so spans are not sent there twice.
-        otlp_headers: Headers for OTLP export (e.g., authentication).
-        project_name: Optional project name for trace attributes.
-        enable_console_exporter: Whether to also export traces to console.
-        enable_metrics: Whether to enable metrics collection.
-
-    Returns:
-        Configured StrandsInstrumentor instance.
+    ``otlp_endpoint`` remains a base URL for Strands' upstream exporter, which
+    appends ``/v1/traces``. ``otlp_headers`` and ``project_name`` retain their
+    legacy routing-header behavior. Prefer register(project_name=...) for the
+    required project resource attributes. This helper alone does not convert
+    native span semantics: wrap the exporter as documented in the README.
     """
     instrumentor = StrandsInstrumentor()
 
     # Add project name to headers if provided
+    if otlp_headers is not None:
+        otlp_headers = dict(otlp_headers)
     if project_name and otlp_headers is None:
         otlp_headers = {}
     if project_name and otlp_headers is not None:

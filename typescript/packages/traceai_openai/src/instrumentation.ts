@@ -16,12 +16,13 @@ import {
   Span,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
+import { providerForResource } from "./provider";
+import { observeAPIPromise } from "./apiPromise";
 import {
   SemanticConventions,
   FISpanKind,
   MimeType,
   LLMSystem,
-  LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import {
   ChatCompletion,
@@ -97,6 +98,7 @@ function getExecContext(span: Span) {
 export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private manuallyPatchedModule?: typeof openai;
 
   constructor({
     instrumentationConfig,
@@ -119,6 +121,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    // The base constructor can call enable() before our trace options exist.
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
   public override enable(): void {
@@ -129,7 +133,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   protected init() {
     const module = new InstrumentationNodeModuleDefinition(
       "openai",
-      ["^4.0.0", "^5.0.0"],
+      ["^4.0.0", "^5.0.0", "^6.0.0", "^7.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
@@ -141,8 +145,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * @param {openai} module
    */
   manuallyInstrument(module: typeof openai) {
-    // diag.debug(`Manually instrumenting ${MODULE_NAME}`);
+    if (_isFIPatched) return;
     this.patch(module);
+    if (_isFIPatched) this.manuallyPatchedModule = module;
+  }
+
+  public override disable(): void {
+    super.disable();
+    // The base class tracks require-hook patches, not manually loaded ESM clients.
+    if (this.manuallyPatchedModule) {
+      this.unpatch(this.manuallyPatchedModule);
+      this.manuallyPatchedModule = undefined;
+    }
   }
 
   /**
@@ -154,6 +168,16 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   ) {
     // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
     if (module?.fiPatched || _isFIPatched) {
+      return module;
+    }
+    const resources = [
+      module?.OpenAI?.Chat?.Completions,
+      module?.OpenAI?.Completions,
+      module?.OpenAI?.Embeddings,
+      ...(module?.OpenAI?.Responses ? [module.OpenAI.Responses] : []),
+    ];
+    if (resources.some(resource => typeof resource?.prototype?.create !== "function")) {
+      diag.warn("@traceai/openai: unsupported SDK module shape; instrumentation was not applied");
       return module;
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -216,7 +240,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
@@ -250,7 +274,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             },
           );
 
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (isChatCompletionResponse(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -269,17 +294,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
             } else {
-              const [leftStream, rightStream] = result.tee();
-              consumeChatCompletionStreamChunks(rightStream, span);
-              result = leftStream;
+              result = observeStream(result, span, (chunks) =>
+                consumeChatCompletionStreamChunks(chunks, span),
+              );
             }
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -310,7 +330,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.LLM_MODEL_NAME]: body.model,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
                 ...getCompletionInputValueAndMimeType(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -339,7 +359,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               }
             },
           );
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (isCompletionResponse(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -356,14 +377,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
+            } else {
+              result = observeStream(result, span, (chunks) => {
+                span.setAttributes({
+                  [SemanticConventions.OUTPUT_VALUE]: chunks.map((chunk) => chunk.choices[0]?.text ?? "").join(""),
+                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(chunks) ?? "",
+                });
+                span.setStatus({ code: SpanStatusCode.OK });
+              });
             }
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -396,6 +421,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.INPUT_MIME_TYPE]: isStringInput
                 ? MimeType.TEXT
                 : MimeType.JSON,
+              [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               ...getEmbeddingTextAttributes(body),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -422,7 +448,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               }
             },
           );
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (result) {
               // Record the results
               span.setAttributes({
@@ -434,12 +461,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -473,7 +495,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                  [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
@@ -502,11 +524,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 }
               },
             );
-            const wrappedPromise = execPromise.then((result) => {
-              const recordSpan = (result?: ResponseType) => {
+            const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+              if (!span.isRecording()) return result;
+              const recordSpan = (result?: ResponseType, endSpan = true) => {
                 if (!result) {
                   span.setStatus({ code: SpanStatusCode.ERROR });
-                  span.end();
+                  if (endSpan) span.end();
                   return;
                 }
                 span.setAttributes({
@@ -520,23 +543,23 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
+                if (endSpan) span.end();
               };
               if (isResponseCreateResponse(result)) {
                 recordSpan(result);
               } else {
-                const [leftStream, rightStream] = result.tee();
-                consumeResponseStreamEvents(rightStream).then(recordSpan);
-                result = leftStream;
+                result = observeStream(
+                  result,
+                  span,
+                  async (chunks) => {
+                    recordSpan(await consumeResponseStreamEvents(chunks), false);
+                  },
+                  (event) => event.type === "response.completed",
+                );
               }
 
               return result;
-            }).catch((error: Error) => {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-              throw error;
-            });
+            }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
             return context.bind(execContext, wrappedPromise);
           };
         },
@@ -565,6 +588,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
+    if (moduleExports.OpenAI.Responses) {
+      this._unwrap(moduleExports.OpenAI.Responses.prototype, "create");
+    }
 
     _isFIPatched = false;
     try {
@@ -574,6 +600,65 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
     }
   }
+}
+
+/** Observe the caller's iterator, including errors and early return, without a
+ * background tee that can lose errors, keep requests alive or require newer SDKs.
+ * Keep the original Stream object, controller and SDK helpers intact.
+ */
+function observeStream<T>(
+  stream: Stream<T>,
+  span: Span,
+  onComplete: (chunks: T[]) => void | Promise<void>,
+  retainChunk: (chunk: T) => boolean = () => true,
+): Stream<T> {
+  // Modern SDK helpers (notably tee) call the iterator factory directly.
+  // OpenAI 4.0 instead implements only Symbol.asyncIterator.
+  const sdkStream = stream as unknown as { iterator?: () => AsyncIterator<T> };
+  const hasIteratorFactory = typeof sdkStream.iterator === "function";
+  const originalIterator = hasIteratorFactory
+    ? sdkStream.iterator!.bind(stream)
+    : stream[Symbol.asyncIterator].bind(stream);
+  const observedIterator = async function* () {
+    const chunks: T[] = [];
+    try {
+      for await (const chunk of { [Symbol.asyncIterator]: originalIterator }) {
+        if (retainChunk(chunk)) chunks.push(chunk);
+        yield chunk;
+      }
+      await onComplete(chunks);
+    } catch (error) {
+      const exception = error instanceof Error ? error : new Error(String(error));
+      span.recordException(exception);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: exception.message });
+      throw error;
+    } finally {
+      span.end();
+    }
+  };
+  if (hasIteratorFactory) sdkStream.iterator = observedIterator;
+  else stream[Symbol.asyncIterator] = observedIterator;
+  return stream;
+}
+
+function endSpanWithError(span: Span, error: unknown): void {
+  if (!span.isRecording()) return;
+  const exception = error instanceof Error ? error : String(error);
+  span.recordException(exception);
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.end();
+}
+
+function endRawResponseSpan(span: Span, response: { status: number }): void {
+  if (!span.isRecording()) return;
+  // Raw callers own the body. Record only HTTP metadata, never consume it to
+  // recover output/tokens. This also handles raw streaming responses lazily.
+  span.setAttribute("http.response.status_code", response.status);
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
 }
 
 function isResponseCreateResponse(
@@ -846,7 +931,7 @@ function getEmbeddingEmbeddingsAttributes(
  * Consumes the stream chunks and adds them to the span
  */
 async function consumeChatCompletionStreamChunks(
-  stream: Stream<ChatCompletionChunk>,
+  stream: Iterable<ChatCompletionChunk>,
   span: Span,
 ) {
   // --- ADD LOG ---
@@ -924,7 +1009,6 @@ async function consumeChatCompletionStreamChunks(
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
   span.setAttributes(attributes);
-  span.end(); // Streaming end
   // --- ADD LOG ---
   // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
 }

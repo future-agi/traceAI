@@ -103,7 +103,8 @@ def test_classifiers_and_python_range_match_the_tested_versions():
 def test_versions_agree():
     assert re.search(r'^version = "{0}"$'.format(re.escape(__version__)), PYPROJECT.read_text(), re.M)
     assert CHANGELOG.read_text().splitlines()[0] == "# Changelog"
-    assert "## {0}".format(__version__) in CHANGELOG.read_text()
+    # Hand-written "## x.y.z" or release-please "## [x.y.z](compare-url) (date)".
+    assert re.search(r"^## \[?{0}\]?(?:\(|\s|$)".format(re.escape(__version__)), CHANGELOG.read_text(), re.M)
 
 
 def _attribute_constants():

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only release inventory and registry plan for all five SDK ecosystems.
 
---check validates Python runtime versions and release-please coverage without network.
+--check validates Python and npm runtime versions and release-please coverage without network.
 --offline inventories publishable packages without registry calls. --only NAME ...
 limits the plan. --root allows a separate source tree. No command publishes anything.
 The release publisher, not release-please, owns tags and GitHub releases.
@@ -25,6 +25,9 @@ PYTHON_CORE = {"fi-instrumentation-otel"}
 TS_CORE = {"@traceai/fi-core", "@traceai/fi-semantic-conventions"}
 ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
+# npm packages that report their own version at runtime keep it in a VERSION or
+# INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
+TS_VERSION_RE = re.compile(r'^\s*(?:export\s+)?const\s+(?:VERSION|INSTRUMENTATION_VERSION)\s*=\s*["\']([^"\']+)["\']', re.M)
 MAVEN_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 
 
@@ -52,6 +55,17 @@ def declared_versions(pkg_dir: Path, module: str | None) -> dict[str, str]:
             for f in sorted(set(base.rglob("version.py")) | set(base.rglob("__init__.py"))):
                 if f.is_file() and (match := VERSION_RE.search(f.read_text())):
                     out[str(f.relative_to(pkg_dir))] = match.group(1)
+    return out
+
+
+def declared_ts_versions(pkg_dir: Path) -> dict[str, str]:
+    out = {}
+    for f in sorted((pkg_dir / "src").rglob("*.ts")):
+        rel = f.relative_to(pkg_dir)
+        if "__tests__" in rel.parts or f.name.endswith((".test.ts", ".spec.ts", ".d.ts")):
+            continue
+        if match := TS_VERSION_RE.search(f.read_text()):
+            out[str(rel)] = match.group(1)
     return out
 
 
@@ -98,6 +112,7 @@ def typescript_packages(root: Path = REPO_ROOT) -> list[dict]:
                                                for dep in pkg.get(section, {}) if dep in names}),
             "core": name in TS_CORE,
             "changelog": str((d / "CHANGELOG.md").relative_to(root)) if (d / "CHANGELOG.md").is_file() else None,
+            "declared": declared_ts_versions(d),
         })
     return out
 
@@ -149,7 +164,8 @@ def consistency_problems(packages: list[dict]) -> list[str]:
         seen[key] = p["dir"]
         for rel, v in p.get("declared", {}).items():
             if v != p["version"]:
-                problems.append(f"{p['dir']}/{rel}: __version__ is {v} but pyproject.toml says {p['version']}")
+                symbol, manifest = ("VERSION", "package.json") if p["ecosystem"] == "typescript" else ("__version__", "pyproject.toml")
+                problems.append(f"{p['dir']}/{rel}: {symbol} is {v} but {manifest} says {p['version']}")
     return problems
 
 
@@ -185,7 +201,7 @@ def _get_json(url: str) -> dict | None:
         raise  # Authentication failures, rate limits and server errors must never mean 'not published'.
 
 
-def published_versions(p: dict) -> set[str] | None:
+def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
@@ -203,16 +219,27 @@ def published_versions(p: dict) -> set[str] | None:
         return {p["version"]} if d else None
     if eco == "java":
         # Query canonical repository files rather than the eventually consistent search index.
-        # One reactor publishes together; do not skip if any module is missing.
-        for artifact in p["artifacts"]:
+        # Verification (strict) needs every reactor artifact served. The plan's skip decision
+        # (strict=False) needs only the parent: the reactor is one Central deployment, Central never
+        # accepts a second upload of a published version, and a module added later ships with the
+        # next reactor version.
+        def on_central(artifact):
             url = f"https://repo.maven.apache.org/maven2/{p['group'].replace('.', '/')}/{artifact}/{p['version']}/{artifact}-{p['version']}.pom"
             try:
                 with urllib.request.urlopen(url, timeout=30):
-                    pass
+                    return True
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return None
+                    return False
                 raise
+        parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
+        if not on_central(parent):
+            return None
+        later = [a for a in modules if not on_central(a)]
+        if later and strict:
+            return None
+        if later:
+            print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
@@ -231,14 +258,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
         if not offline:
-            have = published_versions(p)
+            have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have
             if published and not include_published:
                 out["skipped"].append({"name": p["name"], "reason": f"{p['version']} is already published"})
                 continue
             p = {**p, "first_release": have is None, "registry_published": published}
             if p["ecosystem"] == "python":
-                p["pypi_bootstrap"] = have is None and p["name"] in set(config.get("pypi_bootstrap_token", []))
+                p["pypi_bootstrap"] = p["name"] in set(config.get("pypi_bootstrap_token", []))
         out[p["ecosystem"]].append({k: v for k, v in p.items() if k not in ("declared", "ecosystem")})
     for eco in ECOSYSTEMS:
         out[eco].sort(key=lambda e: (not e["core"], e["name"].lower()))
