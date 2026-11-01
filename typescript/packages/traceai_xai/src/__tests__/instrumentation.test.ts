@@ -53,6 +53,9 @@ describe("XAIInstrumentation", () => {
       expect(isXAIRequest.call(instrumentation, { baseURL: "https://api.x.ai/v1" })).toBe(true);
       expect(isXAIRequest.call(instrumentation, { baseURL: "https://x.ai/api/v1" })).toBe(true);
       expect(isXAIRequest.call(instrumentation, { baseURL: "https://api.openai.com/v1" })).toBe(false);
+      expect(isXAIRequest.call(instrumentation, { baseURL: "https://api.x.ai.attacker.test/v1" })).toBe(false);
+      expect(isXAIRequest.call(instrumentation, { client: { baseURL: "https://api.x.ai/v1" } })).toBe(true);
+      expect(isXAIRequest.call(instrumentation, { _client: { baseURL: "https://api.x.ai/v1" } })).toBe(true);
     });
   });
 

@@ -26,6 +26,7 @@ import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  generateTraceConfig,
 } from "@traceai/fi-core";
 
 const MODULE_NAME = "openai";
@@ -99,11 +100,16 @@ interface ChatCompletionRequest {
 interface ChatCompletionChoice {
   index: number;
   message: ChatMessage;
-  finish_reason: string;
+  finish_reason: string | null;
   delta?: {
     content?: string;
     role?: string;
-    tool_calls?: ToolCall[];
+    tool_calls?: Array<{
+      index: number;
+      id?: string;
+      type?: string;
+      function?: { name?: string; arguments?: string };
+    }>;
   };
 }
 
@@ -145,6 +151,69 @@ interface StreamResponse<T> {
   [Symbol.asyncIterator](): AsyncIterator<T>;
 }
 
+/** Keep the SDK's APIPromise intact: its response helpers and _thenUnwrap are
+ * used by higher-level resource methods (including structured parse). Both
+ * v4 and v7 expose parseResponse on each instance, but accept different
+ * arguments, so forward them without interpreting them here. */
+function traceSDKPromise<T>(
+  result: Promise<T>,
+  span: Span,
+  execContext: ReturnType<typeof context.active>,
+  onValue: (value: T) => T,
+): Promise<T> {
+  let finished = false;
+  const fail = (error: Error) => {
+    if (!finished) {
+      finished = true;
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      span.end();
+    }
+  };
+  const sdkPromise = result as Promise<T> & {
+    parseResponse?: (...args: unknown[]) => Promise<T>;
+    responsePromise?: Promise<unknown>;
+    parsedPromise?: Promise<T>;
+    asResponse?: () => Promise<Response>;
+  };
+  if (typeof sdkPromise.parseResponse === "function" && sdkPromise.responsePromise) {
+    const originalParse = sdkPromise.parseResponse;
+    sdkPromise.parseResponse = async (...args: unknown[]) => {
+      try {
+        const value = await originalParse(...args);
+        return context.with(execContext, () => {
+          const transformed = onValue(value);
+          if (!isStreamResponse(transformed)) finished = true;
+          return transformed;
+        });
+      } catch (error) {
+        fail(error as Error);
+        throw error;
+      }
+    };
+    // asResponse() bypasses parsing; finish its span if no parse was requested.
+    // withResponse() starts parsing first, so it still records the response data.
+    if (typeof sdkPromise.asResponse === "function") {
+      const originalAsResponse = sdkPromise.asResponse;
+      sdkPromise.asResponse = () => originalAsResponse.call(sdkPromise).then(response => {
+        if (!sdkPromise.parsedPromise && !finished) {
+          finished = true;
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+        }
+        return response;
+      });
+    }
+    // A network rejection also needs to finish when only asResponse() is used.
+    void sdkPromise.responsePromise.catch(fail);
+    return sdkPromise;
+  }
+  return context.bind(execContext, result.then(value => context.with(execContext, () => onValue(value))).catch(error => {
+    fail(error);
+    throw error;
+  }));
+}
+
 /**
  * @param instrumentationConfig The config for the instrumentation
  * @param traceConfig The FI trace configuration for masking sensitive information
@@ -152,6 +221,8 @@ interface StreamResponse<T> {
 export class XAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private hideInputs!: boolean;
+  private readonly manuallyPatchedModules = new Set<Record<string, unknown>>();
 
   constructor({
     instrumentationConfig,
@@ -160,17 +231,28 @@ export class XAIInstrumentation extends InstrumentationBase {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/xai",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
+    // InstrumentationBase calls enable() in its constructor by default, before
+    // subclass fields or traceConfig exist. Defer it until privacy is initialized.
+    super("@traceai/xai", VERSION, { ...instrumentationConfig, enabled: false });
     this._traceConfig = traceConfig;
+    this.setConfig(instrumentationConfig ?? {});
+    if (this.getConfig().enabled) this.enable();
   }
 
   public override enable(): void {
+    const traceConfig = generateTraceConfig(this._traceConfig);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
+    this.hideInputs = traceConfig.hideInputs;
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    for (const module of this.manuallyPatchedModules) this.patch(module);
+  }
+
+  public override disable(): void {
+    if (!this.isEnabled()) return;
+    super.disable();
+    for (const module of this.manuallyPatchedModules) {
+      if ((module as { fiXAIPatched?: boolean }).fiXAIPatched) this.unpatch(module);
+    }
   }
 
   public readonly instrumentationName = "@traceai/xai";
@@ -189,16 +271,31 @@ export class XAIInstrumentation extends InstrumentationBase {
    * Manually instruments the OpenAI module for xAI
    */
   manuallyInstrument(module: Record<string, unknown>) {
+    if (!this.isEnabled()) return;
+    const alreadyPatched = (module as { fiXAIPatched?: boolean }).fiXAIPatched || _isFIPatched;
     this.patch(module);
+    // Only manage the lifetime of patches installed by this instance; a
+    // different instrumentation may already own this SDK module.
+    if (!alreadyPatched && (module as { fiXAIPatched?: boolean }).fiXAIPatched) {
+      this.manuallyPatchedModules.add(module);
+    }
   }
 
   /**
    * Checks if a request is targeting xAI API
    */
   private isXAIRequest(client: unknown): boolean {
-    const baseURL = (client as { baseURL?: string })?.baseURL;
+    // v4 resources use client, v7 resources use _client. Direct wrapper
+    // calls can also receive the parent OpenAI client itself.
+    const resource = client as { client?: { baseURL?: string }; _client?: { baseURL?: string }; baseURL?: string } | null;
+    const baseURL = resource?._client?.baseURL ?? resource?.client?.baseURL ?? resource?.baseURL;
     if (!baseURL) return false;
-    return baseURL.includes("x.ai") || baseURL.includes("api.x.ai");
+    try {
+      const host = new URL(baseURL).hostname;
+      return host === "x.ai" || host.endsWith(".x.ai");
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -217,38 +314,26 @@ export class XAIInstrumentation extends InstrumentationBase {
     // Ensure fiTracer uses the most up-to-date tracer
     if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
         (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
+      const traceConfig = generateTraceConfig(instrumentation._traceConfig);
       instrumentation.fiTracer = new FITracer({
         tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
+        traceConfig,
       });
+      instrumentation.hideInputs = traceConfig.hideInputs;
     }
 
-    // Patch the OpenAI class
-    const OpenAI = module.OpenAI as {
-      prototype: {
-        chat?: { completions?: { create?: unknown } };
-        embeddings?: { create?: unknown };
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      // Patch chat.completions.create
-      if (OpenAI.prototype.chat?.completions && typeof (OpenAI.prototype.chat.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.chat.completions as Record<string, unknown>,
-          "create",
-          this.createChatCompletionWrapper(instrumentation),
-        );
-      }
-
-      // Patch embeddings.create
-      if (OpenAI.prototype.embeddings && typeof (OpenAI.prototype.embeddings as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.embeddings as Record<string, unknown>,
-          "create",
-          this.createEmbeddingWrapper(instrumentation),
-        );
-      }
+    // The SDK instantiates resource classes; chat and embeddings are not
+    // properties on OpenAI.prototype (in either v4 or v7).
+    const resources = this.getResourcePrototypes(module);
+    if (!resources.chat && !resources.embeddings) {
+      diag.warn("No OpenAI chat or embeddings resources available for xAI instrumentation");
+      return module;
+    }
+    if (resources.chat) {
+      this._wrap(resources.chat, "create", this.createChatCompletionWrapper(instrumentation));
+    }
+    if (resources.embeddings) {
+      this._wrap(resources.embeddings, "create", this.createEmbeddingWrapper(instrumentation));
     }
 
     _isFIPatched = true;
@@ -314,7 +399,7 @@ export class XAIInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<ChatCompletion | StreamResponse<ChatCompletion>>).then((result) => {
+        return traceSDKPromise(execPromise as Promise<ChatCompletion | StreamResponse<ChatCompletion>>, span, execContext, (result) => {
           if (isChatCompletionResponse(result)) {
             span.setAttributes({
               [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -330,17 +415,10 @@ export class XAIInstrumentation extends InstrumentationBase {
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
           } else if (isStreamResponse(result)) {
-            return wrapChatStream(result, span);
+            return instrumentChatStream(result, span);
           }
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<ChatCompletion | StreamResponse<ChatCompletion>>;
       };
     };
   }
@@ -373,7 +451,7 @@ export class XAIInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.XAI,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-              ...getEmbeddingInputAttributes(inputTexts),
+              ...(!instrumentation.hideInputs ? getEmbeddingInputAttributes(inputTexts) : {}),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
@@ -395,7 +473,7 @@ export class XAIInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<EmbeddingResponse>).then((result) => {
+        return traceSDKPromise(execPromise as Promise<EmbeddingResponse>, span, execContext, (result) => {
           span.setAttributes({
             [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -406,15 +484,24 @@ export class XAIInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<EmbeddingResponse>;
       };
+    };
+  }
+
+  private getResourcePrototypes(module: Record<string, unknown>): {
+    chat?: Record<string, unknown>;
+    embeddings?: Record<string, unknown>;
+  } {
+    const sdk = (module.OpenAI ?? module.default) as {
+      Chat?: { Completions?: { prototype?: Record<string, unknown> } };
+      Embeddings?: { prototype?: Record<string, unknown> };
+    } | undefined;
+    const chat = sdk?.Chat?.Completions?.prototype;
+    const embeddings = sdk?.Embeddings?.prototype;
+    return {
+      chat: typeof chat?.create === "function" ? chat : undefined,
+      embeddings: typeof embeddings?.create === "function" ? embeddings : undefined,
     };
   }
 
@@ -425,21 +512,9 @@ export class XAIInstrumentation extends InstrumentationBase {
     moduleExports: Record<string, unknown> & { fiXAIPatched?: boolean },
     moduleVersion?: string,
   ) {
-    const OpenAI = moduleExports.OpenAI as {
-      prototype: {
-        chat?: { completions?: Record<string, unknown> };
-        embeddings?: Record<string, unknown>;
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      if (OpenAI.prototype.chat?.completions) {
-        this._unwrap(OpenAI.prototype.chat.completions, "create");
-      }
-      if (OpenAI.prototype.embeddings) {
-        this._unwrap(OpenAI.prototype.embeddings, "create");
-      }
-    }
+    const resources = this.getResourcePrototypes(moduleExports);
+    if (resources.chat) this._unwrap(resources.chat, "create");
+    if (resources.embeddings) this._unwrap(resources.embeddings, "create");
 
     _isFIPatched = false;
     try {
@@ -468,6 +543,22 @@ function isStreamResponse<T>(
   return typeof (response as StreamResponse<T>)[Symbol.asyncIterator] === "function";
 }
 
+/** Preserve the SDK Stream instance (and its controller, tee and readable helpers).
+ * Both v4 and v7 route these helpers through the instance's iterator factory.
+ * Replacing only that factory records whichever consumption path the caller uses.
+ */
+function instrumentChatStream<T extends StreamResponse<ChatCompletion>>(stream: T, span: Span): T {
+  const sdkStream = stream as T & { iterator?: () => AsyncIterator<ChatCompletion> };
+  if (typeof sdkStream.iterator === "function") {
+    const originalIterator = sdkStream.iterator.bind(sdkStream);
+    sdkStream.iterator = () => wrapChatStream({ [Symbol.asyncIterator]: originalIterator }, span);
+  } else {
+    const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+    stream[Symbol.asyncIterator] = () => wrapChatStream({ [Symbol.asyncIterator]: originalIterator }, span);
+  }
+  return stream;
+}
+
 /**
  * Wraps a chat stream to capture the full response
  */
@@ -475,47 +566,72 @@ async function* wrapChatStream(
   stream: StreamResponse<ChatCompletion>,
   span: Span,
 ): AsyncGenerator<ChatCompletion, void, unknown> {
-  let fullContent = "";
   const allChunks: ChatCompletion[] = [];
-  let lastChunk: ChatCompletion | null = null;
+  const messages = new Map<number, { role: string; content: string; tool_calls: Map<number, ToolCall> }>();
+  const finishReasons = new Map<number, string>();
+  let responseId: string | undefined;
+  let responseModel: string | undefined;
+  let usage: ChatCompletion["usage"];
+  let failed = false;
+  let completed = false;
 
   try {
     for await (const chunk of stream) {
       allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
+      responseId = chunk.id || responseId;
+      responseModel = chunk.model || responseModel;
+      usage = chunk.usage || usage;
+      for (const choice of chunk.choices ?? []) {
+        const message = messages.get(choice.index) ?? { role: "assistant", content: "", tool_calls: new Map<number, ToolCall>() };
+        message.role = choice.delta?.role || message.role;
+        message.content += choice.delta?.content ?? "";
+        for (const fragment of choice.delta?.tool_calls ?? []) {
+          const tool = message.tool_calls.get(fragment.index) ?? { id: "", type: "function" as const, function: { name: "", arguments: "" } };
+          tool.id += fragment.id ?? "";
+          tool.function.name += fragment.function?.name ?? "";
+          tool.function.arguments += fragment.function?.arguments ?? "";
+          message.tool_calls.set(fragment.index, tool);
+        }
+        messages.set(choice.index, message);
+        if (choice.finish_reason) finishReasons.set(choice.index, choice.finish_reason);
       }
-      lastChunk = chunk;
       yield chunk;
     }
+    completed = true;
   } catch (error) {
+    failed = true;
     span.recordException(error as Error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
     throw error;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.usage) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.usage.prompt_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.usage.completion_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = lastChunk.usage.total_tokens;
+  } finally {
+    // Async-generator return() lands here too; for-await forwards it to the
+    // original stream, preserving SDK cancellation while retaining partial data.
+    const output = [...messages.entries()].sort(([a], [b]) => a - b).map(([, message]) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.tool_calls.size ? { tool_calls: [...message.tool_calls.entries()].sort(([a], [b]) => a - b).map(([, tool]) => tool) } : {}),
+    }));
+    const attributes: Attributes = {
+      [SemanticConventions.OUTPUT_VALUE]: output.map(message => message.content).join(""),
+      [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(output) ?? "[]",
+      [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+    };
+    if (responseId) attributes[SemanticConventions.GEN_AI_RESPONSE_ID] = responseId;
+    if (responseModel) {
+      attributes[SemanticConventions.LLM_MODEL_NAME] = responseModel;
+      attributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = responseModel;
     }
+    if (finishReasons.size) attributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = safelyJSONStringify([...finishReasons.entries()].sort(([a], [b]) => a - b).map(([, reason]) => reason)) ?? "[]";
+    if (usage) {
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = usage.prompt_tokens;
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = usage.completion_tokens;
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = usage.total_tokens;
+    }
+    span.setAttributes(attributes);
+    if (!failed) span.setStatus({ code: completed ? SpanStatusCode.OK : SpanStatusCode.UNSET });
+    span.end();
   }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
 }
 
 /**
