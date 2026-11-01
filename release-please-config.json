@@ -1046,6 +1046,14 @@
           "section": "Documentation"
         }
       ]
+    },
+    "python/frameworks/harbor": {
+      "release-type": "python",
+      "component": "traceai-harbor",
+      "package-name": "traceai-harbor",
+      "extra-files": [
+        "traceai_harbor/version.py"
+      ]
     }
   }
 }
