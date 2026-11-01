@@ -201,7 +201,7 @@ def _get_json(url: str) -> dict | None:
         raise  # Authentication failures, rate limits and server errors must never mean 'not published'.
 
 
-def published_versions(p: dict) -> set[str] | None:
+def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
@@ -219,9 +219,10 @@ def published_versions(p: dict) -> set[str] | None:
         return {p["version"]} if d else None
     if eco == "java":
         # Query canonical repository files rather than the eventually consistent search index.
-        # One reactor publishes together in a single Central deployment, so the parent decides whether
-        # this version is published. Central never accepts a second upload of a published version: a
-        # module added after that ships with the next reactor version.
+        # Verification (strict) needs every reactor artifact served. The plan's skip decision
+        # (strict=False) needs only the parent: the reactor is one Central deployment, Central never
+        # accepts a second upload of a published version, and a module added later ships with the
+        # next reactor version.
         def on_central(artifact):
             url = f"https://repo.maven.apache.org/maven2/{p['group'].replace('.', '/')}/{artifact}/{p['version']}/{artifact}-{p['version']}.pom"
             try:
@@ -235,6 +236,8 @@ def published_versions(p: dict) -> set[str] | None:
         if not on_central(parent):
             return None
         later = [a for a in modules if not on_central(a)]
+        if later and strict:
+            return None
         if later:
             print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
@@ -255,7 +258,7 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
         if not offline:
-            have = published_versions(p)
+            have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have
             if published and not include_published:
                 out["skipped"].append({"name": p["name"], "reason": f"{p['version']} is already published"})

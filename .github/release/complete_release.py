@@ -18,7 +18,7 @@ def gh_json(*args):
 
 
 def changed_release_paths(repo, pr):
-    """Manifest paths whose version this merged release PR changed, or None when that cannot be read."""
+    """{manifest path: version} for every version this merged release PR changed, or None when that cannot be read."""
     try:
         merge = pr["mergeCommit"]["oid"]
         parent = gh_json("api", f"repos/{repo}/commits/{merge}")["parents"][0]["sha"]
@@ -28,9 +28,17 @@ def changed_release_paths(repo, pr):
             return json.loads(base64.b64decode(d["content"]))
 
         before, after = manifest(parent), manifest(merge)
-        return {path for path, version in after.items() if before.get(path) != version}
+        return {path: version for path, version in after.items() if before.get(path) != version}
     except Exception:
         return None
+
+
+def with_version(package, version):
+    """The package as released at version: tags end in the version (name-vX, npm-...-vX, java-vX, go/x/vX)."""
+    tag = package["tag"]
+    if tag.endswith(package["version"]):
+        tag = tag[: -len(package["version"])] + version
+    return {**package, "version": version, "tag": tag}
 
 
 def main():
@@ -47,15 +55,16 @@ def main():
     # Only the versions these release PRs changed must be released. A first-time package that is
     # still waiting on its registry must not hold back every later release. If a PR's changes cannot
     # be read, fall back to requiring every package.
-    scope = set()
+    scope = {}
     for pr in pending:
-        paths = changed_release_paths(repo, pr)
-        if paths is None:
+        changed = changed_release_paths(repo, pr)
+        if changed is None:
             scope = None
             break
-        scope |= paths
+        scope.update(changed)
     if scope is not None:
-        packages = [p for p in packages if p.get("release_path", p["dir"]) in scope]
+        # Check the versions the release PRs released, which a later bump on main may have moved past.
+        packages = [with_version(p, scope[path]) for p in packages if (path := p.get("release_path", p["dir"])) in scope]
     missing = [p["tag"] for p in packages if p["name"] not in skip and p["tag"] not in tags]
     if missing:
         print(f"Still pending: {len(missing)} package releases; finish credentials/publishing and rerun Release.")
