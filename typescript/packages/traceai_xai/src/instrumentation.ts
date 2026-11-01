@@ -99,11 +99,16 @@ interface ChatCompletionRequest {
 interface ChatCompletionChoice {
   index: number;
   message: ChatMessage;
-  finish_reason: string;
+  finish_reason: string | null;
   delta?: {
     content?: string;
     role?: string;
-    tool_calls?: ToolCall[];
+    tool_calls?: Array<{
+      index: number;
+      id?: string;
+      type?: string;
+      function?: { name?: string; arguments?: string };
+    }>;
   };
 }
 
@@ -143,6 +148,69 @@ interface EmbeddingResponse {
 
 interface StreamResponse<T> {
   [Symbol.asyncIterator](): AsyncIterator<T>;
+}
+
+/** Keep the SDK's APIPromise intact: its response helpers and _thenUnwrap are
+ * used by higher-level resource methods (including structured parse). Both
+ * v4 and v7 expose parseResponse on each instance, but accept different
+ * arguments, so forward them without interpreting them here. */
+function traceSDKPromise<T>(
+  result: Promise<T>,
+  span: Span,
+  execContext: ReturnType<typeof context.active>,
+  onValue: (value: T) => T,
+): Promise<T> {
+  let finished = false;
+  const fail = (error: Error) => {
+    if (!finished) {
+      finished = true;
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      span.end();
+    }
+  };
+  const sdkPromise = result as Promise<T> & {
+    parseResponse?: (...args: unknown[]) => Promise<T>;
+    responsePromise?: Promise<unknown>;
+    parsedPromise?: Promise<T>;
+    asResponse?: () => Promise<Response>;
+  };
+  if (typeof sdkPromise.parseResponse === "function" && sdkPromise.responsePromise) {
+    const originalParse = sdkPromise.parseResponse;
+    sdkPromise.parseResponse = async (...args: unknown[]) => {
+      try {
+        const value = await originalParse(...args);
+        return context.with(execContext, () => {
+          const transformed = onValue(value);
+          if (!isStreamResponse(transformed)) finished = true;
+          return transformed;
+        });
+      } catch (error) {
+        fail(error as Error);
+        throw error;
+      }
+    };
+    // asResponse() bypasses parsing; finish its span if no parse was requested.
+    // withResponse() starts parsing first, so it still records the response data.
+    if (typeof sdkPromise.asResponse === "function") {
+      const originalAsResponse = sdkPromise.asResponse;
+      sdkPromise.asResponse = () => originalAsResponse.call(sdkPromise).then(response => {
+        if (!sdkPromise.parsedPromise && !finished) {
+          finished = true;
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+        }
+        return response;
+      });
+    }
+    // A network rejection also needs to finish when only asResponse() is used.
+    void sdkPromise.responsePromise.catch(fail);
+    return sdkPromise;
+  }
+  return context.bind(execContext, result.then(value => context.with(execContext, () => onValue(value))).catch(error => {
+    fail(error);
+    throw error;
+  }));
 }
 
 /**
@@ -308,7 +376,7 @@ export class XAIInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<ChatCompletion | StreamResponse<ChatCompletion>>).then((result) => {
+        return traceSDKPromise(execPromise as Promise<ChatCompletion | StreamResponse<ChatCompletion>>, span, execContext, (result) => {
           if (isChatCompletionResponse(result)) {
             span.setAttributes({
               [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -327,14 +395,7 @@ export class XAIInstrumentation extends InstrumentationBase {
             return wrapChatStream(result, span);
           }
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<ChatCompletion | StreamResponse<ChatCompletion>>;
       };
     };
   }
@@ -367,7 +428,7 @@ export class XAIInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.XAI,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-              ...getEmbeddingInputAttributes(inputTexts),
+              ...(!instrumentation._traceConfig?.hideInputs ? getEmbeddingInputAttributes(inputTexts) : {}),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
@@ -389,7 +450,7 @@ export class XAIInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<EmbeddingResponse>).then((result) => {
+        return traceSDKPromise(execPromise as Promise<EmbeddingResponse>, span, execContext, (result) => {
           span.setAttributes({
             [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -400,14 +461,7 @@ export class XAIInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<EmbeddingResponse>;
       };
     };
   }
@@ -473,47 +527,72 @@ async function* wrapChatStream(
   stream: StreamResponse<ChatCompletion>,
   span: Span,
 ): AsyncGenerator<ChatCompletion, void, unknown> {
-  let fullContent = "";
   const allChunks: ChatCompletion[] = [];
-  let lastChunk: ChatCompletion | null = null;
+  const messages = new Map<number, { role: string; content: string; tool_calls: Map<number, ToolCall> }>();
+  const finishReasons = new Map<number, string>();
+  let responseId: string | undefined;
+  let responseModel: string | undefined;
+  let usage: ChatCompletion["usage"];
+  let failed = false;
+  let completed = false;
 
   try {
     for await (const chunk of stream) {
       allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
+      responseId = chunk.id || responseId;
+      responseModel = chunk.model || responseModel;
+      usage = chunk.usage || usage;
+      for (const choice of chunk.choices ?? []) {
+        const message = messages.get(choice.index) ?? { role: "assistant", content: "", tool_calls: new Map<number, ToolCall>() };
+        message.role = choice.delta?.role || message.role;
+        message.content += choice.delta?.content ?? "";
+        for (const fragment of choice.delta?.tool_calls ?? []) {
+          const tool = message.tool_calls.get(fragment.index) ?? { id: "", type: "function" as const, function: { name: "", arguments: "" } };
+          tool.id += fragment.id ?? "";
+          tool.function.name += fragment.function?.name ?? "";
+          tool.function.arguments += fragment.function?.arguments ?? "";
+          message.tool_calls.set(fragment.index, tool);
+        }
+        messages.set(choice.index, message);
+        if (choice.finish_reason) finishReasons.set(choice.index, choice.finish_reason);
       }
-      lastChunk = chunk;
       yield chunk;
     }
+    completed = true;
   } catch (error) {
+    failed = true;
     span.recordException(error as Error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
     throw error;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.usage) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.usage.prompt_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.usage.completion_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = lastChunk.usage.total_tokens;
+  } finally {
+    // Async-generator return() lands here too; for-await forwards it to the
+    // original stream, preserving SDK cancellation while retaining partial data.
+    const output = [...messages.entries()].sort(([a], [b]) => a - b).map(([, message]) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.tool_calls.size ? { tool_calls: [...message.tool_calls.entries()].sort(([a], [b]) => a - b).map(([, tool]) => tool) } : {}),
+    }));
+    const attributes: Attributes = {
+      [SemanticConventions.OUTPUT_VALUE]: output.map(message => message.content).join(""),
+      [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(output) ?? "[]",
+      [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+    };
+    if (responseId) attributes[SemanticConventions.GEN_AI_RESPONSE_ID] = responseId;
+    if (responseModel) {
+      attributes[SemanticConventions.LLM_MODEL_NAME] = responseModel;
+      attributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = responseModel;
     }
+    if (finishReasons.size) attributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = safelyJSONStringify([...finishReasons.entries()].sort(([a], [b]) => a - b).map(([, reason]) => reason)) ?? "[]";
+    if (usage) {
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = usage.prompt_tokens;
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = usage.completion_tokens;
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = usage.total_tokens;
+    }
+    span.setAttributes(attributes);
+    if (!failed) span.setStatus({ code: completed ? SpanStatusCode.OK : SpanStatusCode.UNSET });
+    span.end();
   }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
 }
 
 /**
