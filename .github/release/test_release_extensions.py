@@ -67,11 +67,16 @@ class ExtensionTests(unittest.TestCase):
         p.update(group='com.futureagi', version='1.1.0-SNAPSHOT')
         self.assertEqual(release_plan.plan([p], {}, offline=True)['java'], [])
 
-    def test_java_skip_requires_every_reactor_artifact_on_central(self):
+    def test_java_reactor_version_is_published_when_its_parent_is_on_central(self):
+        # Central deploys the reactor as one bundle, so the parent decides. A module missing at a
+        # published version was added later and ships with the next version (Central refuses re-uploads).
         p = {'ecosystem': 'java', 'group': 'com.futureagi', 'version': '1.0.0', 'artifacts': ['parent', 'core']}
         context = Mock(); context.__enter__ = Mock(); context.__exit__ = Mock(return_value=False)
         with patch('urllib.request.urlopen', side_effect=[context, urllib.error.HTTPError('url', 404, 'missing', {}, None)]):
+            self.assertEqual(release_plan.published_versions(p), {'1.0.0'})
+        with patch('urllib.request.urlopen', side_effect=[urllib.error.HTTPError('url', 404, 'missing', {}, None)]) as get:
             self.assertIsNone(release_plan.published_versions(p))
+            self.assertEqual(get.call_count, 1)
         with patch('urllib.request.urlopen', return_value=context) as get:
             self.assertEqual(release_plan.published_versions(p), {'1.0.0'})
             self.assertEqual(get.call_count, 2)
@@ -121,6 +126,64 @@ class ExtensionTests(unittest.TestCase):
         with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': package['tag']}]]]), patch.object(complete_release, 'python_packages', return_value=[]), patch.object(complete_release, 'typescript_packages', return_value=[]), patch.object(complete_release, 'other_packages', return_value=[package]), patch.object(complete_release, 'load_config', return_value={'skip': {}}), patch.object(complete_release, 'published_versions', return_value=None), patch('subprocess.run') as run:
             complete_release.main()
             run.assert_not_called()
+
+    def test_completion_requires_only_the_versions_the_release_pr_changed(self):
+        # A first-time package still waiting on its registry must not block an unrelated release PR.
+        released = {'ecosystem': 'python', 'name': 'a', 'version': '0.1.1', 'tag': 'a-v0.1.1', 'dir': 'python/frameworks/a'}
+        waiting = {'ecosystem': 'python', 'name': 'b', 'version': '0.1.0', 'tag': 'b-v0.1.0', 'dir': 'python/frameworks/b'}
+        pending = [{'number': 7, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'm'}}]
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch.object(complete_release, 'gh_json', side_effect=[pending, [[{'tag_name': 'a-v0.1.1'}]]]), \
+             patch.object(complete_release, 'changed_release_paths', return_value={'python/frameworks/a'}), \
+             patch.object(complete_release, 'python_packages', return_value=[released, waiting]), \
+             patch.object(complete_release, 'typescript_packages', return_value=[]), \
+             patch.object(complete_release, 'other_packages', return_value=[]), \
+             patch.object(complete_release, 'load_config', return_value={'skip': {}}), \
+             patch.object(complete_release, 'published_versions', return_value={'0.1.1'}), \
+             patch('subprocess.run') as run:
+            complete_release.main()
+        commands = [c.args[0] for c in run.call_args_list]
+        self.assertIn(['gh', 'pr', 'edit', '7', '--repo', 'owner/repo', '--remove-label', 'autorelease: pending', '--add-label', 'autorelease: tagged'], commands)
+        self.assertTrue(any(c[:3] == ['gh', 'label', 'create'] for c in commands), 'the tagged label is created when missing')
+
+    def test_completion_still_waits_for_a_version_the_release_pr_changed(self):
+        changed = {'ecosystem': 'python', 'name': 'a', 'version': '0.1.1', 'tag': 'a-v0.1.1', 'dir': 'python/frameworks/a'}
+        pending = [{'number': 7, 'headRefName': 'release-please--branches--main', 'mergeCommit': {'oid': 'm'}}]
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo'}), \
+             patch.object(complete_release, 'gh_json', side_effect=[pending, [[]]]), \
+             patch.object(complete_release, 'changed_release_paths', return_value={'python/frameworks/a'}), \
+             patch.object(complete_release, 'python_packages', return_value=[changed]), \
+             patch.object(complete_release, 'typescript_packages', return_value=[]), \
+             patch.object(complete_release, 'other_packages', return_value=[]), \
+             patch.object(complete_release, 'load_config', return_value={'skip': {}}), \
+             patch('subprocess.run') as run:
+            complete_release.main()
+        run.assert_not_called()
+
+    def test_changed_release_paths_compares_the_manifest_across_the_merge(self):
+        import base64 as b64
+        enc = lambda d: {'content': b64.b64encode(json.dumps(d).encode()).decode()}
+        replies = {'repos/o/r/commits/m': {'parents': [{'sha': 'p'}]},
+                   'repos/o/r/contents/.release-please-manifest.json?ref=p': enc({'x': '1.0.0', 'y': '0.1.0'}),
+                   'repos/o/r/contents/.release-please-manifest.json?ref=m': enc({'x': '1.0.1', 'y': '0.1.0', 'z': '0.1.0'})}
+        with patch.object(complete_release, 'gh_json', side_effect=lambda *a: replies[a[1]]):
+            self.assertEqual(complete_release.changed_release_paths('o/r', {'mergeCommit': {'oid': 'm'}}), {'x', 'z'})
+        self.assertIsNone(complete_release.changed_release_paths('o/r', {'number': 1}))
+
+    def test_java_new_module_does_not_republish_a_published_reactor(self):
+        import urllib.error as ue
+        p = {'ecosystem': 'java', 'name': 'com.futureagi:traceai-java-parent', 'group': 'com.futureagi', 'version': '1.0.0',
+             'artifacts': ['traceai-java-parent', 'traceai-java-core', 'traceai-java-new']}  # parent first, as other_packages builds it
+        def urlopen(url, timeout=30):
+            if 'traceai-java-new' in url:
+                raise ue.HTTPError(url, 404, 'not found', {}, None)
+            return Mock(__enter__=lambda s: s, __exit__=lambda *a: False)
+        with patch.object(release_plan.urllib.request, 'urlopen', side_effect=urlopen):
+            self.assertEqual(release_plan.published_versions(p), {'1.0.0'})
+        def missing_parent(url, timeout=30):
+            raise ue.HTTPError(url, 404, 'not found', {}, None)
+        with patch.object(release_plan.urllib.request, 'urlopen', side_effect=missing_parent):
+            self.assertIsNone(release_plan.published_versions(p))
 
     def test_workflow_plan_orders_every_npm_dependency_edge(self):
         with tempfile.TemporaryDirectory() as d:

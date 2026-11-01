@@ -219,16 +219,24 @@ def published_versions(p: dict) -> set[str] | None:
         return {p["version"]} if d else None
     if eco == "java":
         # Query canonical repository files rather than the eventually consistent search index.
-        # One reactor publishes together; do not skip if any module is missing.
-        for artifact in p["artifacts"]:
+        # One reactor publishes together in a single Central deployment, so the parent decides whether
+        # this version is published. Central never accepts a second upload of a published version: a
+        # module added after that ships with the next reactor version.
+        def on_central(artifact):
             url = f"https://repo.maven.apache.org/maven2/{p['group'].replace('.', '/')}/{artifact}/{p['version']}/{artifact}-{p['version']}.pom"
             try:
                 with urllib.request.urlopen(url, timeout=30):
-                    pass
+                    return True
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return None
+                    return False
                 raise
+        parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
+        if not on_central(parent):
+            return None
+        later = [a for a in modules if not on_central(a)]
+        if later:
+            print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
