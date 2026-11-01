@@ -2259,6 +2259,9 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
+      '@opentelemetry/exporter-trace-otlp-http':
+        specifier: ^0.57.2
+        version: 0.57.2(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.29.0
         version: 1.30.1(@opentelemetry/api@1.9.0)
@@ -2275,8 +2278,8 @@ importers:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3))
       openai:
-        specifier: ^4.77.0
-        version: 4.98.0(ws@8.22.0)(zod@3.25.76)
+        specifier: ^7.47.0
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.1)(google-auth-library@11.1.0)(undici@6.29.0)(ws@8.22.0)(zod@4.6.5)
       rimraf:
         specifier: ^6.0.1
         version: 6.1.2
@@ -10276,6 +10279,33 @@ packages:
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
+
+  openai@7.47.0:
+    resolution: {integrity: sha512-BYa2RYgocAv9WjPUJmNu8fICuA1fFhkTBEpiR3sC5L1K6v8Hnhc8pcnQEhu8l/+W1XKA+JUaBa7HpT+AK1s77w==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      google-auth-library: '>=9.15.1 <12'
+      undici: '>=5 <9'
+      ws: ^8.21.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      google-auth-library:
+        optional: true
+      undici:
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
 
 snapshots:
 
@@ -20940,3 +20970,11 @@ snapshots:
   zod@4.6.5: {}
 
   zwitch@2.0.4: {}
+
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.1)(google-auth-library@11.1.0)(undici@6.29.0)(ws@8.22.0)(zod@4.6.5):
+    optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.1
+      google-auth-library: 11.1.0
+      undici: 6.29.0
+      ws: 8.22.0
+      zod: 4.6.5

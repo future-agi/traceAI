@@ -5,12 +5,20 @@ OpenTelemetry instrumentation for xAI (Grok) - AI models from xAI.
 ## Installation
 
 ```bash
-npm install @traceai/xai
+npm install @traceai/xai openai
 ```
+
+The `openai` package is an optional peer dependency (minimum 4.0.0). The
+instrumentation supports both the v4 resource layout and the latest v7 layout;
+OpenAI SDK 7.47.0 requires Node.js 22+, while older compatible SDK versions
+can still be used on Node.js 18+. Configure the OpenAI client with an xAI
+`baseURL` (such as `https://api.x.ai/v1`); calls to non-xAI hosts are not traced
+by this package. Embedding spans are recorded only when the endpoint supports
+an embedding model.
 
 ## Features
 
-- Automatic tracing of xAI API calls through OpenAI-compatible interface
+- Automatic tracing of xAI API calls through the OpenAI-compatible interface (OpenAI JS SDK 4.x–7.x, including 7.47.0)
 - Support for chat completions and embeddings
 - Streaming response support
 - Tool/function calling support
@@ -41,15 +49,20 @@ instrumentation.enable();
 const openaiModule = await import("openai");
 instrumentation.manuallyInstrument(openaiModule);
 
-// Create the xAI client
+// Supply an API key and a model ID available to your xAI account.
+const apiKey = process.env.XAI_API_KEY;
+const model = process.env.XAI_MODEL;
+if (!apiKey || !model) {
+  throw new Error("Set XAI_API_KEY and XAI_MODEL");
+}
 const client = new OpenAI({
   baseURL: "https://api.x.ai/v1",
-  apiKey: process.env.XAI_API_KEY,
+  apiKey,
 });
 
-// Make requests - they will be automatically traced
+// Calls against the xAI base URL are traced.
 const response = await client.chat.completions.create({
-  model: "grok-beta",
+  model,
   messages: [
     { role: "system", content: "You are Grok, a witty AI assistant." },
     { role: "user", content: "Hello!" },
@@ -61,7 +74,7 @@ const response = await client.chat.completions.create({
 
 ```typescript
 const stream = await client.chat.completions.create({
-  model: "grok-beta",
+  model,
   messages: [{ role: "user", content: "Tell me a joke." }],
   stream: true,
 });
@@ -75,7 +88,7 @@ for await (const chunk of stream) {
 
 ```typescript
 const response = await client.chat.completions.create({
-  model: "grok-beta",
+  model,
   messages: [
     { role: "user", content: "What's the current time in Tokyo?" },
   ],
@@ -113,7 +126,8 @@ if (toolCall) {
 
 ```typescript
 const embedding = await client.embeddings.create({
-  model: "grok-embed",
+  // Set this only if your xAI endpoint offers an embedding model.
+  model: process.env.XAI_EMBEDDING_MODEL!,
   input: "Hello, world!",
 });
 
@@ -124,7 +138,7 @@ console.log(`Embedding dimensions: ${embedding.data[0].embedding.length}`);
 
 ```typescript
 const response = await client.chat.completions.create({
-  model: "grok-beta",
+  model,
   messages: [
     { role: "system", content: "You are Grok." },
     { role: "user", content: "My name is Alice." },
@@ -145,29 +159,17 @@ const response = await client.chat.completions.create({
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" for chat, "EMBEDDING" for embeddings |
-| `llm.system` | "xai" |
-| `llm.provider` | "xai" |
-| `llm.model` | Model name (grok-beta, etc.) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
-| `llm.input_messages.{n}.role` | Message role |
-| `llm.input_messages.{n}.content` | Message content |
-| `llm.output_messages.{n}.role` | Response role |
-| `llm.output_messages.{n}.content` | Response content |
-| `llm.output_messages.{n}.tool_calls.{m}.*` | Tool call details |
+| `fi.span.kind` | `LLM` for chat, `EMBEDDING` for embeddings |
+| `gen_ai.provider.name` | `xai` |
+| `gen_ai.request.model` | Requested chat model |
+| `gen_ai.input.messages` | JSON-encoded chat messages |
+| `gen_ai.output.messages` | JSON-encoded response message and tool calls |
+| `gen_ai.usage.input_tokens` | Input token count (when returned) |
+| `gen_ai.usage.output_tokens` | Output token count (when returned) |
+| `gen_ai.usage.total_tokens` | Total token count (when returned) |
 
-## Available Models
-
-| Model | Description |
-|-------|-------------|
-| `grok-beta` | Grok beta model |
-| `grok-embed` | Embedding model (availability varies) |
-
-## About Grok
-
-Grok is developed by xAI, founded by Elon Musk. It's designed to be witty, helpful, and have real-time knowledge through X (Twitter) integration.
+Use a model ID currently available to your xAI account. Available models and
+embedding support depend on the endpoint and account configuration.
 
 ## License
 

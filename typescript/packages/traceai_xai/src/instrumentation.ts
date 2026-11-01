@@ -196,9 +196,17 @@ export class XAIInstrumentation extends InstrumentationBase {
    * Checks if a request is targeting xAI API
    */
   private isXAIRequest(client: unknown): boolean {
-    const baseURL = (client as { baseURL?: string })?.baseURL;
+    // v4 resources use client, v7 resources use _client. Direct wrapper
+    // calls can also receive the parent OpenAI client itself.
+    const resource = client as { client?: { baseURL?: string }; _client?: { baseURL?: string }; baseURL?: string } | null;
+    const baseURL = resource?._client?.baseURL ?? resource?.client?.baseURL ?? resource?.baseURL;
     if (!baseURL) return false;
-    return baseURL.includes("x.ai") || baseURL.includes("api.x.ai");
+    try {
+      const host = new URL(baseURL).hostname;
+      return host === "x.ai" || host.endsWith(".x.ai");
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -223,32 +231,18 @@ export class XAIInstrumentation extends InstrumentationBase {
       });
     }
 
-    // Patch the OpenAI class
-    const OpenAI = module.OpenAI as {
-      prototype: {
-        chat?: { completions?: { create?: unknown } };
-        embeddings?: { create?: unknown };
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      // Patch chat.completions.create
-      if (OpenAI.prototype.chat?.completions && typeof (OpenAI.prototype.chat.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.chat.completions as Record<string, unknown>,
-          "create",
-          this.createChatCompletionWrapper(instrumentation),
-        );
-      }
-
-      // Patch embeddings.create
-      if (OpenAI.prototype.embeddings && typeof (OpenAI.prototype.embeddings as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.embeddings as Record<string, unknown>,
-          "create",
-          this.createEmbeddingWrapper(instrumentation),
-        );
-      }
+    // The SDK instantiates resource classes; chat and embeddings are not
+    // properties on OpenAI.prototype (in either v4 or v7).
+    const resources = this.getResourcePrototypes(module);
+    if (!resources.chat && !resources.embeddings) {
+      diag.warn("No OpenAI chat or embeddings resources available for xAI instrumentation");
+      return module;
+    }
+    if (resources.chat) {
+      this._wrap(resources.chat, "create", this.createChatCompletionWrapper(instrumentation));
+    }
+    if (resources.embeddings) {
+      this._wrap(resources.embeddings, "create", this.createEmbeddingWrapper(instrumentation));
     }
 
     _isFIPatched = true;
@@ -418,6 +412,22 @@ export class XAIInstrumentation extends InstrumentationBase {
     };
   }
 
+  private getResourcePrototypes(module: Record<string, unknown>): {
+    chat?: Record<string, unknown>;
+    embeddings?: Record<string, unknown>;
+  } {
+    const sdk = (module.OpenAI ?? module.default) as {
+      Chat?: { Completions?: { prototype?: Record<string, unknown> } };
+      Embeddings?: { prototype?: Record<string, unknown> };
+    } | undefined;
+    const chat = sdk?.Chat?.Completions?.prototype;
+    const embeddings = sdk?.Embeddings?.prototype;
+    return {
+      chat: typeof chat?.create === "function" ? chat : undefined,
+      embeddings: typeof embeddings?.create === "function" ? embeddings : undefined,
+    };
+  }
+
   /**
    * Un-patches the OpenAI module
    */
@@ -425,21 +435,9 @@ export class XAIInstrumentation extends InstrumentationBase {
     moduleExports: Record<string, unknown> & { fiXAIPatched?: boolean },
     moduleVersion?: string,
   ) {
-    const OpenAI = moduleExports.OpenAI as {
-      prototype: {
-        chat?: { completions?: Record<string, unknown> };
-        embeddings?: Record<string, unknown>;
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      if (OpenAI.prototype.chat?.completions) {
-        this._unwrap(OpenAI.prototype.chat.completions, "create");
-      }
-      if (OpenAI.prototype.embeddings) {
-        this._unwrap(OpenAI.prototype.embeddings, "create");
-      }
-    }
+    const resources = this.getResourcePrototypes(moduleExports);
+    if (resources.chat) this._unwrap(resources.chat, "create");
+    if (resources.embeddings) this._unwrap(resources.embeddings, "create");
 
     _isFIPatched = false;
     try {
