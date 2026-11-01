@@ -79,7 +79,10 @@ for (const name of ["@elevenlabs/sdk-floor", "@elevenlabs/elevenlabs-js"]) {
       pull(controller) {
         reads++;
         if (reads === 1) controller.enqueue(Uint8Array.from(AUDIO));
-        else controller.close();
+        else {
+          controller.close();
+          controller.byobRequest?.respond(0);
+        }
       },
     });
     const raw = new SDK.ElevenLabsClient({

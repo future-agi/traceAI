@@ -5,7 +5,11 @@ function audioStream(
   source: ReadableStream<Uint8Array>,
   operation: Operation,
 ): ReadableStream<Uint8Array> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let reader:
+    | { mode: "default"; value: ReadableStreamDefaultReader<Uint8Array> }
+    | { mode: "byob"; value: ReadableStreamBYOBReader }
+    | undefined;
+  let cancelled = false;
   let supportsBYOB = false;
   try {
     const probe = source.getReader({ mode: "byob" });
@@ -21,29 +25,54 @@ function audioStream(
         | ReadableByteStreamController,
     ) {
       try {
-        reader ??= source.getReader();
-        const next = await reader.read();
+        const request =
+          "byobRequest" in controller ? controller.byobRequest : null;
+        let next: ReadableStreamReadResult<Uint8Array>;
+        if (request?.view) {
+          if (reader?.mode !== "byob") {
+            reader?.value.releaseLock();
+            reader = { mode: "byob", value: source.getReader({ mode: "byob" }) };
+          }
+          // Pass the consumer's storage through, including its offset and capacity.
+          // The upstream read transfers it; respondWithNewView returns that buffer.
+          const view = request.view;
+          next = await reader.value.read(
+            new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
+          );
+        } else {
+          if (reader?.mode !== "default") {
+            reader?.value.releaseLock();
+            reader = { mode: "default", value: source.getReader() };
+          }
+          next = await reader.value.read();
+        }
+        if (cancelled) return;
         if (next.done) {
           operation.end("complete");
           controller.close();
-          if ("byobRequest" in controller) controller.byobRequest?.respond(0);
-          reader.releaseLock();
+          if (request && next.value) request.respondWithNewView(next.value);
+          else if ("byobRequest" in controller) controller.byobRequest?.respond(0);
+          reader.value.releaseLock();
         } else {
           operation.audio(next.value);
-          controller.enqueue(next.value);
+          if (request) request.respondWithNewView(next.value);
+          else controller.enqueue(next.value);
         }
       } catch (error) {
         operation.error(error);
         controller.error(error);
-        safely(() => reader?.releaseLock());
+        safely(() => reader?.value.releaseLock());
       }
     },
     async cancel(reason: unknown) {
+      cancelled = true;
       operation.end("cancelled");
       try {
-        return await (reader ? reader.cancel(reason) : source.cancel(reason));
+        return await (reader
+          ? reader.value.cancel(reason)
+          : source.cancel(reason));
       } finally {
-        safely(() => reader?.releaseLock());
+        safely(() => reader?.value.releaseLock());
       }
     },
   };

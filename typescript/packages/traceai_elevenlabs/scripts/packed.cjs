@@ -45,6 +45,7 @@ if (stage === "prepare") {
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
   fs.mkdirSync(path.join(directory, "test"));
   for (const name of [
+    "byob.test.cjs",
     "contract.test.cjs",
     "edge.test.cjs",
     "fixture.cjs",
@@ -95,6 +96,7 @@ if (stage === "prepare") {
     process.execPath,
     [
       "--test",
+      path.join(directory, "test/byob.test.cjs"),
       path.join(directory, "test/contract.test.cjs"),
       path.join(directory, "test/edge.test.cjs"),
     ],
