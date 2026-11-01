@@ -333,6 +333,65 @@ test("terminal receipts and accounting indexes reclaim bounded pages after reten
   assert.equal(spool.admit(route().id, fact("retained-0")).duplicate, true);
 });
 
+test("retention scans bounded candidates without killing the storage child", async (t) => {
+  const { StorageClient } = require("../dist/src/runtime/storage-client.js");
+  const dir = fs.mkdtempSync(path.join(base, "gc-candidates-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const initial = new Spool(dir, "0.1.0");
+  initial.close();
+  const db = new Database(path.join(dir, "spool.db"));
+  const binding = route().binding.id;
+  const insert = db.prepare("INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created,plan) VALUES(?,?,?,?,?,?,NULL,0,1,'accepted',?,?)");
+  const plan = db.prepare("INSERT INTO plans VALUES(?,?,?)");
+  db.transaction(() => {
+    for (let i = 0; i < 10000; i++) {
+      const id = i.toString(16).padStart(64, "0");
+      insert.run(route().id, binding, id, id.slice(32), id.slice(48), "semantic-v1:" + id, Date.now(), id);
+      plan.run(binding, id, "request");
+    }
+    const id = "f".repeat(64);
+    insert.run(route().id, binding, id, id.slice(32), id.slice(48), "semantic-v1:" + id, Date.now() - 8 * 86400000, id);
+    plan.run(binding, id, "request");
+  })();
+  db.close();
+  const client = new StorageClient(path.resolve(__dirname, "../dist/src/runtime/storage-child.js"));
+  try {
+    await client.call("init", { root: dir, version: "0.1.0" });
+    assert.equal(await client.call("expire"), 0);
+    assert.equal((await client.call("status")).state, "ready");
+    // The orphan is beyond the first candidate window; subsequent bounded
+    // passes must eventually reach and reclaim it without touching live plans.
+    for (let i = 0; i < 80; i++) await client.call("expire");
+  } finally {
+    await client.close().catch(() => {});
+  }
+  const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+  assert.equal(check.prepare("SELECT count(*) n FROM plans").get().n, 10000);
+  check.close();
+});
+
+test("new non-additive receipts cannot pin expired accounting plans", (t) => {
+  const { spool, dir } = fixture(t);
+  const source = (id, unit) => reference.normalize(
+    { schema: "fixture-v1", session: "s", turn: id, id, unit }, context,
+  )[0];
+  spool.admit(route().id, source("ongoing-turn", "turn"));
+  const current = spool.next(route().id);
+  spool.complete(current.id, current.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+  for (let cycle = 0; cycle < 3; cycle++) {
+    spool.admit(route().id, source("old-request-" + cycle, "request"));
+    const old = spool.next(route().id);
+    spool.complete(old.id, old.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+    const db = new Database(path.join(dir, "spool.db"));
+    db.prepare("UPDATE records SET created=? WHERE id=?").run(Date.now() - 8 * 86400000, old.id);
+    db.close();
+    spool.expire();
+    const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(check.prepare("SELECT count(*) n FROM plans").get().n, 0);
+    check.close();
+  }
+});
+
 test("v1 receipts migrate without deleting pending work or its accounting plan", (t) => {
   const dir = fs.mkdtempSync(path.join(base, "migration-"));
   let spool = new Spool(dir, "0.1.0");
@@ -341,7 +400,8 @@ test("v1 receipts migrate without deleting pending work or its accounting plan",
     spool.admit(route().id, fact("legacy"));
     spool.close();
     const db = new Database(path.join(dir, "spool.db"));
-    db.exec("DROP INDEX terminal_age; DROP INDEX record_plans");
+    db.exec("DROP INDEX terminal_age; DROP INDEX record_plans; DROP INDEX legacy_plan_refs");
+    db.exec("ALTER TABLE records DROP COLUMN legacy_unknown");
     db.exec("ALTER TABLE records DROP COLUMN plan");
     db.exec("ALTER TABLE cursors DROP COLUMN updated");
     db.prepare("UPDATE meta SET value='1' WHERE key='schema'").run();
@@ -355,7 +415,68 @@ test("v1 receipts migrate without deleting pending work or its accounting plan",
     const db2 = new Database(path.join(dir, "spool.db"), { readonly: true });
     assert.equal(db2.pragma("user_version", { simple: true }), 4);
     assert.equal(db2.prepare("SELECT count(*) n FROM plans").get().n, 1);
+    assert.equal(db2.prepare("SELECT legacy_unknown FROM records WHERE work=?").get(fact("legacy").sourceWorkId).legacy_unknown, 1);
+    assert.equal(db2.prepare("SELECT legacy_unknown FROM records WHERE work=?").get(fact("new").sourceWorkId).legacy_unknown, 0);
     db2.close();
+  } finally {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("v2 unknown-plan receipts pin old plans only until receipt expiry", (t) => {
+  const dir = fs.mkdtempSync(path.join(base, "migration-v2-"));
+  let spool = new Spool(dir, "0.1.0");
+  const source = (id, unit) => reference.normalize(
+    { schema: "fixture-v1", session: "s", turn: id, id, unit }, context,
+  )[0];
+  try {
+    spool.route(route());
+    for (const [id, unit] of [["old-request", "request"], ["legacy-turn", "turn"]]) {
+      spool.admit(route().id, source(id, unit));
+      const row = spool.next(route().id);
+      spool.complete(row.id, row.epoch, { state: "accepted", code: "HTTP_ACCEPTED" });
+    }
+    spool.close();
+    const old = new Database(path.join(dir, "spool.db"));
+    old.exec("DROP INDEX legacy_plan_refs; ALTER TABLE records DROP COLUMN legacy_unknown");
+    old.prepare("UPDATE meta SET value='2' WHERE key='schema'").run();
+    old.pragma("user_version=2");
+    old.close();
+    spool = new Spool(dir, "0.1.1");
+    const migrated = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(migrated.pragma("user_version", { simple: true }), 3);
+    assert.equal(migrated.prepare("SELECT legacy_unknown FROM records WHERE work=?").get(source("legacy-turn", "turn").sourceWorkId).legacy_unknown, 1);
+    migrated.close();
+    const age = new Database(path.join(dir, "spool.db"));
+    age.prepare("UPDATE records SET created=? WHERE work=?").run(Date.now() - 8 * 86400000, source("old-request", "request").sourceWorkId);
+    age.close();
+    spool.expire();
+    const pinned = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(pinned.prepare("SELECT count(*) n FROM plans").get().n, 1);
+    pinned.close();
+    const ageAgain = new Database(path.join(dir, "spool.db"));
+    ageAgain.prepare("UPDATE records SET created=? WHERE work=?").run(Date.now() - 8 * 86400000, source("legacy-turn", "turn").sourceWorkId);
+    ageAgain.close();
+    spool.expire();
+    spool.admit(route().id, source("new-turn", "turn"));
+    spool.expire();
+    const check = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(check.prepare("SELECT count(*) n FROM plans").get().n, 0);
+    check.close();
+    // The additive ledger and immutable receipt survive a schema
+    // forward/backward/forward round trip, not only the first upgrade.
+    spool.close();
+    const rollback = new Database(path.join(dir, "spool.db"));
+    rollback.exec("DROP INDEX legacy_plan_refs; ALTER TABLE records DROP COLUMN legacy_unknown");
+    rollback.prepare("UPDATE meta SET value='2' WHERE key='schema'").run();
+    rollback.pragma("user_version=2");
+    rollback.close();
+    spool = new Spool(dir, "0.1.2");
+    assert.equal(spool.admit(route().id, source("new-turn", "turn")).duplicate, true);
+    const forward = new Database(path.join(dir, "spool.db"), { readonly: true });
+    assert.equal(forward.pragma("user_version", { simple: true }), 3);
+    forward.close();
   } finally {
     spool.close();
     fs.rmSync(dir, { recursive: true, force: true });

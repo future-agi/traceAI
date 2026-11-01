@@ -63,8 +63,25 @@ test("OTLP admission attributes match immutable backend contract and do not fake
   }, "0.1.0")).resourceSpans[0].scopeSpans[0].spans[0]
     .attributes.map((a) => [a.key, a.value.stringValue ?? a.value.doubleValue]));
   assert.equal(summaryAttributes["fi.usage.contribution"], "none");
+  assert.equal(summaryAttributes["fi.usage.plan.id"], undefined);
+  assert.equal(summaryAttributes["fi.usage.fact.id"], undefined);
   assert.equal(summaryAttributes["gen_ai.usage.input_tokens"], undefined);
   assert.equal(summaryAttributes["gen_ai.cost.total"], undefined);
+  assert.equal(summaryAttributes["fi.source.summary.gen_ai.usage.input_tokens"], fact.usage.input);
+  assert.equal(summaryAttributes["fi.source.summary.gen_ai.usage.output_tokens"], fact.usage.output);
+  assert.equal(summaryAttributes["fi.source.summary.gen_ai.cost.total"], undefined);
+  const turn = { ...fact, unit: "turn", usage: { ...fact.usage, scope: "turn", contribution: "turn" } };
+  const turnAttributes = Object.fromEntries(decodeTraces(encodeFacts([turn], {
+    id: "00000000-0000-4000-8000-000000000001",
+    project: "fixture", endpoint: "https://api.futureagi.com/tracer/v1/traces",
+    approvedOrigin: "https://api.futureagi.com",
+  }, "0.1.0")).resourceSpans[0].scopeSpans[0].spans[0]
+    .attributes.map((a) => [a.key, a.value.stringValue ?? a.value.doubleValue]));
+  assert.equal(turnAttributes["fi.capture.observation_unit"], "turn");
+  assert.equal(turnAttributes["fi.span.kind"], "AGENT");
+  assert.equal(turnAttributes["fi.usage.contribution"], "turn");
+  assert.equal(turnAttributes["gen_ai.usage.input_tokens"], fact.usage.input);
+  assert.equal(turnAttributes["gen_ai.cost.total"], undefined);
 });
 for (const status of [301, 302, 303, 307, 308])
   test(
