@@ -8,9 +8,14 @@
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
-      "require": "./dist/src/index.js"
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/src/index.d.ts",
+        "default": "./dist/src/index.js"
+      }
     }
   },
   "scripts": {
@@ -43,7 +48,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
-    "@langchain/core": "^0.2.0 || ^0.3.0"
+    "@langchain/core": "^0.2.0 || ^0.3.0 || ^1.0.0"
   },
   "devDependencies": {
     "@langchain/openai": "0.3.16",
