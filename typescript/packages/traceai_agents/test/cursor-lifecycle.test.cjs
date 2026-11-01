@@ -106,3 +106,41 @@ test("re-enable releases retained old-epoch root and does not resurrect stale ca
   assert.equal(outcome(parent), "incomplete");
   assert.equal(spool.next(route.id), undefined);
 });
+
+test("pending Cursor roots expire 24 hours after first observation and cannot be recovered", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook());
+  const child = take(spool);
+  assert.equal(spool.next(route.id), undefined);
+  clock += 86_400_001;
+  assert.equal(spool.expire(), 1);
+  assert.equal(spool.next(route.id), undefined);
+  assert.throws(() => admit(spool, { ...hook(), tool_use_id: "late-tool" }), /HELD_TURN_FINALIZED/);
+  spool.disable(route.id);
+  spool.route({ ...route, epoch: 3 });
+  assert.equal(spool.next(route.id), undefined);
+  assert.ok(child.parentSpanId.length, "the already exported child remains independently valid");
+});
+
+test("a stop just before the pending cap does not bypass its original expiry", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook());
+  take(spool);
+  clock += 86_400_000 - 1_000;
+  admit(spool, hook("stop"));
+  assert.equal(spool.next(route.id), undefined);
+  clock += 2_000;
+  assert.equal(spool.expire(), 1);
+  assert.equal(spool.next(route.id), undefined);
+});
+
+test("preview retention documentation discloses the pending cap and unrecoverable root", () => {
+  const readme = fs.readFileSync(path.resolve(__dirname, "../README.md"), "utf8");
+  assert.match(readme, /pending roots.{0,120}24 hours/i);
+  assert.match(readme, /expiry irreversibly drops their bytes/i);
+  assert.match(readme, /cannot recover an expired root/i);
+});
