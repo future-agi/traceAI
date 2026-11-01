@@ -233,6 +233,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | Azure AI Search | `traceai-java-azure-search` |
 | Retrieval | PostgreSQL pgvector | `traceai-java-pgvector` |
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
+| Framework | Koog JVM (native OpenTelemetry adapter) | `traceai-java-koog` |
 | Framework | LangChain4j | `traceai-langchain4j` |
 | Framework | Spring AI | `traceai-spring-ai` |
 | Framework | Spring Boot auto-configuration | `traceai-spring-boot-starter` |

@@ -64,6 +64,7 @@
         <module>traceai-java-elasticsearch</module>
 
         <!-- Frameworks -->
+        <module>traceai-java-koog</module>
         <module>traceai-langchain4j</module>
         <module>traceai-java-quarkus-langchain4j</module>
         <module>traceai-spring-ai</module>
