@@ -1,4 +1,4 @@
-// Package traceaia2a traces A2A (Agent2Agent) protocol client calls made with
+// Package traceaia2a traces A2A (Agent2Agent) protocol client and server calls made with
 // the official Go SDK, github.com/a2aproject/a2a-go/v2, for Future AGI.
 //
 // [Interceptor] is an a2aclient.CallInterceptor, the SDK's own extension
@@ -27,5 +27,8 @@
 // pointed at Future AGI (see the example directory) and pass it with
 // [WithTracerProvider], or install it as the global provider.
 //
-// Server-side handlers (a2asrv) are not instrumented by this package.
+// [ServerInterceptor] attaches to a2asrv.WithCallInterceptors and traces the
+// same methods as SERVER spans. It extracts W3C context from incoming service
+// parameters and passes the span context to the executor. Existing local
+// transport spans remain parents. No application tracing glue is required.
 package traceaia2a

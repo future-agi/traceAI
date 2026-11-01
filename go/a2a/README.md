@@ -1,15 +1,16 @@
 # traceAI A2A Go
 
-OpenTelemetry tracing for A2A (Agent2Agent) protocol clients built with the official Go SDK,
+OpenTelemetry tracing for A2A (Agent2Agent) protocol clients and servers built with the official Go SDK,
 [`github.com/a2aproject/a2a-go/v2`](https://github.com/a2aproject/a2a-go), sending spans to
 [Future AGI](https://futureagi.com).
 
-It is an `a2aclient.CallInterceptor`, the SDK's own extension point: you pass it with
+The client uses `a2aclient.CallInterceptor`, the SDK's own extension point: you pass it with
 `a2aclient.WithCallInterceptors` when you create the client. Each call to a remote agent becomes
 one client span with `gen_ai.span.kind=AGENT` and the A2A attribute names that the Python
 `traceai-a2a` package uses (`gen_ai.a2a.task.id`, `gen_ai.a2a.task.state`, `gen_ai.a2a.agent.url`,
 ...). The interceptor also sends the W3C `traceparent` (as an HTTP header on JSON-RPC and REST, as call
-metadata on gRPC), so a remote agent that reads it continues the same trace.
+metadata on gRPC). Add `NewServerInterceptor` to the receiving agent to continue the trace
+with one server span per call, without copying context extraction into your application.
 
 | | |
 |---|---|
@@ -72,7 +73,7 @@ remote agent; that request gets `traceparent` (and `tracestate` when set) only.
 
 [`example/main.go`](example/main.go) is a complete program: an agent span, A2A calls (streamed
 with `-stream`), a failing task (`-fail`), and a demo remote agent built with a2a-go's server
-package whose own spans join the trace. When it calls `api.openai.com`, the demo marks its own LLM
+package whose maintained server interceptor joins the trace. When it calls `api.openai.com`, the demo marks its own LLM
 span with `gen_ai.provider.name=openai`; other OpenAI-compatible hosts remain unlabelled rather than
 guessing a vendor. The A2A interceptor itself still never creates an LLM span or invents a provider.
 
@@ -81,9 +82,39 @@ export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service
 go run ./example -stream -fail
 ```
 
+## Trace the receiving agent
+
+Use the same tracer provider and content settings with the official server hook:
+
+```go
+handler := a2asrv.NewHandler(executor,
+	a2asrv.WithCallInterceptors(traceaia2a.NewServerInterceptor(
+		traceaia2a.WithTracerProvider(tp))))
+httpHandler := a2asrv.NewJSONRPCHandler(handler)
+```
+
+Here `executor` is your `a2asrv.AgentExecutor`. Serve `httpHandler` using `net/http`.
+For REST use `a2asrv.NewRESTHandler(handler)`; for gRPC use
+`a2agrpc.NewHandler(handler).RegisterWith(grpcServer)` from `a2agrpc/v1`.
+Attach the interceptor once, first in the list. It traces protocol calls, not agent-card
+requests, transport parsing/authentication failures that occur before the hook, or separate
+executor lifetimes. A background task may outlive a nonblocking request's span.
+
+The executor receives a context containing the server span. Start any application/model
+spans from that context; do not re-extract `traceparent` or add a second A2A server span.
+An existing local transport span is kept as the parent. `WithPropagator(nil)` disables incoming
+extraction; the default extracts W3C trace context only, not baggage. Session/user context helpers
+are process-local: the A2A context ID becomes the server's `session.id` unless set on its context.
+Headers, authenticated user details and request metadata are never copied to spans.
+
+The server uses the same privacy settings and stream/error handling as the client. HTTP and gRPC
+cancel the request context on disconnect. When calling a handler directly, pass a cancellable
+context and cancel it if you stop consuming a stream early: the SDK does not call `After` on
+iterator close.
+
 ## What is traced
 
-| Client method | Span | `gen_ai.operation.name` |
+| Client and server method | Span | `gen_ai.operation.name` |
 |---|---|---|
 | `SendMessage` | `a2a.SendMessage` | `a2a.send` |
 | `SendStreamingMessage` | `a2a.SendStreamingMessage` | `a2a.send` |
@@ -97,8 +128,8 @@ a span.
 A stream is one span. Every streamed event is a span event named `a2a.event` (with
 `gen_ai.a2a.event.type`, and the task state or artifact type when the event has one), and the span
 ends at the agent's reply message or when the task reaches a terminal state (`completed`,
-`failed`, `canceled`, `rejected`) or an interrupted one (`input-required`, `auth-required`), which
-is when a2a-go closes the stream.
+`failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream. `auth-required` does not close
+an active stream: later events and its final result remain on the same span.
 
 ## Attributes
 
@@ -159,9 +190,6 @@ recorded, values are cut at 32 000 bytes, and the module adds no resource attrib
 
 ## Not supported
 
-- Server-side tracing (`a2asrv`). The server interceptor is a different interface and is not part
-  of this module; a remote agent joins the trace only if it reads `traceparent` itself (the
-  example's demo agent shows how).
 - Push notifications and the a2a CLI.
 
 ## Test
