@@ -18,6 +18,7 @@
     "traceAI-mcp-use",
     "traceAI-minimax",
     "traceAI-openai-realtime",
+    "traceAI-openwebui",
     "traceAI-parallel",
     "traceAI-replicate",
     "traceAI-semantic-kernel",

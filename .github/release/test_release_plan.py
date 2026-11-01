@@ -62,6 +62,42 @@ class PlanTests(unittest.TestCase):
         packages = release_plan.python_packages(self.repo.root)
         self.assertEqual(release_plan.consistency_problems(packages), ["python/frameworks/openai/traceai_openai/version.py: __version__ is 0.1.0 but pyproject.toml says 0.1.10"])
 
+    def test_npm_runtime_version_constants_are_checked(self):
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        packages = release_plan.typescript_packages(self.repo.root)
+        by = {p["name"]: p for p in packages}
+        self.assertEqual(by["@traceai/openai"]["declared"], {"src/version.ts": "0.1.13"})
+        self.assertEqual(by["@traceai/fi-core"]["declared"], {})
+        self.assertEqual(release_plan.consistency_problems(packages), [])
+        write(pkg / "src/version.ts", "export const VERSION = '0.1.0';\n")
+        packages = release_plan.typescript_packages(self.repo.root)
+        self.assertEqual(release_plan.consistency_problems(packages), ["typescript/packages/traceai_openai/src/version.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
+
+    def test_npm_version_constants_are_found_in_any_source_file(self):
+        # A second constant in another module is what the instrumentor may really use.
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        write(pkg / "src/mcp/patch.ts", 'import x from "y";\n\nconst VERSION = "0.1.0";\n')
+        write(pkg / "src/__tests__/fixture.test.ts", 'const VERSION = "9.9.9";\n')
+        by = {p["name"]: p for p in release_plan.typescript_packages(self.repo.root)}
+        self.assertEqual(by["@traceai/openai"]["declared"], {"src/mcp/patch.ts": "0.1.0", "src/version.ts": "0.1.13"})
+        self.assertEqual(release_plan.consistency_problems([by["@traceai/openai"]]), ["typescript/packages/traceai_openai/src/mcp/patch.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
+
+    def test_npm_runtime_version_needs_marker_and_extra_file(self):
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13";\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"typescript/packages/traceai_openai": {"release-type": "node"}}}))
+        write(self.repo.root / ".release-please-manifest.json", json.dumps({"typescript/packages/traceai_openai": "0.1.13"}))
+        packages = [p for p in release_plan.typescript_packages(self.repo.root) if p["name"] == "@traceai/openai"]
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, packages), [
+            "typescript/packages/traceai_openai/src/version.ts: missing release-please version marker",
+            "typescript/packages/traceai_openai/src/version.ts: missing release-please extra-file",
+        ])
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"typescript/packages/traceai_openai": {"release-type": "node", "extra-files": ["src/version.ts"]}}}))
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, packages), [])
+
     def test_offline_plan_lists_everything_core_first_and_honours_skips(self):
         cfg = {"skip": {"traceai": "the PyPI name belongs to another publisher"}}
         p = release_plan.plan(self.packages, cfg, offline=True)
