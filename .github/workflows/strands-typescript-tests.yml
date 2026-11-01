@@ -62,18 +62,21 @@ jobs:
           SUITE: ${{ matrix.suite }}
         run: |
           mkdir -p "$RUNNER_TEMP/strands-consumer"
+          extras=()
+          if [ "$SUITE" = native ]; then
+            extras=(@opentelemetry/exporter-trace-otlp-http@0.219.0
+              @opentelemetry/exporter-trace-otlp-proto@0.219.0 protobufjs@7.5.4 openai@6.45.0
+              typescript@5.8.3 @types/node@22.15.33)
+          fi
+          # Resolve the complete app together, as in the README. Installing the
+          # legacy core's transitive exporters first can hoist incompatible
+          # optional Strands peers before the native exporters are present.
           npm install --prefix "$RUNNER_TEMP/strands-consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP"/strands-package/*.tgz \
             "@strands-agents/sdk@$SDK_VERSION" \
             "@opentelemetry/sdk-trace-node@$OTEL_VERSION" \
             "@opentelemetry/sdk-trace-base@$OTEL_VERSION" \
-            "@opentelemetry/resources@$RESOURCE_VERSION"
-          if [ "$SUITE" = native ]; then
-            npm install --prefix "$RUNNER_TEMP/strands-consumer" --ignore-scripts --no-audit --no-fund \
-              @opentelemetry/exporter-trace-otlp-http@0.219.0 \
-              @opentelemetry/exporter-trace-otlp-proto@0.219.0 protobufjs@7.5.4 openai@6.45.0 \
-              typescript@5.8.3 @types/node@22.15.33
-          fi
+            "@opentelemetry/resources@$RESOURCE_VERSION" "${extras[@]}"
       - name: Packed framework and wire contracts (loopback-only network namespace)
         env:
           SUITE: ${{ matrix.suite }}
