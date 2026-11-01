@@ -8,6 +8,9 @@
 // "generate_content <model>" with gen_ai.span.kind=LLM, the GenAI
 // semantic-convention attributes, token usage when the API returns it, and the
 // messages, the same attribute names traceai-google-genai writes in Python.
+// Models.EmbedContent (embedContent/batchEmbedContents) produces one
+// "embeddings <model>" client span with gen_ai.span.kind=EMBEDDING, text
+// inputs, embedding count and vector dimensions. Vectors are never captured.
 // Other SDK requests pass through without a span.
 //
 // The tested backend is the Gemini Developer API (genai.BackendGeminiAPI).

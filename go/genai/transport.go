@@ -27,6 +27,8 @@ const (
 
 	methodGenerate       = ":generateContent"
 	methodStreamGenerate = ":streamGenerateContent"
+	methodEmbed          = ":embedContent"
+	methodBatchEmbed     = ":batchEmbedContents"
 	apiKeyHeader         = "x-goog-api-key"
 )
 
@@ -52,7 +54,7 @@ func WithTraceConfig(tc TraceConfig) Option {
 	return func(c *config) { c.tc, c.tcSet = tc, true }
 }
 
-// Transport is an http.RoundTripper that traces Gemini generate calls made by
+// Transport is an http.RoundTripper that traces Gemini generation and embedding calls made by
 // google.golang.org/genai. Build it with [NewTransport].
 type Transport struct {
 	base http.RoundTripper
@@ -60,9 +62,10 @@ type Transport struct {
 }
 
 // NewTransport returns a RoundTripper that sends every request through base
-// (http.DefaultTransport when nil) and spans the GenerateContent and
-// GenerateContentStream calls among them. Any other request (files, caches,
-// tokens, embeddings, models, batches, interactions) passes through untouched
+// (http.DefaultTransport when nil) and spans GenerateContent,
+// GenerateContentStream and EmbedContent calls. Both embedContent and
+// batchEmbedContents REST routes are traced. Other requests (files, caches,
+// tokens, models, asynchronous batch jobs, interactions) pass through untouched
 // and without a span.
 func NewTransport(base http.RoundTripper, opts ...Option) *Transport {
 	c := &config{}
@@ -104,17 +107,15 @@ func WrapClient(hc *http.Client, opts ...Option) *http.Client {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	method, ok := generateMethod(req)
+	method, ok := tracedMethod(req)
 	if !ok {
 		return t.base.RoundTrip(req)
 	}
-	return t.traceGenerate(req, method == methodStreamGenerate)
+	return t.traceRequest(req, method)
 }
 
-// generateMethod reports whether req is a Gemini generate call and which one.
-// The SDK builds {base}/{version}/models/{model}:generateContent and
-// :streamGenerateContent?alt=sse for both backends.
-func generateMethod(req *http.Request) (string, bool) {
+// tracedMethod reports whether req is a supported Gemini REST call and which one.
+func tracedMethod(req *http.Request) (string, bool) {
 	if req == nil || req.URL == nil || req.Method != http.MethodPost {
 		return "", false
 	}
@@ -124,6 +125,10 @@ func generateMethod(req *http.Request) (string, bool) {
 		return methodGenerate, true
 	case strings.HasSuffix(p, methodStreamGenerate):
 		return methodStreamGenerate, true
+	case strings.HasSuffix(p, methodEmbed):
+		return methodEmbed, true
+	case strings.HasSuffix(p, methodBatchEmbed):
+		return methodBatchEmbed, true
 	}
 	return "", false
 }
@@ -157,24 +162,35 @@ func (c *config) tracer() trace.Tracer {
 	return tp.Tracer(ScopeName, trace.WithInstrumentationVersion(Version))
 }
 
-func (t *Transport) traceGenerate(req *http.Request, streaming bool) (*http.Response, error) {
+func (t *Transport) traceRequest(req *http.Request, method string) (*http.Response, error) {
 	c := t.cfg
 	body, out := requestBody(req)
 	model := modelFromPath(req.URL.Path)
-	parsed := parseGenerateRequest(body, c.tc)
+	operation, kind := OperationGenerateContent, SpanKindLLM
+	embedding := method == methodEmbed || method == methodBatchEmbed
+	var parsed parsedRequest
+	if embedding {
+		operation, kind = OperationEmbeddings, SpanKindEmbedding
+		parsed = parseEmbeddingRequest(body, c.tc, method == methodBatchEmbed)
+	} else {
+		parsed = parseGenerateRequest(body, c.tc)
+	}
 
 	attrs := []attribute.KeyValue{
-		attribute.String(GenAISpanKind, SpanKindLLM),
-		attribute.String(GenAIOperationName, OperationGenerateContent),
+		attribute.String(GenAISpanKind, kind),
+		attribute.String(GenAIOperationName, operation),
 		attribute.String(GenAIProviderName, ProviderGoogle),
 	}
 	if model != "" {
 		attrs = append(attrs, attribute.String(GenAIRequestModel, model))
+		if embedding {
+			attrs = append(attrs, attribute.String(EmbeddingModelName, model))
+		}
 	}
 	attrs = append(attrs, parsed.attrs...)
 	attrs = append(attrs, ContextAttributes(req.Context())...)
 
-	name := OperationGenerateContent
+	name := operation
 	if model != "" {
 		name += " " + model
 	}
@@ -202,10 +218,10 @@ func (t *Transport) traceGenerate(req *http.Request, streaming bool) (*http.Resp
 	switch {
 	case res.StatusCode >= 400:
 		c.endHTTPError(span, res, secrets)
-	case streaming:
+	case method == methodStreamGenerate:
 		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc, secrets)
 	default:
-		c.endJSON(reqCtx, span, res)
+		c.endJSON(reqCtx, span, res, embedding)
 	}
 	return res, nil
 }
@@ -270,7 +286,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // endJSON reads a non-streaming response, restores the body for the SDK and
 // ends the span with the response attributes.
-func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response) {
+func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, embedding bool) {
 	if res.Body == nil {
 		span.End()
 		return
@@ -284,9 +300,13 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 		return
 	}
 	res.Body = io.NopCloser(bytes.NewReader(b))
-	acc := newAccumulator()
-	acc.addResponse(b)
-	span.SetAttributes(c.tc.Filter(acc.attributes())...)
+	if embedding {
+		span.SetAttributes(c.tc.Filter(embeddingResponseAttributes(b))...)
+	} else {
+		acc := newAccumulator()
+		acc.addResponse(b)
+		span.SetAttributes(c.tc.Filter(acc.attributes())...)
+	}
 	span.End()
 }
 
