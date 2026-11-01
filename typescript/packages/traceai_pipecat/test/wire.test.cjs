@@ -32,7 +32,7 @@ async function receiver(t) {
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeIdleConnections(); }));
   return { received, url: `http://127.0.0.1:${server.address().port}/v1/traces` };
 }
 

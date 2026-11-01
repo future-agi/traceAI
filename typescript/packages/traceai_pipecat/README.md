@@ -57,6 +57,8 @@ const pipecat = require("@pipecat-ai/client-js");
 instrumentation.manuallyInstrument(pipecat); // Idempotent with automatic instrumentation.
 ```
 
+For Node 18 ESM applications, load client-js 1.16 through its CommonJS entry with `createRequire(import.meta.url)("@pipecat-ai/client-js")` (import `createRequire` from `node:module`). Its upstream `.js` ESM entry lacks `type:module`; use a bundler or a newer Node with syntax detection for native imports. Pass the loaded module to `manuallyInstrument()`.
+
 This path traces `connect` and `disconnect`, legacy `action`/`sendMessage`, and current `sendText`/`sendClientMessage`/`sendClientRequest`. It preserves synchronous returns and throws. Connect spans end when the connection attempt completes, rather than waiting for disconnect. `disable()` restores patched methods, including manually instrumented modules. The client SDK still requires its normal browser/media environment; the Node instrumentor does not supply a transport or make browser-only SDKs server runtimes.
 
 Choose public-event observation for browser lifecycle telemetry, or Node operation tracing for method timings. They describe different events; do not stack both to obtain server pipeline tracing.

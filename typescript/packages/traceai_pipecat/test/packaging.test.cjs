@@ -2,6 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { spawnSync } = require('node:child_process');
 const { buildSync } = require('esbuild');
 const http = require('node:http');
@@ -28,7 +30,7 @@ test('README example stays executable and exports real client events over OTLP',
     req.on('end', () => { received.push(JSON.parse(Buffer.concat(chunks))); res.end('{}'); });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeIdleConnections(); }));
   const { client } = createClient(require('@pipecat-ai/client-js'));
   const stop = example.exports.traceClient(client, `http://127.0.0.1:${server.address().port}/v1/traces`);
   await client.connect();
@@ -72,16 +74,30 @@ test('automatic CommonJS instrumentation patches current SDK once', () => {
   assert.equal(child.status, 0, child.stdout + child.stderr);
 });
 
-test('native ESM namespace and both public entry points work', async t => {
-  const sdk = await import('@pipecat-ai/client-js');
+test('ESM consumers export spans through immutable namespaces on both Node generations', async t => {
+  // Upstream 1.16.0 publishes ESM as .js without type:module. Older Node needs
+  // its public CommonJS entry via createRequire; Node 22+ detects ESM syntax.
+  const interop = `
+    import { createRequire } from 'node:module';
+    const sdk = createRequire(${JSON.stringify(pathToFileURL(__filename).href)})('@pipecat-ai/client-js');
+    export const { PipecatClient, Transport, RTVIMessage } = sdk;
+  `;
+  const sdk = Number(process.versions.node.split('.')[0]) >= 22
+    ? await import('@pipecat-ai/client-js')
+    : await import('data:text/javascript,' + encodeURIComponent(interop));
   const entry = await import('../dist/src/index.js');
   const browserEntry = await import('../dist/src/client.js');
   assert.equal(typeof browserEntry.observePipecatClient, 'function');
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
   const inst = new entry.PipecatInstrumentation();
-  t.after(() => inst.disable());
+  inst.setTracerProvider(provider);
+  t.after(async () => { inst.disable(); await provider.shutdown(); });
   assert.equal(Object.isExtensible(sdk), false);
   inst.manuallyInstrument(sdk);
   const { client } = createClient(sdk);
   await client.connect();
   await client.disconnect();
+  assert.equal(exporter.getFinishedSpans().length, 2);
+  assert.ok(exporter.getFinishedSpans().every(s => s.attributes['pipecat.telemetry_source'] === 'client'));
 });
