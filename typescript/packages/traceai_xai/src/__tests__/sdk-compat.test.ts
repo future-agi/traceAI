@@ -98,7 +98,7 @@ describe("installed OpenAI SDK compatibility", () => {
   it("redacts embedding text on the wire with hideInputs", async () => {
     const hidden = new XAIInstrumentation({ traceConfig: { hideInputs: true, hideOutputs: true } });
     const sdk = require("openai");
-    // Manual instrumentation is not registered with the module-loader unpatch.
+    // Switch owners of the already-loaded SDK before checking masking.
     (instrumentation as unknown as { unpatch: (sdk: unknown) => void }).unpatch(sdk);
     hidden.setTracerProvider(provider);
     hidden.enable();
@@ -144,6 +144,24 @@ describe("installed OpenAI SDK compatibility", () => {
       if (active) (active as unknown as { unpatch: (sdk: unknown) => void }).unpatch(sdk);
       if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
       else process.env.FI_HIDE_INPUTS = previous;
+      instrumentation.manuallyInstrument(sdk);
+    }
+  });
+
+  it("stops tracing a manually patched preloaded SDK on disable and resumes on enable", async () => {
+    const sdk = require("openai");
+    const fetch: typeof globalThis.fetch = async () => new Response(JSON.stringify({ id: "chat-lifecycle", object: "chat.completion", model: "grok-test", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }), { headers: { "content-type": "application/json" } });
+    const client = new OpenAI({ apiKey: "synthetic", baseURL: "https://api.x.ai/v1", fetch });
+    try {
+      const before = exporter.getFinishedSpans().length;
+      instrumentation.disable();
+      await client.chat.completions.create({ model: "grok-test", messages: [{ role: "user", content: "hi" }] });
+      expect(exporter.getFinishedSpans()).toHaveLength(before);
+      instrumentation.enable();
+      await client.chat.completions.create({ model: "grok-test", messages: [{ role: "user", content: "hi" }] });
+      expect(exporter.getFinishedSpans()).toHaveLength(before + 1);
+    } finally {
+      instrumentation.enable();
       instrumentation.manuallyInstrument(sdk);
     }
   });

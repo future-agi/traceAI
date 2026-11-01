@@ -221,7 +221,8 @@ function traceSDKPromise<T>(
 export class XAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private hideInputs = false;
+  private hideInputs!: boolean;
+  private readonly manuallyPatchedModules = new Set<Record<string, unknown>>();
 
   constructor({
     instrumentationConfig,
@@ -230,19 +231,28 @@ export class XAIInstrumentation extends InstrumentationBase {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/xai",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
+    // InstrumentationBase calls enable() in its constructor by default, before
+    // subclass fields or traceConfig exist. Defer it until privacy is initialized.
+    super("@traceai/xai", VERSION, { ...instrumentationConfig, enabled: false });
     this._traceConfig = traceConfig;
+    this.setConfig(instrumentationConfig ?? {});
+    if (this.getConfig().enabled) this.enable();
   }
 
   public override enable(): void {
-    super.enable();
     const traceConfig = generateTraceConfig(this._traceConfig);
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
     this.hideInputs = traceConfig.hideInputs;
+    super.enable();
+    for (const module of this.manuallyPatchedModules) this.patch(module);
+  }
+
+  public override disable(): void {
+    if (!this.isEnabled()) return;
+    super.disable();
+    for (const module of this.manuallyPatchedModules) {
+      if ((module as { fiXAIPatched?: boolean }).fiXAIPatched) this.unpatch(module);
+    }
   }
 
   public readonly instrumentationName = "@traceai/xai";
@@ -261,7 +271,14 @@ export class XAIInstrumentation extends InstrumentationBase {
    * Manually instruments the OpenAI module for xAI
    */
   manuallyInstrument(module: Record<string, unknown>) {
+    if (!this.isEnabled()) return;
+    const alreadyPatched = (module as { fiXAIPatched?: boolean }).fiXAIPatched || _isFIPatched;
     this.patch(module);
+    // Only manage the lifetime of patches installed by this instance; a
+    // different instrumentation may already own this SDK module.
+    if (!alreadyPatched && (module as { fiXAIPatched?: boolean }).fiXAIPatched) {
+      this.manuallyPatchedModules.add(module);
+    }
   }
 
   /**
