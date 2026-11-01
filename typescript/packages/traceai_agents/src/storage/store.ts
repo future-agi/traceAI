@@ -66,6 +66,7 @@ function semanticHash(bytes: Buffer): string {
 export class Spool {
   private db: Database.Database;
   private paused: string | undefined;
+  private gcOrphans = false;
   constructor(
     private readonly root: string,
     private readonly runtimeVersion: string,
@@ -112,7 +113,7 @@ export class Spool {
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
       const existingVersion = this.db.pragma("user_version", { simple: true });
-      if (![0, 1, 2, 3].includes(Number(existingVersion)))
+      if (![0, 1, 2, 3, 4].includes(Number(existingVersion)))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
         this.db.exec(`
@@ -123,26 +124,37 @@ export class Spool {
       CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY,route TEXT NOT NULL,binding TEXT NOT NULL,work TEXT NOT NULL,
         trace TEXT NOT NULL,span TEXT NOT NULL,hash TEXT NOT NULL,bytes BLOB,encrypted INTEGER NOT NULL,epoch INTEGER NOT NULL,
         state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,
-        UNIQUE(binding,work),UNIQUE(binding,trace,span));
+        plan TEXT,UNIQUE(binding,work),UNIQUE(binding,trace,span));
       CREATE INDEX IF NOT EXISTS pending ON records(route,state,next_at,id);
+      CREATE INDEX IF NOT EXISTS terminal_age ON records(created,id) WHERE bytes IS NULL;
       CREATE TABLE IF NOT EXISTS observed_turns (binding TEXT NOT NULL,work TEXT NOT NULL,route TEXT NOT NULL,
         epoch INTEGER NOT NULL,start_ns TEXT NOT NULL,end_ns TEXT NOT NULL,deadline INTEGER NOT NULL,PRIMARY KEY(binding,work));
-      CREATE TABLE IF NOT EXISTS cursors (route TEXT NOT NULL,stream TEXT NOT NULL,coordinate TEXT NOT NULL,PRIMARY KEY(route,stream));
+      CREATE TABLE IF NOT EXISTS cursors (route TEXT NOT NULL,stream TEXT NOT NULL,coordinate TEXT NOT NULL,
+        updated INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(route,stream));
     `),
       );
       const version = this.db
         .prepare("SELECT value FROM meta WHERE key=?")
-        .get("schema") as any;
-      if (version && !["1", "2", "3"].includes(version.value))
+        .get("schema") as { value: string } | undefined;
+      if (version && !["1", "2", "3", "4"].includes(version.value))
         throw new AgentError("HELD_STORAGE_SCHEMA");
-      if (version?.value !== "3")
+      if (Number(existingVersion) < 4 || version?.value !== "4")
         this.write(() => {
-          this.db.exec("ALTER TABLE observed_turns ADD COLUMN terminal TEXT");
-          this.db
-            .prepare("INSERT OR REPLACE INTO meta VALUES (?,?)")
-            .run("schema", "3");
-          this.db.pragma("user_version=3");
+          // Legacy receipts retain their accounting plan until the last receipt expires.
+          const columns = (table: string): Set<string> =>
+            new Set((this.db.pragma(`table_info(${table})`) as { name: string }[]).map((row) => row.name));
+          if (!columns("records").has("plan"))
+            this.db.exec("ALTER TABLE records ADD COLUMN plan TEXT");
+          if (!columns("cursors").has("updated")) {
+            this.db.exec("ALTER TABLE cursors ADD COLUMN updated INTEGER NOT NULL DEFAULT 0");
+            this.db.prepare("UPDATE cursors SET updated=?").run(Date.now());
+          }
+          if (!columns("observed_turns").has("terminal"))
+            this.db.exec("ALTER TABLE observed_turns ADD COLUMN terminal TEXT");
+          this.db.prepare("INSERT OR REPLACE INTO meta VALUES (?,?)").run("schema", "4");
+          this.db.pragma("user_version=4");
         });
+      this.write(() => this.db.exec("CREATE INDEX IF NOT EXISTS record_plans ON records(binding,plan)"));
     } catch (e) {
       this.db.close();
       if (exclusiveOwner && (e as { code?: string }).code === "SQLITE_BUSY")
@@ -401,7 +413,7 @@ export class Spool {
       } else
         id = this.db
           .prepare(
-            "INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created,plan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             routeId,
@@ -415,14 +427,15 @@ export class Spool {
             route.epoch,
             state,
             Date.now(),
+            u && u.contribution !== "none" ? u.planId : null,
           ).lastInsertRowid;
     }
     if (cursor)
       this.db
         .prepare(
-          "INSERT INTO cursors VALUES (?,?,?) ON CONFLICT(route,stream) DO UPDATE SET coordinate=excluded.coordinate",
+          "INSERT INTO cursors(route,stream,coordinate,updated) VALUES (?,?,?,?) ON CONFLICT(route,stream) DO UPDATE SET coordinate=excluded.coordinate,updated=excluded.updated",
         )
-        .run(routeId, cursor.stream, cursor.coordinate);
+        .run(routeId, cursor.stream, cursor.coordinate, Date.now());
     return {
       receipt_id: String(id),
       duplicate: !!old && old.state !== "pending-turn",
@@ -673,15 +686,35 @@ export class Spool {
       return Math.max(result.changes, turns);
     });
   }
+  /** Retain pending roots for at most 24 hours from their first observation.
+   * Terminal receipts stay for seven days so replay cannot mint duplicate usage. */
+  private collectReceipts(limit: number): number {
+    const cutoff = Date.now() - 7 * 86_400_000;
+    const removed = this.db.prepare(
+      "DELETE FROM records WHERE id IN (SELECT id FROM records WHERE bytes IS NULL AND created<? LIMIT ?)",
+    ).run(cutoff, limit).changes;
+    if (removed || this.gcOrphans) {
+      const facts = this.db.prepare(
+        "DELETE FROM usage WHERE rowid IN (SELECT u.rowid FROM usage u WHERE NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=u.binding AND r.work=u.work) LIMIT ?)",
+      ).run(limit).changes;
+      const plans = this.db.prepare(
+        "DELETE FROM plans WHERE rowid IN (SELECT p.rowid FROM plans p WHERE NOT EXISTS (SELECT 1 FROM records r WHERE r.binding=p.binding AND (r.plan=p.id OR r.plan IS NULL)) LIMIT ?)",
+      ).run(limit).changes;
+      this.gcOrphans = facts === limit || plans === limit;
+    }
+    this.db.prepare(
+      "DELETE FROM cursors WHERE rowid IN (SELECT rowid FROM cursors WHERE updated<? LIMIT ?)",
+    ).run(cutoff, limit);
+    return removed;
+  }
   expire(): number {
-    return this.write(
-      () =>
-        this.db
-          .prepare(
-            "UPDATE records SET bytes=NULL,state='expired' WHERE id IN (SELECT id FROM records WHERE bytes IS NOT NULL AND created<? LIMIT 128)",
-          )
-          .run(Date.now() - 86_400_000).changes,
-    );
+    return this.write(() => {
+      const expired = this.db.prepare(
+        "UPDATE records SET bytes=NULL,state='expired' WHERE id IN (SELECT id FROM records WHERE bytes IS NOT NULL AND created<? LIMIT 128)",
+      ).run(Date.now() - 86_400_000).changes;
+      this.collectReceipts(128);
+      return expired;
+    });
   }
   status(): object {
     return {
