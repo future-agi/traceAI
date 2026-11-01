@@ -82,9 +82,10 @@ def test_cancelled_native_send_ends_only_its_span(operation, timeout):
                     await asyncio.wait_for(task, 0.01)
             else:
                 task.cancel("private-cancellation-marker")
-                with pytest.raises(
-                    asyncio.CancelledError, match="private-cancellation-marker"
-                ):
+                # Python 3.10 drops Task.cancel(msg) at the task-await boundary,
+                # including without instrumentation. Direct-await tests below
+                # still require the original cancellation message to survive.
+                with pytest.raises(asyncio.CancelledError):
                     await task
             assert trace.get_current_span() is trace.INVALID_SPAN
             assert len(started) == 2
