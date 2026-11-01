@@ -25,6 +25,7 @@
     "traceAI-tavily",
     "traceAI-temporal",
     "traceAI-typesafe",
-    "traceAI-voyage"
+    "traceAI-voyage",
+    "traceAI-transformers"
   ]
 }
