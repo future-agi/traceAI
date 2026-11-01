@@ -236,7 +236,13 @@ def test_lazy_lifetime(features, telemetry, mode, source_type):
     assert spans(exporter) == []
     assert not trace.get_current_span().get_span_context().is_valid
     if mode == "exhaust":
-        list(iterator)
+        # Drain the active traversal without iter(): PipelineIterator.__iter__
+        # resets a dataset's producer, even when partially consumed.
+        while True:
+            try:
+                next(iterator)
+            except StopIteration:
+                break
     elif mode == "close":
         iterator.close()
         iterator.close()
@@ -253,6 +259,129 @@ def test_lazy_lifetime(features, telemetry, mode, source_type):
     assert span.status.status_code.name == ("ERROR" if mode == "error" else "OK")
     assert "input.value" not in span.attributes
     assert "output.value" not in span.attributes
+
+
+@pytest.mark.parametrize("task", ["features", "generation"])
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("protocol", ["length", "dataset", "repeat", "loader"])
+def test_lazy_dataset_protocols(request, telemetry, task, batch_size, protocol):
+    pipe = request.getfixturevalue(task)
+    class Data(torch.utils.data.Dataset):
+        def __len__(self):
+            return 3
+        def __getitem__(self, index):
+            if index >= 3:
+                raise IndexError
+            return ["hello", "world", "hello world"][index]
+    kwargs = {"num_workers": 0, "batch_size": batch_size}
+    if task == "generation":
+        kwargs.update(max_new_tokens=2, do_sample=False)
+    baseline = pipe(Data(), **kwargs)
+    # Compare each traversal independently: upstream can retain a shortened
+    # final-batch size on subsequent traversals. Instrumentation must preserve
+    # that behavior too, rather than fixing or re-creating the dataset.
+    expected_passes = [list(baseline), list(baseline)]
+    exporter = instrument(telemetry, capture_content=True)
+    with telemetry[1].get_tracer("test").start_as_current_span("parent") as parent:
+        actual = pipe(Data(), **kwargs)
+    assert spans(exporter) == []
+    if protocol == "length":
+        assert len(actual) == len(baseline)
+        assert spans(exporter) == []
+    elif protocol == "dataset":
+        assert isinstance(actual, torch.utils.data.IterableDataset)
+        assert isinstance(actual, type(baseline))
+    elif protocol == "repeat":
+        for expected in expected_passes:
+            assert_same(list(actual), expected)
+        assert len(spans(exporter)) == 2
+    else:
+        loader = torch.utils.data.DataLoader(actual, batch_size=None, num_workers=0)
+        baseline_loader = torch.utils.data.DataLoader(baseline, batch_size=None, num_workers=0)
+        assert len(loader) == len(baseline_loader)
+        for expected in expected_passes:
+            assert_same(list(loader), expected)
+        assert len(spans(exporter)) == 2
+    assert len({span.context.span_id for span in spans(exporter)}) == len(spans(exporter))
+    for span in spans(exporter):
+        assert span.parent.span_id == parent.get_span_context().span_id
+        assert span.status.status_code.name == "OK"
+        assert "input.value" not in span.attributes
+        assert "output.value" not in span.attributes
+
+
+@pytest.mark.parametrize("end", ["reset", "close", "error"])
+def test_lazy_dataset_restart_lifetime(features, telemetry, monkeypatch, end):
+    class Data(torch.utils.data.Dataset):
+        def __len__(self):
+            return 2
+        def __getitem__(self, index):
+            if index >= 2:
+                raise IndexError
+            return ["hello", "world"][index]
+    baseline = features(Data(), num_workers=0)
+    expected = list(baseline)
+    first = next(iter(baseline))
+    assert_same(list(baseline), expected)  # __iter__ resets even a partial traversal.
+    exporter = instrument(telemetry)
+    seen = []
+    original = features._forward
+    def forward(*args, **kwargs):
+        seen.append(trace.get_current_span().get_span_context().span_id)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(features, "_forward", forward)
+    actual = features(Data(), num_workers=0)
+    assert_same(next(iter(actual)), first)
+    assert spans(exporter) == []
+    if end == "close":
+        actual.close()
+        actual.close()
+        with pytest.raises(StopIteration):
+            next(actual)
+    elif end == "error":
+        def fail(*args, **kwargs):
+            raise ValueError("SENTINEL-RESTART")
+        monkeypatch.setattr(features, "_forward", fail)
+        with pytest.raises(ValueError, match="SENTINEL-RESTART"):
+            next(actual)
+        monkeypatch.setattr(features, "_forward", forward)
+    assert_same(list(actual), expected)
+    first_span, second_span = spans(exporter)
+    assert first_span.status.status_code.name == ("ERROR" if end == "error" else "OK")
+    assert second_span.status.status_code.name == "OK"
+    assert first_span.end_time <= second_span.start_time
+    assert first_span.context.span_id != second_span.context.span_id
+    assert seen == [first_span.context.span_id, second_span.context.span_id, second_span.context.span_id]
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+def test_lazy_generator_preserves_one_shot_source(features, telemetry):
+    baseline = features((text for text in ["hello", "world"]), num_workers=0)
+    expected = [list(baseline), list(baseline)]
+    exporter = instrument(telemetry)
+    actual = features((text for text in ["hello", "world"]), num_workers=0)
+    for traversal in expected:
+        assert_same(list(actual), traversal)
+    assert expected[1] == []
+    assert all(span.status.status_code.name == "OK" for span in spans(exporter))
+
+
+def test_lazy_dataset_unused_traversal(features, telemetry):
+    class Data(torch.utils.data.Dataset):
+        def __len__(self):
+            return 2
+        def __getitem__(self, index):
+            if index >= 2:
+                raise IndexError
+            return "hello"
+    exporter = instrument(telemetry)
+    actual = features(Data(), num_workers=0)
+    assert iter(actual) is actual
+    assert iter(actual) is actual
+    actual.close()
+    assert spans(exporter) == []
+    assert len(list(actual)) == 2
+    assert len(spans(exporter)) == 1
 
 
 def test_lazy_forward_parent_and_no_payload_accumulation(features, telemetry, monkeypatch):
@@ -443,6 +572,43 @@ def test_otlp_wire_and_privacy(generation, telemetry, receiver, monkeypatch, pri
         assert decoded[-1].status.code == 2
         assert not decoded[-1].status.message
         assert all("exception.message" not in str(e) and "exception.stacktrace" not in str(e) for e in decoded[-1].events)
+
+
+def test_lazy_dataset_otlp_traversals(features, telemetry, receiver):
+    class Data(torch.utils.data.Dataset):
+        def __len__(self):
+            return 2
+        def __getitem__(self, index):
+            if index >= 2:
+                raise IndexError
+            return "SENTINEL-LAZY-CONTENT"
+    endpoint, received = receiver
+    provider = telemetry[1]
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(
+        endpoint=endpoint, headers={"FI_API_KEY": "synthetic-api", "FI_SECRET_KEY": "synthetic-secret"})))
+    instrument(telemetry, capture_content=True)
+    with provider.get_tracer("test").start_as_current_span("parent") as parent:
+        actual = features(Data(), num_workers=0)
+    for _ in range(2):
+        assert len(list(actual)) == 2
+    provider.force_flush()
+    decoded = []
+    for path, headers, request in received:
+        assert path == "/tracer/v1/traces"
+        lower = {key.lower(): value for key, value in headers.items()}
+        assert lower["fi_api_key"] == "synthetic-api"
+        assert lower["fi_secret_key"] == "synthetic-secret"
+        assert "SENTINEL" not in str(request)
+        for resource in request.resource_spans:
+            for scope in resource.scope_spans:
+                decoded.extend(span for span in scope.spans if span.name.startswith("transformers."))
+    assert len(decoded) == 2
+    assert decoded[0].span_id != decoded[1].span_id
+    assert decoded[0].end_time_unix_nano <= decoded[1].start_time_unix_nano
+    for span in decoded:
+        assert int.from_bytes(span.parent_span_id, "big") == parent.get_span_context().span_id
+        assert span.status.code == 1
+        assert span.end_time_unix_nano >= span.start_time_unix_nano
 
 
 def test_no_model_construction_or_bare_generate_spans(tokenizer, telemetry):

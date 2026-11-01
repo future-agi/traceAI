@@ -4,6 +4,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import copy
 from itertools import islice
 from time import time_ns
 from types import GeneratorType
@@ -13,6 +14,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import context, trace
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Status, StatusCode
+from wrapt import ObjectProxy
 
 _ACTIVE: ContextVar[tuple[int, ...]] = ContextVar("traceai_transformers_active", default=())
 _MAX_PREVIEW = 4096
@@ -148,9 +150,9 @@ class _TracedIterator(Iterator):
     Payloads are never accumulated. Close an abandoned iterator explicitly;
     finalization is only a best-effort fallback, as with Python generators.
     """
-    def __init__(self, wrapped, invocation):
+    def __init__(self, wrapped, invocation, *, iterator=None):
         self._wrapped = wrapped
-        self._iterator = None
+        self._iterator = iterator
         self._invocation = invocation
         self._closed = False
 
@@ -199,6 +201,42 @@ class _TracedIterator(Iterator):
 
     def __del__(self):
         self._invocation.finish()
+
+
+class _TracedDataset(ObjectProxy):
+    """Keep upstream dataset protocols, with a separate span per traversal.
+
+    PipelineIterator is an IterableDataset whose __iter__ resets its producer,
+    including during a partial traversal. A one-shot Iterator wrapper loses that
+    behavior. ObjectProxy preserves __len__ and isinstance(..., IterableDataset),
+    which DataLoader uses to choose iterable rather than indexed access.
+    """
+    def __init__(self, wrapped, invocation):
+        super().__init__(wrapped)
+        # This template stays unstarted and retains only metadata and context,
+        # not source previews, outputs, or a pipeline/model reference.
+        self._self_template = invocation
+        self._self_cursor = _TracedIterator(wrapped, copy(invocation))
+
+    def __iter__(self):
+        self._self_cursor.close()
+        invocation = copy(self._self_template)
+        try:
+            iterator = iter(self.__wrapped__)
+        except BaseException as error:
+            invocation.start()
+            invocation.finish(error)
+            raise
+        self._self_cursor = _TracedIterator(self.__wrapped__, invocation, iterator=iterator)
+        return self
+
+    def __next__(self):
+        return next(self._self_cursor)
+
+    def close(self):
+        # Explicit close ends the current traversal; a later iter() retains
+        # the underlying dataset's own ability (or inability) to start again.
+        self._self_cursor.close()
 
 
 def _input(args, kwargs):
@@ -252,6 +290,9 @@ class _PipelineWrapper:
             if isinstance(result, Iterator):
                 # Do not keep even bounded source previews for lazy streams.
                 invocation.attributes.pop("input.value", None)
+                from torch.utils.data import IterableDataset
+                if isinstance(result, IterableDataset):
+                    return _TracedDataset(result, invocation)
                 return _TracedIterator(result, invocation)
             # Some framework/backend paths materialize the result; avoid
             # consuming or transforming it to manufacture lazy behavior.
