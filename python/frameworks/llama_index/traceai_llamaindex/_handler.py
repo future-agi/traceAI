@@ -413,7 +413,7 @@ class _Span(BaseSpan):
             self._last_updated_at = time()
             self.notify_parent(_StreamingStatus.IN_PROGRESS)
         elif isinstance(event, ExceptionEvent):
-            self.end(event.exception)
+            self.finish(event.exception)
             self.notify_parent(_StreamingStatus.FINISHED)
 
     def notify_parent(self, status: _StreamingStatus) -> None:
@@ -1017,6 +1017,8 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if exception is None:
             span.process_output(instance, result)
         span.finish(exception)
+        # The handler holds the run's Context; drop it once the outcome is read.
+        span._run_handler = None
         return span
 
     def _finish_workflow_run(self, span: _Span, source: "asyncio.Future[Any]") -> None:
@@ -1026,6 +1028,7 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if exception is None:
             span.process_output(None, source.result())
         span.finish(exception)
+        span._run_handler = None
 
 
 def _run_outcome_source(handler: Any) -> "Optional[asyncio.Future[Any]]":
