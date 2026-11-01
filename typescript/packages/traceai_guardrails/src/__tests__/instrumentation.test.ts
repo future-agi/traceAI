@@ -1,286 +1,173 @@
-/**
- * Tests for Guardrails instrumentation.
- */
-
-import { GuardrailsInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
-import { VERSION } from "../version";
+import { context, trace, SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { GuardrailsInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
+import { VERSION } from "../version";
 
-describe("GuardrailsInstrumentation", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
+const exporter = new InMemorySpanExporter();
+const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+provider.register();
+const instances: GuardrailsInstrumentation[] = [];
 
-  const instrumentation = new GuardrailsInstrumentation();
-  instrumentation.disable();
-  instrumentation.setTracerProvider(tracerProvider);
+function instrument(config: ConstructorParameters<typeof GuardrailsInstrumentation>[0] = {}) {
+  const inst = new GuardrailsInstrumentation(config);
+  instances.push(inst);
+  inst.setTracerProvider(provider);
+  return inst;
+}
 
-  beforeEach(() => {
-    memoryExporter.reset();
-  });
+function guardReturning(result: unknown) {
+  return class Guard {
+    async parse(_input: string, _options?: object) { return result; }
+  };
+}
 
-  afterAll(() => {
-    instrumentation.disable();
-  });
+beforeEach(() => { exporter.reset(); });
+afterEach(() => {
+  for (const inst of instances.splice(0)) inst.disable();
+  _resetPatchedStateForTesting();
+});
+afterAll(async () => { await provider.shutdown(); });
 
-  describe("VERSION", () => {
-    it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
-    });
-  });
-
-  describe("GuardrailsInstrumentation", () => {
-    it("should create instrumentation instance", () => {
-      const inst = new GuardrailsInstrumentation();
-      expect(inst).toBeInstanceOf(GuardrailsInstrumentation);
-    });
-
-    it("should accept configuration options", () => {
-      const inst = new GuardrailsInstrumentation({
-        traceConfig: {
-          hideInputs: true,
-          hideOutputs: true,
-        },
-      });
-      expect(inst).toBeInstanceOf(GuardrailsInstrumentation);
-    });
-
-    it("should have instrumentationName", () => {
-      const inst = new GuardrailsInstrumentation();
-      expect(inst.instrumentationName).toBe("@traceai/fi-instrumentation-guardrails");
-    });
-
-    it("should have instrumentationVersion", () => {
-      const inst = new GuardrailsInstrumentation();
-      expect(inst.instrumentationVersion).toBe(VERSION);
-    });
-  });
-
-  describe("isPatched", () => {
-    it("should return false when not patched", () => {
-      instrumentation.disable();
-      expect(isPatched()).toBe(false);
-    });
-  });
-
-  describe("manuallyInstrument", () => {
-    it("should handle null module", () => {
-      const inst = new GuardrailsInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      // Should not throw
-      inst.manuallyInstrument(null);
-      expect(true).toBe(true);
-    });
-
-    it("should mark module as patched after manual instrumentation", () => {
-      const inst = new GuardrailsInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      const mockModule = { Guard: {} };
-      inst.manuallyInstrument(mockModule);
-      expect(mockModule).toHaveProperty("_fiPatched", true);
-    });
-  });
-
-  describe("enable/disable", () => {
-    it("should enable instrumentation", () => {
-      const inst = new GuardrailsInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-
-    it("should disable instrumentation", () => {
-      const inst = new GuardrailsInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      inst.disable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-  });
+test("runtime version matches package metadata", () => {
+  expect(VERSION).toBe(require("../../package.json").version);
 });
 
-describe("Guardrails Patching", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should wrap Guard.validate when available", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalValidate = jest.fn().mockResolvedValue({
-      validated: true,
-      valid: true,
-      output: "Valid output",
-    });
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          validate: originalValidate,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap Guard.parse when available", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalParse = jest.fn().mockResolvedValue({
-      validated: true,
-      parsed_output: { name: "John" },
-    });
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          parse: originalParse,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap Guard.call when available", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCall = jest.fn().mockResolvedValue({
-      validated: true,
-      output: "Called output",
-    });
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          call: originalCall,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should not double-patch module", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      _fiPatched: true,
-      Guard: {
-        prototype: {
-          validate: jest.fn(),
-        },
-      },
-    };
-
-    const original = mockModule.Guard.prototype.validate;
-    inst.manuallyInstrument(mockModule);
-
-    // Should not have changed
-    expect(mockModule.Guard.prototype.validate).toBe(original);
-  });
+test.each([
+  [{ validationPassed: false }, false],
+  [{ validationPassed: true }, true],
+  [{ validationPassed: false, valid: true, validated: true }, false],
+  [{ validationPassed: true, valid: false, validated: false }, true],
+  [{ validated: false }, false],
+  [{ valid: false }, false],
+  [{ valid: true, validated: false }, false],
+  [{ validated: true }, true],
+  [{ valid: true }, true],
+  [{}, undefined],
+  [undefined, undefined],
+  [null, undefined],
+  [{ validationPassed: "false" }, undefined],
+  [{ validated: "yes" }, undefined],
+])("records the actual boolean outcome for %j", async (result, expected) => {
+  const Guard = guardReturning(result);
+  instrument().manuallyInstrument({ Guard });
+  expect(await new Guard().parse("candidate")).toBe(result);
+  const spans = exporter.getFinishedSpans();
+  expect(spans).toHaveLength(1);
+  expect(spans[0].attributes["guardrails.validation_passed"]).toBe(expected);
+  expect(spans[0].attributes["fi.span.kind"]).toBe("GUARDRAIL");
+  expect(spans[0].status.code).toBe(SpanStatusCode.OK);
 });
 
-describe("Validation Result Handling", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
+test.each(["validate", "parse", "call"])("keeps the %s entry point", async (method) => {
+  const original = jest.fn().mockResolvedValue({ validationPassed: false });
+  const Guard = class {};
+  Object.assign(Guard.prototype, { [method]: original });
+  instrument().manuallyInstrument({ Guard });
+  const instance: any = new Guard();
+  const options = { numReasks: 0 };
+  await instance[method]("candidate", options);
+  expect(original).toHaveBeenCalledWith("candidate", options);
+  expect(original.mock.instances[0]).toBe(instance);
+  expect(exporter.getFinishedSpans()[0].attributes["guardrails.operation"]).toBe(method);
+});
+
+test("accepts an immutable module namespace and does not duplicate spans", async () => {
+  const Guard = guardReturning({ validationPassed: true });
+  const module = Object.freeze({ Guard });
+  const inst = instrument();
+  inst.manuallyInstrument(module);
+  inst.manuallyInstrument(module);
+  instrument().manuallyInstrument({ Guard });
+  await new Guard().parse("candidate");
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+});
+
+test("does not let one SDK copy block another", async () => {
+  const Guard1 = guardReturning({ validationPassed: true });
+  const Guard2 = guardReturning({ validationPassed: false });
+  const inst = instrument();
+  inst.manuallyInstrument({ Guard: Guard1 });
+  inst.manuallyInstrument({ Guard: Guard2 });
+  await new Guard1().parse("candidate");
+  await new Guard2().parse("candidate");
+  expect(exporter.getFinishedSpans()).toHaveLength(2);
+});
+
+test("disable restores manual patches and enable reapplies them", async () => {
+  const Guard = guardReturning({ validationPassed: true });
+  const original = Guard.prototype.parse;
+  const inst = instrument();
+  inst.manuallyInstrument({ Guard });
+  expect(isPatched()).toBe(true);
+  inst.disable();
+  expect(Guard.prototype.parse).toBe(original);
+  expect(isPatched()).toBe(false);
+  await new Guard().parse("not traced");
+  expect(exporter.getFinishedSpans()).toHaveLength(0);
+  inst.enable();
+  await new Guard().parse("traced");
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+});
+
+test("disabled configuration leaves methods alone until enabled", async () => {
+  const Guard = guardReturning({ validationPassed: true });
+  const inst = instrument({ instrumentationConfig: { enabled: false } });
+  inst.manuallyInstrument({ Guard });
+  await new Guard().parse("not traced");
+  expect(exporter.getFinishedSpans()).toHaveLength(0);
+  inst.enable();
+  await new Guard().parse("traced");
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+});
+
+test("disabling a non-owner does not unpatch the owner", async () => {
+  const Guard = guardReturning({ validationPassed: true });
+  instrument().manuallyInstrument({ Guard });
+  const other = instrument();
+  other.manuallyInstrument({ Guard });
+  other.disable();
+  await new Guard().parse("candidate");
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+});
+
+test("ignores absent methods without marking anything patched", () => {
+  const inst = instrument();
+  inst.manuallyInstrument(null);
+  inst.manuallyInstrument({ Guard: {} });
+  expect(isPatched()).toBe(false);
+});
+
+test("uses constructor privacy configuration without a second enable call", async () => {
+  const secret = "synthetic-private-candidate";
+  const Guard = guardReturning({ validationPassed: false, rawLlmOutput: secret });
+  instrument({ traceConfig: { hideInputs: true, hideOutputs: true } }).manuallyInstrument({ Guard });
+  await new Guard().parse(secret);
+  const span = exporter.getFinishedSpans()[0];
+  expect(JSON.stringify(span.attributes)).not.toContain(secret);
+  expect(span.attributes["guardrails.validation_passed"]).toBe(false);
+});
+
+test("keeps parentage, active child context, and the original error", async () => {
+  const error = new Error("synthetic failure");
+  class Guard {
+    async parse() {
+      await Promise.resolve();
+      expect(trace.getSpan(context.active())).toBeDefined();
+      provider.getTracer("test").startSpan("child").end();
+      throw error;
+    }
+  }
+  instrument().manuallyInstrument({ Guard });
+  const parent = provider.getTracer("test").startSpan("parent");
+  await context.with(trace.setSpan(context.active(), parent), async () => {
+    await expect(new Guard().parse()).rejects.toBe(error);
   });
-  tracerProvider.register();
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should handle validation success", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          validate: jest.fn().mockResolvedValue({
-            validated: true,
-            valid: true,
-            output: "Valid",
-          }),
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should handle validation failure", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          validate: jest.fn().mockResolvedValue({
-            validated: false,
-            valid: false,
-            error: "Validation failed",
-          }),
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should handle reask result", () => {
-    const inst = new GuardrailsInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Guard: {
-        prototype: {
-          validate: jest.fn().mockResolvedValue({
-            validated: true,
-            reask: true,
-            reask_count: 2,
-          }),
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
+  parent.end();
+  const spans = exporter.getFinishedSpans();
+  const guard = spans.find(s => s.name.startsWith("Guardrails"))!;
+  expect(guard.parentSpanId).toBe(parent.spanContext().spanId);
+  expect(spans.find(s => s.name === "child")!.parentSpanId).toBe(guard.spanContext().spanId);
+  expect(guard.status.code).toBe(SpanStatusCode.ERROR);
+  expect(guard.attributes["guardrails.validation_passed"]).toBe(false);
 });
