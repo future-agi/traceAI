@@ -28,7 +28,8 @@ const {
   bytes,
   canary,
 } = require("../contract/cursor-fixtures.cjs");
-const base = path.resolve(__dirname, "../../../../../t");
+const base =
+  process.env.FI_AGENT_TEST_ROOT ?? path.resolve(__dirname, "../../../../../t");
 fs.mkdirSync(base, { recursive: true, mode: 0o700 });
 const bin = path.resolve(__dirname, "../bin/fi-agent.cjs");
 const hookBin = path.resolve(__dirname, "../bin/fi-cursor-hook.cjs");
@@ -541,6 +542,9 @@ test("actual CLI enable/doctor/hook/status/disable works with synthetic auth in 
     "--preview",
   ]);
   assert.equal(enabled.status, 0, enabled.stdout + enabled.stderr);
+  assert.match(enabled.stdout, /real Cursor binaries not qualified/);
+  const implicitReenable = cli(root, ["enable", "cursor", "--surface", "ide"]);
+  assert.ok(JSON.parse(implicitReenable.stdout).reasons.includes("CURSOR_PREVIEW_REQUIRED"));
   let doctor = cli(root, ["doctor", "cursor", "--surface", "ide"]);
   assert.equal(JSON.parse(doctor.stdout).activation.activated, false);
   const result = await hookProcess(root, hook("stop"));

@@ -17,7 +17,8 @@ const { FileSecretStore } = require("../dist/src/security/credentials.js");
 const { paths, saveConfig } = require("../dist/src/config.js");
 const { decodeTraces, encodeResponse } = require("../dist/src/export/otlp.js");
 const { hook } = require("../contract/cursor-fixtures.cjs");
-const base = path.resolve(__dirname, "../../../../../t");
+const base =
+  process.env.FI_AGENT_TEST_ROOT ?? path.resolve(__dirname, "../../../../../t");
 fs.mkdirSync(base, { recursive: true, mode: 0o700 });
 const bin = path.resolve(__dirname, "../bin/fi-agent.cjs");
 const binding = {

@@ -75,6 +75,24 @@ test("active turn across multiple fifteen-minute windows keeps root until real s
   assert.equal(spool.next(route.id), undefined);
 });
 
+test("background drain never finalizes a live silent turn without a stop", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook());
+  const first = take(spool);
+  clock += OBSERVED_TURN_WINDOW_MS + 1;
+  assert.equal(spool.next(route.id)?.work, undefined, "a background sweep cannot infer death from silence");
+  admit(spool, { ...hook(), tool_use_id: "second-tool" });
+  const second = take(spool);
+  admit(spool, hook("stop"));
+  clock += 2000;
+  const parent = take(spool);
+  assert.equal(outcome(parent), "success");
+  assert.equal(first.parentSpanId, parent.spanId);
+  assert.equal(second.parentSpanId, parent.spanId);
+});
+
 test("re-enable releases retained old-epoch root and does not resurrect stale capture", (t) => {
   const spool = fixture(t);
   admit(spool, hook());

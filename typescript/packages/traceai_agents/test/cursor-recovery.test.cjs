@@ -8,7 +8,7 @@ const { Spool } = require("../dist/src/storage/store.js");
 const bin = path.resolve(__dirname, "../bin/fi-agent.cjs");
 
 test("cleanup retries a losing daemon start while the previous storage owner is closing", async (t) => {
-  const base = path.resolve(__dirname, "../../../../../t");
+  const base = path.join("/Volumes/nik-ext-1/tmp", `fi-cursor-r6-${process.pid}`);
   fs.mkdirSync(base, { recursive: true, mode: 0o700 });
   const root = fs.mkdtempSync(path.join(base, "r-"));
   const env = {

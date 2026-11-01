@@ -25,7 +25,8 @@ const { saveConfig, paths } = require("../dist/src/config.js");
 const { FileSecretStore } = require("../dist/src/security/credentials.js");
 const { decodeTraces, encodeResponse } = require("../dist/src/export/otlp.js");
 const { hook, canary } = require("../contract/cursor-fixtures.cjs");
-const base = path.resolve(__dirname, "../../../../../t");
+const base =
+  process.env.FI_AGENT_TEST_ROOT ?? path.resolve(__dirname, "../../../../../t");
 fs.mkdirSync(base, { recursive: true, mode: 0o700 });
 const binding = {
   id: "00000000-0000-4000-8000-000000000001",
@@ -221,49 +222,30 @@ function accept(spool) {
   return span;
 }
 
-test("lost stop has a durable bounded incomplete root after restart; late work cannot rewrite it", (t) => {
+test("lost stop stays pending across restart and background drains until the real stop", (t) => {
   const f = spoolFixture(t);
   const now = Date.now;
   let clock = now();
   Date.now = () => clock;
   try {
-    const first = admit(f.spool, hook());
+    admit(f.spool, hook());
     const tool = accept(f.spool);
-    assert.equal(
-      f.spool.next(route.id),
-      undefined,
-      "parent is pending, not prematurely exported",
-    );
     f.reopen();
-    clock += OBSERVED_TURN_WINDOW_MS - 1;
+    clock += OBSERVED_TURN_WINDOW_MS + 1;
     assert.equal(f.spool.finalizeTurns(route.id), 0);
-    clock++;
+    assert.equal(f.spool.next(route.id), undefined);
+    admit(f.spool, { ...hook(), tool_use_id: "late-tool" });
+    const second = accept(f.spool);
+    admit(f.spool, hook("stop"));
+    clock += 2000;
     const root = accept(f.spool);
     assert.equal(root.spanId, tool.parentSpanId);
-    assert.equal(root.traceId, tool.traceId);
-    assert.equal(root.startTimeUnixNano, tool.startTimeUnixNano);
-    assert.equal(
-      root.endTimeUnixNano,
-      tool.endTimeUnixNano,
-      "timeout is not the execution end",
-    );
-    assert.equal(attr(root, "fi.agent.outcome").stringValue, "incomplete");
-    assert.equal(attr(root, "fi.capture.partial").boolValue, true);
-    assert.equal(attr(root, "fi.capture.timing").stringValue, "estimated");
-    assert.equal(f.spool.finalizeTurns(route.id), 0);
-    assert.deepEqual(admit(f.spool, hook()), {
-      receipt_id: first.receipt_id,
-      duplicate: true,
-    });
+    assert.equal(root.spanId, second.parentSpanId);
+    assert.equal(attr(root, "fi.agent.outcome").stringValue, "success");
     assert.throws(
-      () => admit(f.spool, hook("stop")),
-      /HELD_IMMUTABLE_CONFLICT/,
-    );
-    assert.throws(
-      () => admit(f.spool, { ...hook(), tool_use_id: "late-tool" }),
+      () => admit(f.spool, { ...hook(), tool_use_id: "after-stop" }),
       /HELD_TURN_FINALIZED/,
     );
-    assert.equal(f.spool.next(route.id), undefined);
   } finally {
     Date.now = now;
   }
@@ -341,7 +323,7 @@ test("failed child admission rolls back its reserved parent; disable/purge fence
   );
 });
 
-test("real runtime and SQLite child finalize a recovered lost-stop root over loopback OTLP", async (t) => {
+test("real runtime keeps lost-stop root pending across restart until observed stop", async (t) => {
   const root = fixture(t),
     received = [];
   const server = http.createServer(async (req, res) => {
@@ -416,8 +398,7 @@ test("real runtime and SQLite child finalize a recovered lost-stop root over loo
   );
   assert.equal(received.length, 1);
   await runtime.stop();
-  // Advance the durable deadline with the owner stopped, rather than sleeping 15 minutes
-  // or adding a production clock/config bypass to the observer protocol.
+  // Simulate a legacy expired inactivity deadline; it must not close a turn.
   const db = new Database(path.join(p.state, "spool/spool.db"));
   db.prepare("UPDATE observed_turns SET deadline=?").run(Date.now() - 1);
   db.close();
@@ -427,10 +408,26 @@ test("real runtime and SQLite child finalize a recovered lost-stop root over loo
     { operation: "flush", deadlineMs: 3000 },
     3500,
   );
+  assert.equal(
+    received.length,
+    1,
+    "a stale deadline cannot terminate a live turn",
+  );
+  await runtimeRequest(p.socket, {
+    operation: "observe-source",
+    route_ref: route.id,
+    source_schema: HOOK_SCHEMA,
+    event: hook("stop"),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2100));
+  await runtimeRequest(
+    p.socket,
+    { operation: "flush", deadlineMs: 3000 },
+    3500,
+  );
   assert.equal(received.length, 2);
   const [tool, parent] = received;
   assert.equal(parent.spanId, tool.parentSpanId);
-  assert.equal(attr(parent, "fi.agent.outcome").stringValue, "incomplete");
-  assert.equal(parent.endTimeUnixNano, tool.endTimeUnixNano);
+  assert.equal(attr(parent, "fi.agent.outcome").stringValue, "success");
   await runtime.stop();
 });

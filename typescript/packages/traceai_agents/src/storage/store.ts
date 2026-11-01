@@ -36,8 +36,8 @@ interface Row {
   created: number;
   state: string;
 }
-// A turn can be silent indefinitely; finalize after a fixed, bounded observation
-// window, never treating this timeout as a successful stop or an execution end.
+// Silence is not evidence of process death. The inactivity window is retained
+// only for legacy callers; terminal observations alone make roots exportable.
 export const OBSERVED_TURN_WINDOW_MS = 15 * 60_000;
 export const TERMINAL_GRACE_MS = 2_000;
 interface TurnWindow {
@@ -518,7 +518,7 @@ export class Spool {
       ? window.deadline
       : fact.unit === "turn"
         ? Date.now() + TERMINAL_GRACE_MS
-        : Date.now() + OBSERVED_TURN_WINDOW_MS;
+        : 0;
     this.db
       .prepare(
         `INSERT INTO observed_turns VALUES (?,?,?,?,?,?,?,?)
@@ -538,7 +538,7 @@ export class Spool {
     if (fact.unit === "turn")
       return { ...receipt, duplicate: !!window?.terminal };
   }
-  /** Bounded crash-recoverable sweep; no raw events or invented timeout duration. */
+  /** Only an observed stop can close a root; a quiet live process is not dead. */
   finalizeTurns(routeId: string, observedWork?: string): number {
     const route = this.getRoute(routeId);
     if (!route.enabled) return 0;
@@ -546,7 +546,7 @@ export class Spool {
       .prepare(
         `SELECT r.id FROM records r JOIN observed_turns t
       ON r.binding=t.binding AND r.work=t.work WHERE r.route=? AND r.epoch=?
-      AND r.state='pending-turn' AND t.deadline<=? AND r.work!=? LIMIT 128`,
+      AND r.state='pending-turn' AND t.terminal IS NOT NULL AND t.deadline<=? AND r.work!=? LIMIT 128`,
       )
       .all(routeId, route.epoch, Date.now(), observedWork ?? "") as {
       id: number;

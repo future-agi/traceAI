@@ -680,12 +680,17 @@ export async function main(
       });
       return 0;
     }
+    if (command === "enable" && agent === "cursor" && !context.preview)
+      throw new AgentError("CURSOR_PREVIEW_REQUIRED", 3);
     if (command === "enable" && installed?.route.enabled) {
       if (context.transcriptConsent !== installed.transcriptConsent)
         throw new AgentError("CAPTURE_POLICY_CHANGE_REQUIRED", 3);
       output({
         state: "already-enabled",
         code: 0,
+        ...(agent === "cursor"
+          ? { qualification: "fixture-verified preview; real Cursor binaries not qualified" }
+          : {}),
         activation: installed.activation,
       });
       return 0;
@@ -780,6 +785,9 @@ export async function main(
       state:
         command === "enable" ? "waiting-for-activation" : command + "-complete",
       code: 0,
+      ...(agent === "cursor" && command === "enable"
+        ? { qualification: "fixture-verified preview; real Cursor binaries not qualified" }
+        : {}),
     });
     return 0;
   } catch (e) {

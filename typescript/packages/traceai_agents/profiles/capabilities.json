@@ -59,7 +59,8 @@
     "real-cursor-binary-activation-and-version-qualification",
     "persisted-transcript-schema-and-incremental-reader-qualification",
     "platform-storage-qualification",
-    "subagent-ancestry-and-source-usage-qualification"
+    "subagent-ancestry-and-source-usage-qualification",
+    "missing-stop roots stay pending without source liveness; old-epoch re-enable exports incomplete roots"
   ],
   "reference_adapter": "test-only; never registered by the executable"
 }
