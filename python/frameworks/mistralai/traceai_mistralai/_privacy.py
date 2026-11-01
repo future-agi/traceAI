@@ -62,8 +62,14 @@ class _NativeTraceConfig(ObjectProxy):
                 if not isinstance(part, dict):
                     return None
                 prefix = f"{key}.{message_index}.{MessageAttributes.MESSAGE_CONTENTS}.{part_index}"
-                if part.get("type") in ("text", "reasoning"):
-                    field = "content"
+                if part.get("type") in ("text", "reasoning", "tool_call_response"):
+                    # The SDK stores tool-result text/chunks in response rather
+                    # than content. Mask the payload, never the tool-call ID.
+                    field = (
+                        "response"
+                        if part["type"] == "tool_call_response"
+                        else "content"
+                    )
                     policy_key = (
                         f"{prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}"
                     )

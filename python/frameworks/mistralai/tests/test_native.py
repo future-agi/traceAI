@@ -213,6 +213,152 @@ def test_native_selective_privacy_on_wire(
         assert "call-1" in wire
 
 
+@pytest.mark.parametrize("encoding", ["json", "protobuf"])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("operation", ["chat", "chat-chunks", "conversation"])
+@pytest.mark.parametrize(
+    "policy", ["visible", "hide_input_text", "hide_inputs", "hide_input_messages"]
+)
+def test_native_tool_result_privacy(receiver, encoding, compressed, operation, policy):
+    endpoint, requests = receiver
+    exporter = (
+        JSONExporter(endpoint, compressed)
+        if encoding == "json"
+        else OTLPSpanExporter(
+            endpoint=endpoint,
+            headers={},
+            timeout=5,
+            compression=Compression.Gzip if compressed else Compression.NoCompression,
+        )
+    )
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = MistralAIInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=provider,
+        config=TraceConfig(**({} if policy == "visible" else {policy: True})),
+    )
+    marker = "private-tool-result-marker"
+    tool_id = "input-tool-call"
+
+    def respond(request):
+        if operation == "conversation":
+            body = conversation_response()
+            body["outputs"] = []
+            return httpx.Response(200, json=body)
+        return transport_response(request)
+
+    try:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+            client = Mistral(api_key="synthetic", client=transport)
+            if operation == "conversation":
+                result = client.beta.conversations.append(
+                    conversation_id="conv-test",
+                    inputs=[
+                        {
+                            "type": "function.result",
+                            "tool_call_id": tool_id,
+                            "result": marker,
+                        }
+                    ],
+                )
+                assert result.conversation_id == "conv-test"
+            else:
+                result = client.chat.complete(
+                    model="mistral-test",
+                    messages=[
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {"name": "lookup", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": [{"type": "text", "text": marker}]
+                            if operation == "chat-chunks"
+                            else marker,
+                        },
+                    ],
+                )
+                assert result.choices[0].message.content == OUTPUT_TEXT
+        provider.force_flush()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+    spans = wire_spans(requests)
+    assert len(spans) == 1
+    wire = json.dumps(requests)
+    assert (marker in wire) == (policy == "visible")
+    if operation != "conversation":
+        assert OUTPUT_TEXT in wire
+    if policy in ("visible", "hide_input_text"):
+        attrs = {a["key"]: a["value"] for a in spans[0]["attributes"]}
+        messages = json.loads(attrs["gen_ai.input.messages"]["stringValue"])
+        part = messages[-1]["parts"][0]
+        assert part["type"] == "tool_call_response"
+        assert part["id"] == tool_id
+        if policy == "hide_input_text":
+            assert part["response"] == REDACTED_VALUE
+
+
+@pytest.mark.parametrize("encoding", ["json", "protobuf"])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_cancelled_native_send_on_wire(receiver, encoding, compressed):
+    endpoint, requests = receiver
+    exporter = (
+        JSONExporter(endpoint, compressed)
+        if encoding == "json"
+        else OTLPSpanExporter(
+            endpoint=endpoint,
+            headers={},
+            timeout=5,
+            compression=Compression.Gzip if compressed else Compression.NoCompression,
+        )
+    )
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = MistralAIInstrumentor()
+    instrumentor.instrument(
+        tracer_provider=provider,
+        config=TraceConfig(hide_error_details=True),
+    )
+
+    async def run():
+        async def respond(request):
+            raise asyncio.CancelledError("private-cancellation-marker")
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(respond)
+        ) as transport:
+            client = Mistral(api_key="synthetic-key-marker", async_client=transport)
+            with pytest.raises(
+                asyncio.CancelledError, match="private-cancellation-marker"
+            ):
+                await client.chat.complete_async(
+                    model="mistral-test",
+                    messages=[{"role": "user", "content": "hello"}],
+                )
+
+    try:
+        asyncio.run(run())
+        provider.force_flush()
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+    spans = wire_spans(requests)
+    assert len(spans) == 1
+    assert spans[0]["status"]["code"] == "STATUS_CODE_ERROR"
+    assert "private-cancellation-marker" not in json.dumps(requests)
+    assert "synthetic-key-marker" not in json.dumps(requests)
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "variant", ["string", "text_chunk", "thinking", "image", "tool_call"]

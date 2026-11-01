@@ -1,10 +1,12 @@
 """Route the SDK's own spans through FITracer; never create a second SDK span."""
 
+import asyncio
 import json
 import logging
+from functools import wraps
 from threading import RLock
 from typing import Any
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, ref
 
 from fi_instrumentation import FITracer, TraceConfig
 from mistralai.extra.observability.formatting import format_output_message
@@ -118,6 +120,7 @@ class _NativeInstrumentation:
 
         self._provider = _NativeProvider(provider, config)
         self._hooks = WeakKeyDictionary()
+        self._async_sends = WeakKeyDictionary()
         self._lock = RLock()
         from mistralai.extra.observability.otel import TracedResponse
 
@@ -143,7 +146,41 @@ class _NativeInstrumentation:
             instance.tracer_provider = self._provider
             # Do not let SDK auto-export configuration create a second destination.
             instance._telemetry_auto_disabled = True
-        return wrapped(*args, **kwargs)
+        request = wrapped(*args, **kwargs)
+        hook_ctx = kwargs.get("hook_ctx", args[0] if args else None)
+        client = getattr(getattr(hook_ctx, "config", None), "async_client", None)
+        if client is not None:
+            self._wrap_async_send(client, instance)
+        return request
+
+    def _wrap_async_send(self, client, hook):
+        # SDK 3.6 only catches Exception during send, not CancelledError. Keep
+        # its context management and finish its existing request span on cancel.
+        try:
+            with self._lock:
+                previous = self._async_sends.get(client)
+                if previous is not None and client.send is previous():
+                    return
+                original = client.send
+
+                @wraps(original)
+                async def send(request, *args, **kwargs):
+                    try:
+                        return await original(request, *args, **kwargs)
+                    except asyncio.CancelledError as error:
+                        try:
+                            if isinstance(hook._get_request_span(request), _NativeSpan):
+                                hook._finish_request_span_with_error(request, error)
+                        except Exception:
+                            logger.debug("Could not finish cancelled Mistral request")
+                        raise
+
+                client.send = send
+                # A bound send method retains its client: weak-reference both
+                # sides so tracking does not keep closed application clients alive.
+                self._async_sends[client] = ref(send)
+        except Exception:
+            logger.debug("Could not wrap Mistral async send")
 
     def _after_error(self, wrapped, instance, args, kwargs):
         response = kwargs.get("response", args[1] if len(args) > 1 else None)
@@ -242,6 +279,11 @@ class _NativeInstrumentation:
         for cls, method, original in reversed(self._originals):
             setattr(cls, method, original)
         with self._lock:
+            for client, send_ref in self._async_sends.items():
+                send = send_ref()
+                if send is not None and client.send is send:
+                    client.send = send.__wrapped__
+            self._async_sends.clear()
             for hook, values in self._hooks.items():
                 # Respect an explicit customer reconfiguration made after ours.
                 if hook.tracer_provider is self._provider:
