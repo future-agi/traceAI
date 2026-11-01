@@ -60,7 +60,7 @@ lcInstrumentation.manuallyInstrument(CallbackManagerModule);
 
 // 4. Use LangChain as normal
 const chatModel = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
   metadata: {
     session_id: "your-session-id",
   },
@@ -93,6 +93,7 @@ the provider. Before an explicit `forceFlush()`, drain callbacks in the same ord
 ## Features
 
 - Automatic tracing of LangChain operations
+- LangGraph graphs: an `interrupt()` pause or a `Command` handoff is a successful span, not an error; a paused node is marked `langgraph.interrupt`
 - Support for both ESM and CommonJS modules
 - Compatible with `@langchain/core` 0.2.x, 0.3.x, and 1.x
 - Integration with TraceAI's observability platform
