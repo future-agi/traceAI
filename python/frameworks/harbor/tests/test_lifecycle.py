@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from conftest import attrs, spans
 from harbor.cli.job_plugins import attach_job_plugin, finalize_job_plugins
 from harbor.job import Job
@@ -94,7 +95,8 @@ def test_real_job_trial_lifecycle_and_backfill(tmp_path, receiver, monkeypatch):
     )
 
 
-def test_installed_cli_customer_command(tmp_path, receiver):
+@pytest.mark.parametrize("capture_content", [False, True])
+def test_installed_cli_customer_command(tmp_path, receiver, capture_content):
     task = make_task(tmp_path.resolve())
     bindir = Path(sys.executable).parent
     env = {
@@ -127,11 +129,14 @@ def test_installed_cli_customer_command(tmp_path, receiver):
         "--plugin",
         "futureagi",
     ]
+    if capture_content:
+        command.extend(["--plugin-kwarg", "futureagi.capture_content=true"])
     run = subprocess.run(
         command, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=90
     )
     assert run.returncode == 0, run.stdout + run.stderr
     assert len(receiver.requests) == 1
+    assert any("input.value" in attrs(s) for s in spans(receiver)) is capture_content
     result_files = list((tmp_path / "jobs" / "my-harbor-job").glob("*/result.json"))
     assert len(result_files) == 1
     trial = json.loads(result_files[0].read_text())
@@ -148,6 +153,7 @@ def test_installed_cli_customer_command(tmp_path, receiver):
             str(bindir / "traceai-harbor"),
             "import-job",
             "./jobs/my-harbor-job",
+            *(["--capture-content"] if capture_content else []),
         ],
         cwd=tmp_path,
         env=env,

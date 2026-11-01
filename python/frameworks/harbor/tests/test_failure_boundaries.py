@@ -27,7 +27,11 @@ def test_native_plugin_requires_mlflow(job, receiver, monkeypatch):
     )
 
     async def run():
-        plugin = OtelPlugin(endpoint=receiver.endpoint)
+        plugin = OtelPlugin(
+            endpoint=receiver.endpoint,
+            token="synthetic-native-token",
+            experiment_name="synthetic",
+        )
         await plugin.on_job_start(native_job)
         await callbacks[0](
             SimpleNamespace(config=SimpleNamespace(trial_name="trial-1"))
