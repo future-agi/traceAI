@@ -7,6 +7,12 @@ which are checked again after OTLP protobuf serialization.
 import asyncio
 
 import pytest
+
+# Standalone Workflows (llama-index-workflows) ships with llama-index-core 0.13+;
+# the legacy-core floor has neither package.
+pytest.importorskip("llama_index_instrumentation")
+pytest.importorskip("workflows")
+
 from fi_instrumentation import TraceConfig
 from llama_index.core.instrumentation import get_dispatcher as core_dispatcher
 from llama_index.core.llms import MockLLM
