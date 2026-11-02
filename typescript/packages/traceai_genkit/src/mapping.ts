@@ -97,10 +97,15 @@ function modelCallAttributes(source: Attributes): Attributes {
     const provider = namespace === undefined ? undefined : MODEL_NAMESPACE_TO_PROVIDER[namespace];
     if (provider !== undefined) out[SemanticConventions.LLM_PROVIDER] = provider;
   }
-  const response = parseJson(source[GenkitAttributes.OUTPUT]);
-  if (!isRecord(response)) {
+  const envelope = parseJson(source[GenkitAttributes.OUTPUT]);
+  if (!isRecord(envelope)) {
     return out;
   }
+  // Background model actions return an Operation; only its completed output is
+  // the model response. Do not promote usage on the surrounding generate span.
+  const response = source[GenkitAttributes.SUBTYPE] === "background-model"
+    ? envelope.output : envelope;
+  if (!isRecord(response)) return out;
   const usage = response.usage;
   if (isRecord(usage)) {
     for (const [field, key] of Object.entries(USAGE_TO_ATTRIBUTE)) {
@@ -234,11 +239,14 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const isBackgroundModel = subtype === "background-model";
   const isOperation = subtype === "check-operation" || subtype === "cancel-operation";
   // Genkit's generateHelper uses the user-supplied stepName as genkit:name.
-  // Match the native GenerateRequest shape instead of the mutable span label;
-  // other util spans must not have their arbitrary outputs treated as responses.
-  const nativeRequest = parseJson(source[GenkitAttributes.INPUT]);
+  // A truncated native request is no longer parseable. On an unknown util span,
+  // treat malformed nonempty input as potentially native generation so a response
+  // that echoes its prompt fails closed; preserve unrelated parseable util spans.
+  const nativeInput = source[GenkitAttributes.INPUT];
+  const nativeRequest = parseJson(nativeInput);
   const isNativeGeneration = source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL &&
-    isRecord(nativeRequest) && typeof nativeRequest.model === "string" && Array.isArray(nativeRequest.messages);
+    ((isRecord(nativeRequest) && typeof nativeRequest.model === "string" && Array.isArray(nativeRequest.messages)) ||
+      (typeof nativeInput === "string" && nativeInput.length > 0 && nativeRequest === undefined));
   const isGeneration = isModelCall || isNativeGeneration ||
     (source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL && source[GenkitAttributes.NAME] === "generate") ||
     (subtype === "util" && source[GenkitAttributes.KEY] === "/util/generate");
