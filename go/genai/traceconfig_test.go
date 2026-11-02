@@ -13,7 +13,7 @@ import (
 func clearHideEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{EnvHideLLMInvocationParameters, EnvHideInputs, EnvHideOutputs, EnvHideInputMessages,
-		EnvHideOutputMessages, EnvHideInputImages, EnvHideInputText, EnvHideOutputText, EnvBase64ImageMaxLength} {
+		EnvHideOutputMessages, EnvHideInputImages, EnvHideInputText, EnvHideOutputText, EnvHideErrorDetails, EnvBase64ImageMaxLength} {
 		t.Setenv(k, "")
 	}
 }
@@ -166,4 +166,72 @@ func TestSetAttributesAppliesTheConfig(t *testing.T) {
 		t.Fatalf("attrs = %v", attrs)
 	}
 	TraceConfig{}.SetAttributes(nil) // must not panic
+}
+
+func TestErrorDetailsResolution(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  TraceConfig
+		derived bool
+	}{
+		{"default", TraceConfig{}, false},
+		{"inputs", TraceConfig{HideInputs: true}, true},
+		{"outputs", TraceConfig{HideOutputs: true}, true},
+		{"input messages", TraceConfig{HideInputMessages: true}, true},
+		{"output messages", TraceConfig{HideOutputMessages: true}, true},
+		{"input text", TraceConfig{HideInputText: true}, true},
+		{"output text", TraceConfig{HideOutputText: true}, true},
+		{"images only", TraceConfig{HideInputImages: true}, false},
+		{"parameters only", TraceConfig{HideLLMInvocationParameters: true}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, override := range []*bool{nil, boolPointer(true), boolPointer(false)} {
+				c := tt.config
+				c.HideErrorDetails = override
+				wantHide := tt.derived
+				if override != nil {
+					wantHide = *override
+				}
+				_, keep := c.Mask(attribute.String(ErrorMessage, "private"))
+				if keep == wantHide || c.errorMessageAllowed() == wantHide {
+					t.Errorf("override=%v: mask keep=%v, status allowed=%v, want hide=%v", override, keep, c.errorMessageAllowed(), wantHide)
+				}
+				kv := attribute.String(ErrorType, "INVALID_ARGUMENT")
+				if got, keep := c.Mask(kv); !keep || got != kv {
+					t.Error("error classification must survive")
+				}
+			}
+		})
+	}
+}
+
+func boolPointer(v bool) *bool { return &v }
+
+func TestErrorDetailsEnvironmentOverrides(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		for _, value := range []string{"", "true", " TRUE ", "false", " FaLsE ", "invalid", "1"} {
+			t.Run(value, func(t *testing.T) {
+				clearHideEnv(t)
+				if hidden {
+					t.Setenv(EnvHideInputText, "true")
+				}
+				t.Setenv(EnvHideErrorDetails, value)
+				c := TraceConfigFromEnv()
+				wantHide := hidden
+				switch strings.ToLower(strings.TrimSpace(value)) {
+				case "true":
+					wantHide = true
+				case "false":
+					wantHide = false
+				default:
+					if c.HideErrorDetails != nil {
+						t.Error("invalid/unset override must derive from content flags")
+					}
+				}
+				if c.errorMessageAllowed() == wantHide {
+					t.Errorf("allowed=%v, want hide=%v", c.errorMessageAllowed(), wantHide)
+				}
+			})
+		}
+	}
 }

@@ -23,7 +23,8 @@
 // and FI_BASE64_IMAGE_MAX_LENGTH, or a [TraceConfig] in code. The Gemini API
 // key, request headers and the request URL are never exported.
 //
-// The package depends only on the OpenTelemetry API and the standard library.
+// The package uses the OpenTelemetry API, Google Gen AI SDK response types
+// and the standard library.
 // It does not create an exporter: build a TracerProvider with the stock
 // OTLP/HTTP exporter pointed at Future AGI (see the example directory) and
 // pass it with [WithTracerProvider], or install it as the global provider.
