@@ -16,6 +16,20 @@ public class TraceConfig
     public bool HideInputText { get; init; }
     public bool HideOutputText { get; init; }
     public bool HideEmbeddingVectors { get; init; }
+    internal bool? ErrorDetailsOverride { get; init; }
+
+    /// <summary>
+    /// Omits error messages, stack traces and status descriptions while preserving error types.
+    /// Defaults to true when any input/output content-hiding flag is enabled.
+    /// An explicit value takes precedence over that default.
+    /// </summary>
+    public bool HideErrorDetails
+    {
+        get => ErrorDetailsOverride ?? (HideInputs || HideOutputs || HideInputMessages ||
+            HideOutputMessages || HideInputText || HideOutputText);
+        init => ErrorDetailsOverride = value;
+    }
+
     public int Base64ImageMaxLength { get; init; } = 32_000;
 
     /// <summary>
@@ -24,13 +38,16 @@ public class TraceConfig
     /// </summary>
     public string? Mask(string key, string? value)
     {
-        if (value == null)
+        return (string?)MaskAttribute(key, value);
+    }
+
+    // Keep attribute types unchanged unless the policy redacts or drops the value.
+    internal object? MaskAttribute(string key, object? value)
+    {
+        if (value == null || ShouldOmit(key))
             return null;
 
-        if (ShouldHide(key))
-            return RedactedValue;
-
-        return value;
+        return ShouldHide(key) ? RedactedValue : value;
     }
 
     /// <summary>
@@ -38,49 +55,158 @@ public class TraceConfig
     /// </summary>
     public string? Mask(string key, Func<string?> valueFactory)
     {
+        if (ShouldOmit(key))
+            return null;
         if (ShouldHide(key))
             return RedactedValue;
 
         return valueFactory();
     }
 
-    private bool ShouldHide(string key) => key switch
+    private bool ShouldOmit(string key) => HideErrorDetails && (
+        key is "error.message" or "exception.message" or "exception.stacktrace" ||
+        key.EndsWith(".error.message", StringComparison.Ordinal) ||
+        key.EndsWith(".exception.message", StringComparison.Ordinal) ||
+        key.EndsWith(".exception.stacktrace", StringComparison.Ordinal) ||
+        key.EndsWith(".error_message", StringComparison.Ordinal));
+
+    // Content families, not whole namespaces: model names, tool IDs, token counts,
+    // template names and other operational identifiers must remain available.
+    private static readonly string[] InputContent =
+    [
+        SemanticConventions.InputValue, "raw.input", "llm.prompt_template.variables",
+        SemanticConventions.GenAiPromptTemplateVariables, SemanticConventions.GenAiSystemInstructions,
+        SemanticConventions.GenAiRequestParameters, SemanticConventions.GenAiRequestStopSequences,
+        SemanticConventions.GenAiAgentDescription, SemanticConventions.GenAiImagePrompt,
+        SemanticConventions.GenAiImageNegativePrompt, SemanticConventions.InputImages,
+        SemanticConventions.GenAiPrompts, SemanticConventions.GenAiToolDefinitions,
+        SemanticConventions.GenAiToolDescription, SemanticConventions.GenAiToolCallArguments,
+        SemanticConventions.GenAiToolParameters, "tool.parameters",
+        SemanticConventions.ToolCallFunctionArguments, SemanticConventions.MessageFunctionCallArgumentsJson,
+        SemanticConventions.GenAiComputerUseText, SemanticConventions.GenAiComputerUseElementSelector,
+        SemanticConventions.ToolJsonSchema, SemanticConventions.GenAiRetrievalQuery,
+        SemanticConventions.GenAiRerankerQuery, SemanticConventions.GenAiRerankerInputDocuments,
+        SemanticConventions.RerankerQuery, SemanticConventions.RerankerInputDocuments,
+    ];
+
+    private static readonly string[] OutputContent =
+    [
+        SemanticConventions.OutputValue, "raw.output", SemanticConventions.GenAiToolCallResult,
+        SemanticConventions.GenAiImageRevisedPrompt, SemanticConventions.GenAiImageOutputUrls,
+        SemanticConventions.GenAiGuardrailModifiedOutput, SemanticConventions.GenAiEvaluationExplanation,
+        SemanticConventions.GenAiComputerUseResult, SemanticConventions.RetrievalDocuments,
+        SemanticConventions.GenAiRetrievalDocuments, SemanticConventions.GenAiRerankerOutputDocuments,
+        SemanticConventions.RerankerOutputDocuments,
+    ];
+
+    // These fields can contain either direction; the aggregate tool call is also
+    // mixed, but its individual arguments/result/ID fields remain directional.
+    private static readonly string[] MixedContent =
+    [
+        SemanticConventions.GenAiVoiceTranscript, SemanticConventions.GenAiVoiceRecordingUrl,
+        SemanticConventions.GenAiVoiceRecordingStereoUrl, SemanticConventions.GenAiVoiceRecordingCustomerUrl,
+        SemanticConventions.GenAiVoiceRecordingAssistantUrl, SemanticConventions.GenAiAudioUrl,
+        SemanticConventions.GenAiAudioTranscript, SemanticConventions.GenAiComputerUseScreenshot,
+        SemanticConventions.GenAiComputerUseCurrentUrl,
+    ];
+
+    private static readonly string[] InvocationParameters =
+    [
+        SemanticConventions.GenAiRequestParameters, SemanticConventions.GenAiRequestTemperature,
+        SemanticConventions.GenAiRequestTopP, SemanticConventions.GenAiRequestTopK,
+        SemanticConventions.GenAiRequestMaxTokens, SemanticConventions.GenAiRequestFrequencyPenalty,
+        SemanticConventions.GenAiRequestPresencePenalty, SemanticConventions.GenAiRequestStopSequences,
+        SemanticConventions.GenAiRequestSeed,
+    ];
+
+    private bool ShouldHide(string key)
     {
-        SemanticConventions.InputValue or
-        SemanticConventions.InputMimeType
-            => HideInputs,
+        if (HideInputs && (key == SemanticConventions.InputMimeType || HasPrefix(key, InputContent)))
+            return true;
+        if (HideOutputs && (key == SemanticConventions.OutputMimeType || HasPrefix(key, OutputContent)))
+            return true;
+        if ((HideInputs || HideOutputs) &&
+            (key == SemanticConventions.GenAiToolCall || HasPrefix(key, MixedContent)))
+            return true;
 
-        SemanticConventions.OutputValue or
-        SemanticConventions.OutputMimeType
-            => HideOutputs,
+        if (IsFamily(key, SemanticConventions.GenAiInputMessages) &&
+            (HideInputs || HideInputMessages ||
+             (HideInputText && IsMessageText(key, SemanticConventions.GenAiInputMessages)) ||
+             (HideInputImages && (IsMessageContainer(key, SemanticConventions.GenAiInputMessages) ||
+                                 HasField(key, SemanticConventions.MessageContentImage)))))
+            return true;
+        if (IsFamily(key, SemanticConventions.GenAiOutputMessages) &&
+            (HideOutputs || HideOutputMessages ||
+             (HideOutputText && IsMessageText(key, SemanticConventions.GenAiOutputMessages))))
+            return true;
 
-        SemanticConventions.GenAiInputMessages
-            => HideInputs || HideInputMessages,
+        if (HideInputImages && (IsFamily(key, SemanticConventions.InputImages) ||
+                               IsFamily(key, SemanticConventions.GenAiComputerUseScreenshot)))
+            return true;
+        if (HideEmbeddingVectors && (IsFamily(key, SemanticConventions.GenAiEmbeddingsVectors) ||
+                                    IsFamily(key, SemanticConventions.EmbeddingVector)))
+            return true;
+        if (IsFamily(key, SemanticConventions.EmbeddingEmbeddings))
+        {
+            bool hideText = HideInputs || HideInputMessages || HideInputText;
+            bool container = IsIndexedContainer(key, SemanticConventions.EmbeddingEmbeddings) ||
+                key.EndsWith(".embedding", StringComparison.Ordinal);
+            if ((HideEmbeddingVectors && (container || HasField(key, SemanticConventions.EmbeddingVector))) ||
+                (hideText && (container || HasField(key, SemanticConventions.EmbeddingText))))
+                return true;
+        }
 
-        SemanticConventions.GenAiOutputMessages
-            => HideOutputs || HideOutputMessages,
+        return HideLlmInvocationParameters && HasPrefix(key, InvocationParameters);
+    }
 
-        SemanticConventions.InputImages or
-        SemanticConventions.GenAiComputerUseScreenshot
-            => HideInputImages,
+    private static bool IsFamily(string key, string prefix) =>
+        key.StartsWith(prefix, StringComparison.Ordinal) &&
+        (key.Length == prefix.Length || key[prefix.Length] == '.');
 
-        SemanticConventions.GenAiEmbeddingsVectors or
-        SemanticConventions.EmbeddingVector
-            => HideEmbeddingVectors,
+    private static bool HasPrefix(string key, string[] prefixes)
+    {
+        foreach (var prefix in prefixes)
+            if (IsFamily(key, prefix)) return true;
+        return false;
+    }
 
-        SemanticConventions.GenAiRequestParameters or
-        SemanticConventions.GenAiRequestTemperature or
-        SemanticConventions.GenAiRequestTopP or
-        SemanticConventions.GenAiRequestTopK or
-        SemanticConventions.GenAiRequestMaxTokens or
-        SemanticConventions.GenAiRequestFrequencyPenalty or
-        SemanticConventions.GenAiRequestPresencePenalty or
-        SemanticConventions.GenAiRequestStopSequences or
-        SemanticConventions.GenAiRequestSeed
-            => HideLlmInvocationParameters,
+    // Match complete semantic fields inside flattened indexed attributes, not
+    // similarly named custom fields such as message.content_type or vector_size.
+    private static bool HasField(string key, string field) => IsFamily(key, field) ||
+        key.EndsWith("." + field, StringComparison.Ordinal) ||
+        key.Contains("." + field + ".", StringComparison.Ordinal);
 
-        _ => false,
-    };
+    private static bool IsMessageText(string key, string root) =>
+        IsMessageContainer(key, root) || HasField(key, SemanticConventions.MessageContent) ||
+        HasField(key, SemanticConventions.MessageContentText);
+
+    private static bool IsIndexedContainer(string key, string root) =>
+        key == root || (key.StartsWith(root + ".", StringComparison.Ordinal) &&
+                        IsIndex(key.AsSpan(root.Length + 1)));
+
+    private static bool IsIndex(ReadOnlySpan<char> value)
+    {
+        if (value.IsEmpty) return false;
+        foreach (char c in value)
+            if (!char.IsAsciiDigit(c)) return false;
+        return true;
+    }
+
+    // Opaque JSON containers can carry hidden text/images too. Redact them as a
+    // whole; when flattened, preserve sibling role/name/type and other modalities.
+    private static bool IsMessageContainer(string key, string root)
+    {
+        if (IsIndexedContainer(key, root)) return true;
+        if (!key.StartsWith(root + ".", StringComparison.Ordinal)) return false;
+        var path = key[(root.Length + 1)..];
+        int separator = path.IndexOf('.');
+        if (separator < 0 || !IsIndex(path.AsSpan(0, separator))) return false;
+        path = path[(separator + 1)..];
+        if (path == "message" || IsIndexedContainer(path, SemanticConventions.MessageContents)) return true;
+        if (path.EndsWith(".message_content", StringComparison.Ordinal))
+            return IsIndexedContainer(path[..^".message_content".Length], SemanticConventions.MessageContents);
+        return false;
+    }
 
     public static TraceConfigBuilder Builder() => new();
 }
@@ -96,6 +222,7 @@ public class TraceConfigBuilder
     private bool _hideInputText;
     private bool _hideOutputText;
     private bool _hideEmbeddingVectors;
+    private bool? _hideErrorDetails;
     private int _base64ImageMaxLength = 32_000;
 
     public TraceConfigBuilder()
@@ -111,6 +238,8 @@ public class TraceConfigBuilder
         _hideOutputText = ParseBoolEnv("FI_HIDE_OUTPUT_TEXT");
         _hideEmbeddingVectors = ParseBoolEnv("FI_HIDE_EMBEDDING_VECTORS");
 
+        _hideErrorDetails = ParseOptionalBoolEnv("FI_HIDE_ERROR_DETAILS");
+
         var maxLen = Environment.GetEnvironmentVariable("FI_BASE64_IMAGE_MAX_LENGTH");
         if (int.TryParse(maxLen, out var parsed))
             _base64ImageMaxLength = parsed;
@@ -125,6 +254,7 @@ public class TraceConfigBuilder
     public TraceConfigBuilder HideInputText(bool value = true) { _hideInputText = value; return this; }
     public TraceConfigBuilder HideOutputText(bool value = true) { _hideOutputText = value; return this; }
     public TraceConfigBuilder HideEmbeddingVectors(bool value = true) { _hideEmbeddingVectors = value; return this; }
+    public TraceConfigBuilder HideErrorDetails(bool value = true) { _hideErrorDetails = value; return this; }
     public TraceConfigBuilder Base64ImageMaxLength(int value) { _base64ImageMaxLength = value; return this; }
 
     public TraceConfig Build() => new()
@@ -139,7 +269,16 @@ public class TraceConfigBuilder
         HideOutputText = _hideOutputText,
         HideEmbeddingVectors = _hideEmbeddingVectors,
         Base64ImageMaxLength = _base64ImageMaxLength,
+        ErrorDetailsOverride = _hideErrorDetails,
     };
+
+    private static bool? ParseOptionalBoolEnv(string envVar) =>
+        Environment.GetEnvironmentVariable(envVar)?.Trim().ToLowerInvariant() switch
+        {
+            "true" or "1" or "yes" => true,
+            "false" or "0" or "no" => false,
+            _ => null,
+        };
 
     private static bool ParseBoolEnv(string envVar)
     {
