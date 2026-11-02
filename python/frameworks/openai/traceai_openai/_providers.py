@@ -6,6 +6,7 @@ loopback servers, self-hosted endpoints, look-alike domains) keeps the
 instrumentor's historical label, "openai", rather than a guess.
 """
 
+import re
 from typing import Optional
 
 from fi_instrumentation.fi_types import FiLLMProviderValues
@@ -60,6 +61,10 @@ def provider_from_host(host: Optional[str]) -> str:
     host = host.lower().rstrip(".")
     if host in _HOSTS:
         return _HOSTS[host]
+    # Dedicated and regional Baseten endpoints use a single model-* DNS label.
+    # Bound it to 63 characters; do not label arbitrary subdomains or look-alikes.
+    if re.fullmatch(r"model-[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?\.api\.baseten\.co", host):
+        return "baseten"
     for suffix, provider in _SUFFIXES:
         if host.endswith(suffix):
             return provider
