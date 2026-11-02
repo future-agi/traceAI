@@ -1,0 +1,727 @@
+# Adapted from OpenInference Agno 1.1.0 (Arize AI), Apache-2.0.
+# Modified by Future AGI; see NOTICE and LICENSE in this directory.
+
+import json
+from contextlib import aclosing, closing
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+
+from agno.agent import Agent
+from agno.models.message import Message
+from agno.run import RunStatus
+from agno.run.agent import RunCompletedEvent as AgentRunCompletedEvent
+from agno.run.agent import RunOutput
+from agno.run.messages import RunMessages
+from agno.run.team import RunCompletedEvent as TeamRunCompletedEvent
+from agno.run.team import TeamRunOutput
+from agno.team import Team
+from agno.tools.function import Function
+from agno.tools.toolkit import Toolkit
+from openinference.instrumentation import get_attributes_from_context
+from openinference.instrumentation.agno.utils import (
+    _AGNO_PARENT_NODE_CONTEXT_KEY,
+    _bind_arguments,
+    _flatten,
+    _generate_node_id,
+)
+from openinference.semconv.trace import (
+    MessageAttributes,
+    OpenInferenceMimeTypeValues,
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
+from opentelemetry import context as context_api
+from opentelemetry import trace as trace_api
+from opentelemetry.context.context import Context
+from opentelemetry.util.types import AttributeValue
+
+from ._stream import aiterate, iterate
+
+
+def _get_attr(obj: Any, key: str, default: Any = None) -> Any:
+    """Helper function to get attribute from either dict or object."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):  # It's a dict
+        return obj.get(key, default)
+    else:  # It's an object with attributes
+        return getattr(obj, key, default)
+
+
+def _get_user_message_content(
+    method: Callable[..., Any], *args: Any, **kwargs: Any
+) -> str:
+    arguments = _bind_arguments(method, *args, **kwargs)
+    arguments = _strip_method_args(arguments)
+
+    # Try to get input from run_response.input.input_content
+    run_response: Optional[RunOutput] = arguments.get("run_response")
+    if run_response and hasattr(run_response, "input") and run_response.input:
+        if (
+            hasattr(run_response.input, "input_content")
+            and run_response.input.input_content
+        ):
+            if isinstance(run_response.input.input_content, str):
+                return run_response.input.input_content
+            elif isinstance(run_response.input.input_content, list):
+                list_content = ""
+                for item in run_response.input.input_content:
+                    if isinstance(item, Message):
+                        list_content += str(item.content) + "\n"
+                    else:
+                        list_content += str(item) + "\n"
+                return list_content
+            elif isinstance(run_response.input.input_content, dict):
+                import json
+
+                return json.dumps(
+                    run_response.input.input_content, indent=2, ensure_ascii=False
+                )
+            elif isinstance(run_response.input.input_content, Message):
+                return str(run_response.input.input_content.content)
+
+            return str(run_response.input.input_content)
+
+    # Fallback: try run_messages approach
+    run_messages: Optional[RunMessages] = arguments.get("run_messages")
+    if run_messages and run_messages.user_message:
+        return str(run_messages.user_message.content)
+
+    return ""
+
+
+def _extract_run_response_output(run_response: Union[RunOutput, TeamRunOutput]) -> str:
+    if run_response and run_response.content:
+        if isinstance(run_response.content, str):
+            return run_response.content
+        if hasattr(run_response.content, "model_dump_json"):
+            return str(run_response.content.model_dump_json())
+        if isinstance(run_response.content, dict):
+            return json.dumps(run_response.content)
+        return str(run_response.content)
+    return ""
+
+
+def _extract_completed_event_output(
+    completed_event: Union[AgentRunCompletedEvent, TeamRunCompletedEvent],
+) -> str:
+    if completed_event.content is None:
+        return ""
+    if isinstance(completed_event.content, str):
+        return completed_event.content
+    if hasattr(completed_event.content, "model_dump_json"):
+        return str(completed_event.content.model_dump_json())
+    return str(completed_event.content)
+
+
+def _set_run_status(span: trace_api.Span, run_response: Any) -> None:
+    status = getattr(run_response, "status", None)
+    if status == RunStatus.completed:
+        span.set_status(trace_api.StatusCode.OK)
+    elif status in (RunStatus.error, RunStatus.cancelled):
+        span.set_status(trace_api.StatusCode.ERROR, f"run status: {status.value}")
+    # Paused, incomplete and missing final results are not successful runs.
+
+
+def _finish_stream_status(
+    span: trace_api.Span, run_response: Any, terminal_completed: bool = False
+) -> None:
+    if run_response is not None:
+        output = _extract_run_response_output(run_response)
+        if output:
+            span.set_attribute(OUTPUT_VALUE, output)
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+    if terminal_completed:
+        span.set_status(trace_api.StatusCode.OK)
+    else:
+        _set_run_status(span, run_response)
+
+
+def _strip_method_args(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in arguments.items() if key not in ("self", "cls")
+    }
+
+
+def _span_method_name(wrapped: Callable[..., Any], default: str) -> str:
+    """Span-name suffix for the wrapped run function.
+
+    The continue-run entrypoints (_continue_run, _acontinue_run, and their
+    _stream variants) share the run/arun wrappers; reflect the continuation in
+    the span name, collapsing stream variants to the base name exactly like
+    the run spans do.
+    """
+    name = getattr(wrapped, "__name__", "")
+    if "continue" in name:
+        return name.lstrip("_").removesuffix("_stream")
+    return default
+
+
+def _run_arguments(
+    arguments: Mapping[str, Any],
+) -> Iterator[Tuple[str, AttributeValue]]:
+    user_id = arguments.get("user_id")
+    session_id = arguments.get("session_id")
+
+    # For agno v2: session_id might be in the session object for internal _run method
+    session = arguments.get("session")
+    if session and hasattr(session, "session_id"):
+        session_id = session.session_id
+
+    if session_id:
+        yield SESSION_ID, session_id
+    if user_id:
+        yield USER_ID, user_id
+
+
+def _agent_run_attributes(
+    agent: Union[Agent, Team], key_suffix: str = ""
+) -> Iterator[Tuple[str, AttributeValue]]:
+    # Get parent from execution context instead of structural parent
+    context_parent_id = context_api.get_value(_AGNO_PARENT_NODE_CONTEXT_KEY)
+
+    if isinstance(agent, Team):
+        # Set graph attributes for team
+        if agent.name:
+            yield GRAPH_NODE_NAME, agent.name
+            yield SpanAttributes.AGENT_NAME, agent.name
+
+        if hasattr(agent, "id") and agent.id:
+            yield "agno.team.id", agent.id
+
+        if hasattr(agent, "user_id") and agent.user_id:
+            yield USER_ID, agent.user_id
+
+        # Use context parent instead of structural parent
+        if context_parent_id:
+            yield GRAPH_NODE_PARENT_ID, cast(str, context_parent_id)
+
+        # Set legacy team attributes
+        yield f"agno{key_suffix}.team", agent.name or ""
+
+        # Capture metadata from team
+        if hasattr(agent, "metadata") and agent.metadata:
+            yield METADATA, json.dumps(agent.metadata, default=str)
+
+    elif isinstance(agent, Agent):
+        # Set graph attributes for agent
+        if agent.name:
+            yield GRAPH_NODE_NAME, agent.name
+            yield SpanAttributes.AGENT_NAME, agent.name
+
+        if hasattr(agent, "id") and agent.id:
+            yield "agno.agent.id", agent.id
+
+        if hasattr(agent, "user_id") and agent.user_id:
+            yield USER_ID, agent.user_id
+
+        # Use context parent instead of structural parent
+        if context_parent_id:
+            yield GRAPH_NODE_PARENT_ID, cast(str, context_parent_id)
+
+        # Set legacy agent attributes
+        if agent.name:
+            yield f"agno{key_suffix}.agent", agent.name or ""
+
+        # Capture metadata from agent
+        if hasattr(agent, "metadata") and agent.metadata:
+            yield METADATA, json.dumps(agent.metadata, default=str)
+
+        if agent.knowledge:
+            yield f"agno{key_suffix}.knowledge", agent.knowledge.__class__.__name__
+
+        if agent.tools and not callable(agent.tools):
+            tool_names = []
+            # Dynamic factories belong to Agno, which injects their run context.
+            # Tool execution spans observe the resolved functions instead.
+            tools = agent.tools
+            for tool in tools:
+                if isinstance(tool, Function):
+                    tool_names.append(tool.name)
+                elif isinstance(tool, Toolkit):
+                    tool_names.extend([f for f in tool.functions.keys()])
+                elif isinstance(tool, dict):
+                    # Agno accepts built-in tool configuration dictionaries. Do not
+                    # stringify them: hosted tools can contain authentication.
+                    builtin_type = tool.get("type")
+                    allowed_types = {
+                        "mcp",
+                        "web_search",
+                        "file_search",
+                        "code_interpreter",
+                        "computer",
+                        "image_generation",
+                    }
+                    tool_names.append(
+                        builtin_type
+                        if isinstance(builtin_type, str)
+                        and builtin_type in allowed_types
+                        else "builtin"
+                    )
+                elif callable(tool):
+                    tool_names.append(tool.__name__)
+                else:
+                    # Unknown objects can carry arbitrary secrets in __str__.
+                    tool_names.append(type(tool).__name__)
+            yield f"agno{key_suffix}.tools", tool_names
+
+
+def _setup_team_context(
+    agent_or_team: Optional[Union[Agent, Team]], node_id: str
+) -> Tuple[Optional[Any], Optional[Context]]:
+    if isinstance(agent_or_team, Team):
+        team_ctx = context_api.set_value(_AGNO_PARENT_NODE_CONTEXT_KEY, node_id)
+        return context_api.attach(team_ctx), team_ctx
+    return None, None
+
+
+def _get_agent_or_team(
+    instance: Any, args: Tuple[Any, ...], kwargs: Mapping[str, Any]
+) -> Optional[Union[Agent, Team]]:
+    """
+    Extract the Agent or Team from the arguments.
+    For module-level functions: first arg is the Agent/Team
+    """
+    # For module-level functions, the Agent/Team is the first positional arg
+    if args and isinstance(args[0], (Agent, Team)):
+        return args[0]
+
+    # Fallback: check kwargs for 'agent' or 'team'
+    if "agent" in kwargs and isinstance(kwargs["agent"], Agent):
+        return kwargs["agent"]
+    if "team" in kwargs and isinstance(kwargs["team"], Team):
+        return kwargs["team"]
+
+    return None
+
+
+def _get_team_span_context(
+    agent_or_team: Optional[Union[Agent, Team]],
+) -> Optional[Context]:
+    # OTel already distinguishes absent/invalid parents. A NonRecordingSpan may
+    # carry a valid remote parent or an upstream decision not to sample.
+    return None
+
+
+def _team_values(agent_or_team: Any, node_id: str) -> dict[str, Any]:
+    return (
+        {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}
+        if isinstance(agent_or_team, Team)
+        else {}
+    )
+
+
+class _RunWrapper:
+    def __init__(self, tracer: trace_api.Tracer) -> None:
+        self._tracer = tracer
+
+    """
+    We need to keep track of parent/child relationships for agent logging. We do this by:
+    1. Each run() method generates a unique node_id and sets it directly as GRAPH_NODE_ID in span
+    attributes
+    2. Team.run() sets _AGNO_PARENT_NODE_CONTEXT_KEY for child agents
+    3. Agent.run() inherits _AGNO_PARENT_NODE_CONTEXT_KEY from team context for parent relationships
+    4. _agent_run_attributes() uses _AGNO_PARENT_NODE_CONTEXT_KEY to set GRAPH_NODE_PARENT_ID
+    5. This ensures correct parent-child relationships with unique node IDs for each execution
+    """
+
+    def run(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+
+        # For module-level functions, the agent/team is the first argument
+        # For instance methods, it's the instance itself
+        agent_or_team = _get_agent_or_team(instance, args, kwargs)
+
+        if agent_or_team and hasattr(agent_or_team, "name") and agent_or_team.name:
+            agent_name = agent_or_team.name.replace(" ", "_").replace("-", "_")
+        else:
+            if isinstance(agent_or_team, Team):
+                agent_name = "Team"
+            else:
+                agent_name = "Agent"
+        span_name = f"{agent_name}.{_span_method_name(wrapped, 'run')}"
+
+        # Get appropriate span context for Team instances
+        span_context = _get_team_span_context(agent_or_team)
+
+        # Generate unique node ID for this execution
+        node_id = _generate_node_id()
+
+        arguments = _bind_arguments(wrapped, *args, **kwargs)
+
+        span = self._tracer.start_span(
+            span_name,
+            context=span_context,
+            attributes=dict(
+                _flatten(
+                    {
+                        OPENINFERENCE_SPAN_KIND: AGENT,
+                        GRAPH_NODE_ID: node_id,
+                        INPUT_VALUE: _get_user_message_content(
+                            wrapped,
+                            *args,
+                            **kwargs,
+                        ),
+                        **dict(
+                            _agent_run_attributes(agent_or_team)
+                            if agent_or_team
+                            else {}
+                        ),
+                        **dict(_run_arguments(arguments)),
+                        **dict(get_attributes_from_context()),
+                    }
+                )
+            ),
+        )
+
+        team_token = None
+        try:
+            with trace_api.use_span(span, end_on_exit=False):
+                team_token, team_ctx = _setup_team_context(agent_or_team, node_id)
+                try:
+                    run_response: RunOutput = wrapped(*args, **kwargs)
+                finally:
+                    if team_token is not None:
+                        context_api.detach(team_token)
+                        team_token = None
+            _set_run_status(span, run_response)
+            span.set_attribute(OUTPUT_VALUE, _extract_run_response_output(run_response))
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+
+            if hasattr(run_response, "run_id") and run_response.run_id:
+                span.set_attribute("agno.run.id", run_response.run_id)
+
+            return run_response
+
+        except BaseException as e:
+            span.set_status(trace_api.StatusCode.ERROR, str(e))
+            span.record_exception(e)
+            raise
+
+        finally:
+            if team_token:
+                try:
+                    context_api.detach(team_token)
+                except Exception:
+                    pass
+            span.end()
+
+    def run_stream(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            yield from wrapped(*args, **kwargs)
+            return
+
+        # For module-level functions, the agent/team is the first argument
+        agent_or_team = _get_agent_or_team(instance, args, kwargs)
+
+        if agent_or_team and hasattr(agent_or_team, "name") and agent_or_team.name:
+            agent_name = agent_or_team.name.replace(" ", "_").replace("-", "_")
+        else:
+            if isinstance(agent_or_team, Team):
+                agent_name = "Team"
+            else:
+                agent_name = "Agent"
+        span_name = f"{agent_name}.{_span_method_name(wrapped, 'run')}"
+
+        # Get appropriate span context for Team instances
+        span_context = _get_team_span_context(agent_or_team)
+
+        # Generate unique node ID for this execution
+        node_id = _generate_node_id()
+        arguments = _bind_arguments(wrapped, *args, **kwargs)
+
+        span = self._tracer.start_span(
+            span_name,
+            context=span_context,
+            attributes=dict(
+                _flatten(
+                    {
+                        OPENINFERENCE_SPAN_KIND: AGENT,
+                        GRAPH_NODE_ID: node_id,
+                        INPUT_VALUE: _get_user_message_content(
+                            wrapped,
+                            *args,
+                            **kwargs,
+                        ),
+                        **dict(
+                            _agent_run_attributes(agent_or_team)
+                            if agent_or_team
+                            else {}
+                        ),
+                        **dict(_run_arguments(arguments)),
+                        **dict(get_attributes_from_context()),
+                    }
+                )
+            ),
+        )
+
+        options = dict(kwargs)
+        hide_run_output = options.get("yield_run_output") is not True
+        options["yield_run_output"] = True
+        run_response = None
+        terminal_completed = False
+        try:
+            with closing(
+                iterate(
+                    iter(wrapped(*args, **options)),
+                    span,
+                    _team_values(agent_or_team, node_id),
+                )
+            ) as iterator:
+                for response in iterator:
+                    if run_id := getattr(response, "run_id", None):
+                        span.set_attribute("agno.run.id", run_id)
+                    if isinstance(response, (RunOutput, TeamRunOutput)):
+                        run_response = response
+                        terminal_completed = response.status == RunStatus.completed
+                        if hide_run_output:
+                            continue
+                    yield response
+            _finish_stream_status(span, run_response, terminal_completed)
+        except BaseException as error:
+            if isinstance(error, GeneratorExit) and terminal_completed:
+                # Agno's workflow consumer closes an agent iterator immediately
+                # after receiving its terminal RunOutput. This is completion,
+                # unlike closing an iterator before the terminal result.
+                _finish_stream_status(span, run_response, terminal_completed)
+            else:
+                span.set_status(
+                    trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+                )
+            if not isinstance(error, GeneratorExit):
+                span.record_exception(error)
+            raise
+        finally:
+            span.end()
+
+    async def arun(
+        self,
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            response = await wrapped(*args, **kwargs)
+            return response
+
+        # For module-level functions, the agent/team is the first argument
+        agent_or_team = _get_agent_or_team(instance, args, kwargs)
+
+        if agent_or_team and hasattr(agent_or_team, "name") and agent_or_team.name:
+            agent_name = agent_or_team.name.replace(" ", "_").replace("-", "_")
+        else:
+            if isinstance(agent_or_team, Team):
+                agent_name = "Team"
+            else:
+                agent_name = "Agent"
+        span_name = f"{agent_name}.{_span_method_name(wrapped, 'arun')}"
+
+        # Get appropriate span context for Team instances
+        span_context = _get_team_span_context(agent_or_team)
+
+        # Generate unique node ID for this execution
+        node_id = _generate_node_id()
+
+        arguments = _bind_arguments(wrapped, *args, **kwargs)
+
+        span = self._tracer.start_span(
+            span_name,
+            context=span_context,
+            attributes=dict(
+                _flatten(
+                    {
+                        OPENINFERENCE_SPAN_KIND: AGENT,
+                        GRAPH_NODE_ID: node_id,
+                        INPUT_VALUE: _get_user_message_content(
+                            wrapped,
+                            *args,
+                            **kwargs,
+                        ),
+                        **dict(
+                            _agent_run_attributes(agent_or_team)
+                            if agent_or_team
+                            else {}
+                        ),
+                        **dict(_run_arguments(arguments)),
+                        **dict(get_attributes_from_context()),
+                    }
+                )
+            ),
+        )
+
+        team_token = None
+        try:
+            with trace_api.use_span(span, end_on_exit=False):
+                team_token, team_ctx = _setup_team_context(agent_or_team, node_id)
+                try:
+                    run_response = await wrapped(*args, **kwargs)
+                finally:
+                    if team_token is not None:
+                        context_api.detach(team_token)
+                        team_token = None
+            _set_run_status(span, run_response)
+            span.set_attribute(OUTPUT_VALUE, _extract_run_response_output(run_response))
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+
+            if hasattr(run_response, "run_id") and run_response.run_id:
+                span.set_attribute("agno.run.id", run_response.run_id)
+
+            return run_response
+        except BaseException as e:
+            span.set_status(trace_api.StatusCode.ERROR, str(e))
+            span.record_exception(e)
+            raise
+
+        finally:
+            if team_token:
+                try:
+                    context_api.detach(team_token)
+                except Exception:
+                    pass
+            span.end()
+
+    async def arun_stream(
+        self,
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            async for response in wrapped(*args, **kwargs):
+                yield response
+            return
+
+        # For module-level functions, the agent/team is the first argument
+        agent_or_team = _get_agent_or_team(instance, args, kwargs)
+
+        if agent_or_team and hasattr(agent_or_team, "name") and agent_or_team.name:
+            agent_name = agent_or_team.name.replace(" ", "_").replace("-", "_")
+        else:
+            if isinstance(agent_or_team, Team):
+                agent_name = "Team"
+            else:
+                agent_name = "Agent"
+        span_name = f"{agent_name}.{_span_method_name(wrapped, 'arun')}"
+
+        # Get appropriate span context for Team instances
+        span_context = _get_team_span_context(agent_or_team)
+
+        # Generate unique node ID for this execution
+        node_id = _generate_node_id()
+
+        arguments = _bind_arguments(wrapped, *args, **kwargs)
+
+        span = self._tracer.start_span(
+            span_name,
+            context=span_context,
+            attributes=dict(
+                _flatten(
+                    {
+                        OPENINFERENCE_SPAN_KIND: AGENT,
+                        GRAPH_NODE_ID: node_id,
+                        INPUT_VALUE: _get_user_message_content(
+                            wrapped,
+                            *args,
+                            **kwargs,
+                        ),
+                        **dict(
+                            _agent_run_attributes(agent_or_team)
+                            if agent_or_team
+                            else {}
+                        ),
+                        **dict(_run_arguments(arguments)),
+                        **dict(get_attributes_from_context()),
+                    }
+                )
+            ),
+        )
+
+        options = dict(kwargs)
+        hide_run_output = options.get("yield_run_output") is not True
+        options["yield_run_output"] = True
+        run_response = None
+        terminal_completed = False
+        try:
+            async with aclosing(
+                aiterate(
+                    wrapped(*args, **options),
+                    span,
+                    _team_values(agent_or_team, node_id),
+                )
+            ) as iterator:
+                async for response in iterator:
+                    if run_id := getattr(response, "run_id", None):
+                        span.set_attribute("agno.run.id", run_id)
+                    if isinstance(response, (RunOutput, TeamRunOutput)):
+                        run_response = response
+                        terminal_completed = response.status == RunStatus.completed
+                        if hide_run_output:
+                            continue
+                    yield response
+            _finish_stream_status(span, run_response, terminal_completed)
+        except BaseException as error:
+            if isinstance(error, GeneratorExit) and terminal_completed:
+                # Agno's workflow consumer closes an agent iterator immediately
+                # after receiving its terminal RunOutput. This is completion,
+                # unlike closing an iterator before the terminal result.
+                _finish_stream_status(span, run_response, terminal_completed)
+            else:
+                span.set_status(
+                    trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+                )
+            if not isinstance(error, GeneratorExit):
+                span.record_exception(error)
+            raise
+        finally:
+            span.end()
+
+
+# span attributes
+INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
+INPUT_VALUE = SpanAttributes.INPUT_VALUE
+SESSION_ID = SpanAttributes.SESSION_ID
+OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
+OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
+OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+USER_ID = SpanAttributes.USER_ID
+GRAPH_NODE_ID = SpanAttributes.GRAPH_NODE_ID
+GRAPH_NODE_NAME = SpanAttributes.GRAPH_NODE_NAME
+GRAPH_NODE_PARENT_ID = SpanAttributes.GRAPH_NODE_PARENT_ID
+METADATA = SpanAttributes.METADATA
+
+# message attributes
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
+    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+)
+MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
+
+# mime types
+TEXT = OpenInferenceMimeTypeValues.TEXT.value
+JSON = OpenInferenceMimeTypeValues.JSON.value
+
+# span kinds
+AGENT = OpenInferenceSpanKindValues.AGENT.value
