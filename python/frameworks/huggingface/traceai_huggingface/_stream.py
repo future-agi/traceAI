@@ -189,6 +189,9 @@ class _Stream:
         return chunk
 
     def close(self) -> None:
+        self._close("closed")
+
+    def _close(self, outcome: str) -> None:
         if self._state.finished:
             return
         with self._state.current():
@@ -200,7 +203,17 @@ class _Stream:
                 self._state.finish("error", error)
                 raise
             finally:
-                self._state.finish("closed")
+                self._state.finish(outcome)
+
+    def __del__(self) -> None:
+        # Like the old generator's finally block, keep a partial trace when a
+        # consumer drops the stream without exhausting or explicitly closing it.
+        try:
+            if hasattr(self, "_state") and hasattr(self, "_iterator"):
+                self._close("abandoned")
+        except BaseException:
+            # Destructors must not raise; _close has already recorded the error.
+            pass
 
 
 class _AsyncStream:

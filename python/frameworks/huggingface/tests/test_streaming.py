@@ -1,6 +1,7 @@
 """Offline stream contracts against real Hub SDK parsers and OTLP serialization."""
 
 import asyncio
+import gc
 import json
 from importlib.metadata import version
 from types import SimpleNamespace
@@ -137,6 +138,28 @@ def install_transport(monkeypatch, chunks, asynchronous, seen, error=None):
     monkeypatch.setattr(
         client_class, transport, async_post if asynchronous else sync_post
     )
+
+
+def test_abandoned_partial_sdk_stream_finalizes_once(monkeypatch, telemetry):
+    provider, exporter = telemetry
+    seen = []
+    install_transport(monkeypatch, text_chunks(), False, seen)
+    HuggingFaceInstrumentor().instrument(tracer_provider=provider)
+    client = InferenceClient(model="http://offline.invalid", token="synthetic-not-real")
+    stream = client.text_generation(prompt="hello", details=True, stream=True)
+    first = next(stream)
+    assert first.token.text == "private hello"
+    assert exporter.get_finished_spans() == ()
+
+    del stream
+    gc.collect()
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.UNSET
+    assert spans[0].attributes["huggingface.stream.status"] == "abandoned"
+    assert json.loads(spans[0].attributes["output.value"])["generated_text"] == "private hello"
+    gc.collect()
+    assert len(exporter.get_finished_spans()) == 1
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
