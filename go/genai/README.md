@@ -10,7 +10,9 @@ The SDK has no middleware option. Its hook is `ClientConfig.HTTPClient`, so this
 them) becomes one client span named `generate_content <model>` with the same attribute names
 `traceai-google-genai` writes in Python (`gen_ai.span.kind=LLM`, `gen_ai.provider.name=google`,
 `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.input.messages.*`, `gen_ai.output.messages.*`,
-`input.value`, `output.value`, `session.id`, `user.id`).
+`input.value`, `output.value`, `session.id`, `user.id`). `Models.EmbedContent` uses the same
+client and creates an `embeddings <model>` span with `gen_ai.span.kind=EMBEDDING`, text inputs,
+embedding count and vector dimensions. Vector values are never captured.
 
 | | |
 |---|---|
@@ -18,7 +20,7 @@ them) becomes one client span named `generate_content <model>` with the same att
 | Gemini SDK | `google.golang.org/genai` v1.71.0 or later (the `go.mod` minimum) |
 | Backend | Gemini Developer API (`genai.BackendGeminiAPI`). Vertex AI is not tested and not claimed. |
 | Go | 1.26.0 or later, the common minimum across traceAI Go modules |
-| Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and the standard library. No exporter is built in. `google.golang.org/genai` and the OTel SDK are used by the tests and the example only. |
+| Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`), Google Gen AI SDK response types (`google.golang.org/genai`) and the standard library. No exporter is built in. The OTel SDK is used by the tests and the example only. |
 
 The retired module `github.com/google/generative-ai-go` (support ended 2025-11-30) is not
 supported and not wrapped.
@@ -81,6 +83,26 @@ export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service GEMINI_API_KE
 go run ./example -stream -fail
 ```
 
+## Trace embeddings
+
+Use the same traced client for one or more input documents:
+
+```go
+embeddings, err := client.Models.EmbedContent(ctx, "gemini-embedding-001", []*genai.Content{
+	genai.NewContentFromText("How do I reset my password?", genai.RoleUser),
+	genai.NewContentFromText("Open Settings and choose Reset password.", genai.RoleUser),
+}, &genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"})
+if err != nil {
+	return err
+}
+fmt.Printf("Embedded %d documents\n", len(embeddings.Embeddings))
+```
+
+The SDK sends this call to `batchEmbedContents`, including when there is only one input.
+Direct `embedContent` requests through the wrapped transport are also traced. This is
+synchronous embedding, not the asynchronous Batch API. In Future AGI, open your project
+and look for `embeddings gemini-embedding-001`.
+
 ## Privacy
 
 Content is captured by default, as in every traceAI instrumentor. The traceAI `TraceConfig`
@@ -88,17 +110,28 @@ switches, with the same names and defaults as Python, turn it off:
 
 | Variable | Effect |
 |---|---|
-| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) and the API error message are dropped |
-| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) and the API error message are dropped |
+| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) are dropped |
+| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) are dropped |
 | `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | drop `gen_ai.input.messages.*` / `gen_ai.output.messages.*` only |
 | `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | redact the message text, keep roles and function calls |
 | `FI_HIDE_INPUT_IMAGES` | drop image parts |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | drop `gen_ai.request.parameters` |
+| `FI_HIDE_ERROR_DETAILS` | drop API error messages from attributes and status descriptions; keep ERROR status and error classification |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | redact `data:` images longer than this (default 32000) |
 
-A value counts only when it is `true` (any case). `WithTraceConfig(traceaigenai.TraceConfig{...})`
+A hide switch is enabled by `true` (any case). `WithTraceConfig(traceaigenai.TraceConfig{...})`
 sets them in code instead. `TraceConfig.SetAttributes` applies the same rules to spans your own
 code starts.
+
+When `FI_HIDE_ERROR_DETAILS` is unset or invalid, error details are hidden if any input/output,
+message or text hide switch is enabled. Explicit `true` or `false` overrides that default.
+Setting it to `false` can expose content quoted in API errors even when content capture is hidden.
+In code, leave `TraceConfig.HideErrorDetails` nil to derive it from the content switches, or use
+`genai.Ptr(true)` / `genai.Ptr(false)` for an explicit override.
+
+Rewrapping a traced client with `WrapClient` preserves its settings and still creates one span
+per HTTP attempt. Supplied options replace the corresponding settings on the new client;
+`WithTraceConfig` replaces the whole privacy configuration. The original client is unchanged.
 
 In every mode: the Gemini API key (`x-goog-api-key`), every other request header and the request
 URL are never copied, and the key is scrubbed from any API error text; transport errors are
@@ -117,14 +150,27 @@ generated (inline) images are never copied; the transport adds no resource attri
   `thoughtsTokenCount` (as in Python), `total_tokens`, `output_tokens.reasoning`,
   `cache_read_tokens`. Usage is never written as zero; a stream takes the last chunk's running
   total.
+- `POST .../models/{model}:embedContent` and `:batchEmbedContents`: one `EMBEDDING` span
+  with operation `embeddings`, request model, `embedding.model_name`, text inputs using the
+  same input attributes as generation, and allow-listed task type/output dimensionality in
+  `gen_ai.request.parameters`. The flattened `gen_ai.input.messages.*` preview contains at most
+  the first 32 documents, leaving room for context and response/error metadata under the default
+  OpenTelemetry attribute limit. `input.value` retains the full batch, subject to privacy settings.
+  `embedding.count` records returned vectors;
+  `gen_ai.embeddings.dimension.count` records their dimension when uniform. Vector values,
+  titles, media and opaque fields are never captured. `FI_HIDE_INPUTS` redacts the input
+  summary and drops messages; `FI_HIDE_INPUT_TEXT` redacts text in both. Gemini Developer
+  API embedding responses do not include token usage, so no token counts are invented.
 - A stream is one span: it ends when the body is read to the end, on a read error, or when the SDK
   closes the body (your `range` loop finished or broke).
 - HTTP 4xx/5xx: status ERROR, `http.response.status_code`, `error.type` (the Google status such as
-  `NOT_FOUND`), and the API error message unless content is hidden. An error block inside a stream
+  `NOT_FOUND`), and the API error message when error details are allowed. An error block inside a stream
   ends the span with ERROR.
+- Invalid embedding JSON or vector values: status ERROR and `error.type=decode`, without
+  recording the response body or decoder error text. The SDK still receives the original response.
 - Cancellation: a context cancelled before the response completes ends the span with ERROR and
   `error.type=canceled`.
-- Other requests (countTokens, embeddings, files, caches, batches, models, interactions, live)
+- Other requests (countTokens, files, caches, asynchronous batches, models, interactions, live)
   pass through without a span.
 
 ## Limitations
@@ -135,7 +181,7 @@ generated (inline) images are never copied; the transport adds no resource attri
   Start a span around your call, as the example does, so they share one trace.
 - Vertex AI (`genai.BackendVertexAI`) is not tested. A Vertex call made through a wrapped client
   may still produce a span; that is not a support claim.
-- Live API (websocket), video generation and embeddings are not traced.
+- Live API (websocket) and video generation are not traced.
 - Cost is not computed here; Future AGI prices the model from the token counts.
 
 ## Test

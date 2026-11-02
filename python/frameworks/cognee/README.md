@@ -2,10 +2,10 @@
 
 Send Cognee's native OpenTelemetry spans to Future AGI without additional instrumentation. Enable `COGNEE_TRACING_ENABLED=true` before your first Cognee operation and configure once before that operation.
 
-Requires Python 3.10–3.13 and `fi-instrumentation-otel>=1.2.2,<2`.
+Requires Python 3.10–3.13, Cognee 1.6.5 or later, and `fi-instrumentation-otel>=1.2.2,<2`.
 
 ```bash
-pip install "cognee[tracing]==1.6.5" "traceai-cognee==0.1.0"
+pip install --upgrade "cognee[tracing]>=1.6.5" traceai-cognee
 export COGNEE_TRACING_ENABLED=true
 export FI_API_KEY="YOUR_FI_API_KEY"
 export FI_SECRET_KEY="YOUR_FI_SECRET_KEY"
@@ -36,4 +36,4 @@ With content capture enabled, the adapter redacts recognized credential field na
 
 This is a field-name policy, not a universal secret detector. Free text and unknown encodings are not scanned for credentials; enable content capture only for approved application data. The adapter does not mutate the original content or inspect opaque runtime objects. Numeric attributes outside the OTLP signed 64-bit integer range, or non-finite floating-point values, are omitted before encoding.
 
-For a complete add/cognify/search application, see the [Cognee example](../../examples/cognee/). Search spans are mapped to `RETRIEVER` and structured-output model calls to `LLM`. Native span IDs, parent relationships and status codes are preserved, including Cognee's missing-collection probe errors.
+For a complete add/cognify/search application, see the [Cognee example](../../examples/cognee/). Search spans are mapped to `RETRIEVER`, structured-output model calls to `LLM`, and native `gen_ai.operation.name=embeddings` spans to `EMBEDDING`. Embedding provider, model, and dimension metadata remain available with content capture disabled. An explicit native span-kind attribute takes precedence over inferred kinds. Native span IDs, parent relationships and status codes are preserved, including Cognee's missing-collection probe errors.

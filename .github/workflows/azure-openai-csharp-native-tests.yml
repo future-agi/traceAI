@@ -1,0 +1,72 @@
+name: Azure OpenAI C# native tracing
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'csharp/tests/AzureOpenAINativeContract/**'
+      - '.github/workflows/azure-openai-csharp-native-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'csharp/tests/AzureOpenAINativeContract/**'
+      - '.github/workflows/azure-openai-csharp-native-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: '8.0.x'
+            framework: net8.0
+          - sdk: '10.0.x'
+            framework: net10.0
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.sdk }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install published dependencies and build locked consumer
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          python -m pip install -r csharp/tests/AzureOpenAINativeContract/requirements.txt
+          dotnet restore csharp/tests/AzureOpenAINativeContract/AzureOpenAINativeContract.csproj \
+            -p:ContractFramework="$FRAMEWORK" --locked-mode
+          dotnet build csharp/tests/AzureOpenAINativeContract/AzureOpenAINativeContract.csproj \
+            -c Release -p:ContractFramework="$FRAMEWORK" --no-restore
+      - name: Verify native spans on loopback only
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          # A private network namespace has no external interface or route.
+          # Do not modify the runner's host network or rely on application mocks.
+          sudo unshare --net -- bash -c '
+            set -euo pipefail
+            ip link set lo up
+            "$1" -I "$2" --dotnet "$3" --dll "$4" --output "$5"
+          ' _ "$(command -v python)" \
+            "$PWD/csharp/tests/AzureOpenAINativeContract/wire.py" \
+            "$(command -v dotnet)" \
+            "$PWD/csharp/tests/AzureOpenAINativeContract/bin/Release/$FRAMEWORK/AzureOpenAINativeContract.dll" \
+            "$RUNNER_TEMP/azure-csharp-wire"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: azure-csharp-${{ matrix.framework }}-wire
+          path: ${{ runner.temp }}/azure-csharp-wire
