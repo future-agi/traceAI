@@ -30,7 +30,7 @@ describe("enrichSpan — gen_ai.span.kind mapping", () => {
     [SpanType.GENERIC, "CHAIN"],
   ])("maps %s -> %s", (type, kind) => {
     const otelSpan = fakeOtelSpan();
-    enrichSpan(otelSpan, fakeMastraSpan(type as SpanType));
+    enrichSpan(otelSpan, fakeMastraSpan(type as SpanType), true);
     expect(otelSpan.attributes["gen_ai.span.kind"]).toBe(kind);
   });
 
@@ -84,10 +84,10 @@ describe("enrichSpan — input.value / output.value", () => {
 });
 
 
-describe("enrichSpan — authoritative converter and runtime fields", () => {
+describe("enrichSpan — authoritative runtime fields", () => {
   it("keeps floor generations classified as the actual LLM call", () => {
     const converted = fakeOtelSpan({ "gen_ai.operation.name": "chat" });
-    enrichSpan(converted, fakeMastraSpan(SpanType.MODEL_GENERATION));
+    enrichSpan(converted, fakeMastraSpan(SpanType.MODEL_GENERATION), false);
     expect(converted.attributes["gen_ai.span.kind"]).toBe("LLM");
   });
 
@@ -114,5 +114,29 @@ describe("enrichSpan — authoritative converter and runtime fields", () => {
     const span = { ...fakeMastraSpan(SpanType.WORKFLOW_RUN), outcome: "interrupted" } as unknown as AnyExportedSpan;
     enrichSpan(converted, span);
     expect(converted.status.code).toBe(2);
+  });
+});
+
+
+describe("enrichSpan — mismatched converter versions", () => {
+  it("ignores an old converter's chat and aggregate usage on a new wrapper", () => {
+    const converted = fakeOtelSpan({ "gen_ai.operation.name": "chat",
+      "gen_ai.usage.input_tokens": 11, "gen_ai.usage.output_tokens": 5,
+      "gen_ai.request.model": "synthetic", "gen_ai.response.model": "synthetic",
+      "gen_ai.input.messages": "question", "gen_ai.output.messages": "answer",
+    });
+    enrichSpan(converted, fakeMastraSpan(SpanType.MODEL_GENERATION, "question", "answer"), true);
+    expect(converted.attributes["gen_ai.span.kind"]).toBe("CHAIN");
+    expect(converted.attributes["gen_ai.operation.name"]).toBe("model_generation");
+    expect(Object.keys(converted.attributes).some(key => key.startsWith("gen_ai.usage."))).toBe(false);
+    expect(converted.attributes["gen_ai.request.model"]).toBeUndefined();
+    expect(converted.attributes["input.value"]).toBe("question");
+    expect(converted.attributes["output.value"]).toBe("answer");
+  });
+
+  it("does not demote a floor runtime call because the new converter lacks chat", () => {
+    const converted = fakeOtelSpan({ "gen_ai.operation.name": "model_generation" });
+    enrichSpan(converted, fakeMastraSpan(SpanType.MODEL_GENERATION), false);
+    expect(converted.attributes["gen_ai.span.kind"]).toBe("LLM");
   });
 });

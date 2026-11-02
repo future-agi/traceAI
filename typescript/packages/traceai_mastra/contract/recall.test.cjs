@@ -9,13 +9,19 @@ const { test, before, after, beforeEach, afterEach } = require('node:test');
 const packagePath = process.env.MASTRA_TEST_PACKAGE || path.resolve(__dirname, '../dist/src/index.js');
 const req = createRequire(process.env.MASTRA_TEST_DEPS
   ? path.join(process.env.MASTRA_TEST_DEPS, 'package.json') : packagePath);
-const { createFIObservability } = require(packagePath);
+const { pathToFileURL } = require('node:url');
+let createFIObservability;
 const { SpanType } = req('@mastra/core/observability');
+// Core's enum alone is not evidence that the installed observability runtime
+// implements outcomes. In particular, new-core/old-observability is supported.
+const { observabilityFeatures } = req('@mastra/observability');
+const supportsOutcomes = observabilityFeatures?.has('model-inference-span') === true;
+
 const wire = req('@opentelemetry/otlp-transformer/build/src/generated/root.js')
   .opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 const flags = ['INPUTS', 'OUTPUTS', 'INPUT_MESSAGES', 'OUTPUT_MESSAGES', 'INPUT_TEXT',
   'OUTPUT_TEXT', 'INPUT_IMAGES', 'EMBEDDING_VECTORS', 'ERROR_DETAILS'].map(key => `FI_HIDE_${key}`);
-const envKeys = [...flags, 'FI_PROJECT_NAME'];
+const envKeys = [...flags, 'FI_PROJECT_NAME', 'FI_PII_REDACTION'];
 let originalEnv, obs, endpoint;
 const spans = [];
 const attributes = list => Object.fromEntries((list || []).map(a => [a.key, Object.values(a.value)[0]]));
@@ -29,7 +35,7 @@ const server = http.createServer((request, response) => {
     const data = wire.toObject(wire.decode(Buffer.concat(chunks)), { longs: String, bytes: String });
     for (const resource of data.resourceSpans || []) {
       for (const scope of resource.scopeSpans || []) {
-        for (const span of scope.spans || []) spans.push({ ...span, resource: attributes(resource.resource.attributes), attrs: attributes(span.attributes) });
+        for (const span of scope.spans || []) spans.push({ ...span, scope: scope.scope, resource: attributes(resource.resource.attributes), attrs: attributes(span.attributes) });
       }
     }
     response.writeHead(200, { 'content-type': 'application/x-protobuf' });
@@ -37,6 +43,7 @@ const server = http.createServer((request, response) => {
   });
 });
 before(async () => {
+  ({ createFIObservability } = await import(pathToFileURL(packagePath).href));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   endpoint = `http://127.0.0.1:${server.address().port}/tracer/v1/traces`;
 });
@@ -178,6 +185,9 @@ test('generation produces one LLM observation per real model request', async () 
   assert.equal(calls, 1);
   const llm = spans.filter(span => span.attrs['gen_ai.span.kind'] === 'LLM');
   assert.equal(llm.length, calls);
+  assert.equal(spans.filter(span => span.attrs['gen_ai.operation.name'] === 'chat').length, calls);
+  assert.equal(spans.reduce((n, span) => n + Number(span.attrs['gen_ai.usage.input_tokens'] || 0), 0), 11);
+  assert.equal(spans.reduce((n, span) => n + Number(span.attrs['gen_ai.usage.output_tokens'] || 0), 0), 5);
   assert.equal(llm[0].status?.code, 1);
   assert.equal(Number(llm[0].attrs['gen_ai.usage.input_tokens']), 11);
   assert.equal(Number(llm[0].attrs['gen_ai.usage.output_tokens']), 5);
@@ -216,7 +226,7 @@ test('failed conversions settle and do not prevent draining healthy spans', asyn
   assert.equal(spans.length, 1);
   assert.equal(spans[0].name, 'valid');
 });
-test('real stream cancellation preserves the unsuccessful SDK outcomes', { skip: !SpanType.MODEL_INFERENCE }, async () => {
+test('real stream cancellation preserves the unsuccessful SDK outcomes', { skip: !supportsOutcomes }, async () => {
   const { Mastra } = req('@mastra/core');
   const { Agent } = req('@mastra/core/agent');
   setup();
@@ -247,7 +257,7 @@ test('real stream cancellation preserves the unsuccessful SDK outcomes', { skip:
     assert.equal(span.attrs['mastra.span.stop_reason'], 'caller_cancelled');
   }
 });
-test('native unsuccessful outcomes are never OK', { skip: !SpanType.MODEL_INFERENCE }, async () => {
+test('native unsuccessful outcomes are never OK', { skip: !supportsOutcomes }, async () => {
   const instance = setup();
   for (const termination of [
     { outcome: 'abort', stopReason: 'caller_cancelled' },
@@ -262,4 +272,89 @@ test('native unsuccessful outcomes are never OK', { skip: !SpanType.MODEL_INFERE
     assert.ok(span.attrs['mastra.span.outcome']);
     assert.ok(span.attrs['mastra.span.stop_reason']);
   }
+});
+
+// Round-one recall regressions: native converter aliases, not invented wire keys.
+test('input hiding covers native stop sequences and tool descriptions', async () => {
+  process.env.FI_HIDE_INPUTS = 'true';
+  const instance = setup();
+  instance.startSpan({ type: SpanType.MODEL_INFERENCE || SpanType.MODEL_GENERATION,
+    name: 'native-model', input: 'PRIVATE_INPUT', attributes: {
+      model: 'synthetic', parameters: { stopSequences: ['PRIVATE_STOP_SEQUENCE'] },
+    } }).end({ output: 'safe-output' });
+  instance.startSpan({ type: SpanType.TOOL_CALL, name: 'native-tool', entityName: 'tool',
+    input: 'PRIVATE_INPUT', attributes: { toolDescription: 'PRIVATE_TOOL_DESCRIPTION' },
+  }).end({ output: 'safe-output' });
+  await flush();
+  assert.equal(spans.length, 2);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_/);
+});
+test('input hiding covers stop sequences supplied to a real generation', async () => {
+  process.env.FI_HIDE_INPUTS = 'true';
+  const { Mastra } = req('@mastra/core');
+  const { Agent } = req('@mastra/core/agent');
+  setup();
+  let calls = 0;
+  const model = { specificationVersion: 'v2', provider: 'synthetic', modelId: 'synthetic', supportedUrls: {},
+    doGenerate: async options => {
+      calls++;
+      assert.deepEqual(options.stopSequences, ['PRIVATE_STOP_SEQUENCE']);
+      return { content: [{ type: 'text', text: 'safe-output' }], finishReason: 'stop',
+        usage: { inputTokens: 11, outputTokens: 5, totalTokens: 16 }, warnings: [] };
+    } };
+  const agent = new Agent({ id: 'stop-agent', name: 'Stop agent', instructions: 'PRIVATE_SYSTEM', model });
+  const mastra = new Mastra({ agents: { agent }, observability: obs });
+  await mastra.getAgent('agent').generate('PRIVATE_INPUT', { modelSettings: { stopSequences: ['PRIVATE_STOP_SEQUENCE'] } });
+  await flush();
+  assert.equal(calls, 1);
+  assert.ok(spans.length > 0);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_/);
+});
+test('credential scrubbing covers nested camelCase keys without upstream filtering', async () => {
+  const instance = setup();
+  instance.startSpan({ type: SpanType.TOOL_CALL, name: 'credential-tool', entityName: 'tool',
+    input: { clientSecret: 'PRIVATE_CLIENT_SECRET', privateKey: 'PRIVATE_PRIVATE_KEY',
+      nested: [{ apiKey: 'PRIVATE_API_KEY', accessToken: 'PRIVATE_ACCESS_TOKEN', keep: 'safe' }] },
+  }).end({ output: { privateKey: 'PRIVATE_OUTPUT_KEY', keep: 'safe' } });
+  await flush();
+  assert.equal(spans.length, 1);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_/);
+  assert.match(JSON.stringify(spans), /safe/);
+});
+for (const errorText of [
+  'Request failed; headers: {"Authorization":"Bearer PRIVATE_JSON_AUTH"}',
+  'Authorization: Basic c3ludGhldGljOmNyZWRlbnRpYWw=',
+  'Request failed; headers: {"proxy-authorization":"Basic c3ludGhldGljOmNyZWRlbnRpYWw="}',
+  "Request failed; clientSecret='PRIVATE_CLIENT_SECRET' privateKey=PRIVATE_PRIVATE_KEY",
+]) test(`scrubs credential-bearing errors: ${errorText}`, async () => {
+  setup().startSpan({ type: SpanType.TOOL_CALL, name: 'credential-error', entityName: 'tool' })
+    .error({ error: new Error(errorText), endSpan: true });
+  await flush();
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].status.code, 2);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_|c3ludGhldGljOmNyZWRlbnRpYWw=/);
+});
+for (const enabled of [true, false]) test(`PII redaction is opt-in (${enabled}) across native/FI content and errors`, async () => {
+  process.env.FI_PII_REDACTION = String(enabled);
+  const instance = setup();
+  instance.startSpan({ type: SpanType.TOOL_CALL, name: 'pii-tool', entityName: 'tool',
+    input: { contact: 'customer@example.test', count: 7 },
+  }).end({ output: ['customer@example.test', 'safe'] });
+  instance.startSpan({ type: SpanType.TOOL_CALL, name: 'pii-error', entityName: 'tool' })
+    .error({ error: new Error('Contact customer@example.test'), endSpan: true });
+  await flush();
+  assert.equal(spans.length, 2);
+  const data = JSON.stringify(spans);
+  if (enabled) {
+    assert.doesNotMatch(data, /customer@example\.test/);
+    assert.match(data, /<EMAIL_ADDRESS>/);
+  } else assert.match(data, /customer@example\.test/);
+});
+test('integration version is deterministic on the OTLP resource and scope', async () => {
+  setup().startSpan({ type: SpanType.GENERIC, name: 'version' }).end();
+  await flush();
+  const { VERSION } = await import(pathToFileURL(path.join(path.dirname(packagePath), 'version.js')).href);
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].scope.version, VERSION);
+  assert.equal(spans[0].resource['telemetry.sdk.version'], VERSION);
 });

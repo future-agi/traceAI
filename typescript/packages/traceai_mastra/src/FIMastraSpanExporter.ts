@@ -1,4 +1,6 @@
 import { BaseExporter } from "@mastra/observability";
+import * as observability from "@mastra/observability";
+import { coreFeatures } from "@mastra/core/features";
 import { SpanConverter } from "@mastra/otel-exporter";
 import { SpanType } from "@mastra/core/observability";
 import type { AnyExportedSpan, TracingEvent } from "@mastra/core/observability";
@@ -6,9 +8,21 @@ import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { generateTraceConfig } from "@traceai/fi-core";
 import { sanitizeSpan } from "./privacy.js";
+import { VERSION } from "./version.js";
+
+function runtimeEmitsInference(): boolean {
+  // Use the emitting runtime, NOT the converter's potentially nested dependency.
+  // A namespace import keeps strict ESM compatible with the old peer floor.
+  const features = (observability as { observabilityFeatures?: ReadonlySet<string> }).observabilityFeatures;
+  return features?.has("model-inference-span") === true && coreFeatures.has("model-inference-span");
+}
+
+function isModelCall(type: string, inferenceEnabled: boolean): boolean {
+  return type === "model_inference" || (type === "model_generation" && !inferenceEnabled);
+}
 
 export interface FISpanExporterConfig {
   /** Full OTLP traces endpoint URL. */
@@ -76,15 +90,24 @@ function setIoValue(
  * (from the span's input/output). Existing values are not overwritten. Exported
  * for unit testing.
  */
-export function enrichSpan(otelSpan: ReadableSpan, span: AnyExportedSpan): void {
+export function enrichSpan(
+  otelSpan: ReadableSpan,
+  span: AnyExportedSpan,
+  inferenceEnabled = runtimeEmitsInference(),
+): void {
   const attrs = otelSpan.attributes as Record<string, unknown>;
 
-  // Span kind so the span isn't typed "unknown" in Future AGI.
-  // Let the official converter decide which generation is an actual request:
-  // the floor uses MODEL_GENERATION/chat; newer SDKs use MODEL_INFERENCE/chat.
-  const kind = span.type === SpanType.MODEL_GENERATION
-    ? (attrs["gen_ai.operation.name"] === "chat" ? FISpanKind.LLM : FISpanKind.CHAIN)
-    : SPAN_KIND_BY_TYPE[span.type];
+  const kind = isModelCall(span.type, inferenceEnabled) ? FISpanKind.LLM
+    : span.type === SpanType.MODEL_GENERATION ? FISpanKind.CHAIN : SPAN_KIND_BY_TYPE[span.type];
+  if (span.type === SpanType.MODEL_GENERATION && inferenceEnabled) {
+    // Old converters classify the new generation loop as chat and attach its
+    // aggregate usage. Keep that usage only on the real provider-call spans.
+    attrs["gen_ai.operation.name"] = "model_generation";
+    for (const key of Object.keys(attrs)) {
+      if (/^gen_ai\.(?:usage|request|response)\./.test(key)
+        || key === "gen_ai.input.messages" || key === "gen_ai.output.messages") delete attrs[key];
+    }
+  }
   if (kind && attrs["gen_ai.span.kind"] == null) {
     attrs["gen_ai.span.kind"] = kind;
   }
@@ -132,7 +155,10 @@ export class FIMastraSpanExporter extends BaseExporter {
       packageName: "@traceai/mastra",
       serviceName: config.serviceName,
       // Only `resourceAttributes` is read off this config by the converter.
-      config: { resourceAttributes: config.resourceAttributes } as any,
+      config: { resourceAttributes: {
+        ...config.resourceAttributes,
+        "telemetry.sdk.version": VERSION,
+      } } as any,
     });
     const exporter = new OTLPTraceExporter({
       url: config.endpoint,
@@ -162,9 +188,25 @@ export class FIMastraSpanExporter extends BaseExporter {
     if (event.type !== "span_ended") return;
     const span = event.exportedSpan;
     try {
-      const otelSpan = await this.converter.convertSpan(span);
-      enrichSpan(otelSpan, span);
-      this.processor.onEnd(sanitizeSpan(otelSpan, this.traceConfig));
+      const inferenceEnabled = runtimeEmitsInference();
+      const modelCall = isModelCall(span.type, inferenceEnabled);
+      let otelSpan = await this.converter.convertSpan(span);
+      if (modelCall && otelSpan.attributes["gen_ai.operation.name"] !== "chat") {
+        // Independently versioned converters can recognize the other request
+        // type. Reuse their native message/usage/parameter conversion with a
+        // shallow view; never mutate the runtime span or emit a second span.
+        const converterType = span.type === "model_inference" ? "model_generation" : "model_inference";
+        otelSpan = await this.converter.convertSpan({ ...span, type: converterType } as AnyExportedSpan);
+        otelSpan.attributes["mastra.span.type"] = span.type;
+      }
+      enrichSpan(otelSpan, span, inferenceEnabled);
+      const generationWrapper = span.type === SpanType.MODEL_GENERATION && inferenceEnabled;
+      this.processor.onEnd(sanitizeSpan({
+        ...otelSpan,
+        ...(generationWrapper ? { name: span.name, kind: SpanKind.INTERNAL } : {}),
+        ...(modelCall ? { kind: SpanKind.CLIENT } : {}),
+        instrumentationScope: { ...otelSpan.instrumentationScope, version: VERSION },
+      }, this.traceConfig));
     } catch {
       // Conversion failures can quote sensitive input; do not send it to logs.
       this.logger.error("[@traceai/mastra] Failed to convert or enqueue span");

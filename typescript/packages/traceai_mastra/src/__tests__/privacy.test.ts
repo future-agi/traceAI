@@ -21,6 +21,7 @@ describe("Mastra export privacy", () => {
       "input.value", "raw.input", "gen_ai.input.messages", "gen_ai.prompt",
       SemanticConventions.PROMPT_TEMPLATE_VARIABLES, "gen_ai.system_instructions",
       "gen_ai.tool.call.arguments", "mastra.agent_run.input",
+      "gen_ai.tool.description", "gen_ai.request.stop_sequences",
       "output.value", "raw.output", "gen_ai.output.messages", "gen_ai.completion",
       "gen_ai.tool.call.result", "mastra.workflow_run.output", "error.message",
     ].map(key => [key, "PRIVATE_CONTENT"]));
@@ -69,5 +70,51 @@ describe("Mastra export privacy", () => {
     const result = sanitizeSpan(converted(), generateTraceConfig({ hideInputs: true, hideErrorDetails: false }));
     expect(result.status).toEqual({ code: 2, message: "PRIVATE_ERROR" });
     expect(result.events[0].attributes?.["exception.message"]).toBe("PRIVATE_ERROR");
+  });
+});
+
+
+describe("Mastra complete credential and PII policy", () => {
+  it.each(["clientSecret", "client_secret", "client-secret", "privateKey", "private_key", "private-key",
+    "APIKey", "api_key", "mastra.metadata.clientSecret", "headers.Proxy-Authorization"])("scrubs %s", key => {
+    const span = converted({ [key]: "PRIVATE_VALUE", "input.value": JSON.stringify({ [key]: "PRIVATE_VALUE", keep: "safe" }) });
+    const result = sanitizeSpan(span, generateTraceConfig());
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_VALUE");
+    expect(result.attributes["input.value"]).toContain("safe");
+  });
+
+  it.each([
+    'Request failed; headers: {"Authorization":"Bearer PRIVATE_VALUE"}',
+    'Authorization: Basic PRIVATE_VALUE',
+    'Authorization: Bearer PRIVATE_VALUE',
+    'clientSecret="PRIVATE_VALUE with spaces"',
+    "private_key='PRIVATE_VALUE with spaces'",
+    'Request failed; {"privateKey":"PRIVATE_VALUE\\nsecond line"}',
+  ])("scrubs credentials from status and exception text: %s", message => {
+    const span = converted();
+    span.status.message = message;
+    span.events[0].attributes = { "exception.message": message, "exception.stacktrace": message };
+    const original = JSON.stringify(span);
+    const result = sanitizeSpan(span, generateTraceConfig());
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_VALUE");
+    expect(JSON.stringify(result)).not.toContain("second line");
+    expect(result.status.code).toBe(2);
+    expect(JSON.stringify(span)).toBe(original);
+  });
+
+  it("uses the shared PII policy for scalar/array/serialized attributes, events and status", () => {
+    const span = converted({ "input.value": JSON.stringify({ email: "customer@example.test", count: 7 }),
+      "gen_ai.request.stop_sequences": ["customer@example.test"], "custom.count": 7,
+    });
+    span.status.message = "customer@example.test";
+    span.events[0].attributes = { "exception.message": "customer@example.test" };
+    const original = JSON.stringify(span);
+    const result = sanitizeSpan(span, generateTraceConfig({ piiRedaction: true }));
+    expect(JSON.stringify(result)).not.toContain("customer@example.test");
+    expect(result.attributes["input.value"]).toContain("<EMAIL_ADDRESS>");
+    expect(result.attributes["gen_ai.request.stop_sequences"]).toEqual(["<EMAIL_ADDRESS>"]);
+    expect(result.attributes["custom.count"]).toBe(7);
+    expect(JSON.stringify(span)).toBe(original);
+    expect(JSON.stringify(sanitizeSpan(span, generateTraceConfig({ piiRedaction: false })))).toContain("customer@example.test");
   });
 });

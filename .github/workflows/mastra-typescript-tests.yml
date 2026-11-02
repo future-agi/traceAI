@@ -29,6 +29,8 @@ jobs:
         include:
           - { version: floor, core: '1.16.0', observability: '1.0.0', exporter: '1.0.0' }
           - { version: latest, core: latest, observability: latest, exporter: latest }
+          - { version: latest-runtime-floor-converter, core: latest, observability: latest, exporter: '1.0.0' }
+          - { version: floor-runtime-latest-converter, core: latest, observability: '1.0.0', exporter: latest }
     defaults:
       run:
         shell: bash
@@ -51,6 +53,7 @@ jobs:
             "$(command -v node)" "$PWD/node_modules/jest/bin/jest.js" \
             --config "$PWD/packages/traceai_mastra/jest.config.js" --runInBand
           mkdir -p "$RUNNER_TEMP/mastra-package"
+          pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/mastra-package"
           pnpm --dir packages/traceai_mastra pack --pack-destination "$RUNNER_TEMP/mastra-package"
           git diff --exit-code -- pnpm-lock.yaml
       - name: Install packed exporter and real SDK in a clean consumer
@@ -68,7 +71,9 @@ jobs:
       - name: Native lifecycle and wire contracts (loopback-only network namespace)
         run: |
           export MASTRA_TEST_DEPS="$RUNNER_TEMP/mastra-consumer"
-          export MASTRA_TEST_PACKAGE="$RUNNER_TEMP/mastra-consumer/node_modules/@traceai/mastra/dist/src/index.js"
-          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
-            env MASTRA_TEST_DEPS="$MASTRA_TEST_DEPS" MASTRA_TEST_PACKAGE="$MASTRA_TEST_PACKAGE" \
-            "$(command -v node)" --test "$PWD/packages/traceai_mastra/contract/recall.test.cjs"
+          for entrypoint in src esm; do
+            export MASTRA_TEST_PACKAGE="$RUNNER_TEMP/mastra-consumer/node_modules/@traceai/mastra/dist/$entrypoint/index.js"
+            sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+              env MASTRA_TEST_DEPS="$MASTRA_TEST_DEPS" MASTRA_TEST_PACKAGE="$MASTRA_TEST_PACKAGE" \
+              "$(command -v node)" --test "$PWD/packages/traceai_mastra/contract/recall.test.cjs"
+          done

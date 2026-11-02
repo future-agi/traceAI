@@ -4,6 +4,7 @@ import {
   ERROR_DETAIL_ATTRIBUTE_KEYS,
   REDACTED_VALUE,
   stripStackTrace,
+  redactPiiInValue,
   type TraceConfig,
 } from "@traceai/fi-core";
 
@@ -15,13 +16,23 @@ const INPUT_KEYS = new Set<string>([
   FI.INPUT_VALUE, FI.INPUT_MIME_TYPE, FI.RAW_INPUT, FI.LLM_INPUT_MESSAGES,
   FI.PROMPT_TEMPLATE_VARIABLES, "gen_ai.prompt", "gen_ai.system_instructions",
   "gen_ai.tool.call.arguments", "gen_ai.tool.definitions",
+  "gen_ai.request.stop_sequences", "gen_ai.tool.description",
 ]);
 const OUTPUT_KEYS = new Set<string>([
   FI.OUTPUT_VALUE, FI.OUTPUT_MIME_TYPE, FI.RAW_OUTPUT, FI.LLM_OUTPUT_MESSAGES,
   "gen_ai.completion", "gen_ai.tool.call.result",
 ]);
 const ERROR_DETAIL = /\.(?:exception\.(?:message|stacktrace)|error\.message|error_message)$/;
-const CREDENTIAL = /(?:^|[._-])(?:api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|token|cookie|set[_-]?cookie)$/i;
+const CREDENTIAL = /(?:^|_)(?:api_?key|secret_?key|private_?key|client_?secret|access_?token|refresh_?token|id_?token|authorization|password|secret|token|cookie|set_?cookie)$/;
+
+function isCredentialKey(key: string): boolean {
+  const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.-]/g, "_").toLowerCase();
+  return CREDENTIAL.test(normalized);
+}
+
+// Also match quoted fields inside non-JSON error text. Consume the complete
+// quoted value or Basic/Bearer scheme + payload, not just its first word.
+const CREDENTIAL_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization|api[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|token|cookie|set[_-]?cookie)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer|Basic)\s+[^\s,;}"']+|[^\s,;}"']+)/gi;
 
 /** Mask structured credentials even on older SDKs without a default data filter. */
 function redactCredentials(value: unknown, depth = 0): unknown {
@@ -29,7 +40,7 @@ function redactCredentials(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.map(item => redactCredentials(item, depth + 1));
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-      key, CREDENTIAL.test(key) ? REDACTED_VALUE : redactCredentials(item, depth + 1),
+      key, isCredentialKey(key) ? REDACTED_VALUE : redactCredentials(item, depth + 1),
     ]));
   }
   if (typeof value !== "string") return value;
@@ -42,10 +53,12 @@ function redactCredentials(value: unknown, depth = 0): unknown {
       // Not JSON: handle credential assignments in plain text below.
     }
   }
-  return value.replace(
-    /\b(api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|token)\s*[:=]\s*(?:Bearer\s+)?[^\s,;]+/gi,
-    `$1=${REDACTED_VALUE}`,
-  );
+  return value.replace(CREDENTIAL_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`);
+}
+
+function sanitizeValue(value: AttributeValue, config: TraceConfig): AttributeValue {
+  const scrubbed = redactCredentials(value) as AttributeValue;
+  return config.piiRedaction ? redactPiiInValue(scrubbed) : scrubbed;
 }
 
 function maskAttributes(attributes: Attributes, config: TraceConfig, embedding: boolean): Attributes {
@@ -65,9 +78,9 @@ function maskAttributes(attributes: Attributes, config: TraceConfig, embedding: 
       if (!key.endsWith("mime_type")) masked[key] = REDACTED_VALUE;
       continue;
     }
-    masked[key] = CREDENTIAL.test(key)
+    masked[key] = isCredentialKey(key)
       ? REDACTED_VALUE
-      : redactCredentials(value) as AttributeValue;
+      : sanitizeValue(value, config);
   }
   return masked;
 }
@@ -78,7 +91,7 @@ export function sanitizeSpan(span: ReadableSpan, config: TraceConfig): ReadableS
   const message = span.status.message;
   const status = message == null || config.hideErrorDetails
     ? { code: span.status.code }
-    : { code: span.status.code, message: redactCredentials(stripStackTrace(message)) as string };
+    : { code: span.status.code, message: sanitizeValue(stripStackTrace(message), config) as string };
   return {
     ...span,
     status,
