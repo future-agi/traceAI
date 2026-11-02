@@ -26,6 +26,23 @@ class _StreamState:
         self.chunks = []
         self.finished = span.is_finished
 
+    def finish_response(self, response: Any) -> None:
+        """Finish an unstreamed native response from its parsed completion."""
+        if self.finished:
+            return
+        self.finished = True
+        status = trace_api.Status(trace_api.StatusCode.OK)
+        try:
+            _finish_tracing(
+                with_span=self.span, status=status,
+                attributes=self.extractor.get_attributes(response=response),
+                extra_attributes=self.extractor.get_extra_attributes(
+                    response=response, request_parameters=self.request_parameters,
+                ),
+            )
+        finally:
+            self.span.finish_tracing(status=status)
+
     def capture(self, chunk: Any) -> None:
         if not self.finished:
             self.chunks.append(chunk)

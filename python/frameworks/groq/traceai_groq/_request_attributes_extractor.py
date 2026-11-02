@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterator as OneShotIterator
 from enum import Enum
 from typing import Any, Iterable, Iterator, Mapping, Tuple, TypeVar
 
@@ -27,11 +28,13 @@ logger.addHandler(logging.NullHandler())
 def _without_transport_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
     # Headers and query parameters can carry arbitrary credentials, including
     # custom names. Omit the entire transport fields regardless of content flags
-    # and never mutate the arguments passed to the SDK.
+    # and never mutate the arguments passed to the SDK. A one-shot messages
+    # iterator must also remain untouched until the SDK serializes it.
     return {
         key: value
         for key, value in parameters.items()
         if key not in ("extra_headers", "extra_query")
+        and not (key == "messages" and isinstance(value, OneShotIterator))
     }
 
 
@@ -52,7 +55,11 @@ class _RequestAttributesExtractor:
             messages = request_parameters.get("messages")
             input_data = messages if messages is not None else request_parameters
 
-            if messages and isinstance(messages, Iterable):
+            if (
+                messages
+                and isinstance(messages, Iterable)
+                and not isinstance(messages, OneShotIterator)
+            ):
                 yield from _extract_eval_input(messages)
 
             yield from _as_input_attributes(
@@ -87,7 +94,7 @@ class _RequestAttributesExtractor:
 
         if (input_messages := request_parameters.get("messages")) and isinstance(
             input_messages, Iterable
-        ):
+        ) and not isinstance(input_messages, OneShotIterator):
             for index, input_message in list(enumerate(input_messages)):
                 for key, value in self._get_attributes_from_message_param(
                     input_message

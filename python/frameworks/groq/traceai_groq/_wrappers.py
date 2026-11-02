@@ -163,7 +163,7 @@ class _CompletionsWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
-            if streaming and isinstance(response, APIResponse):
+            if isinstance(response, APIResponse):
                 return _RawResponse(
                     response,
                     _StreamState(span, self._response_extractor, request_parameters),
@@ -248,7 +248,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
-            if streaming and isinstance(response, AsyncAPIResponse):
+            if isinstance(response, AsyncAPIResponse):
                 return _AsyncRawResponse(
                     response,
                     _StreamState(span, self._response_extractor, request_parameters),

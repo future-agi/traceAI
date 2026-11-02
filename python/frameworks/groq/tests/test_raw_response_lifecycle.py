@@ -205,7 +205,7 @@ async def test_raw_response_custom_parse_and_prefetched_body(asynchronous):
                     client, "with_raw_response", **PARAMS
                 ) as response:
                     assert await response.read() == b"".join(EVENTS)
-                    assert not memory.get_finished_spans()
+                    assert single_span(memory).attributes["output.value"] == OUTPUT + "-tail"
                     stream = await response.parse(to=AsyncStream[ChatCompletionChunk])
                     assert (
                         await response.parse(to=AsyncStream[ChatCompletionChunk])
@@ -216,7 +216,7 @@ async def test_raw_response_custom_parse_and_prefetched_body(asynchronous):
             with sync_client(SyncBody()) as client:
                 with sync_response(client, "with_raw_response", **PARAMS) as response:
                     assert response.read() == b"".join(EVENTS)
-                    assert not memory.get_finished_spans()
+                    assert single_span(memory).attributes["output.value"] == OUTPUT + "-tail"
                     stream = response.parse(to=Stream[ChatCompletionChunk])
                     assert response.parse(to=Stream[ChatCompletionChunk]) is stream
                     list(stream)
