@@ -187,10 +187,10 @@ type invokeResponse struct {
 // Metadata is independent of the content budget. Unmarshal skips unknown fields
 // (including content) without copying their values; never decode the entire
 // response into a map or RawMessage merely to read usage from a large completion.
-// Bound stop_reason too, so a malformed response cannot allocate arbitrary text.
-type stopReason string
+// Bound metadata strings too, so a malformed response cannot allocate arbitrary text.
+type boundedMetadataString string
 
-func (s *stopReason) UnmarshalJSON(data []byte) error {
+func (s *boundedMetadataString) UnmarshalJSON(data []byte) error {
 	*s = ""
 	if len(data) > 512 {
 		return nil
@@ -199,14 +199,14 @@ func (s *stopReason) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
-	*s = stopReason(value)
+	*s = boundedMetadataString(value)
 	return nil
 }
 
 func (r *record) invokeOutput(data []byte) {
 	var metadata struct {
-		Usage      *invokeUsage `json:"usage"`
-		StopReason stopReason   `json:"stop_reason"`
+		Usage      *invokeUsage          `json:"usage"`
+		StopReason boundedMetadataString `json:"stop_reason"`
 	}
 	if json.Unmarshal(data, &metadata) != nil {
 		return
@@ -234,12 +234,24 @@ func (r *record) invokeEvent(ev types.ResponseStream) {
 	if !ok {
 		return
 	}
+	// Completion is protocol state, not captured content. Bedrock may attach
+	// large guardrail traces to message_stop; skip those fields without copying
+	// them, and recognize the terminal event regardless of size or privacy gates.
+	var metadata struct {
+		Type boundedMetadataString `json:"type"`
+	}
+	if json.Unmarshal(v.Value.Bytes, &metadata) != nil {
+		return
+	}
+	if metadata.Type == "message_stop" {
+		r.streamComplete = true
+		return
+	}
 	if len(v.Value.Bytes) > 2*maxCapture {
 		r.truncated = true
 		return
 	}
 	var e struct {
-		Type         string          `json:"type"`
 		Index        int32           `json:"index"`
 		Message      *invokeResponse `json:"message"`
 		ContentBlock *invokeBlock    `json:"content_block"`
@@ -254,9 +266,7 @@ func (r *record) invokeEvent(ev types.ResponseStream) {
 	if json.Unmarshal(v.Value.Bytes, &e) != nil {
 		return
 	}
-	switch e.Type {
-	case "message_stop":
-		r.streamComplete = true
+	switch metadata.Type {
 	case "message_start":
 		if e.Message != nil {
 			r.invokeUsage(e.Message.Usage)
