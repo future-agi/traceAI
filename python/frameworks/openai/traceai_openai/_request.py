@@ -18,11 +18,13 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
+from traceai_openai._privacy import redact, request_credentials, safe_request
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
     _CompletionAccumulator,
     _ResponsesAccumulator,
+    _response_status,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_openai._span_io_handler import add_io_to_span_attributes
@@ -57,12 +59,13 @@ class _WithTracer(ABC):
         attributes: Iterable[Tuple[str, AttributeValue]],
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
+        secrets: Tuple[str, ...] = (),
     ) -> Iterator[_WithSpan]:
         # Keep primary attributes so finalization can restore them after optional
         # details: OTel's bounded attribute map evicts the oldest entries.
         initial_attributes = {}
         try:
-            initial_attributes = dict(attributes)
+            initial_attributes = {key: redact(value, secrets) for key, value in attributes}
             span = self._tracer.start_span(name=span_name, attributes=initial_attributes)
         except Exception:
             logger.exception("Failed to start span")
@@ -75,6 +78,7 @@ class _WithTracer(ABC):
         ) as span:
             yield _WithSpan(
                 span=span,
+                secrets=secrets,
                 initial_attributes=initial_attributes,
                 context_attributes=dict(context_attributes),
                 extra_attributes=dict(extra_attributes),
@@ -114,6 +118,7 @@ class _WithOpenAI(ABC):
             return _ResponsesAccumulator(
                 request_parameters=request_parameters,
                 chat_completion_type=openai.types.responses.response.Response,
+                config=self._config,
                 response_attributes_extractor=self._response_attributes_extractor,
             )
         
@@ -206,9 +211,10 @@ class _WithOpenAI(ABC):
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
         not a stream.
         """
+        parsed_response = response
         if hasattr(response, "parse") and callable(response.parse):
             try:
-                response.parse()
+                parsed_response = response.parse()
             except Exception:
                 logger.exception(f"Failed to parse response of type {type(response)}")
 
@@ -240,7 +246,7 @@ class _WithOpenAI(ABC):
 
         else:
             _finish_tracing(
-                status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                status=_response_status(parsed_response),
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,
@@ -285,6 +291,8 @@ class _Request(_WithTracer, _WithOpenAI):
             return wrapped(*args, **kwargs)
         try:
             cast_to, request_parameters = _parse_request_args(args)
+            secrets = request_credentials(instance, args[1], request_parameters)
+            request_parameters = safe_request(request_parameters)
             # Extract input data more robustly
             input_data = (
                 request_parameters.get("messages")
@@ -299,6 +307,7 @@ class _Request(_WithTracer, _WithOpenAI):
 
         with self._start_as_current_span(
             span_name=span_name,
+            secrets=secrets,
             attributes=chain(
                 self._get_attributes_from_instance(instance),
                 self._get_attributes_from_request(
@@ -333,6 +342,7 @@ class _Request(_WithTracer, _WithOpenAI):
                         None,
                         response,
                         is_streaming=self._is_streaming(response),
+                        config=self._config,
                     )
                 return self._finalize_response(
                     response=response,
@@ -340,7 +350,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     cast_to=cast_to,
                     request_parameters=request_parameters,
                 )
-            except Exception as e:
+            except BaseException as e:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
                     description=f"{type(e).__name__}: {e}",
@@ -362,6 +372,8 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             return await wrapped(*args, **kwargs)
         try:
             cast_to, request_parameters = _parse_request_args(args)
+            secrets = request_credentials(instance, args[1], request_parameters)
+            request_parameters = safe_request(request_parameters)
             # Extract input data more robustly
             input_data = (
                 request_parameters.get("messages")
@@ -376,6 +388,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             return await wrapped(*args, **kwargs)
         with self._start_as_current_span(
             span_name=span_name,
+            secrets=secrets,
             attributes=chain(
                 self._get_attributes_from_instance(instance),
                 self._get_attributes_from_request(
@@ -404,9 +417,10 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     )
 
                 add_io_to_span_attributes(
-                    with_span, None, response, is_streaming=self._is_streaming(response)
+                    with_span, None, response, is_streaming=self._is_streaming(response),
+                    config=self._config,
                 )
-            except Exception as exception:
+            except BaseException as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

@@ -40,6 +40,38 @@ def _finish_on_exit(stream: Any, error: Optional[BaseException]) -> None:
     stream._finish_tracing(status=status)
 
 
+class _ResponseCloseProxy(ObjectProxy):
+    """Responses.stream() closes the HTTP response, not the raw SDK stream.
+
+    Expose a per-call proxy instead of patching HTTPX classes or the client's
+    transport. Internal SDK reads still use the original response unchanged.
+    """
+
+    def __init__(self, response: Any, stream: Any) -> None:
+        super().__init__(response)
+        self._self_stream = stream
+
+    def close(self) -> None:
+        error = None
+        try:
+            self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self._self_stream, error)
+
+    async def aclose(self) -> None:
+        error = None
+        try:
+            await self.__wrapped__.aclose()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self._self_stream, error)
+
+
 class _Stream(ObjectProxy):  # type: ignore
     __slots__ = (
         "_self_with_span",
@@ -60,6 +92,13 @@ class _Stream(ObjectProxy):  # type: ignore
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
 
+    @property
+    def response(self) -> Any:
+        response = self.__wrapped__.response
+        if getattr(self._self_response_accumulator, "get_status", None) is not None:
+            return _ResponseCloseProxy(response, self)
+        return response
+
     def __enter__(self) -> "_Stream":
         # ObjectProxy otherwise returns the SDK stream, bypassing our iterator.
         self.__wrapped__.__enter__()
@@ -74,6 +113,16 @@ class _Stream(ObjectProxy):  # type: ignore
         finally:
             _finish_on_exit(self, exc)
 
+    def close(self) -> None:
+        error = None
+        try:
+            self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __iter__(self) -> Iterator[Any]:
         return self
 
@@ -85,7 +134,7 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -115,6 +164,12 @@ class _Stream(ObjectProxy):  # type: ignore
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if self._self_is_finished:
+            return
+        if status is None or status.status_code is not trace_api.StatusCode.ERROR:
+            get_status = getattr(self._self_response_accumulator, "get_status", None)
+            if get_status is not None:
+                status = get_status()
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
@@ -151,6 +206,13 @@ class _AsyncStream(ObjectProxy):
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
 
+    @property
+    def response(self) -> Any:
+        response = self.__wrapped__.response
+        if getattr(self._self_response_accumulator, "get_status", None) is not None:
+            return _ResponseCloseProxy(response, self)
+        return response
+
     async def __aenter__(self) -> "_AsyncStream":
         await self.__wrapped__.__aenter__()
         return self
@@ -164,6 +226,16 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, exc)
 
+    async def close(self) -> None:
+        error = None
+        try:
+            await self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __aiter__(self):
         return self
 
@@ -175,7 +247,7 @@ class _AsyncStream(ObjectProxy):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -205,6 +277,12 @@ class _AsyncStream(ObjectProxy):
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if self._self_is_finished:
+            return
+        if status is None or status.status_code is not trace_api.StatusCode.ERROR:
+            get_status = getattr(self._self_response_accumulator, "get_status", None)
+            if get_status is not None:
+                status = get_status()
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
