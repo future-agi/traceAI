@@ -106,3 +106,50 @@ async def test_audio_and_text_input_both_preserved(with_tool, asynchronous):
     assert marker in json.dumps(requests[0])
     actual = attrs(exporter)
     assert marker in json.dumps(actual), {"with_tool": with_tool, "actual": actual}
+
+@pytest.mark.parametrize("flag", ["hide_input_text", "hide_input_messages"])
+@pytest.mark.parametrize("kind", ["completion", "audio", "embedding"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_message_input_flags_do_not_leak_aggregate(flag, kind, asynchronous):
+    marker = "synthetic-private-input-aaa"
+    with capture(TraceConfig(**{flag: True})) as exporter:
+        if kind == "embedding":
+            payload = {"object": "list", "model": "text-embedding-ada-002", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
+            transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+            if asynchronous:
+                async with openai.AsyncOpenAI(api_key="synthetic-key", http_client=httpx.AsyncClient(transport=transport)) as client:
+                    await litellm.aembedding("text-embedding-ada-002", marker, client=client)
+            else:
+                with openai.OpenAI(api_key="synthetic-key", http_client=httpx.Client(transport=transport)) as client:
+                    litellm.embedding("text-embedding-ada-002", marker, client=client)
+        else:
+            content = marker if kind == "completion" else [{"type": "text", "text": marker}, {"type": "input_audio", "input_audio": {"data": "c3ludGhldGljLWF1ZGlv", "format": "wav"}}]
+            kwargs = dict(model="gpt-4o-mini", messages=[{"role": "user", "content": content}], mock_response="ok", api_key="synthetic-key")
+            if asynchronous:
+                await litellm.acompletion(**kwargs)
+            else:
+                litellm.completion(**kwargs)
+    actual = attrs(exporter)
+    assert marker not in actual.get("input.value", ""), (flag, kind, actual.get("input.value"))
+
+
+@pytest.mark.parametrize("flag", ["hide_output_text", "hide_output_messages"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.asyncio
+async def test_message_output_flags_do_not_leak_aggregate(flag, asynchronous, streaming):
+    marker = "synthetic-private-output-bbb"
+    kwargs = dict(model="gpt-4o-mini", messages=[{"role": "user", "content": "hello"}], mock_response=marker, api_key="synthetic-key", stream=streaming)
+    with capture(TraceConfig(**{flag: True})) as exporter:
+        if asynchronous:
+            result = await litellm.acompletion(**kwargs)
+            if streaming:
+                async for _ in result:
+                    pass
+        else:
+            result = litellm.completion(**kwargs)
+            if streaming:
+                list(result)
+    actual = attrs(exporter)
+    assert marker not in actual.get("output.value", ""), (flag, streaming, actual.get("output.value"))

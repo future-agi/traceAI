@@ -206,7 +206,10 @@ def _instrument_func_type_completion(
 
     if messages := kwargs.get("messages"):
         process_messages = _process_messages(messages, config)
-        if filtered_messages := process_messages.get("filtered_messages"):
+        # Core masks indexed message attributes, but input.value is an independent
+        # aggregate. Omit it when either message-content privacy flag applies.
+        hide_message_input = bool(config and (config.hide_input_text or config.hide_input_messages))
+        if not hide_message_input and (filtered_messages := process_messages.get("filtered_messages")):
             _set_span_attribute(
                 span, SpanAttributes.INPUT_VALUE, json.dumps(filtered_messages)
             )
@@ -214,7 +217,7 @@ def _instrument_func_type_completion(
             _set_span_attribute(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
-        if any(
+        if not hide_message_input and any(
             _has_tool_context(message) or _has_non_text_content(message)
             for message in messages
         ):
@@ -223,7 +226,7 @@ def _instrument_func_type_completion(
             _set_span_attribute(
                 span, SpanAttributes.INPUT_VALUE, safe_json_dumps(filtered_messages)
             )
-        elif eval_input := process_messages.get("eval_input"):
+        elif not hide_message_input and (eval_input := process_messages.get("eval_input")):
             _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
 
         for index, input_message in list(enumerate(messages)):
@@ -252,7 +255,10 @@ def _instrument_func_type_embedding(
         litellm.embedding()
         litellm.aembedding() (async version of embedding)
     """
-    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
+    config = config or TraceConfig()
+    hide_message_input = config.hide_input_text or config.hide_input_messages
+    if not hide_message_input:
+        _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
     _set_span_attribute(
         span,
         SpanAttributes.GEN_AI_SPAN_KIND,
@@ -284,7 +290,8 @@ def _instrument_func_type_embedding(
             f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{EmbeddingAttributes.EMBEDDING_TEXT}",
             safe_text,
         )
-    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(inputs))
+    if not hide_message_input:
+        _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(inputs))
 
 
 def _instrument_func_type_image_generation(
@@ -297,20 +304,26 @@ def _instrument_func_type_image_generation(
         litellm.image_generation()
         litellm.aimage_generation() (async version of image_generation)
     """
-    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
+    if not (config and (config.hide_input_text or config.hide_input_messages)):
+        _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
     _set_span_attribute(
         span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
     )
     if model := kwargs.get("model"):
         _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model)
-    if prompt := kwargs.get("prompt"):
+    if (prompt := kwargs.get("prompt")) and not (
+        config and (config.hide_input_text or config.hide_input_messages)
+    ):
         _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(prompt))
 
 
-def _finalize_span(span: trace_api.Span, result: Any) -> None:
-    # Embedding vectors must only use the canonical, privacy-filtered attributes.
-    # Serializing the response elsewhere bypasses FI_HIDE_EMBEDDING_VECTORS.
-    if not isinstance(result, EmbeddingResponse):
+def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConfig] = None) -> None:
+    # Embedding vectors and private message content must not reappear in the
+    # independent raw response aggregate after core filters semantic attributes.
+    hide_message_output = bool(config and (config.hide_output_text or config.hide_output_messages))
+    if not isinstance(result, EmbeddingResponse) and not (
+        hide_message_output and isinstance(result, ModelResponse)
+    ):
         _set_raw_output(span, result)
     if isinstance(result, ModelResponse):
         choices = result.choices or []
@@ -319,6 +332,7 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                 if (
                     len(choices) == 1
                     and choice.message.content
+                    and not hide_message_output
                     and not _has_tool_context(choice.message)
                 ):
                     _set_span_attribute(
@@ -486,8 +500,8 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             with _provider_context(span):
                 result = original(*args, **kwargs)
             if request.get("stream") and hasattr(result, "__next__"):
-                return StreamingIteratorWrapper(result, span)
-            _observe(_finalize_span, span, result)
+                return StreamingIteratorWrapper(result, span, config=self._config)
+            _observe(_finalize_span, span, result, self._config)
             span.set_status(trace_api.StatusCode.OK)
         except BaseException as error:
             _record_error(span, error)
@@ -509,8 +523,8 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             with _provider_context(span):
                 result = await original(*args, **kwargs)
             if request.get("stream") and hasattr(result, "__anext__"):
-                return AsyncStreamingIteratorWrapper(result, span)
-            _observe(_finalize_span, span, result)
+                return AsyncStreamingIteratorWrapper(result, span, config=self._config)
+            _observe(_finalize_span, span, result, self._config)
             span.set_status(trace_api.StatusCode.OK)
         except BaseException as error:
             _record_error(span, error)
@@ -611,9 +625,10 @@ def _set_usage(span, usage):
 
 
 class _StreamState:
-    def __init__(self, span, span_cm=None):
+    def __init__(self, span, span_cm=None, config=None):
         self.span = span
         self.span_cm = span_cm
+        self.config = config
         self.processed_chunks = []
         self.content_by_choice = {}
         self.has_tool_context = False
@@ -653,17 +668,18 @@ class _StreamState:
         self._ended = True
         try:
             content = next(iter(self.content_by_choice.values()), "")
-            _set_span_attribute(
-                self.span,
-                SpanAttributes.OUTPUT_VALUE,
-                (
-                    content
-                    if len(self.content_by_choice) == 1
-                    and content
-                    and not self.has_tool_context
-                    else safe_json_dumps(self.processed_chunks)
-                ),
-            )
+            if not (self.config and (self.config.hide_output_text or self.config.hide_output_messages)):
+                _set_span_attribute(
+                    self.span,
+                    SpanAttributes.OUTPUT_VALUE,
+                    (
+                        content
+                        if len(self.content_by_choice) == 1
+                        and content
+                        and not self.has_tool_context
+                        else safe_json_dumps(self.processed_chunks)
+                    ),
+                )
             for index, text in self.content_by_choice.items():
                 _set_span_attribute(
                     self.span,
@@ -701,8 +717,8 @@ def _stream_close_method(stream, *, asynchronous=False):
 
 
 class StreamingIteratorWrapper(_StreamState):
-    def __init__(self, iterator: Iterator[Any], span: trace_api.Span, span_cm=None):
-        super().__init__(span, span_cm)
+    def __init__(self, iterator: Iterator[Any], span: trace_api.Span, span_cm=None, config=None):
+        super().__init__(span, span_cm, config)
         self.iterator = iterator
 
     def __iter__(self):
@@ -749,9 +765,9 @@ class StreamingIteratorWrapper(_StreamState):
 
 class AsyncStreamingIteratorWrapper(_StreamState):
     def __init__(
-        self, async_iterator: AsyncIterator[Any], span: trace_api.Span, span_cm=None
+        self, async_iterator: AsyncIterator[Any], span: trace_api.Span, span_cm=None, config=None
     ):
-        super().__init__(span, span_cm)
+        super().__init__(span, span_cm, config)
         self.async_iterator = async_iterator
 
     def __aiter__(self):
