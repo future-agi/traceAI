@@ -116,4 +116,31 @@ test('real SDK methods export one span each through loopback OTLP', { timeout: 3
   await provider.forceFlush();
   assert.equal(batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans))).length, spans.length + 3,
     'an already-loaded CommonJS constructor must work after re-enable');
+
+  const shimmer = createRequire(packageRequire.resolve('@opentelemetry/instrumentation'))('shimmer');
+  const exportedSpans = () => batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans)));
+  for (const registration of ['enable', 'instrumentRoom']) {
+    for (const wrapperKind of ['plain', 'shimmer']) {
+      const retained = new client.Room();
+      let thirdPartyCalls = 0;
+      const wrap = original => function (...args) {
+        thirdPartyCalls++;
+        return original.apply(this, args);
+      };
+      if (wrapperKind === 'shimmer') shimmer.wrap(retained, 'disconnect', wrap);
+      else retained.disconnect = wrap(retained.disconnect);
+      const outer = retained.disconnect;
+      for (let cycle = 0; cycle < 3; cycle++) {
+        if (registration === 'enable') instrumentation.enable();
+        else instrumentation.instrumentRoom(retained);
+        const before = exportedSpans().length;
+        await retained.disconnect();
+        await provider.forceFlush();
+        assert.equal(exportedSpans().length - before, 1,
+          `${registration} under ${wrapperKind} wrapper must export exactly one disconnect span`);
+        assert.equal(retained.disconnect, outer, 'registration must preserve the third-party wrapper');
+        assert.equal(thirdPartyCalls, cycle + 1);
+      }
+    }
+  }
 });

@@ -24,6 +24,9 @@ interface Patch {
 }
 // Ownership belongs to the actual method, not the module namespace (which can be frozen).
 const owners = new WeakMap<Method, LiveKitInstrumentation>();
+// A third-party wrapper can hide our function without removing it. Keep active
+// target/method ownership too, so repeat registration does not add another span.
+const activeMethods = new WeakMap<object, Set<string>>();
 let patchCount = 0;
 
 /** Instruments RTC operations, not LiveKit Agents' native LLM/session spans. */
@@ -103,7 +106,8 @@ export class LiveKitInstrumentation extends InstrumentationBase {
   }
 
   private wrap(target: Record<string, Method> | undefined, name: string, operation: Operation): void {
-    if (!target || typeof target[name] !== "function" || owners.has(target[name])) return;
+    if (!target || typeof target[name] !== "function" ||
+        activeMethods.get(target)?.has(name) || owners.has(target[name])) return;
     const instrumentation = this;
     let active = true;
     this._wrap(target, name, (original: Method) => function (this: any, ...args: any[]) {
@@ -113,6 +117,9 @@ export class LiveKitInstrumentation extends InstrumentationBase {
     });
     const wrapped = target[name];
     owners.set(wrapped, this);
+    const methods = activeMethods.get(target) ?? new Set<string>();
+    methods.add(name);
+    activeMethods.set(target, methods);
     const patch = { target: new WeakRef(target), name, wrapped: new WeakRef(wrapped), deactivate: () => { active = false; } };
     this.patches.add(patch);
     this.collected.register(target, patch, patch);
@@ -124,6 +131,7 @@ export class LiveKitInstrumentation extends InstrumentationBase {
     patch.deactivate();
     const target = patch.target.deref();
     const wrapped = patch.wrapped.deref();
+    if (target) activeMethods.get(target)?.delete(patch.name);
     if (target && target[patch.name] === wrapped) this._unwrap(target, patch.name);
     if (wrapped) owners.delete(wrapped);
     this.collected.unregister(patch);
