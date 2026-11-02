@@ -1,5 +1,5 @@
 /**
- * Compile-time contract: the real `@cursor/sdk` types (devDependency, 1.0.38)
+ * Compile-time contract: the real `@cursor/sdk` types (devDependency, 1.2.0)
  * fit the structural types the wrapper reads. `pnpm run typecheck:contract`
  * fails when an SDK release changes a shape this package depends on.
  */
@@ -28,6 +28,8 @@ export const agentOptions = (value: AgentOptions): AgentOptionsLike => value;
 export const sendOptions = (value: SendOptions): SendOptionsLike => value;
 
 /** Every SDKMessage `type` the tracer switches on exists in the SDK union. */
-type Handled = "system" | "user" | "assistant" | "thinking" | "tool_call" | "status" | "request" | "task" | "usage";
+type BaseMessages = "system" | "user" | "assistant" | "thinking" | "tool_call" | "status" | "request" | "task" | "usage";
+// Summary first appeared in 1.2; allow the older SDK's union without masking any other new type.
+type Handled = BaseMessages | Extract<SDKMessage["type"], "summary">;
 export const handled: Handled[] = [] as SDKMessage["type"][];
 export const known: SDKMessage["type"][] = [] as Handled[];
