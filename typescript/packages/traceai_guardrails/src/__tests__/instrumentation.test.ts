@@ -148,6 +148,60 @@ test("uses constructor privacy configuration without a second enable call", asyn
   expect(span.attributes["guardrails.validation_passed"]).toBe(false);
 });
 
+test.each(["option", "environment"])("hideInputs via %s does not leak rejected input through output", async (source) => {
+  const secret = "synthetic-rejected-private-candidate";
+  const result = Object.freeze({
+    rawLlmOutput: secret,
+    validatedOutput: null,
+    validationPassed: false,
+    reask: Object.freeze({
+      incorrectValue: secret,
+      failResults: [{ errorMessage: secret, fixValue: secret }],
+    }),
+    error: secret,
+  });
+  const Guard = guardReturning(result);
+  const previous = process.env.FI_HIDE_INPUTS;
+  if (source === "environment") process.env.FI_HIDE_INPUTS = "true";
+  try {
+    instrument({ traceConfig: source === "option" ? { hideInputs: true } : {} }).manuallyInstrument({ Guard });
+    expect(await new Guard().parse(secret)).toBe(result);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(attrs["input.value"]).toBe("__REDACTED__");
+    expect(attrs["raw.input"]).toBe("__REDACTED__");
+    expect(JSON.stringify(attrs)).not.toContain(secret);
+    for (const key of ["output.value", "raw.output"]) {
+      expect(JSON.parse(attrs[key] as string)).toEqual({ validatedOutput: null, validationPassed: false });
+    }
+    expect(result.rawLlmOutput).toBe(secret);
+    expect(result.reask.incorrectValue).toBe(secret);
+  } finally {
+    if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+    else process.env.FI_HIDE_INPUTS = previous;
+  }
+});
+
+test.each([false, true])("validated output remains independently controlled by hideOutputs=%s", async (hideOutputs) => {
+  const result = Object.freeze({ rawLlmOutput: "synthetic-raw-input", validatedOutput: { count: 7 }, validationPassed: true, reask: null });
+  const Guard = guardReturning(result);
+  instrument({ traceConfig: { hideInputs: true, hideOutputs } }).manuallyInstrument({ Guard });
+  expect(await new Guard().parse(result.rawLlmOutput)).toBe(result);
+  const attrs = exporter.getFinishedSpans()[0].attributes;
+  expect(JSON.stringify(attrs)).not.toContain(result.rawLlmOutput);
+  for (const key of ["output.value", "raw.output"]) {
+    if (hideOutputs) expect(attrs[key]).toBe("__REDACTED__");
+    else expect(JSON.parse(attrs[key] as string)).toEqual({ validatedOutput: { count: 7 }, validationPassed: true });
+  }
+});
+
+test("a pending ReAsk is not a completed retry", async () => {
+  const result = { validationPassed: false, validatedOutput: null, reask: { incorrectValue: "candidate" } };
+  const Guard = guardReturning(result);
+  instrument().manuallyInstrument({ Guard });
+  await new Guard().parse("candidate", { numReasks: 0 });
+  expect(exporter.getFinishedSpans()[0].attributes["guardrails.reask_count"]).toBeUndefined();
+});
+
 test("keeps parentage, active child context, and the original error", async () => {
   const error = new Error("synthetic failure");
   class Guard {

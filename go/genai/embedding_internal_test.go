@@ -6,19 +6,27 @@ func TestEmbeddingResponseMetadata(t *testing.T) {
 	for _, tt := range []struct {
 		name, body       string
 		count, dimension int64
+		wantError, batch bool
 	}{
-		{"single", `{"embedding":{"values":[0.1,0.2]}}`, 1, 2},
-		{"batch", `{"embeddings":[{"values":[0.1,0.2]},{"values":[0.3,0.4]}]}`, 2, 2},
-		{"mixed", `{"embeddings":[{"values":[0.1]},{"values":[0.3,0.4]}]}`, 2, 0},
-		{"empty vector", `{"embedding":{"values":[]}}`, 1, 0},
-		{"empty batch", `{"embeddings":[]}`, 0, 0},
-		{"malformed", `not-json`, 0, 0},
-		{"wrong types", `{"embedding":{"values":["private"]}}`, 0, 0},
-		{"unknown", `{"private":"content"}`, 0, 0},
+		{"single", `{"embedding":{"values":[0.1,0.2]}}`, 1, 2, false, false},
+		{"batch", `{"embeddings":[{"values":[0.1,0.2]},{"values":[0.3,0.4]}]}`, 2, 2, false, true},
+		{"mixed", `{"embeddings":[{"values":[0.1]},{"values":[0.3,0.4]}]}`, 2, 0, false, true},
+		{"empty vector", `{"embedding":{"values":[]}}`, 1, 0, false, false},
+		{"empty body", ``, 0, 0, false, false},
+		{"empty batch", `{"embeddings":[]}`, 0, 0, false, true},
+		{"malformed", `not-json`, 0, 0, true, true},
+		{"wrong types", `{"embedding":{"values":["private"]}}`, 0, 0, true, false},
+		{"unknown", `{"private":"content"}`, 0, 0, false, true},
+		{"null first", `{"embeddings":[null,{"values":[0.1]}]}`, 2, 0, false, true},
+		{"null last", `{"embeddings":[{"values":[0.1]},null]}`, 2, 0, false, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := map[string]int64{}
-			for _, kv := range embeddingResponseAttributes([]byte(tt.body)) {
+			attrs, err := embeddingResponseAttributes([]byte(tt.body), tt.batch)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("decode error = %v, want error = %v", err, tt.wantError)
+			}
+			for _, kv := range attrs {
 				got[string(kv.Key)] = kv.Value.AsInt64()
 			}
 			if got[EmbeddingCount] != tt.count || got[GenAIEmbeddingDimensionCount] != tt.dimension {

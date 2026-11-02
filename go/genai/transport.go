@@ -66,17 +66,31 @@ type Transport struct {
 // GenerateContentStream and EmbedContent calls. Both embedContent and
 // batchEmbedContents REST routes are traced. Other requests (files, caches,
 // tokens, models, asynchronous batch jobs, interactions) pass through untouched
-// and without a span.
+// and without a span. If base is already a *Transport, its configuration is
+// copied and its underlying transport reused, so wrapping does not duplicate
+// spans. New options override the inherited settings without changing base.
 func NewTransport(base http.RoundTripper, opts ...Option) *Transport {
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	c := &config{}
+	if existing, ok := base.(*Transport); ok {
+		*c = *existing.cfg
+		// Inherit the resolved privacy settings rather than rereading the env.
+		c.tcSet = true
+	}
+	for existing, ok := base.(*Transport); ok; existing, ok = base.(*Transport) {
+		base = existing.base
+	}
 	for _, o := range opts {
 		o(c)
 	}
 	if !c.tcSet {
 		c.tc = TraceConfigFromEnv()
 	}
-	if base == nil {
-		base = http.DefaultTransport
+	if c.tc.HideErrorDetails != nil {
+		hide := *c.tc.HideErrorDetails
+		c.tc.HideErrorDetails = &hide
 	}
 	return &Transport{base: base, cfg: c}
 }
@@ -95,7 +109,9 @@ func NewHTTPClient(opts ...Option) *http.Client {
 
 // WrapClient returns a copy of hc whose transport is traced. hc itself is not
 // changed. Use it when you already build your own *http.Client (a proxy, a
-// custom timeout). A nil hc is treated as an empty client.
+// custom timeout). A nil hc is treated as an empty client. Rewrapping a traced
+// client inherits its settings, applies new options and still emits one span
+// per HTTP attempt; the original client and its settings remain unchanged.
 func WrapClient(hc *http.Client, opts ...Option) *http.Client {
 	var out http.Client
 	if hc != nil {
@@ -221,7 +237,7 @@ func (t *Transport) traceRequest(req *http.Request, method string) (*http.Respon
 	case method == methodStreamGenerate:
 		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc, secrets)
 	default:
-		c.endJSON(reqCtx, span, res, embedding)
+		c.endJSON(reqCtx, span, res, method)
 	}
 	return res, nil
 }
@@ -286,7 +302,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // endJSON reads a non-streaming response, restores the body for the SDK and
 // ends the span with the response attributes.
-func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, embedding bool) {
+func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, method string) {
 	if res.Body == nil {
 		span.End()
 		return
@@ -300,8 +316,15 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 		return
 	}
 	res.Body = io.NopCloser(bytes.NewReader(b))
-	if embedding {
-		span.SetAttributes(c.tc.Filter(embeddingResponseAttributes(b))...)
+	if method == methodEmbed || method == methodBatchEmbed {
+		attrs, err := embeddingResponseAttributes(b, method == methodBatchEmbed)
+		if err != nil {
+			// Decoder errors may contain response content. Keep only a safe
+			// classification, and leave the original body for the SDK to decode.
+			endWithFailure(span, failure{"decode", "failed to decode embedding response"})
+			return
+		}
+		span.SetAttributes(c.tc.Filter(attrs)...)
 	} else {
 		acc := newAccumulator()
 		acc.addResponse(b)
@@ -312,8 +335,8 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 
 // endHTTPError ends the span for a 4xx/5xx response. The status token
 // (NOT_FOUND, INVALID_ARGUMENT, ...) is kept; the API's error message only
-// while inputs and outputs are both captured, and never with a credential in
-// it.
+// when error details are allowed by TraceConfig, and never with a credential
+// in it.
 func (c *config) endHTTPError(span trace.Span, res *http.Response, secrets []string) {
 	var b []byte
 	if res.Body != nil {

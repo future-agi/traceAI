@@ -88,7 +88,13 @@ func testEmbeddingOTLPWire(t *testing.T, batchSize int, apiError bool) {
 	t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "")
 	for _, jsonWire := range []bool{false, true} {
 		for _, compressed := range []bool{false, true} {
-			for name, tc := range map[string]traceaigenai.TraceConfig{"capture": {}, "inputs": {HideInputs: true}, "messages": {HideInputMessages: true}, "text": {HideInputText: true}, "parameters": {HideLLMInvocationParameters: true}} {
+			for name, tc := range map[string]traceaigenai.TraceConfig{
+				"capture": {}, "inputs": {HideInputs: true}, "messages": {HideInputMessages: true},
+				"text": {HideInputText: true}, "parameters": {HideLLMInvocationParameters: true},
+				"outputs": {HideOutputs: true}, "output messages": {HideOutputMessages: true},
+				"output text": {HideOutputText: true}, "errors": {HideErrorDetails: genai.Ptr(true)},
+				"error override": {HideInputText: true, HideErrorDetails: genai.Ptr(false)},
+			} {
 				t.Run(fmt.Sprintf("json=%t/gzip=%t/%s", jsonWire, compressed, name), func(t *testing.T) {
 					clearHideEnv(t)
 					ctx := traceaigenai.ContextWithSessionID(context.Background(), "batch-session")
@@ -244,8 +250,16 @@ func testEmbeddingOTLPWire(t *testing.T, batchSize int, apiError bool) {
 					if apiError {
 						want["http.response.status_code"] = "400"
 						want["error.type"] = "INVALID_ARGUMENT"
-						if !tc.HideInputs {
+						hideError := name != "capture" && name != "parameters" && name != "error override"
+						wantDescription := "HTTP 400 INVALID_ARGUMENT"
+						if !hideError {
 							want["error.message"] = "invalid embedding input"
+							wantDescription += ": invalid embedding input"
+						} else if a["error.message"] != "" {
+							t.Error("hidden API error message reached OTLP attributes")
+						}
+						if s.Status.GetMessage() != wantDescription {
+							t.Errorf("OTLP error description=%q want=%q", s.Status.GetMessage(), wantDescription)
 						}
 						if s.Status.GetCode() != tracepb.Status_STATUS_CODE_ERROR || a["embedding.count"] != "" {
 							t.Error("wrong error semantics")
