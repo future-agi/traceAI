@@ -130,14 +130,9 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
-            if not self._self_is_finished:
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                self._self_with_span.record_exception(exception)
-                self._finish_tracing(status=status)
+        except BaseException as exception:
+            # Interruptions also terminate the stream; preserve the error span.
+            _finish_on_exit(self, exception)
             raise
         else:
             self._process_chunk(chunk)

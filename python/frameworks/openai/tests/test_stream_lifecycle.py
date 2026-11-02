@@ -219,6 +219,39 @@ def test_close_failure_preserves_exception_and_finishes(
 
 
 @pytest.mark.parametrize("tracing,hide_errors", [(False, False), (True, True)], indirect=["tracing"])
+def test_sync_stream_interrupt_finishes_before_close(tracing, base_url, hide_errors):
+    class InterruptBody(http.SyncByteStream):
+        def __iter__(self):
+            yield CHUNK_BYTES
+            raise KeyboardInterrupt("synthetic stream interruption")
+
+        def close(self):
+            pass
+
+    def handler(_):
+        return http.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=InterruptBody(),
+        )
+
+    with client(handler, base_url) as sdk:
+        stream = sdk.chat.completions.create(**ARGS, stream=True)
+        assert next(stream).choices[0].delta.content == "partial-answer"
+        with pytest.raises(KeyboardInterrupt, match="synthetic stream interruption"):
+            next(stream)
+        span = only_span(tracing, StatusCode.ERROR)
+        stream.close()
+        stream.close()
+        assert stream.response.is_closed
+
+    assert only_span(tracing, StatusCode.ERROR) is span
+    assert span.attributes["output.value"] == "partial-answer"
+    if hide_errors:
+        assert "synthetic stream interruption" not in span.to_json()
+    else:
+        assert sum(event.name == "exception" for event in span.events) == 1
+
+
+@pytest.mark.parametrize("tracing,hide_errors", [(False, False), (True, True)], indirect=["tracing"])
 def test_cancel_pending_request_finishes(tracing, base_url, hide_errors):
     async def run():
         reached_transport = asyncio.Event()
