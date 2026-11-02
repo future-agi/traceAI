@@ -47,18 +47,43 @@ _CREDENTIAL_KEYS = frozenset(
         "awssessiontoken",
     }
 )
+# Provider-qualified variants retain the same credential meaning. Match the
+# normalized compound name (azure_api_key / azureApiKey), but require a word
+# boundary for bare key/token/secret so monkey and token_count stay visible.
+_CREDENTIAL_SUFFIXES = (
+    "apikey",
+    "apitoken",
+    "accesstoken",
+    "authtoken",
+    "refreshtoken",
+    "clientsecret",
+    "secretkey",
+    "authorization",
+    "password",
+    "credentials",
+    "extraheaders",
+    "defaultheaders",
+    "headers",
+    "cookie",
+    "cookies",
+)
+
+
+def _is_credential_key(key: str) -> bool:
+    normalized = "".join(char for char in key.lower() if char.isalnum())
+    if normalized in _CREDENTIAL_KEYS or normalized.endswith(_CREDENTIAL_SUFFIXES):
+        return True
+    parts = key.replace("-", "_").replace(".", "_").split("_")
+    if len(parts) > 1 and parts[-1].lower() in {"key", "token", "secret"}:
+        return True
+    return key.endswith(("Key", "Token", "Secret"))
 
 
 def sanitize(value: Any) -> Any:
     """Copy payloads; credential configuration never depends on FI_HIDE_* flags."""
     if isinstance(value, Mapping):
         return {
-            key: REDACTED
-            if isinstance(key, str)
-            and (
-                "".join(char for char in key.lower() if char.isalnum())
-                in _CREDENTIAL_KEYS
-            )
+            key: REDACTED if isinstance(key, str) and _is_credential_key(key)
             else sanitize(item)
             for key, item in value.items()
         }

@@ -18,6 +18,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from traceai_dspy import DSPyInstrumentor, _llm_model_name
+from traceai_dspy._privacy import sanitize
 
 HAS_CALLBACKS = importlib.util.find_spec("dspy.utils.callback") is not None
 
@@ -78,6 +79,79 @@ def test_record_credentials_are_redacted_without_mutation(setup, direction, shap
     elif shape == "sequence":
         captured = captured["records"][0]
     assert captured == {"text": "local", "api_key": "__REDACTED__"}
+
+
+def test_credential_matching_preserves_noncredential_fields():
+    fields = {
+        "monkey": "visible",
+        "output_tokens": 12,
+        "token_count": 9,
+        "azureApiKey": "hidden",
+        "openai.api-key": "hidden",
+    }
+    assert sanitize(fields) == {
+        **fields,
+        "azureApiKey": "__REDACTED__",
+        "openai.api-key": "__REDACTED__",
+    }
+    assert fields["azureApiKey"] == "hidden"
+
+
+@pytest.mark.parametrize(
+    "credential_field",
+    [
+        "azure_api_key",
+        "openai_api_key",
+        "azure_access_token",
+        "provider_client_secret",
+        "provider_token",
+        "provider_key",
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_provider_prefixed_credentials_are_redacted_in_records(setup, credential_field, nested):
+    instrumentor, provider, exporter = setup
+    instrumentor.instrument(tracer_provider=provider)
+    secret = "SYNTHETIC_PROVIDER_SECRET"
+    record = dspy.Example(**{credential_field: secret, "text": "safe"})
+    argument = dspy.Example(child=dspy.Prediction(record=record)) if nested else record
+
+    class Program(dspy.Module):
+        def forward(self, data):
+            assert data is argument
+            return dspy.Prediction(result=argument)
+
+    result = Program()(data=argument)
+    assert result.result is argument
+    assert getattr(record, credential_field) == secret
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    for attr in ("input.value", "output.value"):
+        captured = json.loads(spans[0].attributes[attr])
+        assert secret not in json.dumps(captured)
+        if attr == "input.value":
+            captured = captured.get("kwargs", captured)["data"]
+        else:
+            captured = captured["result"]
+        if nested:
+            captured = captured["child"]["record"]
+        assert captured[credential_field] == "__REDACTED__"
+
+
+@pytest.mark.skipif(not hasattr(dspy, "Tool"), reason="DSPy has no Tool")
+def test_provider_prefixed_tool_credentials_are_redacted(setup):
+    instrumentor, provider, exporter = setup
+    instrumentor.instrument(tracer_provider=provider)
+    secret = "SYNTHETIC_TOOL_SECRET"
+
+    def offline_tool(openai_api_key: str):
+        assert openai_api_key == secret
+        return "safe"
+
+    assert dspy.Tool(offline_tool)(openai_api_key=secret) == "safe"
+    spans = exporter.get_finished_spans()
+    assert spans
+    assert all(secret not in str(value) for span in spans for value in span.attributes.values())
 
 
 @pytest.mark.skipif(not HAS_CALLBACKS, reason="DSPy predates callbacks")
