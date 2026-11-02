@@ -36,6 +36,7 @@ from ._stream import (
     EagerSpanAsyncIterator,
     EagerSpanCoroutine,
     EagerSpanIterator,
+    finish_span,
     span_scope,
 )
 
@@ -359,7 +360,12 @@ class _WorkflowWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "close", None):
+                    close()
 
     def arun(
         self,
@@ -532,7 +538,12 @@ class _WorkflowWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "aclose", None):
+                    await close()
 
 
 class _WorkflowExecuteWrapper:
@@ -672,14 +683,18 @@ class _WorkflowExecuteWrapper:
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            async for item in wrapped(*args, **kwargs):
-                yield item
-            return
-
-        if self._already_spanned():
-            async for item in wrapped(*args, **kwargs):
-                yield item
+        if (
+            context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY)
+            or self._already_spanned()
+        ):
+            # This is still an owning async generator when the caller stops early.
+            source = wrapped(*args, **kwargs).__aiter__()
+            try:
+                async for item in source:
+                    yield item
+            finally:
+                if close := getattr(source, "aclose", None):
+                    await close()
             return
 
         workflow_name = (
@@ -710,8 +725,9 @@ class _WorkflowExecuteWrapper:
             ),
         )
 
-        async_iter = wrapped(*args, **kwargs).__aiter__()
+        async_iter = None
         try:
+            async_iter = wrapped(*args, **kwargs).__aiter__()
             while True:
                 ctx_token = None
                 workflow_token = None
@@ -739,7 +755,13 @@ class _WorkflowExecuteWrapper:
             span.record_exception(e)
             raise
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if async_iter is not None:
+                    if close := getattr(async_iter, "aclose", None):
+                        await close()
 
 
 def _set_step_status(span: Any, response: Any) -> None:
