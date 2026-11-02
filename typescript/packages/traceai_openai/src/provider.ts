@@ -1,8 +1,10 @@
+import { diag } from "@opentelemetry/api";
 import { LLMProvider } from "@traceai/fi-semantic-conventions";
 
 // Keep the explicit host mapping aligned with the Python OpenAI instrumentor.
 // A model name identifies a model, not the service receiving the request.
 const HOSTS: Readonly<Record<string, string>> = {
+  "ai-gateway.vercel.sh": "vercel",
   "api.openai.com": LLMProvider.OPENAI,
   "generativelanguage.googleapis.com": LLMProvider.GOOGLE,
   "api.anthropic.com": LLMProvider.ANTHROPIC,
@@ -19,6 +21,7 @@ const HOSTS: Readonly<Record<string, string>> = {
   "api.anannas.ai": "anannas",
   "anannas.ai": "anannas",
   "api.doubleword.ai": "doubleword",
+  "api.fireworks.ai": "fireworks",
 };
 
 const SUFFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -51,7 +54,8 @@ export function providerForResource(resource: unknown): string {
       if (host.endsWith(suffix)) return provider;
     }
   } catch {
-    // Instrumentation must not break a request on an absent or malformed URL.
+    // Do not log URLs or exceptions: either can contain credentials.
+    diag.debug("@traceai/openai: unable to resolve endpoint provider; retaining compatibility attribution");
   }
   // Preserve the historical fallback for custom proxies and local endpoints.
   return LLMProvider.OPENAI;

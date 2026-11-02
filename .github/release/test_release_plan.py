@@ -62,6 +62,65 @@ class PlanTests(unittest.TestCase):
         packages = release_plan.python_packages(self.repo.root)
         self.assertEqual(release_plan.consistency_problems(packages), ["python/frameworks/openai/traceai_openai/version.py: __version__ is 0.1.0 but pyproject.toml says 0.1.10"])
 
+    def test_npm_runtime_version_constants_are_checked(self):
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        packages = release_plan.typescript_packages(self.repo.root)
+        by = {p["name"]: p for p in packages}
+        self.assertEqual(by["@traceai/openai"]["declared"], {"src/version.ts": "0.1.13"})
+        self.assertEqual(by["@traceai/fi-core"]["declared"], {})
+        self.assertEqual(release_plan.consistency_problems(packages), [])
+        write(pkg / "src/version.ts", "export const VERSION = '0.1.0';\n")
+        packages = release_plan.typescript_packages(self.repo.root)
+        self.assertEqual(release_plan.consistency_problems(packages), ["typescript/packages/traceai_openai/src/version.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
+
+    def test_npm_version_constants_are_found_in_any_source_file(self):
+        # A second constant in another module is what the instrumentor may really use.
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        write(pkg / "src/mcp/patch.ts", 'import x from "y";\n\nconst VERSION = "0.1.0";\n')
+        write(pkg / "src/__tests__/fixture.test.ts", 'const VERSION = "9.9.9";\n')
+        by = {p["name"]: p for p in release_plan.typescript_packages(self.repo.root)}
+        self.assertEqual(by["@traceai/openai"]["declared"], {"src/mcp/patch.ts": "0.1.0", "src/version.ts": "0.1.13"})
+        self.assertEqual(release_plan.consistency_problems([by["@traceai/openai"]]), ["typescript/packages/traceai_openai/src/mcp/patch.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
+
+    def test_java_consumer_pinned_to_the_reactor_version(self):
+        # A consumer outside the reactor that pins the SDK resolves the last published JAR if it drifts.
+        write(self.repo.root / "java/pom.xml", '<project xmlns="http://maven.apache.org/POM/4.0.0"><groupId>com.futureagi</groupId>'
+              '<artifactId>traceai-java-parent</artifactId><version>1.0.1</version></project>\n')
+        consumer = self.repo.root / "java/compatibility/spring-ai/pom.xml"
+        write(consumer, '<project><version>1.0.0</version>\n  <traceai.version>1.0.0</traceai.version><!-- x-release-please-version -->\n</project>\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"java": {"release-type": "maven", "extra-files": [
+            {"type": "generic", "path": "compatibility/spring-ai/pom.xml"}]}}}))
+        write(self.repo.root / ".release-please-manifest.json", json.dumps({"java": "1.0.1"}))
+        java = release_plan.other_packages(self.repo.root)[:1]
+        self.assertEqual(java[0]["declared"], {"compatibility/spring-ai/pom.xml": "1.0.0"})
+        self.assertEqual(release_plan.consistency_problems(java), [
+            "java/compatibility/spring-ai/pom.xml: the marked traceAI version is 1.0.0 but java/pom.xml says 1.0.1"])
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, java), [])
+        write(consumer, '<project><version>1.0.1</version>\n  <traceai.version>1.0.1</traceai.version><!-- x-release-please-version -->\n</project>\n')
+        java = release_plan.other_packages(self.repo.root)[:1]
+        self.assertEqual(release_plan.consistency_problems(java), [])
+        # The extra-file path is relative to the package directory, as release-please resolves it.
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"java": {"release-type": "maven", "extra-files": [
+            {"type": "generic", "path": "java/compatibility/spring-ai/pom.xml"}]}}}))
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, java), [
+            "java/compatibility/spring-ai/pom.xml: missing release-please extra-file"])
+
+    def test_npm_runtime_version_needs_marker_and_extra_file(self):
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13";\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"typescript/packages/traceai_openai": {"release-type": "node"}}}))
+        write(self.repo.root / ".release-please-manifest.json", json.dumps({"typescript/packages/traceai_openai": "0.1.13"}))
+        packages = [p for p in release_plan.typescript_packages(self.repo.root) if p["name"] == "@traceai/openai"]
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, packages), [
+            "typescript/packages/traceai_openai/src/version.ts: missing release-please version marker",
+            "typescript/packages/traceai_openai/src/version.ts: missing release-please extra-file",
+        ])
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        write(self.repo.root / "release-please-config.json", json.dumps({"packages": {"typescript/packages/traceai_openai": {"release-type": "node", "extra-files": ["src/version.ts"]}}}))
+        self.assertEqual(release_plan.coverage_problems(self.repo.root, packages), [])
+
     def test_offline_plan_lists_everything_core_first_and_honours_skips(self):
         cfg = {"skip": {"traceai": "the PyPI name belongs to another publisher"}}
         p = release_plan.plan(self.packages, cfg, offline=True)
@@ -72,19 +131,21 @@ class PlanTests(unittest.TestCase):
 
     def test_plan_skips_published_versions(self):
         have = {"traceAI-openai": {"0.1.9", "0.1.10"}, "fi-instrumentation-otel": {"1.0.0"}, "@traceai/openai": None}
-        with patch.object(release_plan, 'published_versions', side_effect=lambda p: have.get(p["name"], set())):
+        with patch.object(release_plan, 'published_versions', side_effect=lambda p, **kw: have.get(p["name"], set())):
             p = release_plan.plan(self.packages, {"skip": {}}, only={"traceAI-openai", "fi-instrumentation-otel", "@traceai/openai"})
         self.assertEqual([e["name"] for e in p["python"]], ["fi-instrumentation-otel"])
         self.assertEqual([(e["name"], e["first_release"]) for e in p["typescript"]], [("@traceai/openai", True)])
         self.assertEqual(p["skipped"], [{"name": "traceAI-openai", "reason": "0.1.10 is already published"}])
 
-    def test_bootstrap_token_only_for_listed_projects_never_published(self):
+    def test_bootstrap_token_for_listed_projects_including_after_their_first_release(self):
+        # A project the token created has no trusted publisher until someone adds one, so its
+        # next upload must still use the token; only removing it from the list switches it over.
         have = {"traceai-agno": None, "traceAI-openai": None, "fi-instrumentation-otel": {"1.0.0"}}
         cfg = {"skip": {}, "pypi_bootstrap_token": ["traceai-agno", "fi-instrumentation-otel"]}
-        with patch.object(release_plan, 'published_versions', side_effect=lambda p: have.get(p["name"], set())):
+        with patch.object(release_plan, 'published_versions', side_effect=lambda p, **kw: have.get(p["name"], set())):
             p = release_plan.plan(self.packages, cfg, only={"traceai-agno", "traceAI-openai", "fi-instrumentation-otel"})
         self.assertEqual({e["name"]: e["pypi_bootstrap"] for e in p["python"]},
-                         {"fi-instrumentation-otel": False, "traceai-agno": True, "traceAI-openai": False})
+                         {"fi-instrumentation-otel": True, "traceai-agno": True, "traceAI-openai": False})
 
     def test_check_mode_exit_codes(self):
         self.assertEqual(release_plan.main(["--check", "--root", str(self.repo.root)]), 0)
