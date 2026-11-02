@@ -107,14 +107,16 @@ if (!process.argv[2]) {
     // A fixed reply cannot echo the prompt. Any prompt on the wire is a mapping leak.
     assert.equal((await ai.generate({ model, prompt })).text, reply);
     await assert.rejects(ai.generate({ model: failingModel, prompt }), { message: marker });
+    assert.equal((await ai.generate({ model, prompt, stepName: 'private-step' })).text, reply);
+    await assert.rejects(ai.generate({ model: failingModel, prompt, stepName: 'private-step-failure' }), { message: marker });
     await flushTracing();
     await processor.forceFlush();
 
     const wire = payloads.flatMap((p) => p.resourceSpans ?? []).flatMap((r) => r.scopeSpans).flatMap((s) => s.spans);
-    assert.equal(wire.length, 7, 'one export per native flow/tool/generate/model span');
+    assert.equal(wire.length, 11, 'one export per native flow/tool/generate/model span');
     assert.equal(new Set(wire.map((s) => s.spanId)).size, wire.length, 'no duplicate spans');
     const errorSpans = wire.filter((s) => s.status?.code === 2);
-    assert.equal(errorSpans.length, 4, 'flow, tool, generate and model retain ERROR status');
+    assert.equal(errorSpans.length, 6, 'flow, tool, both generate and model calls retain ERROR status');
     assert.equal(JSON.stringify(wire).includes(marker), !test.hidden, 'private marker on OTLP wire');
     const enabled = (option, env) => test.config?.[option] ?? (test.env?.[env] === 'true');
     const hiddenInput = test.captureContent === false || contentFlags
@@ -123,7 +125,8 @@ if (!process.argv[2]) {
       .filter(([key]) => key.startsWith('hideOutput')).some(([key, env]) => enabled(key, env));
     assert.equal(JSON.stringify(wire).includes(prompt), !hiddenInput, 'input policy covers embedded request');
     assert.equal(JSON.stringify(wire).includes(reply), !hiddenOutput, 'input hiding retains public model output');
-    for (const span of wire.filter((s) => s.name === 'generate')) {
+    assert.equal(wire.filter((s) => ['private-step', 'private-step-failure'].includes(s.name)).length, 2, 'custom step names reach native telemetry');
+    for (const span of wire.filter((s) => ['generate', 'private-step', 'private-step-failure'].includes(s.name))) {
       const attrs = Object.fromEntries(span.attributes.map((a) => [a.key, a.value.stringValue]));
       if (attrs['genkit:output'] && attrs['genkit:output'] !== '__REDACTED__') {
         assert.equal(attrs['genkit:output'], attrs['output.value'], 'both response representations use the same policy');

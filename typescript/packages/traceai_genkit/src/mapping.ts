@@ -233,7 +233,13 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const subtype = isAction ? source[GenkitAttributes.SUBTYPE] : undefined;
   const isBackgroundModel = subtype === "background-model";
   const isOperation = subtype === "check-operation" || subtype === "cancel-operation";
-  const isGeneration = isModelCall ||
+  // Genkit's generateHelper uses the user-supplied stepName as genkit:name.
+  // Match the native GenerateRequest shape instead of the mutable span label;
+  // other util spans must not have their arbitrary outputs treated as responses.
+  const nativeRequest = parseJson(source[GenkitAttributes.INPUT]);
+  const isNativeGeneration = source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL &&
+    isRecord(nativeRequest) && typeof nativeRequest.model === "string" && Array.isArray(nativeRequest.messages);
+  const isGeneration = isModelCall || isNativeGeneration ||
     (source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL && source[GenkitAttributes.NAME] === "generate") ||
     (subtype === "util" && source[GenkitAttributes.KEY] === "/util/generate");
   const modes = sideModes(policy, isGeneration);

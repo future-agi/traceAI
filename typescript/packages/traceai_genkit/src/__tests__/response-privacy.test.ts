@@ -4,7 +4,7 @@ import { generateAttributes, modelAttributes, toolAttributes } from "./fixtures"
 const prompt = "SYNTHETIC_HIDDEN_PROMPT";
 const error = "SYNTHETIC_PRIVATE_ERROR";
 const reply = "SYNTHETIC_PUBLIC_REPLY";
-const request = { messages: [{ role: "user", content: [{ text: prompt }, { reasoning: prompt }] }], config: { temperature: 0 } };
+const request = { model: "fixture/mock", messages: [{ role: "user", content: [{ text: prompt }, { reasoning: prompt }] }], config: { temperature: 0 } };
 const response = {
   message: { role: "model", content: [{ text: reply }] },
   finishReason: "failed",
@@ -14,8 +14,8 @@ const response = {
   request,
 };
 
-function mapped(policy: Partial<ContentPolicy>, attributes = generateAttributes(), value: unknown = response) {
-  const source = { ...attributes, "genkit:input": JSON.stringify(request), "genkit:output": JSON.stringify(value) };
+function mapped(policy: Partial<ContentPolicy>, attributes = generateAttributes(), value: unknown = response, input: unknown = request) {
+  const source = { ...attributes, "genkit:input": JSON.stringify(input), "genkit:output": JSON.stringify(value) };
   const before = JSON.stringify(source);
   const out = mapGenkitAttributes(source, { policy: { ...SHOW_ALL, ...policy } });
   expect(JSON.stringify(source)).toBe(before);
@@ -67,6 +67,25 @@ describe.each([generateAttributes, modelAttributes])("generation response envelo
       expect(out["genkit:output"]).toBe("__REDACTED__");
       expect(out["output.value"]).toBe("__REDACTED__");
     }
+  });
+});
+
+describe("custom native generation step names", () => {
+  const custom = () => ({ ...generateAttributes(), "genkit:name": "private-step", "genkit:path": "/{private-step,t:util}" });
+
+  it.each(["hideInputs", "hideInputMessages", "hideInputText", "hideErrorDetails"] as const)(
+    "%s protects the response envelope irrespective of stepName", (key) => {
+      const { out, output } = mapped({ [key]: true }, custom());
+      expect(JSON.stringify(out)).not.toContain(error);
+      if (key !== "hideErrorDetails") expect(JSON.stringify(out)).not.toContain(prompt);
+      if (key === "hideInputs" || key === "hideInputMessages") expect(output.request).toBeUndefined();
+      if (key === "hideInputText") expect(output.request.messages[0].content[0].text).toBe("__REDACTED__");
+      expect(output.message).toEqual(response.message);
+    },
+  );
+
+  it("does not interpret a different util's arbitrary content as a generation envelope", () => {
+    expect(mapped({ hideErrorDetails: true }, custom(), response, { query: "other" }).output).toEqual(response);
   });
 });
 
