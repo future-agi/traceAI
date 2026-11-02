@@ -21,6 +21,7 @@ describe("HuggingFaceInstrumentation", () => {
   });
 
   afterEach(async () => {
+    instrumentation.disable();
     memoryExporter.reset();
     await provider.shutdown();
   });

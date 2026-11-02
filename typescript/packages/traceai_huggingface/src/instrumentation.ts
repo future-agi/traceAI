@@ -11,14 +11,13 @@ import {
   SpanKind,
   Attributes,
   SpanStatusCode,
-  Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
@@ -26,35 +25,20 @@ import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  TraceConfig,
+  generateTraceConfig,
 } from "@traceai/fi-core";
 
 const MODULE_NAME = "@huggingface/inference";
 
-/**
- * Flag to check if the huggingface module has been patched
- */
-let _isFIPatched = false;
+const patchedInstrumentations = new Set<HuggingFaceInstrumentation>();
+const CLIENT_CONSTRUCTORS = new Set([
+  "InferenceClient", "HfInference", "InferenceClientEndpoint", "HfInferenceEndpoint",
+]);
 
-/**
- * Function to check if instrumentation is enabled / disabled
- */
+/** Whether an enabled instrumentor has wrapped a module or client. */
 export function isPatched() {
-  return _isFIPatched;
-}
-
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
+  return patchedInstrumentations.size > 0;
 }
 
 // Type definitions for HuggingFace Inference SDK
@@ -152,21 +136,6 @@ interface HFQuestionAnsweringOutput {
   end: number;
 }
 
-interface HFStream<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
-}
-
-interface HFChatCompletionStreamOutput {
-  choices: Array<{
-    delta: {
-      content?: string;
-      role?: string;
-    };
-    index: number;
-    finish_reason?: string;
-  }>;
-}
-
 /**
  * @param instrumentationConfig The config for the instrumentation
  * @param traceConfig The FI trace configuration for masking sensitive information
@@ -174,6 +143,17 @@ interface HFChatCompletionStreamOutput {
 export class HuggingFaceInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private resolvedTraceConfig!: TraceConfig;
+  private readonly clients = new WeakMap<object, object>();
+  private hasWrappedClients = false;
+  private readonly constructors = new WeakMap<object, object>();
+  private readonly moduleSources = new WeakMap<Record<string, unknown>, Record<string, unknown>>();
+  private readonly modules = new Map<Record<string, unknown>, {
+    source: Record<string, unknown>;
+    wrapped: Record<string, unknown>;
+    originals: Map<string, PropertyDescriptor>;
+    replacements: Map<string, unknown>;
+  }>();
 
   constructor({
     instrumentationConfig,
@@ -188,11 +168,30 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.refreshTracer();
   }
 
   public override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    this.refreshTracer();
+    if (this.modules?.size || this.hasWrappedClients) patchedInstrumentations.add(this);
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.resolvedTraceConfig = generateTraceConfig(this._traceConfig);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this.resolvedTraceConfig });
+  }
+
+  public override disable(): void {
+    super.disable();
+    // OTel does not know about modules patched through manuallyInstrument().
+    for (const module of this.modules?.keys() ?? []) this.unpatch(module);
+    patchedInstrumentations.delete(this);
   }
 
   public readonly instrumentationName = "@traceai/huggingface";
@@ -208,142 +207,144 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
   }
 
   /**
-   * Manually instruments the HuggingFace module
+   * Use the returned module, especially with ESM/read-only exports. Mutable
+   * CommonJS exports are also patched in place for existing callers.
    */
-  manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
+  manuallyInstrument<T extends Record<string, unknown>>(module: T): T {
+    return this.patch(module) as T;
   }
 
-  /**
-   * Patches the HuggingFace module
-   */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
-    }
+  /** Wrap an already-created client without changing its immutable task methods. */
+  instrumentClient<T extends object>(client: T): T {
+    return this.wrapClient(client);
+  }
 
-    const instrumentation: HuggingFaceInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the HfInference class
-    const HfInference = module.HfInference as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (HfInference?.prototype) {
-      // Patch textGeneration
-      if (typeof HfInference.prototype.textGeneration === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "textGeneration",
-          this.createTextGenerationWrapper(instrumentation),
-        );
+  private wrapClient<T extends object>(client: T, subclassBase?: object): T {
+    const existing = this.clients.get(client);
+    if (existing) return existing as T;
+    const instrumentation = this;
+    const methods = new Map<PropertyKey, { original: unknown; wrapped: unknown }>();
+    // A proxy of client itself cannot replace a nonconfigurable, nonwritable
+    // property. Inherit from it instead; instanceof and the SDK receiver survive.
+    const target = Object.create(client);
+    const isSubclassMember = (key: PropertyKey): boolean => {
+      if (!subclassBase) return false;
+      for (let proto = Object.getPrototypeOf(client); proto && proto !== subclassBase; proto = Object.getPrototypeOf(proto)) {
+        if (Object.prototype.hasOwnProperty.call(proto, key)) return true;
       }
-
-      // Patch chatCompletion
-      if (typeof HfInference.prototype.chatCompletion === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "chatCompletion",
-          this.createChatCompletionWrapper(instrumentation),
-        );
-      }
-
-      // Patch chatCompletionStream
-      if (typeof HfInference.prototype.chatCompletionStream === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "chatCompletionStream",
-          this.createChatCompletionStreamWrapper(instrumentation),
-        );
-      }
-
-      // Patch featureExtraction (embeddings)
-      if (typeof HfInference.prototype.featureExtraction === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "featureExtraction",
-          this.createFeatureExtractionWrapper(instrumentation),
-        );
-      }
-
-      // Patch summarization
-      if (typeof HfInference.prototype.summarization === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "summarization",
-          this.createSummarizationWrapper(instrumentation),
-        );
-      }
-
-      // Patch translation
-      if (typeof HfInference.prototype.translation === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "translation",
-          this.createTranslationWrapper(instrumentation),
-        );
-      }
-
-      // Patch questionAnswering
-      if (typeof HfInference.prototype.questionAnswering === "function") {
-        this._wrap(
-          HfInference.prototype,
-          "questionAnswering",
-          this.createQuestionAnsweringWrapper(instrumentation),
-        );
-      }
-    }
-
-    // Also patch InferenceClient if it exists
-    const InferenceClient = module.InferenceClient as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (InferenceClient?.prototype) {
-      const methodsToPatch = [
-        "textGeneration",
-        "chatCompletion",
-        "chatCompletionStream",
-        "featureExtraction",
-        "summarization",
-        "translation",
-        "questionAnswering",
-      ];
-
-      methodsToPatch.forEach((method) => {
-        if (typeof InferenceClient.prototype[method] === "function") {
-          const wrapper = this.getWrapperForMethod(method, instrumentation);
-          if (wrapper) {
-            this._wrap(InferenceClient.prototype, method, wrapper);
+      return false;
+    };
+    const wrapped = new Proxy(target, {
+      get(_target, key) {
+        // A subclass initializes public fields on the shadow target and private
+        // brands on the returned proxy, not on the underlying SDK client.
+        const own = Object.getOwnPropertyDescriptor(target, key);
+        const clientOwn = Object.getOwnPropertyDescriptor(client, key);
+        const receiver = own ? target : isSubclassMember(key) ? wrapped : client;
+        const original = own ? Reflect.get(target, key, target) : Reflect.get(client, key, receiver);
+        if (typeof original !== "function" || key === "constructor") return original;
+        const cached = methods.get(key);
+        if (cached && cached.original === original) return cached.wrapped;
+        const bound = original.bind(receiver);
+        const factory = typeof key === "string"
+          ? instrumentation.getWrapperForMethod(key, instrumentation) : null;
+        const method = key === "endpoint"
+          ? (...args: unknown[]) => instrumentation.instrumentClient(bound(...args))
+          : factory ? factory(bound) : bound;
+        methods.set(key, { original, wrapped: method });
+        return method;
+      },
+      set(_target, key, value, receiver) {
+        if (Object.prototype.hasOwnProperty.call(target, key)) {
+          return Reflect.set(target, key, value, receiver);
+        }
+        if (isSubclassMember(key)) {
+          // Private brands live on the returned proxy for subclasses created
+          // from the wrapped constructor. Accessor setters need that receiver.
+          for (let proto = Object.getPrototypeOf(client); proto && proto !== subclassBase; proto = Object.getPrototypeOf(proto)) {
+            const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+            if (descriptor) {
+              return "set" in descriptor
+                ? Reflect.set(client, key, value, wrapped)
+                : Reflect.set(target, key, value, target);
+            }
           }
         }
-      });
-    }
+        return Reflect.set(client, key, value, client);
+      },
+    }) as T;
+    this.clients.set(client, wrapped);
+    this.clients.set(wrapped, wrapped);
+    this.hasWrappedClients = true;
+    if (this.isEnabled()) patchedInstrumentations.add(this);
+    return wrapped;
+  }
 
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
+  private wrapConstructor(original: Function): Function {
+    const existing = this.constructors.get(original);
+    if (existing) return existing as Function;
+    const instrumentation = this;
+    const wrapped: Function = new Proxy(original, {
+      construct(target, args, newTarget): object {
+        return instrumentation.wrapClient(
+          Reflect.construct(target, args, newTarget),
+          newTarget === wrapped || newTarget === target ? undefined : target.prototype,
+        );
+      },
+    });
+    this.constructors.set(original, wrapped);
+    this.constructors.set(wrapped, wrapped);
+    return wrapped;
+  }
 
-    return module;
+  private patch(module: Record<string, unknown>) {
+    module = this.moduleSources.get(module) ?? module;
+    const existing = this.modules.get(module);
+    if (existing) return existing.wrapped;
+    const wrapped: Record<string, unknown> = Object.create(Object.getPrototypeOf(module));
+    const originals = new Map<string, PropertyDescriptor>();
+    const replacements = new Map<string, unknown>();
+    for (const key of Object.getOwnPropertyNames(module)) {
+      const original = module[key];
+      const factory = this.getWrapperForMethod(key, this);
+      const value = typeof original !== "function" ? original
+        : CLIENT_CONSTRUCTORS.has(key) ? this.wrapConstructor(original)
+        : factory ? factory(original.bind(module)) : original;
+      Object.defineProperty(wrapped, key, { value, enumerable: true, configurable: true, writable: true });
+      if (value === original) continue;
+      replacements.set(key, value);
+      const descriptor = Object.getOwnPropertyDescriptor(module, key)!;
+      // CJS 4.x exports are configurable. ESM namespaces and older SDK exports
+      // are immutable, so their caller must use the returned facade.
+      try {
+        if (descriptor.configurable) {
+          Object.defineProperty(module, key, { value, enumerable: descriptor.enumerable, configurable: true, writable: true });
+          originals.set(key, descriptor);
+        } else if (descriptor.writable && Reflect.set(module, key, value)) {
+          originals.set(key, descriptor);
+        }
+      } catch (error) {
+        // Export mutation is best effort; the returned wrapper still works.
+        diag.debug(`${MODULE_NAME}: could not replace export ${key}; using the returned wrapper`, error);
+      }
+    }
+    if (replacements.size === 0) return module;
+    Object.defineProperty(wrapped, "fiPatched", { get: () => this.isEnabled(), configurable: true });
+    const record = { source: module, wrapped, originals, replacements };
+    this.modules.set(module, record);
+    this.modules.set(wrapped, record);
+    this.moduleSources.set(wrapped, module);
+    if (this.isEnabled()) patchedInstrumentations.add(this);
+    if (originals.size < replacements.size) {
+      diag.debug(`${MODULE_NAME}: use the module returned by manuallyInstrument() for read-only exports`);
+    }
+    return wrapped;
   }
 
   private getWrapperForMethod(method: string, instrumentation: HuggingFaceInstrumentation) {
     switch (method) {
+      case "textGenerationStream":
+        return this.createStreamingWrapper(instrumentation, false);
       case "textGeneration":
         return this.createTextGenerationWrapper(instrumentation);
       case "chatCompletion":
@@ -372,7 +373,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedTextGeneration(
         this: unknown,
         args: HFTextGenerationInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const span = instrumentation.fiTracer.startSpan(
           `HuggingFace Text Generation`,
           {
@@ -382,21 +387,24 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(args.parameters ?? {}),
+              // Parameters can contain request text (e.g. stop sequences).
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [SemanticConventions.LLM_INVOCATION_PARAMETERS]: JSON.stringify(args.parameters ?? {}) }
+                : {}),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
-              [`${SemanticConventions.LLM_PROMPTS}.0`]: args.inputs,
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [`${SemanticConventions.LLM_PROMPTS}.0`]: args.inputs } : {}),
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -438,7 +446,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedChatCompletion(
         this: unknown,
         args: HFChatCompletionInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const span = instrumentation.fiTracer.startSpan(
           `HuggingFace Chat Completion`,
           {
@@ -446,21 +458,21 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
+              [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(safeInput(args)) ?? "",
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(args),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -499,60 +511,91 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
     };
   }
 
-  /**
-   * Creates a wrapper for chatCompletionStream
-   */
   private createChatCompletionStreamWrapper(instrumentation: HuggingFaceInstrumentation) {
+    return this.createStreamingWrapper(instrumentation, true);
+  }
+
+  private createStreamingWrapper(instrumentation: HuggingFaceInstrumentation, chat: boolean) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (original: any): any => {
-      return function patchedChatCompletionStream(
-        this: unknown,
-        args: HFChatCompletionInput,
-      ) {
+    return (original: any) => function (this: unknown, ...args: any[]) {
+      const receiver = this;
+      const parent = context.active();
+      // Keep the SDK's synchronous AsyncIterable API, including for-await without
+      // an await. Start lazily so an unconsumed iterator does not leak a span.
+      return (async function* () {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(parent)) {
+          yield* await original.apply(receiver, args);
+          return;
+        }
+        const input = args[0];
         const span = instrumentation.fiTracer.startSpan(
-          `HuggingFace Chat Completion Stream`,
-          {
-            kind: SpanKind.INTERNAL,
-            attributes: {
-              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-              [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
-              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
-              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-              ...getChatInputMessagesAttributes(args),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
-            },
-          },
+          chat ? "HuggingFace Chat Completion Stream" : "HuggingFace Text Generation Stream",
+          { kind: SpanKind.INTERNAL, attributes: {
+            [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+            [SemanticConventions.LLM_MODEL_NAME]: input.model ?? "unknown",
+            [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
+            [SemanticConventions.GEN_AI_OPERATION_NAME]: chat ? "chat" : "text_completion",
+            [SemanticConventions.INPUT_VALUE]: chat ? safelyJSONStringify(safeInput(input)) ?? "" : input.inputs,
+            [SemanticConventions.INPUT_MIME_TYPE]: chat ? MimeType.JSON : MimeType.TEXT,
+            [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(input)) ?? "",
+            ...(chat ? getChatInputMessagesAttributes(input) : {}),
+          } }, parent,
         );
-
-        const execContext = getExecContext(span);
-        const execPromise = safeExecuteInTheMiddle(
-          () => {
-            return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
-            });
-          },
-          (error) => {
-            if (error) {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
+        const active = trace.setSpan(parent, span);
+        let iterator: AsyncIterator<any> | undefined;
+        let complete = false;
+        let content = "";
+        const chatMessages = new Map<number, { index: number; role: string; content: string }>();
+        try {
+          const stream = await context.with(active, () => original.apply(receiver, args));
+          iterator = stream[Symbol.asyncIterator]();
+          while (true) {
+            const item = await context.with(active, () => iterator!.next());
+            if (item.done) { complete = true; break; }
+            const chunk = item.value;
+            if (chat) {
+              for (const choice of chunk.choices ?? []) {
+                const index = choice.index ?? 0;
+                const message = chatMessages.get(index) ?? { index, role: "assistant", content: "" };
+                if (choice.delta?.role) message.role = choice.delta.role;
+                message.content += choice.delta?.content ?? "";
+                chatMessages.set(index, message);
+              }
+              span.setAttributes(getUsageAttributes(chunk));
+              if (chunk.model) span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_MODEL, chunk.model);
+              if (chunk.id) span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_ID, chunk.id);
+            } else {
+              content = chunk.generated_text ?? (content + (chunk.token?.text ?? chunk.choices?.[0]?.text ?? ""));
             }
-          },
-        );
-
-        const wrappedPromise = (execPromise as Promise<HFStream<HFChatCompletionStreamOutput>>).then((stream) => {
-          return wrapChatStream(stream, span);
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
+            yield chunk;
+          }
+          span.setStatus({ code: SpanStatusCode.OK });
+        } catch (error) {
+          span.recordException(error as Error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
           throw error;
-        });
-
-        return context.bind(execContext, wrappedPromise) as Promise<AsyncGenerator<HFChatCompletionStreamOutput>>;
-      };
+        } finally {
+          try {
+            if (!complete && iterator?.return) {
+              await context.with(active, () => iterator!.return!());
+            }
+          } catch (error) {
+            span.recordException(error as Error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+            throw error;
+          } finally {
+            const messages = [...chatMessages.values()].sort((a, b) => a.index - b.index);
+            span.setAttributes({
+              [SemanticConventions.OUTPUT_VALUE]: chat
+                ? messages.length > 1 ? JSON.stringify(messages) : messages[0]?.content ?? ""
+                : content,
+              [SemanticConventions.OUTPUT_MIME_TYPE]: chat && messages.length > 1 ? MimeType.JSON : MimeType.TEXT,
+              ...(chat ? { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" } : {}),
+            });
+            span.end();
+          }
+        }
+      })();
     };
   }
 
@@ -565,7 +608,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedFeatureExtraction(
         this: unknown,
         args: HFFeatureExtractionInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const inputTexts = Array.isArray(args.inputs) ? args.inputs : [args.inputs];
 
         const span = instrumentation.fiTracer.startSpan(
@@ -575,21 +622,21 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
               [SemanticConventions.EMBEDDING_MODEL_NAME]: args.model ?? "unknown",
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
+              [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(safeInput(args)) ?? "",
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-              ...getEmbeddingInputAttributes(inputTexts),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              ...(!instrumentation.resolvedTraceConfig.hideInputs ? getEmbeddingInputAttributes(inputTexts) : {}),
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -605,7 +652,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
           span.setAttributes({
             [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-            ...getEmbeddingOutputAttributes(result, inputTexts.length),
+            ...(!instrumentation.resolvedTraceConfig.hideOutputs ? getEmbeddingOutputAttributes(result, inputTexts.length) : {}),
             [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
           });
           span.setStatus({ code: SpanStatusCode.OK });
@@ -632,7 +679,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedSummarization(
         this: unknown,
         args: HFSummarizationInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const span = instrumentation.fiTracer.startSpan(
           `HuggingFace Summarization`,
           {
@@ -642,19 +693,21 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(args.parameters ?? {}),
+              // Parameters can contain request text (e.g. stop sequences).
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [SemanticConventions.LLM_INVOCATION_PARAMETERS]: JSON.stringify(args.parameters ?? {}) }
+                : {}),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -696,7 +749,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedTranslation(
         this: unknown,
         args: HFTranslationInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const span = instrumentation.fiTracer.startSpan(
           `HuggingFace Translation`,
           {
@@ -707,16 +764,16 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -758,7 +815,11 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
       return function patchedQuestionAnswering(
         this: unknown,
         args: HFQuestionAnsweringInput,
+        ...options: unknown[]
       ) {
+        if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+          return original.apply(this, [args, ...options]);
+        }
         const span = instrumentation.fiTracer.startSpan(
           `HuggingFace Question Answering`,
           {
@@ -769,16 +830,16 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(args.inputs),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [args]);
+              return original.apply(this, [args, ...options]);
             });
           },
           (error) => {
@@ -811,92 +872,24 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
     };
   }
 
-  /**
-   * Un-patches the HuggingFace module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const HfInference = moduleExports.HfInference as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    const methodsToUnpatch = [
-      "textGeneration",
-      "chatCompletion",
-      "chatCompletionStream",
-      "featureExtraction",
-      "summarization",
-      "translation",
-      "questionAnswering",
-    ];
-
-    if (HfInference?.prototype) {
-      methodsToUnpatch.forEach((method) => {
-        if (typeof HfInference.prototype[method] === "function") {
-          this._unwrap(HfInference.prototype, method);
-        }
-      });
+  private unpatch(module: Record<string, unknown>) {
+    const record = this.modules.get(module);
+    if (!record) return;
+    for (const [key, descriptor] of record.originals) {
+      if (record.source[key] === record.replacements.get(key)) {
+        Object.defineProperty(record.source, key, descriptor);
+      }
     }
-
-    const InferenceClient = moduleExports.InferenceClient as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (InferenceClient?.prototype) {
-      methodsToUnpatch.forEach((method) => {
-        if (typeof InferenceClient.prototype[method] === "function") {
-          this._unwrap(InferenceClient.prototype, method);
-        }
-      });
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
+    this.modules.delete(record.source);
+    this.modules.delete(record.wrapped);
+    if (!this.modules.size) patchedInstrumentations.delete(this);
   }
 }
 
-/**
- * Wraps a chat stream to capture the full response
- */
-async function* wrapChatStream(
-  stream: HFStream<HFChatCompletionStreamOutput>,
-  span: Span,
-): AsyncGenerator<HFChatCompletionStreamOutput, void, unknown> {
-  let fullContent = "";
-  const allChunks: HFChatCompletionStreamOutput[] = [];
-
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
-      }
-      yield chunk;
-    }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
-  }
-
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content: fullContent }]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+/** Do not export credentials accepted by the SDK's standalone task functions. */
+function safeInput(input: object): object {
+  const { accessToken: _token, apiKey: _key, headers: _headers, endpointUrl: _endpointUrl, ...rest } = input as Record<string, unknown>;
+  return rest;
 }
 
 /**
@@ -917,17 +910,12 @@ function getChatInputMessagesAttributes(request: HFChatCompletionInput): Attribu
  * Gets output message attributes from chat response (JSON blob)
  */
 function getChatOutputMessagesAttributes(response: HFChatCompletionOutput): Attributes {
-  const choice = response.choices[0];
-  if (!choice) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: choice.message.role };
-  if (choice.message.content) {
-    msg.content = choice.message.content;
-  }
-
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
+  const messages = response.choices.map(choice => {
+    const msg: Record<string, unknown> = { index: choice.index, role: choice.message.role };
+    if (choice.message.content) msg.content = choice.message.content;
+    return msg;
+  });
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" };
 }
 
 /**
