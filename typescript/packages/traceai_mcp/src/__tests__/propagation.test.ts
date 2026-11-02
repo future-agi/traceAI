@@ -387,6 +387,110 @@ for (const [name, webModule, split] of [
   });
 }
 
+it("keeps a shared transport instrumented until the last owner disables", async () => {
+  const second = new MCPInstrumentation();
+  const send = jest.fn(async (_message: unknown) => {});
+  const seen: (string | undefined)[] = [];
+  const transport = {
+    start: async () => {},
+    close: async () => {},
+    send,
+    onmessage: (_message: unknown) => seen.push(activeId()),
+  };
+  try {
+    instrumentation.instrumentTransport(transport);
+    second.instrumentTransport(transport);
+    instrumentation.disable();
+    expect(second.isEnabled()).toBe(true);
+    await transport.start();
+    await context.with(parent(), () =>
+      transport.send({ jsonrpc: "2.0", id: 1, method: "tools/call" }),
+    );
+    transport.onmessage({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { _meta: { traceparent } },
+    });
+    expect(send.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ params: { _meta: { traceparent } } }),
+    );
+    expect(seen).toEqual([traceId]);
+  } finally {
+    second.disable();
+  }
+  expect(transport.send).toBe(send);
+});
+
+it("keeps a shared module prototype patched when a different instance closes", async () => {
+  class Transport {
+    sent: unknown[] = [];
+    async start() {}
+    async send(message: unknown) { this.sent.push(message); }
+    async close() {}
+  }
+  const second = new MCPInstrumentation();
+  const modules = { clientStdioModule: { StdioClientTransport: Transport } };
+  try {
+    instrumentation.manuallyInstrument(modules);
+    second.manuallyInstrument(modules);
+    instrumentation.disable();
+    await new Transport().close();
+    const live = new Transport();
+    await context.with(parent(), () =>
+      live.send({ jsonrpc: "2.0", id: 3, method: "tools/call" }),
+    );
+    expect(live.sent[0]).toEqual(
+      expect.objectContaining({ params: { _meta: { traceparent } } }),
+    );
+    expect(isPatched("@modelcontextprotocol/sdk/client/stdio")).toBe(true);
+  } finally {
+    second.disable();
+  }
+  expect(isPatched("@modelcontextprotocol/sdk/client/stdio")).toBe(false);
+});
+
+it.each(sdkRoutes)("keeps a $name server patched across transport reconnects", async (route) => {
+  const { Server } = require(
+    route.split ? `${route.root}/server` : `${route.root}/server/index.js`,
+  );
+  const schemas = require(
+    route.split ? `${route.root}/core` : `${route.root}/types.js`,
+  );
+  const server = new Server(
+    { name: "reconnecting", version: "1" },
+    { capabilities: { tools: {} } },
+  );
+  const observed: (string | undefined)[] = [];
+  server.setRequestHandler(
+    route.split ? "tools/call" : schemas.CallToolRequestSchema,
+    () => {
+      observed.push(activeId());
+      return { content: [] };
+    },
+  );
+  instrumentation.instrumentServer(server);
+  try {
+    for (let id = 1; id <= 2; id++) {
+      const [, serverTransport] = WireTransport.pair();
+      await server.connect(serverTransport);
+      context.with(ROOT_CONTEXT, () =>
+        serverTransport.onmessage?.({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "test", _meta: { traceparent } },
+        }),
+      );
+      await tick();
+      await serverTransport.close();
+    }
+    expect(observed).toEqual([traceId, traceId]);
+  } finally {
+    await server.close();
+  }
+});
+
 it("preserves frozen messages, metadata, send options and promise identity without double wrapping", async () => {
   const promise = Promise.resolve();
   const send = jest.fn((_message: unknown, _options?: unknown) => promise);
@@ -454,8 +558,11 @@ it.each([false, true])(
       await expect(
         Reflect.apply(server.connect, server, [transport]),
       ).rejects.toBe(error);
-    expect(server.connect).toBe(connect);
+    // A failed connection may be retried on the same explicitly instrumented server.
+    expect(server.connect).not.toBe(connect);
     expect(Object.hasOwn(transport, "send")).toBe(false);
+    instrumentation.disable();
+    expect(server.connect).toBe(connect);
   },
 );
 
@@ -548,8 +655,10 @@ it.each([false, true])(
         expect(text).toContain(traceId);
       }
       await tick();
+      // The modern factory closes only transports; the legacy one closes its
+      // servers. Neither path should require callers to reapply patches.
       for (const server of servers)
-        expect(server.connect).toBe(server.originalConnect);
+        expect(server.connect === server.originalConnect).toBe(!modern);
       await provider.forceFlush();
       expect(spans()).toHaveLength(3);
       expect(

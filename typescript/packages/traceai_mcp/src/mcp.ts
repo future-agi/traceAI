@@ -87,8 +87,13 @@ type ModuleName =
   | (typeof transports)[number][1]
   | "@modelcontextprotocol/server"
   | "@modelcontextprotocol/sdk/server/index";
-const patchedModules = new Map<ModuleName, Set<object>>();
-const wrappedMethods = new WeakSet<Method>();
+const patchedModules = new Map<ModuleName, Map<object, Set<MCPInstrumentation>>>();
+interface SharedPatch {
+  target: object;
+  owners: Set<MCPInstrumentation>;
+  restore(): void;
+}
+const wrappedMethods = new WeakMap<Method, SharedPatch>();
 
 /** Whether at least one copy of the named module is currently instrumented. */
 export function isPatched(moduleName: ModuleName): boolean {
@@ -103,16 +108,16 @@ function isRequest(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value.method === "string" && "id" in value;
 }
 
-interface Patch {
-  restore(): void;
-}
-
 /** Propagates request context; does not create execution spans or capture content. */
 export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfig> {
   // Lazily initialized: InstrumentationBase can apply module hooks during super().
-  private patches?: Map<object, Map<string, Patch>>;
+  // Weak keys let framework-owned per-request servers be collected even when
+  // the framework closes only their transports, while disable can still visit
+  // the live targets through weak references.
+  private patches?: WeakMap<object, Map<string, SharedPatch>>;
+  private patchRefs?: Set<WeakRef<object>>;
+  private targetRefs?: WeakMap<object, WeakRef<object>>;
   private moduleTargets?: Map<object, Set<ModuleName>>;
-  private connectedServers?: WeakMap<object, Set<MCPServer>>;
 
   constructor({
     instrumentationConfig,
@@ -168,7 +173,11 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   /** Restores manual patches as well as auto-instrumentation hooks. */
   public override disable(): void {
     super.disable();
-    for (const target of this.patches?.keys() ?? []) this.restoreTarget(target);
+    for (const ref of this.patchRefs ?? []) {
+      const target = ref.deref();
+      if (target) this.restoreTarget(target);
+      else this.patchRefs?.delete(ref);
+    }
   }
 
   protected override init() {
@@ -247,36 +256,23 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private patchServer(server: MCPServer): void {
-    const instrumentation = this;
     this.patchMethod(
       server,
       "connect",
-      (original) =>
+      (original, owners) =>
         function (this: MCPServer, ...args: unknown[]) {
           const transport = args[0] as MCPTransport;
-          instrumentation.instrumentTransport(transport);
-          // Per-request HTTP factories may close only the transport, not the
-          // high-level server. Release explicitly instrumented instances too.
-          if (instrumentation.patches?.has(this)) {
-            instrumentation.connectedServers ??= new WeakMap();
-            let servers = instrumentation.connectedServers.get(transport);
-            if (!servers)
-              instrumentation.connectedServers.set(
-                transport,
-                (servers = new Set()),
-              );
-            servers.add(this);
-          }
+          for (const owner of owners) owner.instrumentTransport(transport);
           try {
             const result = Reflect.apply(original, this, args);
             // Keep the SDK's promise identity and rejection, but do not retain
             // a failed connection when the caller never reaches close().
-            void Promise.resolve(result).then(undefined, () =>
-              instrumentation.restoreTarget(transport),
-            );
+            void Promise.resolve(result).then(undefined, () => {
+              for (const owner of [...owners]) owner.restoreTarget(transport);
+            });
             return result;
           } catch (error) {
-            instrumentation.restoreTarget(transport);
+            for (const owner of [...owners]) owner.restoreTarget(transport);
             throw error;
           }
         },
@@ -284,7 +280,6 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private patchTransport(transport: MCPTransport): void {
-    const instrumentation = this;
     this.patchMethod(
       transport,
       "send",
@@ -313,10 +308,12 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     this.patchMethod(
       transport,
       "start",
-      (original) =>
+      (original, owners) =>
         function (this: MCPTransport, ...args: unknown[]) {
-          instrumentation.patchReceive(this);
-          instrumentation.releaseOnClose(this);
+          for (const owner of owners) {
+            owner.patchReceive(this);
+            owner.releaseOnClose(this);
+          }
           return Reflect.apply(original, this, args);
         },
     );
@@ -343,16 +340,16 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private releaseOnClose(target: object, method = "close"): void {
-    const instrumentation = this;
     this.patchMethod(
       target,
       method,
-      (original) =>
+      (original, owners) =>
         function (this: object, ...args: unknown[]) {
           try {
             return Reflect.apply(original, this, args);
           } finally {
-            instrumentation.restoreTarget(target);
+            // A prototype patch belongs to the module, not one connection.
+            for (const owner of [...owners]) owner.restoreTarget(this);
           }
         },
     );
@@ -361,15 +358,18 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   private patchMethod(
     target: object,
     key: string,
-    wrap: (original: Method) => Method,
+    wrap: (original: Method, owners: Set<MCPInstrumentation>) => Method,
   ): void {
     const original: unknown = Reflect.get(target, key);
-    if (
-      typeof original !== "function" ||
-      wrappedMethods.has(original as Method)
-    )
-      return;
+    if (typeof original !== "function") return;
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
+    const existing = wrappedMethods.get(original as Method);
+    // An inherited wrapper is shared at its prototype rather than wrapped
+    // again on this instance (which would inject twice).
+    if (existing?.owners.size) {
+      this.trackPatch(existing.target, key, existing);
+      return;
+    }
     let declaredDescriptor = descriptor;
     for (
       let owner = Object.getPrototypeOf(target);
@@ -383,7 +383,8 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     const delegated =
       !!declaredDescriptor &&
       ("get" in declaredDescriptor || "set" in declaredDescriptor);
-    const replacement = wrap(original as Method);
+    const owners = new Set<MCPInstrumentation>();
+    const replacement = wrap(original as Method, owners);
     let active = true;
     // If another instrumentor wraps us later, disable still makes its retained
     // wrapper inert; restoration never overwrites a customer's replacement.
@@ -405,13 +406,9 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
       diag.debug(`MCP instrumentation could not wrap ${key}`);
       return;
     }
-    wrappedMethods.add(guarded);
-    this.patches ??= new Map();
-    let methods = this.patches.get(target);
-    if (!methods) this.patches.set(target, (methods = new Map()));
-    // onmessage may have been replaced between connections.
-    methods.get(key)?.restore();
-    methods.set(key, {
+    const shared: SharedPatch = {
+      target,
+      owners,
       restore: () => {
         active = false;
         if (Reflect.get(target, key) !== guarded) return;
@@ -419,7 +416,31 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
         else if (descriptor) Object.defineProperty(target, key, descriptor);
         else Reflect.deleteProperty(target, key);
       },
-    });
+    };
+    wrappedMethods.set(guarded, shared);
+    this.trackPatch(target, key, shared);
+  }
+
+  private trackPatch(target: object, key: string, shared: SharedPatch): void {
+    this.patches ??= new WeakMap();
+    let methods = this.patches.get(target);
+    if (!methods) {
+      this.patches.set(target, (methods = new Map()));
+      const ref = new WeakRef(target);
+      this.patchRefs ??= new Set();
+      this.targetRefs ??= new WeakMap();
+      this.patchRefs.add(ref);
+      this.targetRefs.set(target, ref);
+    }
+    if (methods.get(key) === shared) return;
+    // onmessage can be replaced between connections; release our old wrapper.
+    const previous = methods.get(key);
+    if (previous) {
+      previous.owners.delete(this);
+      if (!previous.owners.size) previous.restore();
+    }
+    shared.owners.add(this);
+    methods.set(key, shared);
   }
 
   private markModule(target: object, name: ModuleName): void {
@@ -429,20 +450,29 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     if (!names) this.moduleTargets.set(target, (names = new Set()));
     names.add(name);
     let targets = patchedModules.get(name);
-    if (!targets) patchedModules.set(name, (targets = new Set()));
-    targets.add(target);
+    if (!targets) patchedModules.set(name, (targets = new Map()));
+    let owners = targets.get(target);
+    if (!owners) targets.set(target, (owners = new Set()));
+    owners.add(this);
   }
 
   private restoreTarget(target: object): void {
     const methods = this.patches?.get(target);
     if (!methods) return;
-    for (const patch of methods.values()) patch.restore();
+    for (const patch of methods.values()) {
+      patch.owners.delete(this);
+      if (!patch.owners.size) patch.restore();
+    }
     this.patches?.delete(target);
-    for (const name of this.moduleTargets?.get(target) ?? [])
-      patchedModules.get(name)?.delete(target);
+    const ref = this.targetRefs?.get(target);
+    if (ref) this.patchRefs?.delete(ref);
+    this.targetRefs?.delete(target);
+    for (const name of this.moduleTargets?.get(target) ?? []) {
+      const targets = patchedModules.get(name);
+      const owners = targets?.get(target);
+      owners?.delete(this);
+      if (!owners?.size) targets?.delete(target);
+    }
     this.moduleTargets?.delete(target);
-    const servers = this.connectedServers?.get(target);
-    this.connectedServers?.delete(target);
-    for (const server of servers ?? []) this.restoreTarget(server);
   }
 }
