@@ -20,7 +20,7 @@ from traceai_cohere._response_attributes_extractor import (
     _RerankResponseAttributesExtractor,
 )
 from traceai_cohere._stream import _AsyncStream, _Stream
-from traceai_cohere._utils import _finish_tracing, _to_dict
+from traceai_cohere._utils import _chat_response_status, _finish_tracing, _to_dict
 from traceai_cohere._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ class _ChatWrapper(_WithTracer):
             try:
                 response_dict = _to_dict(response)
                 _finish_tracing(
-                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                    status=trace_api.Status(_chat_response_status(response_dict, span)),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response_dict),
                     extra_attributes=self._response_extractor.get_extra_attributes(
@@ -168,7 +168,7 @@ class _AsyncChatWrapper(_WithTracer):
             try:
                 response_dict = _to_dict(response)
                 _finish_tracing(
-                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                    status=trace_api.Status(_chat_response_status(response_dict, span)),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response_dict),
                     extra_attributes=self._response_extractor.get_extra_attributes(

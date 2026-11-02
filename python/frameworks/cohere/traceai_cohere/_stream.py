@@ -10,7 +10,7 @@ from opentelemetry import trace
 from traceai_cohere._response_attributes_extractor import (
     _ChatResponseAttributesExtractor,
 )
-from traceai_cohere._utils import _finish_tracing, _to_dict
+from traceai_cohere._utils import _chat_response_status, _finish_tracing, _to_dict
 from traceai_cohere._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -118,15 +118,7 @@ class _StreamBase:
             result = self._accumulator.result()
             # Cohere yields native failure events without raising. Exhaustion
             # (or close after the terminal event) must not mark those as OK.
-            finish_reason = result.get("finish_reason")
-            failure_reason = finish_reason in ("ERROR", "ERROR_TOXIC", "TIMEOUT")
-            if failure_reason or result.get("error"):
-                status = trace.StatusCode.ERROR
-                self._span._span.set_attribute(
-                    "error.type", finish_reason if failure_reason else "_OTHER"
-                )
-                if result.get("error"):
-                    self._span._span.set_attribute("error.message", result["error"])
+            status = _chat_response_status(result, self._span, default=status)
             extractor = self._response_extractor
             _finish_tracing(
                 status=trace.Status(status),

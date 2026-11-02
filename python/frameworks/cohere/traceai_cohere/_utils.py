@@ -47,6 +47,23 @@ def _flatten(
             yield full_key, value
 
 
+def _chat_response_status(
+    response: Mapping[str, Any],
+    with_span: _WithSpan,
+    default: trace_api.StatusCode = trace_api.StatusCode.OK,
+) -> trace_api.StatusCode:
+    """Classify native generation failures shared by unary and stream calls."""
+    reason = response.get("finish_reason")
+    failed = reason in ("ERROR", "ERROR_TOXIC", "ERROR_LIMIT", "TIMEOUT")
+    if not (failed or response.get("error")):
+        return default
+    with_span._span.set_attribute("error.type", reason if failed else "_OTHER")
+    if response.get("error"):
+        # FITracer applies the effective error-detail privacy policy.
+        with_span._span.set_attribute("error.message", response["error"])
+    return trace_api.StatusCode.ERROR
+
+
 def _finish_tracing(
     status: trace_api.Status,
     with_span: _WithSpan,

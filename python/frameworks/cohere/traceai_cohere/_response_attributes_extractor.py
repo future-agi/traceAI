@@ -14,6 +14,46 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _without_citation_inputs(citations: Any) -> Any:
+    """Remove source payloads, retaining generated citation text and references."""
+    if not isinstance(citations, list):
+        return citations
+    result = []
+    for citation in citations:
+        if isinstance(citation, dict) and isinstance(citation.get("sources"), list):
+            citation = dict(citation)
+            citation["sources"] = [
+                {
+                    key: value
+                    for key, value in source.items()
+                    if key not in ("document", "tool_output")
+                }
+                if isinstance(source, dict)
+                else source
+                for source in citation["sources"]
+            ]
+        result.append(citation)
+    return result
+
+
+def _without_input_echoes(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy only telemetry paths containing known v1/v2 input echoes."""
+    result = {
+        key: value
+        for key, value in response.items()
+        if key not in ("chat_history", "documents")
+    }
+    if "citations" in result:
+        result["citations"] = _without_citation_inputs(result["citations"])
+    message = result.get("message")
+    if isinstance(message, dict) and "citations" in message:
+        result["message"] = {
+            **message,
+            "citations": _without_citation_inputs(message["citations"]),
+        }
+    return result
+
+
 class _ChatResponseAttributesExtractor:
     """Extract span attributes from Cohere chat response."""
 
@@ -90,16 +130,15 @@ class _ChatResponseAttributesExtractor:
         # payloads). Do not export that copy when selective content is hidden.
         if self._config.hide_output_messages or self._config.hide_output_text:
             return
-        # v1 echoes the request in chat_history; input privacy also applies to
-        # that response-side copy. Keep the actual reply and usage available.
+        # v1 echoes history/documents; v2 citation sources echo documents and
+        # tool results. Input privacy applies to those structured copies, not
+        # to the generated answer. Never mutate the caller's response.
         if (
             self._config.hide_inputs
             or self._config.hide_input_messages
             or self._config.hide_input_text
         ):
-            response = {
-                key: value for key, value in response.items() if key != "chat_history"
-            }
+            response = _without_input_echoes(response)
         # Native message-end errors are data, not raised exceptions. Mask their
         # telemetry copy before JSON serialization, never the caller's event.
         if "error" in response:
