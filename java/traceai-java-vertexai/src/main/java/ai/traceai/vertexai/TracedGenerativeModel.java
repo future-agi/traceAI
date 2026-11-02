@@ -4,6 +4,11 @@ import ai.traceai.*;
 import com.google.cloud.vertexai.api.*;
 import com.google.cloud.vertexai.generativeai.GenerativeModel;
 import com.google.cloud.vertexai.generativeai.ResponseStream;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
+import com.google.protobuf.MessageOrBuilder;
+import com.google.protobuf.util.JsonFormat;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -117,7 +122,14 @@ public class TracedGenerativeModel {
             }
             tracer.setInputMessages(span, inputMessages);
 
-            tracer.setRawInput(span, contents);
+            if (!tracer.getConfig().isHideInputs()) {
+                JsonArray raw = new JsonArray();
+                for (Content content : contents) {
+                    JsonElement json = protobufJson(content);
+                    if (json != null) raw.add(json);
+                }
+                tracer.setRawInput(span, raw);
+            }
 
             // Execute request
             GenerateContentResponse response = model.generateContent(contents);
@@ -139,6 +151,10 @@ public class TracedGenerativeModel {
     /**
      * Generates content with streaming and tracing.
      *
+     * <p>The span ends on exhaustion or an iteration failure. When stopping early,
+     * use {@code response.stream()} in try-with-resources to finish tracing.
+     * Closing the Java stream does not cancel the legacy SDK's underlying RPC.</p>
+     *
      * @param text the input text
      * @return a stream of generate content responses
      * @throws IOException if an I/O error occurs
@@ -146,7 +162,7 @@ public class TracedGenerativeModel {
     public ResponseStream<GenerateContentResponse> generateContentStream(String text) throws IOException {
         Span span = tracer.startSpan("Vertex AI Generate Content (Stream)", FISpanKind.LLM);
 
-        try {
+        try (Scope scope = span.makeCurrent()) {
             // Set system attributes
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "vertexai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
@@ -159,13 +175,7 @@ public class TracedGenerativeModel {
             // Get the stream
             ResponseStream<GenerateContentResponse> stream = model.generateContentStream(text);
 
-            // Note: Stream wrapping requires custom implementation
-            // For now, we return the original stream and end the span
-            // A complete implementation would wrap the stream to capture chunks
-            span.setStatus(StatusCode.OK);
-            span.end();
-
-            return stream;
+            return TracedResponseStream.wrap(stream, span, tracer);
 
         } catch (Exception e) {
             tracer.setError(span, e);
@@ -186,6 +196,7 @@ public class TracedGenerativeModel {
 
         try (Scope scope = span.makeCurrent()) {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "vertexai");
+            span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
 
             tracer.setInputValue(span, text);
@@ -248,10 +259,22 @@ public class TracedGenerativeModel {
             );
         }
 
-        tracer.setRawOutput(span, response);
+        if (!tracer.getConfig().isHideOutputs()) {
+            tracer.setRawOutput(span, protobufJson(response));
+        }
     }
 
-    private String extractContentText(Content content) {
+    // Protobuf internals are not the API payload. Serialization is best effort:
+    // a telemetry conversion failure must never fail the customer's request.
+    static JsonElement protobufJson(MessageOrBuilder message) {
+        try {
+            return JsonParser.parseString(JsonFormat.printer().omittingInsignificantWhitespace().print(message));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    static String extractContentText(Content content) {
         if (content == null || content.getPartsList() == null) {
             return "";
         }
