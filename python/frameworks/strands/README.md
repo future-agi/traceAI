@@ -91,5 +91,5 @@ The optional callback handler is a legacy manual event API, not a replacement fo
 ## Resources
 
 - [Strands observability](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/traces/)
-- [Strands model providers](https://strandsagents.com/docs/user-guide/concepts/model-providers/)
+- [Strands model providers](https://strandsagents.com/docs/user-guide/sdk/model-providers/)
 - [Future AGI documentation](https://docs.futureagi.com/)

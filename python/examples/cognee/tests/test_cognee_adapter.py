@@ -159,3 +159,14 @@ def test_example_native_operations_export_once_with_content_policy(tmp_path, cap
     assert all(secret not in wire for secret in (b"synthetic-model-key", b"synthetic-fi-api", b"synthetic-fi-secret"))
     for name, kind in (("memory.retrieve", "RETRIEVER"), ("cognee.observe.acreate_structured_output", "LLM")):
         assert any(s.name == name and any(a.key == "fi.span.kind" and a.value.string_value == kind for a in s.attributes) for s in spans)
+    embeddings = [s for s in spans if any(
+        a.key == "gen_ai.operation.name" and a.value.string_value == "embeddings"
+        for a in s.attributes
+    )]
+    assert embeddings, "Real Cognee embedding operations must emit native spans"
+    for span in embeddings:
+        attrs = {a.key: a.value for a in span.attributes}
+        assert attrs["fi.span.kind"].string_value == "EMBEDDING"
+        assert attrs["gen_ai.provider.name"].string_value == "openai"
+        assert attrs["gen_ai.embeddings.dimension.count"].int_value == 16
+        assert attrs["gen_ai.request.model"].string_value.endswith("text-embedding-3-small")
