@@ -1,296 +1,103 @@
 # @traceai/weaviate
 
-OpenTelemetry instrumentation for [Weaviate](https://weaviate.io/) vector database client in Node.js/TypeScript applications.
+Trace Weaviate collection queries, writes, and aggregations as OpenTelemetry client spans in Future AGI.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/weaviate
-# or
-pnpm add @traceai/weaviate
-# or
-yarn add @traceai/weaviate
+npm install @traceai/weaviate @traceai/fi-core weaviate-client
 ```
 
-## Prerequisites
+Use the `weaviate-client` v3 API. Current client releases require Node.js 22 or later. You also need a running Weaviate instance and a collection to query.
 
-- Node.js >= 18
-- Weaviate client (`weaviate-client` >= 3.0.0)
-- OpenTelemetry SDK configured in your application
+## Trace a collection query
 
-## Quick Start
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment using your Future AGI API credentials.
 
 ```typescript
+import { register, ProjectType } from "@traceai/fi-core";
 import { WeaviateInstrumentation } from "@traceai/weaviate";
 import weaviate from "weaviate-client";
 
-// Initialize instrumentation
+const provider = register({
+  projectName: "weaviate-search",
+  projectType: ProjectType.OBSERVE,
+});
+
 const instrumentation = new WeaviateInstrumentation({
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
+  traceConfig: { hideErrorDetails: true },
 });
-
-// Enable instrumentation
-instrumentation.enable();
-
-// Manually instrument the weaviate module
-instrumentation.manuallyInstrument(weaviate);
-
-// Now all Weaviate operations will be traced
-const client = await weaviate.connectToLocal();
-const collection = client.collections.get("Articles");
-
-// This query will be automatically traced
-const results = await collection.query.nearText("machine learning", {
-  limit: 10,
-});
-```
-
-## Configuration Options
-
-```typescript
-interface WeaviateInstrumentationConfig {
-  // Enable/disable the instrumentation
-  enabled?: boolean;
-
-  // Capture query vectors in span attributes
-  captureQueryVectors?: boolean;
-
-  // Capture result vectors in span attributes
-  captureResultVectors?: boolean;
-
-  // Capture document content
-  captureDocuments?: boolean;
-}
-
-interface TraceConfigOptions {
-  // Mask sensitive input data
-  maskInputs?: boolean;
-
-  // Mask sensitive output data
-  maskOutputs?: boolean;
-}
-```
-
-## Traced Operations
-
-The instrumentation automatically traces the following Weaviate operations:
-
-### Query Operations
-- `nearVector` - Vector similarity search
-- `nearText` - Text-based semantic search
-- `hybrid` - Hybrid search (vector + keyword)
-- `bm25` - BM25 keyword search
-- `fetchObjects` - Fetch objects by criteria
-
-### Data Operations
-- `insert` - Insert single object
-- `insertMany` - Batch insert objects
-- `deleteById` - Delete object by ID
-- `deleteMany` - Batch delete objects
-- `update` - Update object properties
-
-### Aggregation
-- `aggregate` - Aggregation queries
-
-## Span Attributes
-
-Each traced operation includes relevant attributes:
-
-| Attribute | Description |
-|-----------|-------------|
-| `db.system` | Always "weaviate" |
-| `db.operation` | Operation name (e.g., "nearText", "insert") |
-| `db.collection.name` | Collection name |
-| `db.weaviate.limit` | Query limit |
-| `db.weaviate.offset` | Query offset |
-| `db.weaviate.vector_dimensions` | Vector dimensions (when applicable) |
-
-## Real-World Use Cases
-
-### 1. RAG (Retrieval Augmented Generation) Pipeline
-
-```typescript
-import { WeaviateInstrumentation } from "@traceai/weaviate";
-import weaviate from "weaviate-client";
-import OpenAI from "openai";
-
-const instrumentation = new WeaviateInstrumentation();
-instrumentation.enable();
+instrumentation.setTracerProvider(provider);
+// Instrument the mutable default export before creating a client.
 instrumentation.manuallyInstrument(weaviate);
 
 const client = await weaviate.connectToLocal();
-const openai = new OpenAI();
-
-async function ragQuery(userQuestion: string) {
-  // Step 1: Semantic search for relevant context (traced)
-  const articles = client.collections.get("Articles");
-  const searchResults = await articles.query.nearText(userQuestion, {
-    limit: 5,
-    returnProperties: ["title", "content", "source"],
-  });
-
-  // Step 2: Build context from results
-  const context = searchResults.objects
-    .map((obj) => `${obj.properties.title}: ${obj.properties.content}`)
-    .join("\n\n");
-
-  // Step 3: Generate response with context
-  const response = await openai.chat.completions.create({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: `Answer based on this context:\n${context}`,
-      },
-      { role: "user", content: userQuestion },
-    ],
-  });
-
-  return response.choices[0].message.content;
-}
-```
-
-### 2. E-commerce Product Search
-
-```typescript
-async function searchProducts(query: string, filters?: ProductFilters) {
-  const products = client.collections.get("Products");
-
-  // Hybrid search combining semantic + keyword matching
-  const results = await products.query.hybrid(query, {
-    limit: 20,
-    alpha: 0.7, // 70% vector, 30% keyword
-    returnProperties: ["name", "description", "price", "category", "imageUrl"],
-    where: filters?.category
-      ? {
-          path: ["category"],
-          operator: "Equal",
-          valueText: filters.category,
-        }
-      : undefined,
-  });
-
-  return results.objects.map((obj) => ({
-    id: obj.uuid,
-    ...obj.properties,
-    score: obj.metadata?.score,
-  }));
-}
-```
-
-### 3. Document Similarity & Deduplication
-
-```typescript
-async function findDuplicates(documentVector: number[], threshold = 0.95) {
-  const documents = client.collections.get("Documents");
-
-  // Find highly similar documents
-  const results = await documents.query.nearVector(documentVector, {
-    limit: 10,
-    certainty: threshold,
-    returnProperties: ["title", "hash", "createdAt"],
-  });
-
-  return results.objects.filter(
-    (obj) => obj.metadata?.certainty && obj.metadata.certainty >= threshold
-  );
-}
-```
-
-### 4. Multi-tenant Knowledge Base
-
-```typescript
-async function searchKnowledgeBase(
-  tenantId: string,
-  query: string,
-  options?: SearchOptions
-) {
-  const knowledge = client.collections.get("KnowledgeBase");
-
-  // BM25 search with tenant isolation
-  const results = await knowledge.query.bm25(query, {
-    limit: options?.limit ?? 10,
-    returnProperties: ["title", "content", "tags", "updatedAt"],
-    where: {
-      path: ["tenantId"],
-      operator: "Equal",
-      valueText: tenantId,
-    },
-  });
-
-  return results;
-}
-```
-
-### 5. Real-time Content Recommendation
-
-```typescript
-async function getRecommendations(userId: string, limit = 10) {
-  const users = client.collections.get("Users");
-  const content = client.collections.get("Content");
-
-  // Get user's preference vector
-  const user = await users.query.fetchObjectById(userId, {
-    returnProperties: ["preferenceVector"],
-  });
-
-  if (!user?.properties.preferenceVector) {
-    return [];
-  }
-
-  // Find similar content
-  const recommendations = await content.query.nearVector(
-    user.properties.preferenceVector as number[],
-    {
-      limit,
-      returnProperties: ["title", "type", "thumbnailUrl", "duration"],
-      where: {
-        path: ["status"],
-        operator: "Equal",
-        valueText: "published",
-      },
-    }
-  );
-
-  return recommendations.objects;
-}
-```
-
-## Integration with OpenTelemetry
-
-```typescript
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { WeaviateInstrumentation } from "@traceai/weaviate";
-
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: "http://localhost:4318/v1/traces",
-  }),
-  instrumentations: [new WeaviateInstrumentation()],
-});
-
-sdk.start();
-```
-
-## Error Handling
-
-The instrumentation automatically captures errors and exceptions:
-
-```typescript
 try {
-  await collection.query.nearText("search query", { limit: 10 });
-} catch (error) {
-  // Error is automatically recorded in the span with:
-  // - exception.type
-  // - exception.message
-  // - exception.stacktrace
-  // - span status set to ERROR
+  const articles = client.collections.get("Articles");
+  const results = await articles.query.fetchObjects({ limit: 5 });
+  console.log(results.objects.length);
+} finally {
+  await client.close();
+  await provider.shutdown();
 }
 ```
+
+Replace `Articles` with an existing collection. Open the `weaviate-search` project in Future AGI to inspect the `weaviate fetchObjects` span, including its collection name, limit, returned-row count, and duration.
+
+If your application already has an OpenTelemetry provider and exporter, reuse that provider instead of calling `register` again. Pass it to `instrumentation.setTracerProvider(provider)`.
+
+## Connection and collection coverage
+
+The existing `WeaviateInstrumentation` and `manuallyInstrument` entry points support:
+
+- Connection factories: `client`, `connectToLocal`, `connectToCustom`, `connectToWeaviateCloud`, and the legacy `connectToWCD` / `connectToWCS` aliases.
+- Collection factories: `collections.get`, `use`, `create`, `createFromSchema`, and `createFromJson`, where available in your client version.
+- Collection variants: `withTenant` and `withConsistency`, including chained variants.
+
+For native ESM, instrument the **default export** as shown above. ESM named exports are read-only and cannot be manually replaced. CommonJS supports automatic instrumentation when you enable it before requiring `weaviate-client`, or manual instrumentation of the module namespace/default export. Avoid saving factory references before enabling instrumentation.
+
+Clients and collections created before instrumentation are not retroactively instrumented. `disable()` restores patched methods on existing objects and stops tracing. After re-enabling manual instrumentation, call `manuallyInstrument` again and create a new client.
+
+## Traced operations
+
+| API | Methods |
+| --- | --- |
+| `collection.query` | `nearVector`, `nearText`, `hybrid`, `bm25`, `fetchObjects`, `fetchObjectById`, `nearObject` |
+| `collection.data` | `insert`, `insertMany`, `deleteById`, `deleteMany`, `update`, `replace` |
+| `collection.aggregate` and `collection.aggregate.groupBy` | `overAll`, `nearVector`, `nearText`, `nearObject`, `hybrid` (where supported by the client) |
+
+Each supported call creates one span. Connection setup, schema management, generative queries, streaming ingestion, and reference-management methods do not get their own spans.
+
+## Content and privacy
+
+Query text, document properties, and vectors are omitted by default. Error messages and stack traces follow the shared trace configuration; set `hideErrorDetails: true` to omit them, since server errors can contain request data.
+
+These opt-in settings are available under `instrumentationConfig`:
+
+| Setting | Captures |
+| --- | --- |
+| `captureDocuments` | Text search inputs, inserted/updated document properties, and query-result properties |
+| `captureQueryVectors` | `nearVector` input and explicit `hybrid` vectors |
+| `captureResultVectors` | Vectors returned in query results |
+
+Captured content uses `input.value` and `output.value`. `traceConfig.hideInputs` and `traceConfig.hideOutputs` override capture settings. The corresponding environment variables are `FI_HIDE_INPUTS` and `FI_HIDE_OUTPUTS`. Authentication headers, connection options, and filter expressions are not captured.
+
+## Span attributes
+
+| Attribute | Value |
+| --- | --- |
+| `fi.span.kind` | `VECTOR_DB` |
+| `db.system` | `weaviate` |
+| `db.operation.name` | Method name, with `aggregate.` or `aggregate.groupBy.` prefixes for aggregations |
+| `db.collection.name` | Collection name |
+| `db.vector.query.top_k`, `offset`, `certainty`, `distance`, `alpha` | Supplied numeric query options, under the `db.vector.query.` prefix |
+| `db.vector.query.dimensions` | Length of an array passed to `nearVector` |
+| `db.operation.batch_size` | Number of input objects for writes |
+| `db.response.returned_rows` | Number of returned query objects |
+| `db.response.inserted_count` | Successful entries in an `insertMany` result |
+| `db.response.total_count` | Total count returned by an aggregation |
+
+Rejected operations preserve the original error and mark the span as an error. Partial `insertMany` failures also mark the span as an error without exporting per-object error payloads.
 
 ## License
 
