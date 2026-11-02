@@ -26,12 +26,14 @@ public class LangChain4jExample {
                 .hideInputs(true).hideOutputs(true).hideErrorDetails(true)
                 .build());
         try {
-            // Register the official callback once; no model wrapper or Java agent is needed.
-            ChatModel model = OpenAiChatModel.builder()
-                    .apiKey(System.getenv("OPENAI_API_KEY"))
-                    .modelName("gpt-4o-mini")
-                    .listeners(List.of(new LangChain4jListener("openai")))
-                    .build();
+            // The native listener records calls; the optional lifecycle boundary
+            // closes spans when LangChain4j omits a terminal callback on cancellation.
+            ChatModel model = LangChain4jListener.guardLifecycle(ChatModel.class,
+                    OpenAiChatModel.builder()
+                            .apiKey(System.getenv("OPENAI_API_KEY"))
+                            .modelName("gpt-4o-mini")
+                            .listeners(List.of(new LangChain4jListener("openai")))
+                            .build());
             Assistant assistant = AiServices.builder(Assistant.class).chatModel(model).build();
             // Optional synchronous service parent. The model listener records its child calls.
             Assistant traced = TracedAiServices.create(Assistant.class, assistant);
