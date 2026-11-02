@@ -9,7 +9,7 @@ npm install @traceai/lancedb @traceai/fi-core @lancedb/lancedb@0.41.0 \
   @opentelemetry/api @opentelemetry/context-async-hooks
 ```
 
-Use Node.js 20 or later. This integration supports `@lancedb/lancedb` versions `>=0.4.20 <=0.41.0`; the example uses 0.41.0. Older SDK versions expose vector search as `table.vectorSearch(...)` rather than `table.search(...)`.
+Use Node.js 22 or later for this example: `@lancedb/lancedb@0.41.0` requires Node.js 22. This integration supports `@lancedb/lancedb` versions `>=0.4.20 <=0.41.0`; the 0.4.20 minimum supports Node.js 18 or later but uses `table.vectorSearch(...)` rather than the example's `table.search(...)`.
 
 ## Send traces to Future AGI
 
@@ -94,7 +94,7 @@ Query vectors, record contents, filter expressions, connection URIs, and credent
 
 ## Enable and disable
 
-`instrumentation.disable()` restores the original module and prototype methods, including hooks installed manually. `instrumentation.enable()` restores owned hooks for existing connections and builders. Operations already in flight finish their existing spans.
+`instrumentation.disable()` restores the original module and prototype methods when no other registered LanceDB instrumentation remains active. Otherwise, tracing continues through the remaining instance. `instrumentation.enable()` restores hooks for existing connections and builders. Operations already in flight finish their existing spans.
 
 ## Troubleshooting
 

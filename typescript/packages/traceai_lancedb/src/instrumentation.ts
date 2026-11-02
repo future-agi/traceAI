@@ -19,6 +19,12 @@ interface Patch {
   key: PropertyKey;
   descriptor: PropertyDescriptor;
   wrapper: Method;
+  owners: Set<LanceDBInstrumentation>;
+  group: ModuleGroup;
+}
+interface ModuleGroup {
+  owners: Set<LanceDBInstrumentation>;
+  patches: Set<Patch>;
 }
 interface QueryMetadata {
   tableName?: string;
@@ -28,6 +34,10 @@ interface QueryMetadata {
 // Ownership is per method, not a single global flag: a second instrumentor must
 // neither double-wrap nor undo the first instrumentor's hooks.
 const activePatches = new Set<Patch>();
+// Separate LanceDB module instances (including different SDK versions) do not share owners.
+const moduleGroups = new WeakMap<object, ModuleGroup>();
+const queryMetadata = new WeakMap<object, QueryMetadata>();
+const tableNames = new WeakMap<object, string>();
 export function isPatched(): boolean {
   return activePatches.size > 0;
 }
@@ -42,8 +52,9 @@ export interface LanceDBInstrumentationConfig extends InstrumentationConfig {
 export class LanceDBInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   private _patches: Patch[] = [];
-  private _queries = new WeakMap<object, QueryMetadata>();
-  private _tables = new WeakMap<object, string>();
+  private _groups = new Set<ModuleGroup>();
+  private _queries = queryMetadata;
+  private _tables = tableNames;
 
   constructor({ instrumentationConfig, traceConfig }: {
     instrumentationConfig?: LanceDBInstrumentationConfig;
@@ -64,7 +75,11 @@ export class LanceDBInstrumentation extends InstrumentationBase {
     super.enable();
     // InstrumentationBase calls enable from its constructor, before our fields
     // exist. Later enables also restore hooks installed by manuallyInstrument.
-    for (const patch of this._patches ?? []) this.install(patch);
+    for (const group of this._groups ?? []) group.owners.add(this);
+    for (const patch of this._patches ?? []) {
+      patch.owners.add(this);
+      this.install(patch);
+    }
   }
 
   public override disable(): void {
@@ -80,23 +95,34 @@ export class LanceDBInstrumentation extends InstrumentationBase {
     if (!this.isEnabled()) return moduleExports;
     // Node ESM namespace objects are immutable; their CJS default is mutable.
     const target = moduleExports?.default?.connect ? moduleExports.default : moduleExports;
-    const installed = this.wrap(target, "connect", (original) => {
-      const instrumentation = this;
-      return function (...args: any[]) {
-        const result = original.apply(this, args);
-        if (!instrumentation.isEnabled()) return result;
-        return result.then((connection: any) => {
-          if (instrumentation.isEnabled()) instrumentation.instrumentConnection(connection);
-          return connection;
-        });
-      };
-    });
+    if (!target || (typeof target !== "object" && typeof target !== "function")) return moduleExports;
+    const group = moduleGroups.get(target) ?? { owners: new Set(), patches: new Set() };
+    const installed = this.wrap(target, "connect", (original, owner) => function (...args: any[]) {
+      const result = original.apply(this, args);
+      return result.then((connection: any) => {
+        owner()?.instrumentConnection(connection, group);
+        return connection;
+      });
+    }, group);
+    if (installed) {
+      moduleGroups.set(target, group);
+      this._groups.add(group);
+      group.owners.add(this);
+      // Adopt already-discovered connection, table, and query methods too.
+      for (const p of group.patches) {
+        p.owners.add(this);
+        if (!this._patches.includes(p)) this._patches.push(p);
+      }
+    }
     if (!installed) this._diag.warn("LanceDB: no writable connect export; pass the CommonJS module or its ESM default before connecting.");
     return moduleExports;
   }
 
   private unpatch(): void {
+    for (const group of this._groups ?? []) group.owners.delete(this);
     for (const patch of this._patches ?? []) {
+      patch.owners.delete(this);
+      if (patch.owners.size) continue;
       if (Object.getOwnPropertyDescriptor(patch.target, patch.key)?.value === patch.wrapper) {
         Object.defineProperty(patch.target, patch.key, patch.descriptor);
       }
@@ -106,6 +132,7 @@ export class LanceDBInstrumentation extends InstrumentationBase {
 
   private install(patch: Patch): void {
     const current = Object.getOwnPropertyDescriptor(patch.target, patch.key);
+    if (current?.value === patch.wrapper && activePatches.has(patch)) return;
     if (!current || current.value !== patch.descriptor.value || current.get !== patch.descriptor.get) return;
     if ([...activePatches].some(p => p.target === patch.target && p.key === patch.key)) return;
     Object.defineProperty(patch.target, patch.key, {
@@ -115,86 +142,107 @@ export class LanceDBInstrumentation extends InstrumentationBase {
     activePatches.add(patch);
   }
 
-  private wrap(target: any, key: PropertyKey, factory: (original: Method) => Method): boolean {
+  private wrap(target: any, key: PropertyKey,
+    factory: (original: Method, owner: () => LanceDBInstrumentation | undefined) => Method,
+    group: ModuleGroup): boolean {
     // Find the concrete owner rather than the exported abstract Connection/Table.
     while (target && !Object.prototype.hasOwnProperty.call(target, key)) target = Object.getPrototypeOf(target);
     if (!target) return false;
     const descriptor = Object.getOwnPropertyDescriptor(target, key)!;
     const original = target[key];
     if (typeof original !== "function" || (!descriptor.configurable && !descriptor.writable)) return false;
-    if ([...activePatches].some(p => p.target === target && p.key === key)) return true;
-    const existing = this._patches.find(p => p.target === target && p.key === key &&
+    const active = [...activePatches].find(p => p.target === target && p.key === key);
+    if (active) {
+      if (active.group !== group) return false;
+      active.owners.add(this);
+      if (!this._patches.includes(active)) this._patches.push(active);
+      return true;
+    }
+    const existing = [...group.patches].find(p => p.target === target && p.key === key &&
       p.descriptor.value === descriptor.value && p.descriptor.get === descriptor.get);
-    const patch = existing ?? { target, key, descriptor, wrapper: factory(original) };
-    if (!existing) this._patches.push(patch);
+    const patch: Patch = existing ?? { target, key, descriptor, wrapper: original, owners: new Set(), group };
+    if (!existing) {
+      patch.wrapper = factory(original, () => [...patch.owners].find(p => p.isEnabled()));
+      group.patches.add(patch);
+    }
+    for (const owner of group.owners) {
+      patch.owners.add(owner);
+      if (!owner._patches.includes(patch)) owner._patches.push(patch);
+    }
+    if (!this._patches.includes(patch)) this._patches.push(patch);
+    patch.owners.add(this);
     this.install(patch);
     return activePatches.has(patch);
   }
 
-  private instrumentConnection(connection: any): void {
+  private instrumentConnection(connection: any, group: ModuleGroup): void {
     for (const operation of ["createTable", "openTable", "dropTable", "tableNames"]) {
-      const instrumentation = this;
-      this.wrap(connection, operation, original => function (...args: any[]) {
-        if (!instrumentation.isEnabled()) return original.apply(this, args);
+      this.wrap(connection, operation, (original, owner) => function (...args: any[]) {
+        const instrumentation = owner();
+        if (!instrumentation) return original.apply(this, args);
         const tableName = typeof args[0] === "string" ? args[0] : args[0]?.name;
         return instrumentation.run(this, operation, () => original.apply(this, args), { tableName }, false,
           (result) => {
             if (instrumentation.isEnabled() && (operation === "createTable" || operation === "openTable")) {
-              instrumentation.instrumentTable(result, tableName);
+              instrumentation.instrumentTable(result, tableName, group);
             }
             return result;
           });
-      });
+      }, group);
     }
   }
 
-  private instrumentTable(table: any, tableName?: string): void {
+  private instrumentTable(table: any, tableName: string | undefined, group: ModuleGroup): void {
     if (typeof tableName === "string") this._tables.set(table, tableName);
-    const instrumentation = this;
     for (const operation of ["add", "update", "delete", "countRows"]) {
-      this.wrap(table, operation, original => function (...args: any[]) {
+      this.wrap(table, operation, (original, owner) => function (...args: any[]) {
+        const instrumentation = owner();
+        if (!instrumentation) return original.apply(this, args);
         const attributes: Attributes = {};
         if (operation === "add" && Array.isArray(args[0])) attributes["db.operation.batch_size"] = args[0].length;
         return instrumentation.run(this, operation, () => original.apply(this, args), { tableName: instrumentation._tables.get(this) ?? this.name }, false, undefined, attributes);
-      });
+      }, group);
     }
     for (const factory of ["query", "search", "vectorSearch"]) {
-      this.wrap(table, factory, original => function (...args: any[]) {
+      this.wrap(table, factory, (original, owner) => function (...args: any[]) {
         // Builders are synchronous. Do not start a span until execution begins.
         const query = original.apply(this, args);
-        if (instrumentation.isEnabled()) {
+        const instrumentation = owner();
+        if (instrumentation) {
           const vector = args[0];
           instrumentation.instrumentQuery(query, {
             tableName: instrumentation._tables.get(this) ?? this.name,
             ...(Array.isArray(vector) && typeof vector[0] === "number" ? { dimensions: vector.length } : {}),
-          });
+          }, group);
         }
         return query;
-      });
+      }, group);
     }
   }
 
-  private instrumentQuery(query: any, metadata: QueryMetadata): void {
+  private instrumentQuery(query: any, metadata: QueryMetadata, group: ModuleGroup): void {
     if (!query || typeof query !== "object") return;
     this._queries.set(query, { ...this._queries.get(query), ...metadata });
-    const instrumentation = this;
     for (const factory of ["nearestTo", "nearestToText", "fullTextSearch", "limit"]) {
-      this.wrap(query, factory, original => function (...args: any[]) {
+      this.wrap(query, factory, (original, owner) => function (...args: any[]) {
         const result = original.apply(this, args);
-        if (instrumentation.isEnabled()) {
+        const instrumentation = owner();
+        if (instrumentation) {
           const metadata = { ...instrumentation._queries.get(this) };
           if (factory === "limit" && Number.isFinite(args[0])) metadata.limit = args[0];
           if (factory === "nearestTo" && Array.isArray(args[0])) metadata.dimensions = args[0].length;
-          instrumentation.instrumentQuery(result, metadata);
+          instrumentation.instrumentQuery(result, metadata, group);
         }
         return result;
-      });
+      }, group);
     }
     for (const terminal of ["toArray", "toArrow", "execute", Symbol.asyncIterator]) {
-      this.wrap(query, terminal, original => function (...args: any[]) {
-        return instrumentation.run(this, "search", () => original.apply(this, args),
-          instrumentation._queries.get(this), true);
-      });
+      this.wrap(query, terminal, (original, owner) => function (...args: any[]) {
+        const instrumentation = owner();
+        return instrumentation
+          ? instrumentation.run(this, "search", () => original.apply(this, args), instrumentation._queries.get(this), true)
+          : original.apply(this, args);
+      }, group);
     }
   }
 

@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 it("runs the README example and exports query metadata without record content", async () => {
   const root = resolve(__dirname, "../..");
   const readme = await readFile(join(root, "README.md"), "utf8");
+  expect(readme).toMatch(/Use Node\.js 22 or later/);
   const source = readme.match(/```javascript\n([\s\S]*?)\n```/)![1];
   const script = join(root, "scripts", `.readme-example-${process.pid}.mjs`);
   const dir = await mkdtemp(join(tmpdir(), "traceai-lancedb-docs-"));

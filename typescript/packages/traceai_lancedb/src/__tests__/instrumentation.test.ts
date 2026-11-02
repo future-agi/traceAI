@@ -154,6 +154,59 @@ describe("LanceDB instrumentation lifecycle", () => {
     } finally { second.disable(); }
   });
 
+  it("hands off existing and new connections when the first instrumentor disables", async () => {
+    const second = new LanceDBInstrumentation();
+    const secondExporter = new InMemorySpanExporter();
+    const secondProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(secondExporter)] });
+    second.setTracerProvider(secondProvider);
+    try {
+      second.manuallyInstrument(module);
+      const existing = await module.connect();
+      await existing.openTable("vectors");
+      exporter.reset();
+      instrumentation.disable();
+      expect(isPatched()).toBe(true);
+      await table.countRows();
+      await table.search([1, 2]).toArray();
+      const fresh = await module.connect();
+      const freshTable = await fresh.openTable("vectors");
+      await freshTable.countRows();
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      expect(secondExporter.getFinishedSpans().map(span => span.name)).toEqual([
+        "lancedb countRows", "lancedb search", "lancedb openTable", "lancedb countRows",
+      ]);
+      instrumentation.enable();
+      await table.countRows();
+      expect(secondExporter.getFinishedSpans()).toHaveLength(5);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      second.disable();
+      await table.countRows();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      instrumentation.disable();
+      expect(isPatched()).toBe(false);
+    } finally { second.disable(); await secondProvider.shutdown(); }
+  });
+
+  it("does not hand off a different LanceDB module to an unrelated provider", async () => {
+    const secondExporter = new InMemorySpanExporter();
+    const secondProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(secondExporter)] });
+    const second = new LanceDBInstrumentation();
+    second.setTracerProvider(secondProvider);
+    const other = { connect: async () => ({ openTable: async () => ({ name: "other", countRows: async () => 7 }) }) };
+    try {
+      second.manuallyInstrument(other);
+      const otherTable = await (await other.connect()).openTable();
+      exporter.reset();
+      secondExporter.reset();
+      instrumentation.disable();
+      expect(isPatched()).toBe(true);
+      await table.countRows();
+      await otherTable.countRows();
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      expect(secondExporter.getFinishedSpans().map(span => span.name)).toEqual(["lancedb countRows"]);
+    } finally { second.disable(); await secondProvider.shutdown(); }
+  });
+
   it("warns instead of reporting successful instrumentation for unsupported exports", () => {
     instrumentation.disable();
     const fresh = new LanceDBInstrumentation();
