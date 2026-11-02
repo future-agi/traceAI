@@ -167,6 +167,10 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    // InstrumentationBase calls enable() before our traceConfig is assigned.
+    // Rebuild even when the globally registered tracer has not changed, so the
+    // first manually or automatically instrumented call honors privacy options.
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
   }
 
   public override enable(): void {
@@ -185,7 +189,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
   }
 
   /**
-   * Manually instruments the Google GenAI module
+   * Manually instruments the legacy @google/generative-ai module.
+   * The modern @google/genai SDK is not supported by this compatibility adapter.
    */
   manuallyInstrument(module: Record<string, unknown>) {
     this.patch(module);
@@ -198,7 +203,24 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
     module: Record<string, unknown> & { fiPatched?: boolean },
     moduleVersion?: string,
   ) {
-    if (module?.fiPatched || _isFIPatched) {
+    const GenerativeModel = module?.GenerativeModel as {
+      prototype?: Record<string, unknown>;
+    } | undefined;
+
+    // Do not mark an unsupported module as patched: doing so also prevents a
+    // subsequent call with the real legacy SDK from installing its wrappers.
+    if (!GenerativeModel?.prototype || ![
+      "generateContent", "embedContent", "batchEmbedContents",
+    ].some((method) => typeof GenerativeModel.prototype?.[method] === "function")) {
+      diag.warn(
+        "@traceai/google-genai only instruments the legacy @google/generative-ai SDK; " +
+        "the supplied module has no supported GenerativeModel methods. " +
+        "The modern @google/genai SDK is not supported by this adapter.",
+      );
+      return module;
+    }
+
+    if (module.fiPatched || _isFIPatched) {
       return module;
     }
 
@@ -213,11 +235,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
       });
     }
 
-    // Patch GenerativeModel class
-    const GenerativeModel = module.GenerativeModel as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
+    // Patch the legacy GenerativeModel class.
     if (GenerativeModel?.prototype) {
       // Patch generateContent method
       if (typeof GenerativeModel.prototype.generateContent === 'function') {

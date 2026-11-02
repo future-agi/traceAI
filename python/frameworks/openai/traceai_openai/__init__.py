@@ -14,6 +14,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+from traceai_openai._client_provider import set_client_provider as set_client_provider
 from traceai_openai._request import _AsyncRequest, _Request
 from traceai_openai.package import _instruments
 from traceai_openai.version import __version__

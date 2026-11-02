@@ -1,415 +1,111 @@
-# @traceai/google-genai
+# @traceai/google-genai — legacy SDK compatibility
 
-OpenTelemetry instrumentation for [Google Generative AI](https://ai.google.dev/) (Gemini).
+Trace existing Node.js applications that use **`@google/generative-ai`** with Future AGI.
 
-## Features
+> This package does **not** instrument the modern **`@google/genai`** SDK, despite its name. Google ended support for `@google/generative-ai` on November 30, 2025. Keep this adapter for existing legacy applications; use Google's [SDK migration guide](https://ai.google.dev/gemini-api/docs/migrate) when moving to the modern SDK. Replacing the Google SDK alone does not preserve tracing through this adapter.
 
-- Automatic tracing of Gemini generateContent calls
-- Embeddings API tracing (embedContent, batchEmbedContents)
-- Support for all Gemini models
-- Function calling tracing
-- Token usage tracking
-- Multimodal content support
-- Error handling and exception recording
+The package name and `GoogleGenAIInstrumentation` entry point remain unchanged for compatibility. No modern-SDK tracing is implied by them.
 
-## Installation
+## Supported operations
+
+| Legacy SDK method | Tracing |
+| --- | --- |
+| `GenerativeModel.generateContent` | Non-streaming generation, text input/output, model, returned token usage and errors |
+| `GenerativeModel.embedContent` | Embedding input and returned vector |
+| `GenerativeModel.batchEmbedContents` | Batch embedding inputs and returned vectors |
+| `generateContentStream`, `ChatSession.sendMessage`, `ChatSession.sendMessageStream`, `countTokens` | Not instrumented |
+| Modern `@google/genai` APIs | Not supported |
+
+Model availability is controlled by Google, not this adapter. Choose a model available to your account rather than copying a retired model ID.
+
+## Install
+
+For an existing legacy application using Node.js 20 or later:
 
 ```bash
-npm install @traceai/google-genai
-# or
-pnpm add @traceai/google-genai
-# or
-yarn add @traceai/google-genai
+npm install @traceai/google-genai @traceai/fi-core @google/generative-ai@0.24.1
 ```
 
-## Quick Start
+## Trace a generation
 
-```typescript
-import { GoogleGenAIInstrumentation } from "@traceai/google-genai";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+Set `FI_API_KEY` and `FI_SECRET_KEY` from your Future AGI project, `GOOGLE_API_KEY` from Google, and `GOOGLE_MODEL` to a model available to your account. Supply credentials through your environment or secret manager; do not commit them.
 
-// Initialize OpenTelemetry
-const provider = new NodeTracerProvider();
-const exporter = new OTLPTraceExporter({
-  url: "http://localhost:4318/v1/traces",
-});
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
+Save this as `trace.cjs`:
 
-// Initialize Google GenAI instrumentation
-const genAIInstrumentation = new GoogleGenAIInstrumentation();
-genAIInstrumentation.manuallyInstrument(require("@google/generative-ai"));
+```javascript
+const { register, ProjectType } = require("@traceai/fi-core");
+const { GoogleGenAIInstrumentation } = require("@traceai/google-genai");
+const google = require("@google/generative-ai");
 
-// Use Google GenAI as normal - all calls are automatically traced
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-
-const result = await model.generateContent("Explain quantum computing");
-console.log(result.response.text());
-```
-
-## Configuration
-
-### Basic Configuration
-
-```typescript
-const instrumentation = new GoogleGenAIInstrumentation({
-  instrumentationConfig: {
-    enabled: true,
-  },
-});
-```
-
-### With Trace Configuration
-
-```typescript
-const instrumentation = new GoogleGenAIInstrumentation({
-  instrumentationConfig: {
-    enabled: true,
-  },
-  traceConfig: {
-    hideInputs: false,  // Set to true to hide sensitive input data
-    hideOutputs: false, // Set to true to hide sensitive output data
-  },
-});
-```
-
-### With TraceAI Core
-
-```typescript
-import { register, ProjectType } from "@traceai/fi-core";
-import { GoogleGenAIInstrumentation } from "@traceai/google-genai";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-
-// 1. Register TraceAI Core TracerProvider
-const tracerProvider = register({
-  projectName: "my-gemini-app",
-  projectType: ProjectType.OBSERVE,
-  sessionName: "gemini-session-" + Date.now(),
-});
-
-// 2. Register instrumentation BEFORE importing Google GenAI SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider,
-  instrumentations: [new GoogleGenAIInstrumentation()],
-});
-
-// 3. NOW import and use Google GenAI
-const { GoogleGenerativeAI } = await import("@google/generative-ai");
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-// 4. Use normally - all calls are traced
-const result = await model.generateContent("Hello!");
-
-// 5. Shutdown when done
-await tracerProvider.shutdown();
-```
-
-## Supported Models
-
-### Generative Models
-
-| Model | ID | Description |
-|-------|-----|-------------|
-| Gemini 1.5 Pro | `gemini-1.5-pro` | Most capable, 1M context |
-| Gemini 1.5 Flash | `gemini-1.5-flash` | Fast and versatile |
-| Gemini 1.5 Flash-8B | `gemini-1.5-flash-8b` | Small and fast |
-| Gemini 1.0 Pro | `gemini-1.0-pro` | Previous generation |
-| Gemini Pro Vision | `gemini-pro-vision` | Multimodal (legacy) |
-
-### Embedding Models
-
-| Model | ID | Dimensions |
-|-------|-----|------------|
-| Embedding 001 | `embedding-001` | 768 |
-| Text Embedding 004 | `text-embedding-004` | 768 |
-
-## Real-World Use Cases
-
-### 1. Basic Text Generation
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-
-async function generateText(prompt: string) {
-  const result = await model.generateContent(prompt);
-  return result.response.text();
-}
-
-const answer = await generateText("What is machine learning?");
-console.log(answer);
-```
-
-### 2. Multi-Turn Conversation
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-async function chat(history: { role: string; parts: { text: string }[] }[], userMessage: string) {
-  history.push({ role: "user", parts: [{ text: userMessage }] });
-
-  const result = await model.generateContent({
-    contents: history,
+async function main() {
+  const provider = register({
+    projectName: "gemini-legacy-app",
+    projectType: ProjectType.OBSERVE,
   });
+  const instrumentation = new GoogleGenAIInstrumentation();
+  instrumentation.setTracerProvider(provider);
+  instrumentation.manuallyInstrument(google);
 
-  const response = result.response.text();
-  history.push({ role: "model", parts: [{ text: response }] });
-
-  return response;
+  try {
+    const client = new google.GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+    const model = client.getGenerativeModel({ model: process.env.GOOGLE_MODEL });
+    const result = await model.generateContent("Explain quantum computing in one sentence.");
+    console.log(result.response.text());
+  } finally {
+    await provider.shutdown();
+  }
 }
 
-// Usage
-const history: { role: string; parts: { text: string }[] }[] = [];
-const answer1 = await chat(history, "Hello! What's the capital of France?");
-const answer2 = await chat(history, "What's the population there?");
-```
-
-### 3. System Instructions
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-pro",
-  systemInstruction: "You are a helpful coding assistant. Always provide code examples.",
-});
-
-const result = await model.generateContent(
-  "How do I read a file in Python?"
-);
-console.log(result.response.text());
-```
-
-### 4. Function Calling
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-
-const tools = [
-  {
-    functionDeclarations: [
-      {
-        name: "get_weather",
-        description: "Get the current weather for a location",
-        parameters: {
-          type: "object",
-          properties: {
-            location: {
-              type: "string",
-              description: "City name",
-            },
-            unit: {
-              type: "string",
-              enum: ["celsius", "fahrenheit"],
-            },
-          },
-          required: ["location"],
-        },
-      },
-    ],
-  },
-];
-
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-pro",
-  tools,
-});
-
-const result = await model.generateContent(
-  "What's the weather like in Tokyo?"
-);
-
-const functionCall = result.response.candidates?.[0]?.content.parts.find(
-  (part) => part.functionCall
-);
-if (functionCall?.functionCall) {
-  console.log("Function:", functionCall.functionCall.name);
-  console.log("Arguments:", functionCall.functionCall.args);
-}
-```
-
-### 5. Embeddings for Semantic Search
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-
-async function getEmbedding(text: string) {
-  const result = await embeddingModel.embedContent(text);
-  return result.embedding.values;
-}
-
-async function semanticSearch(query: string, documents: string[]) {
-  const queryEmbedding = await getEmbedding(query);
-
-  const docEmbeddings = await Promise.all(
-    documents.map((doc) => getEmbedding(doc))
-  );
-
-  // Calculate cosine similarities
-  const similarities = docEmbeddings.map((docEmb, i) => ({
-    document: documents[i],
-    score: cosineSimilarity(queryEmbedding, docEmb),
-  }));
-
-  return similarities.sort((a, b) => b.score - a.score);
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dot / (magA * magB);
-}
-```
-
-### 6. Batch Embeddings
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-
-async function batchEmbed(texts: string[]) {
-  const result = await embeddingModel.batchEmbedContents({
-    requests: texts.map((text) => ({
-      content: { parts: [{ text }] },
-    })),
-  });
-
-  return result.embeddings.map((e) => e.values);
-}
-
-// Usage
-const embeddings = await batchEmbed([
-  "First document text",
-  "Second document text",
-  "Third document text",
-]);
-```
-
-### 7. Generation Configuration
-
-```typescript
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-pro",
-  generationConfig: {
-    temperature: 0.7,
-    topP: 0.9,
-    topK: 40,
-    maxOutputTokens: 2000,
-    stopSequences: ["END"],
-  },
-});
-
-const result = await model.generateContent("Write a creative story");
-```
-
-### 8. Safety Settings
-
-```typescript
-import { HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
-
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-pro",
-  safetySettings: [
-    {
-      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    },
-    {
-      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-    },
-  ],
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });
 ```
 
-## Traced Attributes
+Run `node trace.cjs`, then open the **gemini-legacy-app** project in Future AGI and look for the **Google GenAI generateContent** span. Shutdown flushes queued spans before the process exits. Manual instrumentation also works when the SDK has already been imported; use one instrumentation instance per process.
 
-The instrumentation captures the following attributes:
+### Use an existing OpenTelemetry collector
 
-| Attribute | Description |
-|-----------|-------------|
-| `llm.system` | Always "google_generative_ai" |
-| `llm.provider` | Always "google_generative_ai" |
-| `llm.model_name` | The model used |
-| `llm.input_messages` | Input messages with role and content |
-| `llm.output_messages` | Output messages with role and content |
-| `llm.invocation_parameters` | Generation config |
-| `llm.token_count.prompt` | Number of input tokens |
-| `llm.token_count.completion` | Number of output tokens |
-| `llm.token_count.total` | Total tokens used |
-| `llm.tools` | Tool/function definitions |
-| `embedding.model_name` | Embedding model used |
-| `embedding.embeddings` | Embedding text and vectors |
+If your application already sends OTLP to a collector, use that tracer provider instead of creating a second one. For a standalone OpenTelemetry 2.x setup, install:
 
-## Integration with TraceAI Platform
+```bash
+npm install @opentelemetry/sdk-trace-node@^2 @opentelemetry/sdk-trace-base@^2 @opentelemetry/exporter-trace-otlp-http@^0.202
+```
 
-```typescript
-import { GoogleGenAIInstrumentation } from "@traceai/google-genai";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Resource } from "@opentelemetry/resources";
+Replace the `register(...)` provider declaration above with:
+
+```javascript
+const { NodeTracerProvider } = require("@opentelemetry/sdk-trace-node");
+const { SimpleSpanProcessor } = require("@opentelemetry/sdk-trace-base");
+const { OTLPTraceExporter } = require("@opentelemetry/exporter-trace-otlp-http");
 
 const provider = new NodeTracerProvider({
-  resource: new Resource({
-    "service.name": "my-gemini-app",
-    "deployment.environment": "production",
-  }),
+  spanProcessors: [new SimpleSpanProcessor(new OTLPTraceExporter())],
 });
-
-const exporter = new OTLPTraceExporter({
-  url: "https://api.traceai.com/v1/traces",
-  headers: {
-    Authorization: `Bearer ${process.env.TRACEAI_API_KEY}`,
-  },
-});
-
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
 provider.register();
-
-const instrumentation = new GoogleGenAIInstrumentation();
-instrumentation.manuallyInstrument(require("@google/generative-ai"));
 ```
 
-## Running Examples
+Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to your collector's full HTTP traces URL, for example `http://localhost:4318/v1/traces`. Keep `setTracerProvider`, manual instrumentation and shutdown from the example. Do not register both providers for the same application.
 
-The `examples/` directory contains real-world examples:
+## Protect prompt and response content
 
-```bash
-cd examples
-cp .env.example .env
-# Edit .env with your API keys
+Content is captured by default. To hide inputs and outputs, replace the instrumentation constructor in the example with:
 
-pnpm install
-pnpm run example
+```javascript
+const instrumentation = new GoogleGenAIInstrumentation({
+  traceConfig: { hideInputs: true, hideOutputs: true },
+});
 ```
 
-## E2E Testing
+See [trace configuration](../fi-core/README.md) for embedding-vector and error-detail controls. These settings affect telemetry, not your application's own logs.
 
-Run E2E tests with real API keys:
+## Troubleshooting
 
-```bash
-GOOGLE_API_KEY=your_key pnpm test -- --testPathPattern=e2e
-```
+- **No spans with `@google/genai`:** this is the legacy adapter. It cannot instrument `GoogleGenAI` or `client.models`. Do not pass that module to `manuallyInstrument`.
+- **No spans for streaming or chat-session calls:** use the support table above; those legacy methods are not wrapped. A direct non-streaming `generateContent` call can include conversation history in `contents`.
+- **`provider.addSpanProcessor is not a function`:** OpenTelemetry 2.x takes `spanProcessors` in its constructor, as shown above.
+- **Model not found:** check Google's current model availability and update `GOOGLE_MODEL`.
 
 ## License
 
 Apache-2.0
-
-## Related Packages
-
-- [@traceai/openai](../traceai_openai) - OpenAI instrumentation
-- [@traceai/anthropic](../traceai_anthropic) - Anthropic instrumentation
-- [@traceai/groq](../traceai_groq) - Groq instrumentation
-- [@traceai/mistral](../traceai_mistral) - Mistral instrumentation
-- [@traceai/cohere](../traceai_cohere) - Cohere instrumentation
-- [@traceai/fi-core](../fi-core) - Core tracing utilities

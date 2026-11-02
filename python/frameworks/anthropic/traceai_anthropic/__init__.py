@@ -8,6 +8,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import (
     BaseInstrumentor,
 )  # type: ignore[attr-defined]
+from traceai_anthropic._native import _NativeTracing
 from traceai_anthropic._wrappers import (
     _AsyncCompletionsWrapper,
     _AsyncMessagesWrapper,
@@ -33,6 +34,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         "_original_messages_count_tokens",
         "_original_async_messages_create",
         "_original_protect",
+        "_native_tracing",
         "_instruments",
         "_tracer",
     )
@@ -57,6 +59,12 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             logger.warning("ai-evaluation is not installed, please install it to trace protect")
             Protect = None
 
+        # When the SDK's own spans (anthropic>=1.14) would reach the same provider,
+        # the instrumentor keeps its Messages spans and turns the SDK's off per call;
+        # see _native.py.
+        native_tracing = _NativeTracing(kwargs.get("tracer_provider"))
+        native_tracing.install()
+        self._native_tracing = native_tracing
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -93,21 +101,27 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         wrap_function_wrapper(
             module="anthropic.resources.messages",
             name="Messages.create",
-            wrapper=_MessagesWrapper(tracer=self._tracer),
+            wrapper=_MessagesWrapper(
+                tracer=self._tracer, native_tracing=native_tracing
+            ),
         )
 
         self._original_async_messages_create = AsyncMessages.create
         wrap_function_wrapper(
             module="anthropic.resources.messages",
             name="AsyncMessages.create",
-            wrapper=_AsyncMessagesWrapper(tracer=self._tracer),
+            wrapper=_AsyncMessagesWrapper(
+                tracer=self._tracer, native_tracing=native_tracing
+            ),
         )
 
         self._original_messages_count_tokens = Messages.count_tokens
         wrap_function_wrapper(
             module="anthropic.resources.messages",
             name="Messages.count_tokens",
-            wrapper=_MessagesCountTokensWrapper(tracer=self._tracer),
+            wrapper=_MessagesCountTokensWrapper(
+                tracer=self._tracer, native_tracing=native_tracing
+            ),
         )
 
         if Protect is not None:
@@ -150,3 +164,8 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
         if self._original_protect is not None:
             Protect.protect = self._original_protect
+
+        native_tracing = getattr(self, "_native_tracing", None)
+        if native_tracing is not None:
+            native_tracing.uninstall()
+            self._native_tracing = None

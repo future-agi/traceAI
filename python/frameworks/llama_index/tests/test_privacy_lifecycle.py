@@ -1,0 +1,263 @@
+"""Offline regressions: hide flags on embedding text and RAG content, and
+streamed chat at the declared core floor.
+
+Everything runs on LlamaIndex's real dispatcher with MockLLM, MockEmbedding and
+the real OpenAI LLM over an in-process HTTP transport. Spans go through the
+instrumentor's FITracer, so TraceConfig masking applies exactly as it does on
+the register() path.
+"""
+
+import json
+import logging
+import time
+
+import pytest
+from fi_instrumentation import TraceConfig
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
+from llama_index.core.embeddings import MockEmbedding
+from llama_index.core.llms import MockLLM
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+from traceai_llamaindex import LlamaIndexInstrumentor
+
+
+QUERY = "synthetic-private-query"
+DOCUMENT = "synthetic-private-document"
+HANDLER_LOGGER = "traceai_llamaindex._handler"
+
+
+@pytest.fixture
+def trace(monkeypatch):
+    # The hide flags must come only from the TraceConfig under test.
+    for name in (
+        "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES",
+        "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT",
+        "FI_HIDE_EMBEDDING_VECTORS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = LlamaIndexInstrumentor()
+
+    def start(config=None):
+        instrumentor.instrument(tracer_provider=provider, config=config or TraceConfig())
+        return exporter
+
+    try:
+        yield start
+    finally:
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        provider.shutdown()
+
+
+def _embed():
+    model = MockEmbedding(embed_dim=3)
+    assert model.get_query_embedding(QUERY) == [0.5, 0.5, 0.5]
+    assert model.get_text_embedding_batch([DOCUMENT]) == [[0.5, 0.5, 0.5]]
+
+
+def _embedding_spans(exporter):
+    # The public entry points; the private _get_*_embedding spans they open
+    # carry no embedding attributes.
+    spans = [
+        span for span in exporter.get_finished_spans()
+        if span.name.endswith((".get_query_embedding", ".get_text_embedding_batch"))
+    ]
+    assert len(spans) == 2, [s.name for s in exporter.get_finished_spans()]
+    assert all(s.attributes["gen_ai.span.kind"] == "EMBEDDING" for s in spans)
+    return spans
+
+
+def test_embedding_text_is_recorded_by_default(trace):
+    exporter = trace()
+    _embed()
+    texts = {
+        span.attributes["embedding.embeddings.0.embedding.text"]
+        for span in _embedding_spans(exporter)
+    }
+    assert texts == {QUERY, DOCUMENT}
+    for span in _embedding_spans(exporter):
+        assert tuple(span.attributes["embedding.embeddings.0.embedding.vector"]) == (0.5, 0.5, 0.5)
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_input_text", "hide_input_messages"])
+def test_input_hide_flags_hide_embedding_text(trace, flag):
+    exporter = trace(TraceConfig(**{flag: True}))
+    _embed()
+    for span in _embedding_spans(exporter):
+        attrs = dict(span.attributes)
+        # Every flag that the docs say hides embedding input text keeps it out of
+        # the embedding text key and of the embedding span's output.
+        assert QUERY not in str(attrs.get("embedding.embeddings.0.embedding.text", ""))
+        assert DOCUMENT not in str(attrs.get("embedding.embeddings.0.embedding.text", ""))
+        assert QUERY not in str(attrs.get("output.value", ""))
+        assert DOCUMENT not in str(attrs.get("output.value", ""))
+        # The vector itself is not input text and stays visible.
+        assert tuple(attrs["embedding.embeddings.0.embedding.vector"]) == (0.5, 0.5, 0.5)
+    if flag == "hide_inputs":
+        # FI_HIDE_INPUTS alone (no FI_HIDE_OUTPUTS) keeps the text out of every span.
+        for span in exporter.get_finished_spans():
+            assert QUERY not in str(dict(span.attributes))
+            assert DOCUMENT not in str(dict(span.attributes))
+
+
+def test_hide_embedding_vectors_hides_every_vector_copy(trace):
+    exporter = trace(TraceConfig(hide_embedding_vectors=True))
+    _embed()
+    for span in _embedding_spans(exporter):
+        attrs = dict(span.attributes)
+        assert "embedding.embeddings.0.embedding.vector" not in attrs
+        assert "0.5" not in str(attrs.get("output.value", ""))
+        assert "0.5" not in str(attrs.get("embedding.embeddings", ""))
+        assert attrs["embedding.embeddings.0.embedding.text"] in (QUERY, DOCUMENT)
+
+
+def test_input_and_output_flags_hide_a_rag_query(trace):
+    # The guide's setting: FI_HIDE_INPUTS and FI_HIDE_OUTPUTS together. The
+    # retrieved document text and the question reach several spans (retrieval
+    # documents, prompt template variables, embedding text); none may export them.
+    from llama_index.core import Document, VectorStoreIndex
+
+    exporter = trace(TraceConfig(hide_inputs=True, hide_outputs=True))
+    embed_model = MockEmbedding(embed_dim=3)
+    index = VectorStoreIndex.from_documents(
+        [Document(text=DOCUMENT)], embed_model=embed_model
+    )
+    engine = index.as_query_engine(llm=MockLLM(max_tokens=2), embed_model=embed_model)
+    assert str(engine.query(QUERY)).strip() == "text text"
+
+    spans = exporter.get_finished_spans()
+    names = {span.name for span in spans}
+    # The spans that carried the text before the core masked these keys.
+    assert any(name.endswith(".retrieve") for name in names), names
+    assert any(name.endswith(".predict") for name in names), names
+    for span in spans:
+        exported = [str(dict(span.attributes))]
+        exported += [str(dict(event.attributes or {})) for event in span.events]
+        for text in exported:
+            assert DOCUMENT not in text, span.name
+            assert QUERY not in text, span.name
+
+
+def _sse(*parts):
+    events = []
+    for index, part in enumerate(parts):
+        chunk = {
+            "id": "synthetic-stream", "object": "chat.completion.chunk", "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": part} if index == 0 else {"content": part},
+                "finish_reason": "stop" if index == len(parts) - 1 else None,
+            }],
+        }
+        events.append(f"data: {json.dumps(chunk)}\n\n")
+    events.append("data: [DONE]\n\n")
+    return "".join(events).encode()
+
+
+@pytest.fixture
+def offline_openai(monkeypatch):
+    """The real llama-index OpenAI LLM over an in-process HTTP transport."""
+    openai_base = pytest.importorskip("llama_index.llms.openai.base")
+    httpx = pytest.importorskip("httpx")
+
+    def respond(request):
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        assert body["messages"] == [{"role": "user", "content": QUERY}]
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content=_sse("synthetic-", "answer"),
+        )
+
+    real_client = openai_base.SyncOpenAI
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        def client(**kwargs):
+            kwargs["http_client"] = http_client
+            return real_client(**kwargs)
+
+        monkeypatch.setattr(openai_base, "SyncOpenAI", client)
+        yield openai_base.OpenAI(
+            model="gpt-4o-mini", api_key="synthetic-local-only",
+            api_base="https://offline.invalid/v1", max_retries=0,
+        )
+
+
+def _stream_chat_spans(exporter):
+    return [s for s in exporter.get_finished_spans() if s.name == "OpenAI.stream_chat"]
+
+
+def test_stream_chat_span_ends_when_the_stream_finishes(trace, offline_openai, caplog):
+    exporter = trace()
+    caplog.set_level(logging.WARNING, logger=HANDLER_LOGGER)
+    stream = offline_openai.stream_chat([ChatMessage(role=MessageRole.USER, content=QUERY)])
+    assert not _stream_chat_spans(exporter)  # still streaming
+    chunks = list(stream)
+    assert chunks[-1].message.content == "synthetic-answer"
+    # No 60 s sweeper wait and no shutdown: the span is exported as the stream ends.
+    span, = _stream_chat_spans(exporter)
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes["gen_ai.span.kind"] == "LLM"
+    assert span.attributes["gen_ai.input.messages.0.message.content"] == QUERY
+    assert span.attributes["gen_ai.output.messages.0.message.content"] == "synthetic-answer"
+    errors = [r for r in caplog.records if r.name == HANDLER_LOGGER and r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
+
+
+def test_a_failing_event_handler_does_not_strand_a_streaming_span(trace, offline_openai, monkeypatch):
+    from traceai_llamaindex import _handler
+
+    exporter = trace()
+
+    def broken(self, *args, **kwargs):
+        raise RuntimeError("synthetic handler failure")
+
+    monkeypatch.setattr(_handler._Span, "_process_messages", broken)
+    chunks = list(offline_openai.stream_chat([ChatMessage(role=MessageRole.USER, content=QUERY)]))
+    assert chunks[-1].message.content == "synthetic-answer"
+    span, = _stream_chat_spans(exporter)
+    assert span.attributes["gen_ai.span.kind"] == "LLM"
+
+
+def test_chat_at_any_core_logs_no_handler_errors(trace, caplog):
+    exporter = trace()
+    caplog.set_level(logging.WARNING, logger=HANDLER_LOGGER)
+    messages = [ChatMessage(role=MessageRole.USER, content=QUERY)]
+    response = MockLLM(max_tokens=2).chat(messages)
+    assert response.message.content == "text text"
+    chat = [s for s in exporter.get_finished_spans() if s.name.endswith(".chat")]
+    assert chat
+    assert any(QUERY in str(s.attributes.get("input.value", "")) for s in chat)
+    errors = [r for r in caplog.records if r.name == HANDLER_LOGGER and r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
+
+
+def test_chat_engine_stream_logs_no_handler_errors(trace, caplog):
+    from llama_index.core.chat_engine import SimpleChatEngine
+
+    exporter = trace()
+    caplog.set_level(logging.WARNING, logger=HANDLER_LOGGER)
+    response = SimpleChatEngine.from_defaults(llm=MockLLM(max_tokens=2)).stream_chat(QUERY)
+    # Older cores yield a trailing space.
+    assert "".join(response.response_gen).strip() == "text text"
+
+    # The engine writes the reply to its history, and emits StreamChatEndEvent,
+    # on a background thread.
+    def history_spans():
+        return [
+            s for s in exporter.get_finished_spans()
+            if s.name.endswith(".write_response_to_history")
+        ]
+
+    deadline = time.monotonic() + 5
+    while not history_spans() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    span, = history_spans()
+    assert span.status.status_code == StatusCode.OK
+    errors = [r for r in caplog.records if r.name == HANDLER_LOGGER and r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
