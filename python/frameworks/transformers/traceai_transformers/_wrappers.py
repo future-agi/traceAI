@@ -233,6 +233,13 @@ class _TracedDataset(ObjectProxy):
     def __next__(self):
         return next(self._self_cursor)
 
+    def __reduce_ex__(self, protocol):
+        # Pickle the native dataset, not this proxy: its invocation retains a
+        # tracer provider and parent context which cannot safely cross a spawn
+        # boundary (and may contain unpicklable locks or private metadata).
+        # Inference in a deserialized DataLoader worker is deliberately untraced.
+        return self.__wrapped__.__reduce_ex__(protocol)
+
     def close(self):
         # Explicit close ends the current traversal; a later iter() retains
         # the underlying dataset's own ability (or inability) to start again.

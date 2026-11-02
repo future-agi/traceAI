@@ -4,6 +4,7 @@ import copy
 import gc
 import gzip
 import os
+import pickle
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -308,6 +309,42 @@ def test_lazy_dataset_protocols(request, telemetry, task, batch_size, protocol):
         assert span.status.status_code.name == "OK"
         assert "input.value" not in span.attributes
         assert "output.value" not in span.attributes
+
+
+class _SpawnDataset(torch.utils.data.Dataset):
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, index):
+        if index >= 2:
+            raise IndexError
+        return ["hello", "world"][index]
+
+
+@pytest.mark.parametrize("execution", ["pickle", "spawn"])
+def test_lazy_dataset_worker_serialization(features, telemetry, execution):
+    # Spawn serializes the returned PipelineIterator before running inference.
+    # A tracer provider, live span and parent context must not cross that boundary.
+    baseline = features(_SpawnDataset(), num_workers=0)
+    exporter = instrument(telemetry)
+    with telemetry[1].get_tracer("test").start_as_current_span("parent"):
+        actual = features(_SpawnDataset(), num_workers=0)
+    assert spans(exporter) == []
+    if execution == "pickle":
+        expected = pickle.loads(pickle.dumps(baseline))
+        restored = pickle.loads(pickle.dumps(actual))
+        assert isinstance(restored, type(expected))
+        assert_same(list(restored), list(expected))
+    else:
+        def consume(result):
+            loader = torch.utils.data.DataLoader(
+                result, batch_size=None, num_workers=1,
+                multiprocessing_context="spawn", timeout=45,
+            )
+            return list(loader)
+        assert_same(consume(actual), consume(baseline))
+    # The worker cannot safely export through the parent's in-memory provider.
+    assert spans(exporter) == []
 
 
 @pytest.mark.parametrize("end", ["reset", "close", "error"])
