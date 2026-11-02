@@ -12,7 +12,7 @@ Send Vercel AI SDK's native OpenTelemetry spans to Future AGI. This package adds
 ## Install
 
 ```bash
-npm install @traceai/vercel ai@7.0.159 @ai-sdk/openai@4.0.106 @ai-sdk/otel@1.0.159 \
+npm install @traceai/vercel ai@7.0.161 @ai-sdk/openai@4.0.107 @ai-sdk/otel@1.0.161 \
   @opentelemetry/api@1.9.1 @opentelemetry/sdk-trace-node@1.30.1 \
   @opentelemetry/resources@1.30.1 @opentelemetry/exporter-trace-otlp-http@0.57.2
 ```
