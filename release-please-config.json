@@ -1100,6 +1100,14 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "python/frameworks/openrouter": {
+      "release-type": "python",
+      "component": "traceai-openrouter",
+      "package-name": "traceAI-openrouter",
+      "extra-files": [
+        "traceai_openrouter/version.py"
+      ]
     }
   }
 }
