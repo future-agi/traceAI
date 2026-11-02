@@ -60,6 +60,20 @@ jobs:
             sudo env PATH="$PATH" unshare --net -- bash -eu -c \
               'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
               bash "$(id -un)" "$NODE" "$SCRIPT" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/privacy-contract.mjs" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+          done
+      # SDK 6 abort/error finalization is an upstream gap, documented in README.
+      # test/lifecycle.mjs also reproduces it on the floor; do not claim floor coverage here.
+      - name: Native abort and transport-error lifecycle (SDK 7)
+        if: matrix.sdk != 'floor'
+        run: |
+          NODE="$(command -v node)"
+          for PROCESSOR in simple batch; do
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/lifecycle.mjs" "$RUNNER_TEMP/consumer" "$PROCESSOR"
           done
       - name: Run customer README snippets
         if: matrix.sdk != 'floor'

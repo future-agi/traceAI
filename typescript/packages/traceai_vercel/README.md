@@ -4,7 +4,7 @@ Send Vercel AI SDK's native OpenTelemetry spans to Future AGI. This package adds
 
 ## Compatibility
 
-- AI SDK 6 (starting at 6.0.0): enable `experimental_telemetry` on each call.
+- AI SDK 6 (starting at 6.0.0): enable `experimental_telemetry` on each call. Aborted streams and mid-stream transport errors can leave native spans unfinished; use AI SDK 7 if you need complete traces for those calls. Flushing cannot recover a span the SDK never ends.
 - AI SDK 7: register the official `@ai-sdk/otel` integration once, and use `telemetry` on each call. Use `OpenTelemetry`, not both it and `LegacyOpenTelemetry`.
 - The Future AGI processors extend OpenTelemetry SDK **1.x**. Keep the SDK/exporter versions below together; do not mix these processors with SDK 2.x.
 - Use a Node.js server, not an Edge or browser runtime. The AI SDK 7 setup below requires Node.js 22 or newer.
@@ -80,7 +80,16 @@ Run `node generate.mjs`, then open **Observe → vercel-app** in Future AGI. You
 
 For streaming calls, finish consuming the stream before flushing or shutting down tracing.
 
-Input/output recording is disabled above. Enable it only for data you are allowed to store. These switches are not complete redaction: errors and custom telemetry attributes can still contain sensitive data.
+Input/output recording is disabled above. Enable it only for data you are allowed to store.
+
+The processors also read Future AGI privacy settings when constructed. Set them before initializing tracing:
+
+- `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` remove input and output payloads, including native and normalized messages and tool data.
+- `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, and `FI_HIDE_INPUT_IMAGES` also remove the corresponding full serialized payloads. This deliberately removes more than the selected modality so another copy cannot expose it.
+- `FI_HIDE_EMBEDDING_VECTORS=true` removes native and normalized vectors without hiding the embedding text.
+- `FI_HIDE_ERROR_DETAILS=true` removes error messages, exception stack traces, and status descriptions, retaining error status and exception type. It defaults to true when input/output, message, or text hiding is enabled; an explicit `false` overrides that default.
+
+Native request-header attributes are always excluded, including custom authentication headers. These controls apply only to exports through the Future AGI processors; another processor on the same provider has its own policy. Avoid putting sensitive data in custom span names or metadata.
 
 ### Existing AI SDK 6 applications
 
@@ -106,11 +115,11 @@ new FIBatchSpanProcessor({ exporter, spanFilter?, config? })
 ```
 
 - `exporter`: an OpenTelemetry 1.x-compatible `SpanExporter`.
-- `spanFilter`: optional predicate on the normalized span. `isFISpan` exports recognized AI spans and excludes unrelated HTTP/server spans.
+- `spanFilter`: optional predicate on the normalized, privacy-filtered span. `isFISpan` exports recognized AI spans and excludes unrelated HTTP/server spans.
 - `config`: optional OpenTelemetry `BufferConfig` for the batch processor.
 - `forceFlush()` and `shutdown()`: drain queued exports. Use the provider's lifecycle methods in application code.
 
-AI SDK 7's native GenAI messages, model, provider, usage, and tool fields are preserved. AI SDK 6's older `ai.*` fields are normalized without replacing existing GenAI values. Tool-call IDs and every tool result are retained.
+AI SDK 7's native GenAI messages, model, provider, usage, and tool fields are preserved unless hidden by the privacy settings. Reranking, speech, transcription, streaming transcription, and decision spans are classified as well. AI SDK 6's older `ai.*` fields are normalized without replacing existing GenAI values. Tool-call IDs and every tool result are retained.
 
 ## Troubleshooting
 

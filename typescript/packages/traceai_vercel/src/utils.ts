@@ -72,6 +72,11 @@ import {
       text_completion: FISpanKind.LLM,
       execute_tool: FISpanKind.TOOL,
       embeddings: FISpanKind.EMBEDDING,
+      rerank: FISpanKind.RERANKER,
+      decide: FISpanKind.EVALUATOR,
+      "ai.generateSpeech": FISpanKind.LLM,
+      "ai.transcribe": FISpanKind.LLM,
+      "ai.streamTranscribe": FISpanKind.LLM,
     };
     // Legacy SDK 6 also emits gen_ai.operation.name on provider spans. Prefer
     // its more precise ai.* operation when available.

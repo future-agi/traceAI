@@ -65,6 +65,7 @@ describe('AI SDK native span normalization', () => {
   test.each([
     ['invoke_agent', 'AGENT'], ['agent_step', 'CHAIN'], ['chat', 'LLM'],
     ['execute_tool', 'TOOL'], ['embeddings', 'EMBEDDING'],
+    ['decide', 'EVALUATOR'], ['rerank', 'RERANKER'], ['ai.generateSpeech', 'LLM'], ['ai.transcribe', 'LLM'], ['ai.streamTranscribe', 'LLM'],
   ])('recognizes native GenAI %s spans without losing their attributes', (operation, kind) => {
     const attrs = { 'gen_ai.operation.name': operation, 'gen_ai.request.model': 'test-model',
       'gen_ai.input.messages': '[{"role":"user","parts":[{"type":"text","content":"hello"}]}]' };
