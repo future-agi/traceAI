@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import harbor_atif2otel
 from harbor.models.trial.result import TrialResult
+from harbor.models.trajectories import Trajectory
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
@@ -70,6 +71,31 @@ def nanos(value: datetime | None) -> int:
     return int(value.timestamp() * 1e9)
 
 
+def _converter_trajectory(trajectory):
+    """Bridge Harbor's v1.8 text schema to the pinned native converter's v1.7.
+
+    Harbor validates the full v1.8 document first. Audio is new in v1.8;
+    refusing it prevents silently presenting an incomplete reconstruction as complete.
+    All other converter inputs retain their original structure and values.
+    """
+
+    def compatible(value):
+        if isinstance(value, dict):
+            if value.get("type") == "audio":
+                raise ArtifactError("unsupported_audio_trajectory")
+            if value.get("schema_version") == "ATIF-v1.8":
+                Trajectory.model_validate(value)
+            converted = {key: compatible(item) for key, item in value.items()}
+            if value.get("schema_version") == "ATIF-v1.8":
+                converted["schema_version"] = "ATIF-v1.7"
+            return converted
+        if isinstance(value, list):
+            return [compatible(item) for item in value]
+        return value
+
+    return compatible(trajectory)
+
+
 def _trajectory_check(trajectory):
     """Budget the converter's expanded tree before executing it; never resolve refs."""
     budget = 0
@@ -80,7 +106,6 @@ def _trajectory_check(trajectory):
         if (
             depth > 8
             or not isinstance(traj, dict)
-            or traj.get("schema_version") != "ATIF-v1.7"
             or harbor_atif2otel.validate_trajectory(traj)
         ):
             raise ArtifactError("unsupported_trajectory")
@@ -262,16 +287,26 @@ def convert_trial(
             raw_trajectory = read_bytes(root_fd, path)
             fingerprint.update(part.encode() + b"\0" + raw_trajectory)
             trajectory = parse(raw_trajectory)
-            incomplete |= _trajectory_check(trajectory)
+            converter_input = _converter_trajectory(trajectory)
+            incomplete |= _trajectory_check(converter_input)
             # Redact before the native converter truncates strings (partial secrets must not survive).
             native = harbor_atif2otel.convert_trajectory(
-                privacy.tree(trajectory),
+                privacy.tree(converter_input),
                 trace_seed=seed + ":" + part,
                 max_attribute_bytes=2048,
             )
             native_spans = [s for scope in native.scope_spans for s in scope.spans]
             if len(native_spans) + len(spans) > 8192:
                 raise ArtifactError("span_budget")
+            versions = {}
+
+            def collect_versions(item):
+                if item.get("trajectory_id"):
+                    versions[item["trajectory_id"]] = item["schema_version"]
+                for child in item.get("subagent_trajectories", []):
+                    collect_versions(child)
+
+            collect_versions(trajectory)
             ids = {s.span_id for s in native_spans}
             if len(ids) != len(native_spans) or any(
                 not s.span_id or s.parent_span_id and s.parent_span_id not in ids
@@ -301,9 +336,16 @@ def convert_trial(
                             )
                             projected.append(attr(accounting_key, number))
                     elif key in _LABELS and field == "string_value":
-                        projected.append(
-                            attr(key, privacy.text(value.string_value, 256))
-                        )
+                        label = value.string_value
+                        if key == "atif.schema_version":
+                            trajectory_id = original.get("trajectory.id")
+                            label = versions.get(
+                                trajectory_id.string_value if trajectory_id else "",
+                                trajectory["schema_version"]
+                                if not span.parent_span_id
+                                else value.string_value,
+                            )
+                        projected.append(attr(key, privacy.text(label, 256)))
                     elif key == "session.id" and field == "string_value":
                         projected.append(
                             attr(
@@ -317,6 +359,21 @@ def convert_trial(
                         and field == "string_value"
                     ):
                         projected.append(attr(key, privacy.text(value.string_value)))
+                if kind == "LLM" and "llm.token_count.total" not in original:
+                    prompt = original.get("llm.token_count.prompt")
+                    completion = original.get("llm.token_count.completion")
+                    if prompt is not None and completion is not None:
+                        counts = (prompt, completion)
+                        if all(
+                            v.WhichOneof("value") == "int_value" and v.int_value >= 0
+                            for v in counts
+                        ):
+                            projected.append(
+                                attr(
+                                    "llm.token_count.total",
+                                    prompt.int_value + completion.int_value,
+                                )
+                            )
                 span.ClearField("attributes")
                 span.attributes.extend(projected)
                 span.ClearField("events")

@@ -15,6 +15,11 @@ _SECRET_KEY = re.compile(
 _SECRET_VALUE = re.compile(
     r"(?i)(?:bearer\s+\S+|(?:sk|fi|api)[_-][a-z0-9_-]{12,}|(?:password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+)"
 )
+# Embedded JSON often arrives as ordinary text or as JSON escaped inside tool arguments.
+# Redact the entire string rather than trying to guess where a quoted value ends.
+_QUOTED_SECRET = re.compile(
+    r"""(?i)\\?["'](?:password|secret|token|api[_-]?key|authorization|credential)\\?["']\s*:"""
+)
 _LOCATION = re.compile(
     r"(?:https?://[^\s\"']+|file://[^\s\"']+|(?<![\w])(?:[A-Za-z]:[\\/]|/)[^\s\"']+)"
 )
@@ -25,6 +30,16 @@ class Privacy:
         self.settings = settings
 
     def text(self, value: str, limit: int = 2048) -> str:
+        if _QUOTED_SECRET.search(value):
+            if value.lstrip().startswith(("{", "[")) and len(value) <= 16384:
+                try:
+                    clean = json.dumps(self._nested(parse(value.encode())))
+                    return clean.encode("utf-8")[:limit].decode(
+                        "utf-8", errors="ignore"
+                    )
+                except ArtifactError:
+                    pass
+            return "[redacted]"
         for secret in (self.settings.api_key, self.settings.secret_key):
             value = value.replace(secret, "[redacted]")
         value = _SECRET_VALUE.sub("[redacted]", value)

@@ -163,11 +163,13 @@ def _import(
                             elif entry.is_symlink():
                                 raise ArtifactError("symlink_trial")
                     names.sort()
+                materialized = 0
                 for name in names:
                     try:
                         trial_id, payload, incomplete, digest = convert_trial(
                             root, name, job_id, settings
                         )
+                        materialized += 1
                         previous = _acknowledged(state, trial_id)
                         if previous is not None:
                             if previous != digest:
@@ -186,6 +188,10 @@ def _import(
                     except (OSError, ValueError, TypeError, KeyError, OverflowError):
                         summary.failed += 1
                         errors["invalid_artifact_or_state"] += 1
+                if trial_name is None and job.stats.n_completed_trials > materialized:
+                    missing = job.stats.n_completed_trials - materialized
+                    summary.failed += missing
+                    errors["missing_completed_trial_artifact"] += missing
     except ArtifactError as exc:
         summary.failed += 1
         errors[str(exc)] += 1
