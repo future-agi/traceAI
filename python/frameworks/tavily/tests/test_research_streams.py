@@ -96,7 +96,7 @@ def test_explicit_close_ends_once_without_claiming_completion(monkeypatch, is_as
             stream.close()
         span = traced.one()
         assert attrs(span)["tavily.stream.closed"] is True
-        assert span.status.status_code == StatusCode.UNSET
+        assert span.status.status_code == StatusCode.ERROR
         assert not span.events
         if started:
             assert transport.closed

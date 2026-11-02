@@ -49,7 +49,9 @@ def unreleased(packages, tags, skip):
     for package in packages:
         if package["name"] in skip:
             continue
-        versions = published_versions(package)
+        # A historical Java reactor is an atomic Central deployment. New modules in today's
+        # inventory did not exist at the release version and cannot be uploaded retroactively.
+        versions = published_versions(package, strict=False) if package["ecosystem"] == "java" else published_versions(package)
         if versions is None or package["version"] not in versions:
             return f"{package['name']} {package['version']} is not served by its registry"
     return None
@@ -76,8 +78,18 @@ def main():
         if changed is None:
             print(f"Still pending: release PR #{pr['number']}: could not read the versions it released")
             continue
-        required = [with_version(p, changed[path]) for p in packages if (path := p.get("release_path", p["dir"])) in changed]
-        reason = unreleased(required, tags, skip)
+        known = {p.get("release_path", p["dir"]): p for p in packages}
+        unknown = changed.keys() - known.keys()
+        if unknown:
+            print(f"Still pending: release PR #{pr['number']}: release paths missing from current inventory: {', '.join(sorted(unknown))}")
+            continue
+        required = [with_version(known[path], version) for path, version in changed.items()]
+        try:
+            reason = unreleased(required, tags, skip)
+        except Exception as exc:
+            # A registry outage must not acknowledge this PR or block an unrelated one.
+            print(f"Still pending: release PR #{pr['number']}: registry check failed ({type(exc).__name__})")
+            continue
         if reason:
             print(f"Still pending: release PR #{pr['number']}: {reason}")
         else:

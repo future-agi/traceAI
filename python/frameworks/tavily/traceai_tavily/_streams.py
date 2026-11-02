@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncGenerator, Generator
 from typing import Any, Callable, Optional, Sequence
 
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, Status, StatusCode
 
 from traceai_tavily._wrappers import _Operation, _attach, _detach, _end
 
@@ -71,9 +71,11 @@ class _ResearchStream:
         if closed or isinstance(error, GeneratorExit):
             try:
                 self._span.set_attribute("tavily.stream.closed", True)
+                # register() normalizes UNSET to OK. Explicit ERROR preserves
+                # incomplete work through export, without a vendor exception.
+                self._span.set_status(Status(StatusCode.ERROR))
             except Exception:
                 logger.debug("Could not record research stream close", exc_info=True)
-            # Closing early is not successful exhaustion or a vendor error.
             _end(self._span)
         elif error is not None:
             self._operation._finish_error(self._span, error, self._keys, self._query)

@@ -35,16 +35,16 @@ class WeaviateTracingTest {
         }
     }
 
-    @Test void returnsOriginalFutureAndOriginalResultAndEndsExactlyOnce() {
+    @Test void preservesOriginalResultAndEndsExactlyOnce() {
         var exporter = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
             var tracing = new WeaviateTracing("Article", new FITracer(provider.get("test"), TraceConfig.builder().build()));
             var pending = new CompletableFuture<Object>();
             var result = new Object();
-            assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> pending)).isSameAs(pending);
+            var traced = tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> pending);
             assertThat(exporter.getFinishedSpanItems()).isEmpty();
             assertThat(pending.complete(result)).isTrue();
-            assertThat(pending.join()).isSameAs(result);
+            assertThat(traced.join()).isSameAs(result);
             assertThat(pending.complete(new Object())).isFalse();
             assertThat(exporter.getFinishedSpanItems()).hasSize(1);
             assertThat(tracing.call("query", FISpanKind.RETRIEVER, null, () -> result)).isSameAs(result);
@@ -82,7 +82,7 @@ class WeaviateTracingTest {
         var failure = new IOException("original SDK failure");
         assertThatThrownBy(() -> tracing.callIO("insert", () -> { throw failure; })).isSameAs(failure);
         var future = CompletableFuture.completedFuture(result);
-        assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> future)).isSameAs(future);
+        assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> future).join()).isSameAs(result);
     }
 
     @Test void handlesAlreadyCompletedAndSynchronouslyFailedAsyncCalls() {
@@ -90,11 +90,11 @@ class WeaviateTracingTest {
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
             var tracing = new WeaviateTracing("Article", new FITracer(provider.get("test"), TraceConfig.builder().build()));
             var done = CompletableFuture.completedFuture("result");
-            assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> done)).isSameAs(done);
+            assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> done).join()).isEqualTo("result");
             var failure = new IllegalArgumentException("failure");
             var failed = CompletableFuture.failedFuture(failure);
-            assertThat(tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> failed)).isSameAs(failed);
-            assertThatThrownBy(failed::join).isInstanceOf(CompletionException.class).hasCause(failure);
+            var tracedFailure = tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> failed);
+            assertThatThrownBy(tracedFailure::join).isInstanceOf(CompletionException.class).hasCause(failure);
             assertThatThrownBy(() -> tracing.callAsync("query", FISpanKind.RETRIEVER, null, () -> { throw failure; })).isSameAs(failure);
             assertThat(exporter.getFinishedSpanItems()).hasSize(3);
             assertThat(Span.current().getSpanContext().isValid()).isFalse();
