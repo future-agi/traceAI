@@ -102,14 +102,13 @@ export class BeeAIInstrumentation extends InstrumentationBase {
     if (exports.RunContext?.enter) {
       this.wrap(exports.RunContext, "enter", original => function (this: unknown,
         instance: unknown, input: unknown, handler: (ctx: BeeContext) => unknown) {
-        const parent = context.active();
         const run = original.call(this, instance, input, (ctx: BeeContext) => {
           const state = instrumentation.spans.get(key(ctx));
           return state
             ? context.with(trace.setSpan(state.parent, state.span), handler, undefined, ctx)
             : handler(ctx);
         }) as BeeRun;
-        run.middleware(ctx => instrumentation.observe(ctx, parent));
+        run.middleware(ctx => instrumentation.observe(ctx, context.active()));
         return run;
       });
     }
@@ -119,10 +118,9 @@ export class BeeAIInstrumentation extends InstrumentationBase {
       const prototype = exports[name]?.prototype;
       if (prototype?.run) {
         this.wrap(prototype, "run", original => function (this: unknown, ...args: unknown[]) {
-          const parent = context.active();
           const run = original.apply(this, args) as BeeRun;
           if (typeof run?.middleware === "function") {
-            run.middleware(ctx => instrumentation.observe(ctx, parent));
+            run.middleware(ctx => instrumentation.observe(ctx, context.active()));
           }
           return run;
         });
@@ -240,6 +238,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isACPTransportEvent(value: unknown): boolean {
+  return isRecord(value) && typeof value.type === "string"
+    && /^run\.(completed|failed)$/.test(value.type) && isRecord(value.run);
+}
+
 function payloadJSON(value: unknown, hideEmbeddingVectors: boolean): string | undefined {
   return JSON.stringify(value, (field, item: unknown) => {
     // FITracer cannot mask fields after they have become a generic JSON string.
@@ -248,9 +251,14 @@ function payloadJSON(value: unknown, hideEmbeddingVectors: boolean): string | un
     // Export the answer, not runner memory, intermediate iterations or history.
     if (isRecord(item)) {
       if ("result" in item && "memory" in item) return { result: item.result };
-      // A2A returns { result, event }; completed task events contain request history.
+      // A2A task history and ACP run completions are transport metadata, not
+      // the answer. ACP also embeds the completion in result.meta.event.
       if ("result" in item && "event" in item && isRecord(item.event)
-        && typeof item.event.kind === "string") return { result: item.result };
+        && (typeof item.event.kind === "string" || isACPTransportEvent(item.event))) return { result: item.result };
+      if (isRecord(item.meta) && isACPTransportEvent(item.meta.event)) {
+        const { event, ...meta } = item.meta;
+        return { ...item, meta };
+      }
       // RePlanAgent uses message/intermediateMemory instead of result/memory.
       if ("message" in item && "intermediateMemory" in item) return { message: item.message };
     }

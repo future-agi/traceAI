@@ -102,6 +102,17 @@ test('real root/BaseAgent registration retains lazy identity and all Run chainin
   assert.equal(spans()[0].status.code, SpanStatusCode.OK);
 });
 
+test('lazy agent runs inherit the application span active when execution begins', async () => {
+  const run = new ProbeAgent().run({ prompt: 'synthetic-input' });
+  const parent = provider.getTracer('application').startSpan('application-parent');
+  await context.with(trace.setSpan(context.active(), parent), async () => await run);
+  parent.end();
+  const agent = spans().find(s => kind(s) === 'AGENT');
+  assert.equal(spans().length, 2);
+  assert.equal(parentId(agent), parent.spanContext().spanId);
+  assert.equal(agent.spanContext().traceId, parent.spanContext().traceId);
+});
+
 test('nested real workflow, tool and model lifecycle spans have exact parents and no duplicates', async () => {
   const tool = new DynamicTool({
     name: 'offline_tool', description: 'Synthetic tool', inputSchema: z.object({ text: z.string() }),
@@ -115,7 +126,7 @@ test('nested real workflow, tool and model lifecycle spans have exact parents an
     });
   const agent = new ProbeAgent(async input => { await workflow.run({ text: input.prompt }); return 'done'; });
   const parent = provider.getTracer('test').startSpan('application');
-  await context.with(trace.setSpan(context.active(), parent), () => agent.run({ prompt: 'synthetic-input' }));
+  await context.with(trace.setSpan(context.active(), parent), async () => await agent.run({ prompt: 'synthetic-input' }));
   parent.end();
   assert.equal(spans().length, 5);
   const agentSpan = spans().find(s => kind(s) === 'AGENT');
@@ -496,6 +507,50 @@ for (const traceConfig of [
     assert.equal(spans()[2].status.code, SpanStatusCode.ERROR);
   } finally { privateInstrumentation.disable(); instrumentation.enable(); }
 });
+
+// ACP's public completion result includes the transport event twice: result.event
+// and result.result.meta.event. Neither is part of the application answer.
+for (const flag of ['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT']) {
+  test(`ACP agent output excludes transport metadata directly and nested: ${flag}`, {
+    skip: sdk('beeai-framework/package.json').version === '0.1.2',
+  }, async () => {
+    const previous = process.env[flag];
+    process.env[flag] = 'true';
+    try {
+      const { ACPAgent } = await upstream('beeai-framework/adapters/acp/agents/agent');
+      const { UnconstrainedMemory } = await upstream('beeai-framework/memory/unconstrainedMemory');
+      const agent = new ACPAgent({ url: 'http://127.0.0.1:1', agentName: 'offline', memory: new UnconstrainedMemory() });
+      agent.client.stream = async function* () {
+        yield { data: JSON.stringify({ type: 'run.completed', run: {
+          input: [{ parts: [{ role: 'user', content: 'PRIVATE_ACP_PROMPT' }] }],
+          output: [{ parts: [{ role: 'assistant', content: 'public-answer' }] }],
+        } }) };
+      };
+      const result = await agent.run({ input: 'PRIVATE_ACP_PROMPT' });
+      assert.equal(result.result.text, 'public-answer');
+      assert.ok(JSON.stringify(result.event).includes('PRIVATE_ACP_PROMPT'));
+      assert.ok(JSON.stringify(result.result.meta).includes('PRIVATE_ACP_PROMPT'));
+      const nested = await new Workflow({ schema: z.object({ agent: z.any().optional() }) })
+        .addStep('return', async state => {
+          state.agent = await new DynamicTool({
+            name: 'acp_result', description: 'Return agent result', inputSchema: z.object({}),
+            handler: async () => ({ result }),
+          }).run({});
+          return Workflow.END;
+        }).run({});
+      assert.equal(nested.state.agent.result, result, 'tracing must not mutate application results');
+      await provider.forceFlush();
+      assert.ok(!JSON.stringify(wire).includes('PRIVATE_ACP_PROMPT'));
+      for (const span of spans().filter(s => ['AGENT', 'CHAIN', 'TOOL'].includes(kind(s)))) {
+        const output = span.attributes[SC.OUTPUT_VALUE];
+        assert.ok(output.includes('public-answer'));
+        assert.ok(!output.includes('PRIVATE_ACP_PROMPT'));
+      }
+    } finally {
+      if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+    }
+  });
+}
 
 // BeeAI 0.1.31 introduces A2AAgent; its completed task keeps the request in
 // event.history, while result contains only the public response.
