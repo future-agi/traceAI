@@ -53,6 +53,14 @@ def test_token_credentials_redacted_in_nested_tool_arguments(job, receiver, traj
     assert b"SYNTHETIC-REFRESH-CREDENTIAL" not in body
     assert b"SYNTHETIC-API-CREDENTIAL" not in body
     assert any("prompt_tokens" in str(attrs(span)) for span in spans(receiver))
+    privacy = Privacy(settings)
+    assert "SYNTHETIC-REFRESH-CREDENTIAL" not in privacy.text(
+        'Tool args: {"refresh_tokens": "SYNTHETIC-REFRESH-CREDENTIAL"}'
+    )
+    assert privacy.tree({"prompt_tokens": 12}) == {"prompt_tokens": 12}
+    assert privacy.tree({"prompt_tokens": "SYNTHETIC-REFRESH-CREDENTIAL"}) == {
+        "prompt_tokens": "[redacted]"
+    }
 
 
 def test_incomplete_then_recovered_sends_only_new_spans(job, receiver, trajectory):
@@ -69,6 +77,20 @@ def test_incomplete_then_recovered_sends_only_new_spans(job, receiver, trajector
     assert new and not existing.intersection(new)
     assert import_job(job, settings=receiver.settings).skipped == 1
     assert len(receiver.requests) == 2
+
+
+def test_recovery_delivery_failure_leaves_provisional_ack(job, receiver, trajectory):
+    path = job / "trial-1" / "agent" / "trajectory.json"
+    path.unlink()
+    assert import_job(job, settings=receiver.settings).incomplete == 1
+    initial = {s.span_id for s in spans(receiver)}
+    path.write_text(json.dumps(trajectory))
+    receiver.responses = [(400, b"", {})]
+    failed = import_job(job, settings=receiver.settings)
+    assert failed.failed == 1 and failed.sent == 0
+    retried = import_job(job, settings=receiver.settings)
+    assert retried.sent == 1 and retried.conflicts == 0
+    assert initial.isdisjoint({s.span_id for s in spans(receiver)[len(initial) + 1 :]})
 
 
 def test_changed_trial_result_still_conflicts_after_incomplete(
