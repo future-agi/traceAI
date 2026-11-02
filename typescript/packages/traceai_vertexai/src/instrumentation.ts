@@ -1,28 +1,12 @@
-/**
- * OpenTelemetry instrumentation for Google Cloud Vertex AI.
- *
- * Vertex AI provides access to Google's generative AI models including Gemini.
- * This instrumentation captures model generation, chat sessions, embeddings,
- * and streaming responses.
- */
-
 import {
   InstrumentationBase,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
 import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  context,
-  trace,
+  Attributes, Span, SpanKind, SpanStatusCode, TracerProvider, context, diag, trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-} from "@traceai/fi-semantic-conventions";
+import { FITracer, TraceConfigOptions, getAttributesFromContext } from "@traceai/fi-core";
+import { SemanticConventions as S, FISpanKind } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
 export interface VertexAIInstrumentationConfig {
@@ -30,609 +14,317 @@ export interface VertexAIInstrumentationConfig {
   traceConfig?: TraceConfigOptions;
 }
 
-/**
- * Vertex AI Instrumentation class.
- *
- * Provides automatic instrumentation for the @google-cloud/vertexai SDK.
- */
+type SDKObject = Record<string, any>;
+type Method = (...args: any[]) => any;
+type Patch = { target: SDKObject; method: string; original: Method; wrapped: Method };
+const owners = new WeakMap<object, VertexAIInstrumentation>();
+const wrappedMethods = new WeakSet<Method>();
+let patchedModules = 0;
+const methods: Record<string, string[]> = {
+  GenerativeModel: ["generateContent", "generateContentStream", "countTokens"],
+  GenerativeModelPreview: ["generateContent", "generateContentStream", "countTokens"],
+  ChatSession: ["sendMessage", "sendMessageStream"],
+  ChatSessionPreview: ["sendMessage", "sendMessageStream"],
+};
+
+/** Compatibility instrumentation for the legacy @google-cloud/vertexai 1.x SDK. */
 export class VertexAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
-  private _traceConfig?: TraceConfigOptions;
+  private traceConfig?: TraceConfigOptions;
+  private patches = new Map<object, Patch[]>();
 
   constructor(config: VertexAIInstrumentationConfig = {}) {
-    super(
-      "@traceai/fi-instrumentation-vertexai",
-      VERSION,
-      config.instrumentationConfig || {}
-    );
-    this._traceConfig = config.traceConfig;
+    super("@traceai/fi-instrumentation-vertexai", VERSION, config.instrumentationConfig || {});
+    this.traceConfig = config.traceConfig;
+    // InstrumentationBase calls enable() before subclass fields are initialized.
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this.traceConfig });
+  }
+
+  override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    this.refreshTracer();
+  }
+
+  override disable(): void {
+    super.disable();
+    // OTel only knows about automatic hooks; explicitly restore manual patches too.
+    for (const module of this.patches?.keys() || []) this.unpatch(module);
   }
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
-      "@google-cloud/vertexai",
-      ["^1.0.0"],
-      this.patch.bind(this),
-      this.unpatch.bind(this)
+    return new InstrumentationNodeModuleDefinition(
+      "@google-cloud/vertexai", [">=1.0.0 <2.0.0"],
+      this.patch.bind(this), this.unpatch.bind(this),
     );
+  }
+
+  manuallyInstrument(vertexModule: any): void {
+    if (vertexModule != null && this.isEnabled()) this.patch(vertexModule);
+  }
+
+  private patch(module: SDKObject): SDKObject {
+    if (owners.has(module)) return module;
+    const patches: Patch[] = [];
+    for (const [name, names] of Object.entries(methods)) {
+      const target = module[name]?.prototype;
+      if (!target) continue;
+      for (const method of names) {
+        const original = target[method];
+        if (typeof original !== "function" || wrappedMethods.has(original)) continue;
+        const instrumentation = this;
+        const wrapped = function(this: SDKObject, ...args: any[]) {
+          return instrumentation.invoke(original, this, args, method);
+        };
+        target[method] = wrapped;
+        wrappedMethods.add(wrapped);
+        patches.push({ target, method, original, wrapped });
+      }
+    }
+    if (patches.length) {
+      owners.set(module, this);
+      this.patches.set(module, patches);
+      patchedModules++;
+    }
     return module;
   }
 
-  /**
-   * Manually instrument the @google-cloud/vertexai module.
-   */
-  manuallyInstrument(vertexModule: any): void {
-    if (vertexModule == null) return;
-    this.patch(vertexModule);
+  private unpatch(module: object): void {
+    if (owners.get(module) !== this) return;
+    for (const patch of this.patches.get(module) || []) {
+      // Do not remove another instrumentor's later wrapper.
+      if (patch.target[patch.method] === patch.wrapped) patch.target[patch.method] = patch.original;
+    }
+    this.patches.delete(module);
+    owners.delete(module);
+    patchedModules--;
   }
 
-  private patch(vertexModule: any & { _fiPatched?: boolean }): any {
-    if (vertexModule?._fiPatched || _isFIPatched) {
-      return vertexModule;
-    }
-
-    const instrumentation = this;
-
-    // Wrap GenerativeModel.generateContent
-    if (vertexModule.GenerativeModel?.prototype?.generateContent) {
-      this._wrap(
-        vertexModule.GenerativeModel.prototype,
-        "generateContent",
-        (original: Function) => {
-          return function patchedGenerateContent(this: any, ...args: any[]) {
-            return instrumentation.traceGenerateContent(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap GenerativeModel.generateContentStream
-    if (vertexModule.GenerativeModel?.prototype?.generateContentStream) {
-      this._wrap(
-        vertexModule.GenerativeModel.prototype,
-        "generateContentStream",
-        (original: Function) => {
-          return function patchedGenerateContentStream(this: any, ...args: any[]) {
-            return instrumentation.traceGenerateContentStream(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap ChatSession.sendMessage
-    if (vertexModule.ChatSession?.prototype?.sendMessage) {
-      this._wrap(
-        vertexModule.ChatSession.prototype,
-        "sendMessage",
-        (original: Function) => {
-          return function patchedSendMessage(this: any, ...args: any[]) {
-            return instrumentation.traceSendMessage(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap ChatSession.sendMessageStream
-    if (vertexModule.ChatSession?.prototype?.sendMessageStream) {
-      this._wrap(
-        vertexModule.ChatSession.prototype,
-        "sendMessageStream",
-        (original: Function) => {
-          return function patchedSendMessageStream(this: any, ...args: any[]) {
-            return instrumentation.traceSendMessageStream(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap GenerativeModel.countTokens
-    if (vertexModule.GenerativeModel?.prototype?.countTokens) {
-      this._wrap(
-        vertexModule.GenerativeModel.prototype,
-        "countTokens",
-        (original: Function) => {
-          return function patchedCountTokens(this: any, ...args: any[]) {
-            return instrumentation.traceCountTokens(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap TextEmbeddingModel.embed (if available)
-    if (vertexModule.TextEmbeddingModel?.prototype?.embed) {
-      this._wrap(
-        vertexModule.TextEmbeddingModel.prototype,
-        "embed",
-        (original: Function) => {
-          return function patchedEmbed(this: any, ...args: any[]) {
-            return instrumentation.traceEmbed(original, this, args);
-          };
-        }
-      );
-    }
-
-    vertexModule._fiPatched = true;
-    _isFIPatched = true;
-    return vertexModule;
-  }
-
-  private unpatch(vertexModule: any & { _fiPatched?: boolean }): void {
-    if (vertexModule?.GenerativeModel?.prototype?.generateContent) {
-      this._unwrap(vertexModule.GenerativeModel.prototype, "generateContent");
-    }
-    if (vertexModule?.GenerativeModel?.prototype?.generateContentStream) {
-      this._unwrap(vertexModule.GenerativeModel.prototype, "generateContentStream");
-    }
-    if (vertexModule?.ChatSession?.prototype?.sendMessage) {
-      this._unwrap(vertexModule.ChatSession.prototype, "sendMessage");
-    }
-    if (vertexModule?.ChatSession?.prototype?.sendMessageStream) {
-      this._unwrap(vertexModule.ChatSession.prototype, "sendMessageStream");
-    }
-    if (vertexModule?.GenerativeModel?.prototype?.countTokens) {
-      this._unwrap(vertexModule.GenerativeModel.prototype, "countTokens");
-    }
-    if (vertexModule?.TextEmbeddingModel?.prototype?.embed) {
-      this._unwrap(vertexModule.TextEmbeddingModel.prototype, "embed");
-    }
-    if (vertexModule) {
-      vertexModule._fiPatched = false;
-    }
-    _isFIPatched = false;
-  }
-
-  private async traceGenerateContent(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const request = args[0] || {};
-    const modelName = instance.model || instance._model || "unknown";
-
-    const span = this.fiTracer.startSpan(`Vertex AI Generate Content`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.LLM_MODEL_NAME]: modelName,
-        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        [SemanticConventions.RAW_INPUT]: safeJsonStringify(request),
-        ...this.getInputMessagesAttributes(request),
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
+  private async invoke(original: Method, instance: SDKObject, args: any[], method: string): Promise<any> {
+    if (!this.isEnabled()) return original.apply(instance, args);
+    const streaming = method.endsWith("Stream");
+    const counting = method === "countTokens";
+    let span: Span | undefined;
     try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
+      const model = instance.model || (instance.resourcePath ?? instance.publisherModelEndpoint)?.split("/models/")[1] || "unknown";
+      span = this.fiTracer.startSpan(`Vertex AI ${method}`, {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          ...getAttributesFromContext(context.active()),
+          [S.FI_SPAN_KIND]: FISpanKind.LLM,
+          [S.LLM_PROVIDER]: "google",
+          [S.LLM_MODEL_NAME]: model,
+          [S.GEN_AI_OPERATION_NAME]: counting ? "count_tokens" : "chat",
+          "vertexai.streaming": streaming,
+          ...inputAttributes(instance, args[0], method),
+        },
       });
-
-      this.setResponseAttributes(span, result);
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
+    } catch {
+      diag.warn("Vertex AI input telemetry failed");
+    }
+    const activeSpan = span;
+    const executionContext = activeSpan ? trace.setSpan(context.active(), activeSpan) : context.active();
+    let result: any;
+    try {
+      result = await context.with(executionContext, () => original.apply(instance, args));
     } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
+      if (activeSpan) finish(activeSpan, undefined, true, counting);
       throw error;
     }
-  }
-
-  private async traceGenerateContentStream(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const request = args[0] || {};
-    const modelName = instance.model || instance._model || "unknown";
-
-    const span = this.fiTracer.startSpan(`Vertex AI Generate Content Stream`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.LLM_MODEL_NAME]: modelName,
-        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        [SemanticConventions.RAW_INPUT]: safeJsonStringify(request),
-        "vertexai.streaming": true,
-        ...this.getInputMessagesAttributes(request),
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      // Wrap the stream to capture output
-      return this.wrapStream(result, span);
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceSendMessage(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const message = args[0];
-    const modelName = instance._model?.model || instance._model?._model || "unknown";
-
-    const inputContent = typeof message === "string" ? message : safeJsonStringify(message);
-    const span = this.fiTracer.startSpan(`Vertex AI Chat Send Message`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.LLM_MODEL_NAME]: modelName,
-        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify([{ role: "user", content: inputContent }]) ?? "[]",
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      this.setResponseAttributes(span, result);
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceSendMessageStream(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const message = args[0];
-    const modelName = instance._model?.model || instance._model?._model || "unknown";
-
-    const streamInputContent = typeof message === "string" ? message : safeJsonStringify(message);
-    const span = this.fiTracer.startSpan(`Vertex AI Chat Send Message Stream`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.LLM_MODEL_NAME]: modelName,
-        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        "vertexai.streaming": true,
-        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify([{ role: "user", content: streamInputContent }]) ?? "[]",
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      return this.wrapStream(result, span);
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceCountTokens(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const request = args[0] || {};
-    const modelName = instance.model || instance._model || "unknown";
-
-    const span = this.fiTracer.startSpan(`Vertex AI Count Tokens`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.LLM_MODEL_NAME]: modelName,
-        "vertexai.operation": "count_tokens",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      if (result?.totalTokens) {
-        span.setAttribute("vertexai.total_tokens", result.totalTokens);
-      }
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceEmbed(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const request = args[0] || {};
-    const modelName = instance.model || instance._model || "unknown";
-    const texts = request.texts || request.instances || [];
-
-    const span = this.fiTracer.startSpan(`Vertex AI Embed`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-        [SemanticConventions.LLM_PROVIDER]: "google",
-        [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
-        [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
-        "vertexai.input_count": Array.isArray(texts) ? texts.length : 1,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      if (result?.embeddings) {
-        span.setAttribute("vertexai.embedding_count", result.embeddings.length);
-        if (result.embeddings[0]?.values) {
-          span.setAttribute("vertexai.embedding_dimensions", result.embeddings[0].values.length);
-        }
-      }
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private getInputMessagesAttributes(request: any): Record<string, string> {
-    const contents = request.contents || [];
-    if (!Array.isArray(contents) || contents.length === 0) {
-      return {};
-    }
-    const messages = contents.map((content: any) => {
-      const msg: Record<string, unknown> = { role: content.role || "user" };
-      if (content.parts) {
-        const textParts = content.parts
-          .filter((p: any) => p.text)
-          .map((p: any) => p.text)
-          .join("");
-        if (textParts) {
-          msg.content = textParts;
-        }
-      }
-      return msg;
-    });
-    return {
-      [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
-    };
-  }
-
-  private setResponseAttributes(span: Span, result: any): void {
-    if (!result) return;
-
-    const response = result.response || result;
-
-    if (response.candidates?.[0]?.content) {
-      const content = response.candidates[0].content;
-      const msg: Record<string, unknown> = { role: content.role || "model" };
-
-      if (content.parts) {
-        const textParts = content.parts
-          .filter((p: any) => p.text)
-          .map((p: any) => p.text)
-          .join("");
-        if (textParts) {
-          msg.content = textParts;
-          span.setAttribute(SemanticConventions.OUTPUT_VALUE, textParts);
-        }
-      }
-
-      span.setAttribute(
-        SemanticConventions.LLM_OUTPUT_MESSAGES,
-        safelyJSONStringify([msg]) ?? "[]"
-      );
-
-      // Add finish reasons
-      const finishReasons = response.candidates
-        ?.map((c: any) => c.finishReason)
-        .filter(Boolean);
-      if (finishReasons?.length) {
-        span.setAttribute(
-          SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS,
-          safelyJSONStringify(finishReasons) ?? "[]"
+    if (activeSpan) {
+      if (streaming && result?.response?.then) {
+        // The SDK eagerly reads an independent tee into response, even if the caller
+        // never iterates (or breaks early). Observe that existing promise, not the
+        // caller's iterator: no extra buffering, reads, promises or history mutation.
+        void result.response.then(
+          (response: SDKObject) => finish(activeSpan, response, false, counting),
+          () => finish(activeSpan, undefined, true, counting),
         );
+      } else {
+        finish(activeSpan, result?.response || result, false, counting);
       }
     }
-
-    if (response.usageMetadata) {
-      const usage = response.usageMetadata;
-      if (usage.promptTokenCount) {
-        span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT, usage.promptTokenCount);
-      }
-      if (usage.candidatesTokenCount) {
-        span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, usage.candidatesTokenCount);
-      }
-      if (usage.totalTokenCount) {
-        span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, usage.totalTokenCount);
-      }
-    }
-
-    span.setAttribute(SemanticConventions.RAW_OUTPUT, safeJsonStringify(response));
-  }
-
-  private async wrapStream(streamResult: any, span: Span): Promise<any> {
-    const chunks: any[] = [];
-    let fullContent = "";
-
-    // Vertex AI streams return a response object with a stream property
-    const originalStream = streamResult.stream;
-
-    if (!originalStream || typeof originalStream[Symbol.asyncIterator] !== "function") {
-      // If not a proper stream, just return as-is
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-      return streamResult;
-    }
-
-    const wrappedStream = async function* () {
-      try {
-        for await (const chunk of originalStream) {
-          chunks.push(chunk);
-          if (chunk.candidates?.[0]?.content?.parts) {
-            const textParts = chunk.candidates[0].content.parts
-              .filter((p: any) => p.text)
-              .map((p: any) => p.text)
-              .join("");
-            fullContent += textParts;
-          }
-          yield chunk;
-        }
-
-        span.setAttributes({
-          [SemanticConventions.OUTPUT_VALUE]: fullContent,
-          [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "model", content: fullContent }]) ?? "[]",
-          [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks),
-        });
-
-        // Get usage from the aggregated response if available
-        if (streamResult.response) {
-          const response = await streamResult.response;
-          if (response?.usageMetadata) {
-            const usage = response.usageMetadata;
-            if (usage.promptTokenCount) {
-              span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT, usage.promptTokenCount);
-            }
-            if (usage.candidatesTokenCount) {
-              span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, usage.candidatesTokenCount);
-            }
-            if (usage.totalTokenCount) {
-              span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, usage.totalTokenCount);
-            }
-          }
-        }
-
-        span.setStatus({ code: SpanStatusCode.OK });
-      } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: (error as Error).message,
-        });
-        throw error;
-      } finally {
-        span.end();
-      }
-    };
-
-    return {
-      ...streamResult,
-      stream: wrappedStream(),
-    };
+    return result;
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
-
-/**
- * Check if the module has been patched.
- */
-export function isPatched(): boolean {
-  return _isFIPatched;
-}
-
-/**
- * Reset the patched state (for testing only).
- */
-export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
-}
-
-// Helper functions
-
-function safeJsonStringify(obj: unknown): string {
+function finish(span: Span, response: SDKObject | undefined, failed: boolean, counting: boolean): void {
   try {
-    return JSON.stringify(obj);
+    if (failed) {
+      // Provider errors can contain prompts, signed URLs and credentials. Never
+      // copy their message, stack or response body, including in default capture.
+      span.setAttribute("error.type", "vertexai.request_failed");
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    } else {
+      if (response) span.setAttributes(outputAttributes(response, counting));
+      span.setStatus({ code: SpanStatusCode.OK });
+    }
   } catch {
-    return String(obj);
+    diag.warn("Vertex AI output telemetry failed");
+  } finally {
+    try { span.end(); } catch { diag.warn("Vertex AI span completion failed"); }
   }
 }
+
+function inputAttributes(instance: SDKObject, request: any, method: string): Attributes {
+  const chat = method.startsWith("sendMessage");
+  const contents = chat
+    ? [...(instance.historyInternal || []).slice(-32), { role: "user", parts: typeof request === "string" ? [{ text: request }] : request }]
+    : typeof request === "string" ? [{ role: "user", parts: [{ text: request }] }] : request?.contents || [];
+  const attributes: Attributes = {};
+  if (contents.length > 32 || (chat && instance.historyInternal?.length > 31)) attributes["vertexai.capture.truncated"] = true;
+  const messages = contents.slice(-32).map((content: SDKObject) => message(content, attributes));
+  // countTokens sends the explicit request verbatim; model generation defaults
+  // are not part of the counted payload, even when the model has them configured.
+  const counting = method === "countTokens";
+  const instruction = counting ? request?.systemInstruction : (request?.systemInstruction ?? instance.systemInstruction);
+  if (instruction) messages.unshift(message(typeof instruction === "string" ? { role: "system", parts: [{ text: instruction }] } : { ...instruction, role: "system" }, attributes));
+  const tools = counting ? request?.tools : (request?.tools ?? instance.tools);
+  // Keep all content-bearing values inside message.content so FI's granular
+  // text/messages privacy controls also hide tool arguments and declarations.
+  if (Array.isArray(tools)) {
+    if (tools.length > 32) attributes["vertexai.capture.truncated"] = true;
+    messages.unshift({ role: "system", content: tools.slice(0, 32).map(safeTool) });
+  }
+  if (messages.length > 32) {
+    const prefix = (instruction ? 1 : 0) + (Array.isArray(tools) ? 1 : 0);
+    messages.splice(prefix, messages.length - 32);
+    attributes["vertexai.capture.truncated"] = true;
+  }
+  capture(attributes, S.LLM_INPUT_MESSAGES, messages, true);
+  if (!counting) {
+    const config = request?.generationConfig ?? instance.generationConfig;
+    for (const [name, key] of Object.entries({ temperature: "gen_ai.request.temperature", topP: "gen_ai.request.top_p", topK: "gen_ai.request.top_k", maxOutputTokens: "gen_ai.request.max_tokens" })) {
+      if (typeof config?.[name] === "number" && Number.isFinite(config[name])) attributes[key] = config[name];
+    }
+  }
+  return attributes;
+}
+
+/** Capture supported tool kinds, never retrieval resource names or unknown payloads. */
+function safeTool(tool: SDKObject): SDKObject {
+  if (!tool || typeof tool !== "object") return { type: "unknown" };
+  if (Array.isArray(tool.functionDeclarations)) return { functionDeclarations: tool.functionDeclarations };
+  if (tool.googleSearchRetrieval && typeof tool.googleSearchRetrieval === "object") {
+    const config = tool.googleSearchRetrieval;
+    return { googleSearchRetrieval: typeof config.disableAttribution === "boolean"
+      ? { disableAttribution: config.disableAttribution } : {} };
+  }
+  if (tool.retrieval && typeof tool.retrieval === "object") {
+    const config = tool.retrieval;
+    const type = config.vertexAiSearch ? "vertexAiSearch" : config.vertexRagStore ? "vertexRagStore" : "retrieval";
+    return { retrieval: { type, ...(typeof config.disableAttribution === "boolean"
+      ? { disableAttribution: config.disableAttribution } : {}) } };
+  }
+  return { type: "unknown" };
+}
+
+function message(content: SDKObject, attributes: Attributes): SDKObject {
+  if (Array.isArray(content?.parts) && content.parts.length > 32) attributes["vertexai.capture.truncated"] = true;
+  const parts = Array.isArray(content?.parts) ? content.parts.slice(0, 32) : [];
+  return {
+    role: ["user", "model", "system", "function"].includes(content?.role) ? content.role : "user",
+    content: parts.map((part: SDKObject | string) => {
+      if (typeof part === "string") return { type: "text", text: part };
+      if (typeof part?.text === "string") return { type: "text", text: part.text };
+      if (part?.functionCall) return { type: "tool_call", name: part.functionCall.name, arguments: part.functionCall.args };
+      if (part?.functionResponse) return { type: "tool_result", name: part.functionResponse.name, response: part.functionResponse.response };
+      // Never copy inlineData.data, fileUri, arbitrary response fields or media.
+      return { type: "media" };
+    }),
+  };
+}
+
+function outputAttributes(response: SDKObject, counting: boolean): Attributes {
+  const attributes: Attributes = {};
+  if (counting) {
+    if (typeof response.totalTokens === "number") attributes["vertexai.total_tokens"] = response.totalTokens;
+    return attributes;
+  }
+  if (Array.isArray(response.candidates)) {
+    if (response.candidates.length > 32) attributes["vertexai.capture.truncated"] = true;
+    capture(attributes, S.LLM_OUTPUT_MESSAGES, response.candidates.slice(0, 32).map((candidate: SDKObject) => message(candidate.content, attributes)));
+    attributes[S.GEN_AI_RESPONSE_FINISH_REASONS] = response.candidates.slice(0, 32).map((candidate: SDKObject) => candidate.finishReason).filter((reason: unknown) => typeof reason === "string").map((reason: string) => reason.slice(0, 128));
+  }
+  const usage = response.usageMetadata;
+  for (const [name, key] of Object.entries({ promptTokenCount: S.LLM_TOKEN_COUNT_PROMPT, candidatesTokenCount: S.LLM_TOKEN_COUNT_COMPLETION, totalTokenCount: S.LLM_TOKEN_COUNT_TOTAL, cachedContentTokenCount: S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, thoughtsTokenCount: S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING })) {
+    if (typeof usage?.[name] === "number" && Number.isFinite(usage[name]) && usage[name] >= 0) attributes[key] = usage[name];
+  }
+  return attributes;
+}
+
+/** Bound content before serialization; do not retain chunks or serialize whole SDK objects. */
+function capture(attributes: Attributes, key: string, messages: SDKObject[], newestFirst = false): void {
+  let budget = 24_000;
+  let truncated = false;
+  const bound = (item: any, depth = 0): any => {
+    if (budget <= 0 || depth > 10) { truncated = true; return "[truncated]"; }
+    budget -= 16;
+    if (typeof item === "string") {
+      const limit = Math.min(4096, Math.max(0, budget));
+      truncated ||= item.length > limit;
+      const text = item.slice(0, limit);
+      budget -= text.length;
+      return text;
+    }
+    if (item === null || typeof item === "boolean" || typeof item === "number") return item;
+    if (Array.isArray(item)) {
+      truncated ||= item.length > 32;
+      const result = [];
+      for (const entry of item.slice(0, 32)) {
+        if (budget <= 0) { truncated = true; break; }
+        result.push(bound(entry, depth + 1));
+      }
+      return result;
+    }
+    if (item && typeof item === "object") {
+      const result: Record<string, unknown> = Object.create(null);
+      const keys = Object.keys(item);
+      truncated ||= keys.length > 32;
+      for (const name of keys.slice(0, 32)) {
+        if (budget <= 0) { truncated = true; break; }
+        const boundedName = name.slice(0, 128);
+        truncated ||= name.length > boundedName.length;
+        budget -= boundedName.length;
+        result[boundedName] = bound(item[name], depth + 1);
+      }
+      return result;
+    }
+    return undefined;
+  };
+  const captured: SDKObject[] = [];
+  // Spend the input budget on the current turn, then recent history. Restore
+  // chronological order afterwards; output candidates retain provider order.
+  for (const message of newestFirst ? [...messages].reverse() : messages) {
+    if (budget < 128) { truncated = true; break; }
+    budget -= 64; // Reserve the role/content envelope; never truncate it.
+    const content: SDKObject[] = [];
+    for (const part of message.content) {
+      if (budget < 64) { truncated = true; break; }
+      budget -= 64; // Reserve the part envelope, including its fixed type.
+      const capturedPart: SDKObject = {};
+      // These keys come from message(), not arbitrary SDK objects. Only payloads
+      // use the recursive limiter, so exhaustion cannot turn messages/parts into strings.
+      for (const [name, value] of Object.entries(part)) {
+        capturedPart[name] = name === "type" ? value : bound(value);
+      }
+      content.push(capturedPart);
+    }
+    captured.push({ role: message.role, content });
+  }
+  attributes[key] = JSON.stringify(newestFirst ? captured.reverse() : captured);
+  if (truncated) attributes["vertexai.capture.truncated"] = true;
+}
+
+export function isPatched(): boolean { return patchedModules > 0; }
+
+/** @deprecated Test compatibility only. Disable the owning instance to restore patches. */
+export function _resetPatchedStateForTesting(): void { /* No global ownership reset. */ }
