@@ -74,6 +74,46 @@ afterEach(() => {
   }
 });
 
+describe("SDK 1.2 summarization", () => {
+  it("does not mark a fallback summary as a failed run", async () => {
+    const { sdk } = instrument({ runs: [[
+      { event: { type: "summary", status: "error", fallback: true } as never },
+      { finish: "finished", result: "private fallback transcript" },
+    ]] });
+    const agent = await sdk.Agent.create({ agentId: AGENT_ID });
+    const run = await agent.summarize();
+    await drain(run.stream());
+    await run.wait();
+    const span = one(spans(), SpanNames.RUN);
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.events.find((event) => event.name === "cursor.summary")?.attributes).toEqual({
+      "cursor.summary.status": "error", "cursor.summary.fallback": true,
+    });
+    expect(allAttributeText(spans())).not.toContain("private fallback transcript");
+  });
+
+  it("traces summarize() and its summary events without exposing conversation content", async () => {
+    const { sdk } = instrument({ runs: [[
+      { event: { type: "summary", status: "running", agent_id: AGENT_ID, run_id: "run-1" } },
+      { event: { type: "summary", status: "completed", fallback: true, agent_id: AGENT_ID, run_id: "run-1" } as never },
+      { finish: "finished", result: "private summarized conversation" },
+    ]] });
+    const agent = await sdk.Agent.create({ agentId: AGENT_ID });
+    const run = await agent.summarize();
+    expect((await drain(run.stream())).map((event) => event.type)).toEqual(["summary", "summary"]);
+    expect((await run.wait()).result).toBe("private summarized conversation");
+    await until(() => runSpans().length === 1);
+    const span = one(spans(), SpanNames.RUN);
+    expect(attr(span, "cursor.run.operation")).toBe("summarize");
+    expect(attr(span, C.RUN_STATUS)).toBe("finished");
+    expect(span.events.filter((event) => event.name === "cursor.summary").map((event) => event.attributes)).toEqual([
+      { "cursor.summary.status": "running" },
+      { "cursor.summary.status": "completed", "cursor.summary.fallback": true },
+    ]);
+    expect(allAttributeText(spans())).not.toContain("private summarized conversation");
+  });
+});
+
 describe("streamed run (documented events)", () => {
   async function streamFullRun(traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean }) {
     const { sdk } = instrument({ runs: [fullRun()] }, { traceConfig });

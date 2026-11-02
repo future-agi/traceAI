@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-a2a"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for Google Agent-to-Agent (A2A) Protocol — distributed tracing across multi-agent boundaries"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "MIT"

@@ -28,7 +28,7 @@ const { z } = req("zod");
 const version = JSON.parse(
   readFileSync(path.join(fixture, "node_modules/fastmcp/package.json")),
 ).version;
-const current = version === "4.23.8";
+const current = version === "4.23.8" || version === "4.23.13";
 const canary = "PRIVATE_CANARY_never_export";
 const remote = "00-11111111111111111111111111111111-2222222222222222-01";
 const meta = { traceparent: remote, custom: canary };

@@ -42,6 +42,29 @@ class FITracerTest {
     }
 
     @Test
+    void explicitSnapshotDoesNotInheritConsumerIdentity() throws Exception {
+        try (var session = ContextAttributes.usingSession("consumer");
+             var user = ContextAttributes.usingUser("consumer-user")) {
+            var parent = io.opentelemetry.context.Context.current();
+            tracer.startSpan("empty", FISpanKind.RETRIEVER, parent, java.util.Map.of()).end();
+            tracer.startSpan("partial", FISpanKind.RETRIEVER, parent,
+                java.util.Map.of(SemanticConventions.SESSION_ID, "caller")).end();
+            tracer.startSpan("implicit", FISpanKind.RETRIEVER, parent).end();
+            assertThat(ContextAttributes.getAttributesFromContext())
+                .containsEntry(SemanticConventions.USER_ID, "consumer-user");
+        }
+        var sessionKey = io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.SESSION_ID);
+        var userKey = io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.USER_ID);
+        assertThat(otelTesting.getSpans()).hasSize(3);
+        assertThat(otelTesting.getSpans().get(0).getAttributes().get(sessionKey)).isNull();
+        assertThat(otelTesting.getSpans().get(0).getAttributes().get(userKey)).isNull();
+        assertThat(otelTesting.getSpans().get(1).getAttributes().get(sessionKey)).isEqualTo("caller");
+        assertThat(otelTesting.getSpans().get(1).getAttributes().get(userKey)).isNull();
+        assertThat(otelTesting.getSpans().get(2).getAttributes().get(sessionKey)).isEqualTo("consumer");
+        assertThat(otelTesting.getSpans().get(2).getAttributes().get(userKey)).isEqualTo("consumer-user");
+    }
+
+    @Test
     void shouldSetInputValue() {
         Span span = tracer.startSpan("test", FISpanKind.LLM);
         tracer.setInputValue(span, "test input");

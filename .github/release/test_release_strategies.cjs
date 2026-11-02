@@ -23,7 +23,7 @@ const caseExists = file => {
 };
 const changed = ['python/fi_instrumentation/instrumentation/config.py', 'python/frameworks/openai/traceai_openai/instrumentation.py',
   'typescript/packages/traceai_openai/src/index.ts', 'java/traceai-java-core/src/Example.java',
-  'go/openai/example.go', 'csharp/src/FIInstrumentation/Example.cs'];
+  'go/openai/example.go', 'go/bedrock/client.go', 'csharp/src/FIInstrumentation/Example.cs'];
 const scm = {
   repository: {owner: 'future-agi', repo: 'traceAI', defaultBranch: 'main'},
   async getFileJson(file) { return JSON.parse(fs.readFileSync(path.join(root, file))); },
@@ -55,7 +55,7 @@ const scm = {
     if (value !== undefined) updates.set(u.path, value);
   }
   const next = JSON.parse(updates.get('.release-please-manifest.json'));
-  for (const p of ['python', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'csharp/src/FIInstrumentation']) {
+  for (const p of ['python', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'go/bedrock', 'csharp/src/FIInstrumentation']) {
     assert.equal(next[p], featureVersion(baseline[p]), `${p}: feature bumps patch before 1.0, minor after 1.0`);
   }
   assert(updates.get('python/frameworks/openai/traceai_openai/version.py').includes(`__version__ = "${next['python/frameworks/openai']}"`));
@@ -65,6 +65,7 @@ const scm = {
   assert.equal(JSON.parse(updates.get('typescript/packages/traceai_openai/package.json')).version, next['typescript/packages/traceai_openai']);
   assert(updates.get('csharp/src/FIInstrumentation/FIInstrumentation.csproj').includes(`<Version>${next['csharp/src/FIInstrumentation']}</Version>`));
   assert(!next.java.includes('SNAPSHOT'), 'one release PR, no Maven snapshot PR');
+  assert(updates.get('go/bedrock/client.go').includes(`Version   = "${next['go/bedrock']}"`), 'Bedrock runtime instrumentation version follows release');
   assert.match(updates.get('java/pom.xml'), new RegExp(`<version>${next.java.replaceAll('.', '\\.')}</version>`));
   // The Java lane's BOM and every literal reactor parent must move with the
   // root version. Merely checking the root POM misses a broken Maven reactor.
