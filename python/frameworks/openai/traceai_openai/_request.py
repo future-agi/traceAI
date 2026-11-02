@@ -10,6 +10,7 @@ from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     SpanAttributes,
 )
+from openai import Omit
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -437,12 +438,21 @@ def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]
     # The targeted signature of `request` is here:
     # https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/_base_client.py#L846-L847  # noqa: E501
     cast_to: type = args[0]
+    json_data = getattr(args[1], "json_data", None)
+    extra_json = getattr(args[1], "extra_json", None)
+    # Mirror the SDK's shallow extra_body merge without mutating its options.
+    # Overrides (including Omit removals) affect both request metadata and the
+    # number of terminal choices required for a successful streamed completion.
+    if extra_json is not None:
+        if json_data is None:
+            json_data = extra_json
+        elif isinstance(json_data, Mapping) and isinstance(extra_json, Mapping):
+            json_data = {
+                key: value for key, value in {**json_data, **extra_json}.items()
+                if not isinstance(value, Omit)
+            }
     request_parameters: Mapping[str, Any] = (
-        json_data
-        # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/_models.py#L427  # noqa: E501
-        if hasattr(args[1], "json_data")
-        and isinstance(json_data := args[1].json_data, Mapping)
-        else {}
+        json_data if isinstance(json_data, Mapping) else {}
     )
     # FIXME: Because request parameters is just a Mapping, it can contain any value as long as it
     # serializes correctly in an HTTP request body. For example, Enum values may be present if a

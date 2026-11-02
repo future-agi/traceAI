@@ -3,6 +3,7 @@ import asyncio
 import json
 
 import httpx
+import openai
 import pytest
 from fi_instrumentation import TraceConfig
 from opentelemetry.trace import StatusCode
@@ -77,6 +78,60 @@ def test_chat_completion_requires_terminal_choices(make_tracer, asynchronous, do
     assert "synthetic-private-output" not in str(attrs)
     if case == "usage_tail":
         assert attrs["gen_ai.usage.total_tokens"] == 5
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("declared_n,override_n,completed_choices,expected_status", [
+    pytest.param(2, 1, 1, StatusCode.OK, id="override-down"),
+    pytest.param(1, 2, 1, StatusCode.ERROR, id="override-up-incomplete"),
+    pytest.param(1, 2, 2, StatusCode.OK, id="override-up-complete"),
+    pytest.param(2, openai.Omit(), 1, StatusCode.OK, id="remove-n"),
+    pytest.param(2, None, 1, StatusCode.OK, id="null-n"),
+    pytest.param(openai.NOT_GIVEN, 2, 1, StatusCode.ERROR, id="extra-body-only-n"),
+])
+def test_completion_count_uses_effective_body(
+    make_tracer, asynchronous, declared_n, override_n, completed_choices, expected_status,
+):
+    exporter = make_tracer()
+    chunks = [chunk(index=i, finish_reason="stop") for i in range(completed_choices)]
+    wire_bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        wire_bodies.append(body)
+        if isinstance(override_n, openai.Omit):
+            assert "n" not in body
+        else:
+            assert body["n"] == override_n
+        return stream_response(chunks, done=True)
+
+    extra_body = {"n": override_n}
+    params = dict(
+        model=REQUEST_MODEL, messages=[{"role": "user", "content": "synthetic-input"}],
+        stream=True, n=declared_n, extra_body=extra_body,
+    )
+
+    async def run_async():
+        async with async_client(handler) as sdk:
+            stream = await sdk.chat.completions.create(**params)
+            assert len([c async for c in stream]) == completed_choices
+            await stream.close()
+
+    if asynchronous:
+        asyncio.run(run_async())
+    else:
+        with client(handler) as sdk:
+            stream = sdk.chat.completions.create(**params)
+            assert len(list(stream)) == completed_choices
+            stream.close()
+
+    assert len(wire_bodies) == 1
+    assert extra_body == {"n": override_n}
+    span, attrs = only_span(exporter)
+    assert span.status.status_code == expected_status
+    # Request metadata and completion detection must describe the same body.
+    expected_parameters = {k: v for k, v in wire_bodies[0].items() if k != "messages"}
+    assert json.loads(attrs["gen_ai.request.parameters"]) == expected_parameters
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
