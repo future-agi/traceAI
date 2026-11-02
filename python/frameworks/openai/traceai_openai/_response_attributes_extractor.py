@@ -27,6 +27,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._attributes._responses_api import _ResponsesApiAttributes
+from traceai_openai._deepseek import _output_alias, deepseek_attributes
 from traceai_openai._utils import _get_openai_version, _get_texts
 
 if TYPE_CHECKING:
@@ -56,9 +57,12 @@ class _ResponseAttributesExtractor:
         "_create_embedding_response_type",
         "_images_response_type",
         "_responses_type",
+        "_provider",
     )
 
-    def __init__(self, openai: ModuleType, config: Optional[TraceConfig] = None) -> None:
+    def __init__(self, openai: ModuleType, config: Optional[TraceConfig] = None,
+                 provider: Optional[str] = None) -> None:
+        self._provider = provider
         self._openai = openai
         self._config = config if config is not None else TraceConfig()
         self._chat_completion_type: Type["ChatCompletion"] = (
@@ -78,6 +82,8 @@ class _ResponseAttributesExtractor:
         response: Any,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        if self._provider == "deepseek":
+            yield from deepseek_attributes(response, self._config)
         if isinstance(response, self._chat_completion_type):
             yield from self._get_attributes_from_chat_completion(
                 completion=response,
@@ -111,7 +117,17 @@ class _ResponseAttributesExtractor:
         response: Response,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield from _ResponsesApiAttributes._get_attributes_from_response(response)
+        for key, value in _ResponsesApiAttributes._get_attributes_from_response(response):
+            if (
+                self._provider == "deepseek"
+                and key.startswith(f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.")
+                and not key.endswith(f".{MessageAttributes.MESSAGE_ROLE}")
+            ):
+                # Tool arguments and reasoning are output text too; older cores
+                # only recognize the standard message.content privacy key.
+                yield from _output_alias(self._config, key, value)
+            else:
+                yield key, value
 
     def _get_attributes_from_chat_completion(
         self,
@@ -134,7 +150,11 @@ class _ResponseAttributesExtractor:
                     for key, value in self._get_attributes_from_chat_completion_message(
                         message
                     ):
-                        yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
+                        attribute = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}"
+                        if self._provider == "deepseek" and key != MessageAttributes.MESSAGE_ROLE:
+                            yield from _output_alias(self._config, attribute, value)
+                        else:
+                            yield attribute, value
 
     def _get_attributes_from_completion(
         self,
