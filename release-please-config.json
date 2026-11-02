@@ -702,6 +702,14 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_google_genai_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-google-genai-sdk",
+      "package-name": "@traceai/google-genai-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_groq": {
       "release-type": "node",
       "component": "npm-traceai-groq",
