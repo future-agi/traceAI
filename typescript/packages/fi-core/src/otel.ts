@@ -1,5 +1,7 @@
 import {
   Attributes,
+  context,
+  createContextKey,
   diag,
   TraceFlags,
   trace,
@@ -25,6 +27,8 @@ import {
 import { Resource, resourceFromAttributes, detectResources, defaultResource } from "@opentelemetry/resources";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 
 // Import grpc for metadata handling
 import * as grpc from "@grpc/grpc-js";
@@ -338,121 +342,75 @@ function constructFullEndpoint(customEndpoint?: string): string {
 
 
 // --- TracerProvider ---
-interface FITracerProviderOptions {
+export interface FITracerProviderOptions {
   resource?: Resource;
   verbose?: boolean;
   idGenerator?: IdGenerator;
-  endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
+  endpoint?: string;
   headers?: FIHeaders;
-  transport?: Transport; // Transport type
+  transport?: Transport;
+  batch?: boolean;
+  /** Explicit processors replace the default FI exporter; [] disables export. */
+  spanProcessors?: SpanProcessor[];
 }
 
 class FITracerProvider extends BasicTracerProvider {
-  private defaultProcessorAttached: boolean = false;
-  private verbose: boolean;
-  private endpoint: string; // This will store the fully constructed endpoint
-  private headers?: FIHeaders;
-  private transport: Transport;
+  private readonly processorRegistry: SpanProcessorRegistry;
 
   constructor(config: FITracerProviderOptions = {}) {
-    const idGenerator = config.idGenerator ?? new UuidIdGenerator();
     const transport = config.transport ?? Transport.HTTP;
-    
+    const endpoint = transport === Transport.GRPC
+      ? config.endpoint ?? getEnvGrpcCollectorEndpoint()
+      : constructFullEndpoint(config.endpoint);
     const verbose = config.verbose ?? (getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true");
-    
-    // Construct the appropriate endpoint based on transport
-    let endpoint: string;
-    if (transport === Transport.GRPC) {
-      endpoint = config.endpoint ?? getEnvGrpcCollectorEndpoint();
-    } else {
-      endpoint = constructFullEndpoint(config.endpoint);
+    let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
+    if (config.spanProcessors === undefined) {
+      const headers = config.headers ?? getEnvFiAuthHeader();
+      const exporter = transport === Transport.GRPC
+        ? new GRPCSpanExporter({ endpoint, headers, verbose })
+        : new _OTLPHTTPTraceExporter({ url: endpoint, headers });
+      defaultProcessor = config.batch
+        ? new DefaultBatchSpanProcessor(exporter)
+        : new DefaultSimpleSpanProcessor(exporter);
     }
-    
-    const headers = config.headers ?? getEnvFiAuthHeader();
-
+    const processorRegistry = new SpanProcessorRegistry(
+      config.spanProcessors ?? [],
+      () => defaultProcessor?.disable(),
+    );
+    super({
+      resource: config.resource,
+      idGenerator: config.idGenerator ?? new UuidIdGenerator(),
+      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry],
+    });
+    this.processorRegistry = processorRegistry;
     if (verbose) {
-      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
-    }
-
-    // Create the appropriate exporter
-    let exporter: SpanExporter;
-    if (transport === Transport.GRPC) {
-      exporter = new GRPCSpanExporter({ endpoint, headers, verbose: config.verbose });
-    } else {
-      exporter = new _OTLPHTTPTraceExporter({ url: endpoint, headers });
-    }
-    
-    const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
-    super({ resource: config.resource, idGenerator, spanProcessors: [defaultProcessor] });
-    this.defaultProcessorAttached = true;
-    this.verbose = verbose;
-    this.endpoint = endpoint;
-    this.headers = headers;
-    this.transport = transport;
-
-    // Log to confirm processor and exporter details
-    if (verbose) {
-      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
-    }
-
-    if (verbose) {
-      this.printTracingDetails();
+      diag.info(`FITracerProvider: ${config.spanProcessors === undefined
+        ? `${config.batch ? "Batch" : "Simple"}SpanProcessor with ${transport.toUpperCase()} exporter at ${endpoint}`
+        : `${config.spanProcessors.length} configured span processor(s)`}`);
     }
   }
 
+  /**
+   * Prefer constructor spanProcessors for new applications. For compatibility,
+   * the first call replaces the default FI processor; subsequent calls append.
+   * Explicit constructor processors are never replaced.
+   */
   addSpanProcessor(spanProcessor: SpanProcessor): void {
-    if (this.defaultProcessorAttached) {
-      diag.warn(
-        "Adding a new SpanProcessor. The default SimpleSpanProcessor will be replaced.",
-      );
-      (this as any)._registeredSpanProcessors = []; 
-      this.defaultProcessorAttached = false; 
-    }
-    (this as any)._registeredSpanProcessors.push(spanProcessor);
+    this.processorRegistry.add(spanProcessor);
   }
+}
 
-  private printTracingDetails(): void {
-    const resource = (this as BasicTracerProvider as any).resource;
-    if (!resource) {
-      diag.warn("No resource available for tracing details");
-      return;
-    }
+const CONTEXT_MANAGER_PROBE = createContextKey("traceai.context-manager-probe");
 
-    const projectName = resource.attributes[PROJECT_NAME] || "N/A";
-    const projectType = resource.attributes[PROJECT_TYPE];
-    const projectVersionName = resource.attributes[PROJECT_VERSION_NAME] || "default";
-    const evalTags = resource.attributes[EVAL_TAGS] || [];
-    const sessionName = resource.attributes[SESSION_NAME] || "N/A";
-
-    const processorName = this.defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
-    const transportName = this.transport.toUpperCase(); 
-
-    const detailsHeader =
-      process.platform === "win32"
-        ? "OpenTelemetry Tracing Details"
-        : "🔭 OpenTelemetry Tracing Details 🔭";
-
-    let detailsMsg = `${detailsHeader}\n`;
-    detailsMsg += `|  FI Project: ${projectName}\n`;
-    detailsMsg += `|  FI Project Type: ${projectType}\n`;
-    detailsMsg += `|  FI Project Version Name: ${projectVersionName}\n`;
-    detailsMsg += `|  Span Processor: ${processorName}\n`;
-    detailsMsg += `|  Collector Endpoint: ${this.endpoint}\n`; // Now shows the full endpoint
-    detailsMsg += `|  Transport: ${transportName}\n`;
-    detailsMsg += `|  Transport Headers: ${this.headers ? Object.keys(this.headers).map(h => `${h}: ****`).join(', ') : 'None'}\n`;
-    detailsMsg += `|  Eval Tags: ${typeof evalTags === 'string' ? evalTags : JSON.stringify(evalTags)}\n`;
-    detailsMsg += `|  Session Name: ${sessionName}\n`;
-    detailsMsg += "|  \n";
-    if (this.defaultProcessorAttached) {
-      detailsMsg += "|  Using a default SpanProcessor. `addSpanProcessor` will overwrite this default.\n";
-    }
-  }
-  async shutdown(): Promise<void> {
-    if (this.verbose) {
-      diag.info("Shutting down FI TracerProvider...");
-    }
-    return super.shutdown();
-  }
+function ensureContextManager(): void {
+  // OTel has no public getter for the installed manager. Test its behavior using
+  // a private context key, without replacing an application's working manager.
+  const probeContext = context.active().setValue(CONTEXT_MANAGER_PROBE, true);
+  if (context.with(probeContext, () => context.active().getValue(CONTEXT_MANAGER_PROBE))) return;
+  const manager = new AsyncLocalStorageContextManager().enable();
+  if (!context.setGlobalContextManager(manager)) manager.disable();
+  // A global manager may also serve other providers. Provider shutdown must not
+  // disable it; the application owns teardown of global OTel state.
 }
 
 class SimpleSpanProcessor extends OTelSimpleSpanProcessor {}
@@ -466,6 +424,8 @@ export interface RegisterOptions {
   sessionName?: string;
   metadata?: Record<string, any>;
   batch?: boolean;
+  /** Explicit processors replace the default FI exporter; [] disables export. */
+  spanProcessors?: SpanProcessor[];
   setGlobalTracerProvider?: boolean;
   headers?: FIHeaders;
   verbose?: boolean;
@@ -483,6 +443,7 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     sessionName,
     metadata = {},
     batch = false,
+    spanProcessors,
     setGlobalTracerProvider = true,
     headers: optHeaders,
     verbose = false,
@@ -578,37 +539,19 @@ if (!projectName) {
     endpoint: optEndpoint,
     headers: exporterHeaders,
     transport,
+    batch,
+    spanProcessors,
   });
 
-  if (batch) {
-    let batchExporter: SpanExporter;
-    if (transport === Transport.GRPC) {
-      batchExporter = new GRPCSpanExporter({
-        endpoint: (tracerProvider as any).endpoint,
-        headers: exporterHeaders,
-        verbose: verbose
-      });
-    } else {
-      batchExporter = new _OTLPHTTPTraceExporter({
-        url: (tracerProvider as any).endpoint,
-        headers: exporterHeaders,
-      });
-    }
-    const batchProcessor = new OTelBatchSpanProcessor(batchExporter);
-
-    (tracerProvider as any)._registeredSpanProcessors = [];
-    (tracerProvider as any)._defaultProcessorAttached = false;
-    tracerProvider.addSpanProcessor(batchProcessor);
-  }
-
   if (setGlobalTracerProvider) {
-    trace.setGlobalTracerProvider(tracerProvider);
-    if (verbose) {
-      diag.info(
-        "|  \n" +
-        "|  `register` has set this TracerProvider as the global OpenTelemetry default.\n" +
-        "|  To disable this behavior, call `register` with " +
-        "`set_global_tracer_provider=false`.\n"
+    if (trace.setGlobalTracerProvider(tracerProvider)) {
+      ensureContextManager();
+      if (verbose) diag.info("register: Installed the global FI tracer provider.");
+    } else {
+      diag.warn(
+        "register: An OpenTelemetry tracer provider is already installed; it was not replaced. " +
+        "Use the returned provider explicitly, or configure exporters on your application's SDK. " +
+        "Use setGlobalTracerProvider: false for an intentionally isolated FI provider.",
       );
     }
   }
