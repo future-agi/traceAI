@@ -77,6 +77,47 @@ def test_no_env_vars_needed_and_diagnostics_flip_on(instrumentor, provider, monk
     assert [(s.enable_otel_diagnostics, s.enable_otel_diagnostics_sensitive) for s in _settings()] == before
 
 
+def test_unsupported_connector_warning_precedes_setup():
+    """Do not bury an unsupported connector and its privacy boundary after setup."""
+    before_install = (PACKAGE_DIR / "README.md").read_text(encoding="utf-8").split("## Install", 1)[0]
+    assert "Azure AI Inference is not supported" in before_install
+    assert "AzureAIInferenceChatCompletion" in before_install
+    assert "privacy controls" in before_install
+    assert "FI_HIDE_INPUTS" in before_install
+
+
+@pytest.mark.parametrize("native_sensitive", [False, True])
+@pytest.mark.parametrize("sensitive", [False, True])
+def test_fresh_connector_settings_are_outside_adapter_scope(
+    instrumentor, provider, monkeypatch, native_sensitive, sensitive
+):
+    """AzureAIInferenceTracing constructs these settings per call, not a singleton.
+
+    Keep the documentation's boundary explicit: instrument() does not change
+    this route's enablement or override its content recording. Globally changing
+    settings defaults would also affect provider SDK tracing outside our scope.
+    """
+    from semantic_kernel.utils.telemetry.model_diagnostics.model_diagnostics_settings import ModelDiagnosticSettings
+
+    for key in list(os.environ):
+        if key.startswith("SEMANTICKERNEL_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv(
+        "SEMANTICKERNEL_EXPERIMENTAL_GENAI_ENABLE_OTEL_DIAGNOSTICS_SENSITIVE", str(native_sensitive).lower()
+    )
+    before = ModelDiagnosticSettings()
+    global_provider = trace_api.get_tracer_provider()
+    instrumentor.instrument(tracer_provider=provider, sensitive=sensitive)
+    after = ModelDiagnosticSettings()
+
+    assert not before.enable_otel_diagnostics and not after.enable_otel_diagnostics
+    assert before.enable_otel_diagnostics_sensitive is native_sensitive
+    assert after.enable_otel_diagnostics_sensitive is native_sensitive
+    assert all(s.enable_otel_diagnostics for s in _settings())
+    assert all(s.enable_otel_diagnostics_sensitive is sensitive for s in _settings())
+    assert trace_api.get_tracer_provider() is global_provider
+
+
 def test_sensitive_opt_in_flips_sensitive(instrumentor, provider):
     instrumentor.instrument(tracer_provider=provider, sensitive=True)
     assert all(s.enable_otel_diagnostics_sensitive for s in _settings())
