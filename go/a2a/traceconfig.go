@@ -11,9 +11,11 @@ import (
 
 // Environment variables read by [TraceConfigFromEnv]. They are the traceAI
 // TraceConfig switches, with the same names and defaults as the Python and
-// TypeScript packages: everything is captured unless a switch is "true".
+// TypeScript packages: content is captured unless its switch is "true".
+// Error details use an explicit true/false override or derive from content flags.
 const (
 	EnvHideLLMInvocationParameters = "FI_HIDE_LLM_INVOCATION_PARAMETERS"
+	EnvHideErrorDetails            = "FI_HIDE_ERROR_DETAILS"
 	EnvHideInputs                  = "FI_HIDE_INPUTS"
 	EnvHideOutputs                 = "FI_HIDE_OUTPUTS"
 	EnvHideInputMessages           = "FI_HIDE_INPUT_MESSAGES"
@@ -35,11 +37,16 @@ const (
 // TraceConfig decides which content attributes leave the process. The zero
 // value captures everything, like DEFAULT_HIDE_* = False in Python traceAI.
 type TraceConfig struct {
+	// HideErrorDetails drops error.message, exception.message and
+	// exception.stacktrace. Nil derives the policy from the six input/output,
+	// message and text switches below. An explicit false allows error details
+	// even when content is hidden. Error classes and ERROR status are kept.
+	HideErrorDetails *bool
 	// HideLLMInvocationParameters drops gen_ai.request.parameters.
 	HideLLMInvocationParameters bool
 	// HideInputs redacts input.value (the message sent to the remote agent)
 	// and drops input messages, system instructions and tool-call arguments.
-	// HideInputs or HideOutputs also drops the remote agent's error message.
+	// Content-hiding flags also hide error details unless explicitly overridden.
 	HideInputs bool
 	// HideOutputs redacts output.value (the agent's reply, artifacts and
 	// final status message) and drops output messages and tool-call results.
@@ -61,7 +68,8 @@ type TraceConfig struct {
 
 // TraceConfigFromEnv reads the FI_HIDE_* variables. A value is true only when
 // it is "true" (any case) and false otherwise, matching Python traceAI, which
-// falls back to the default for anything it cannot parse.
+// falls back to the default for anything it cannot parse. HideErrorDetails
+// is optional: explicit true/false overrides derivation; other values derive it.
 func TraceConfigFromEnv() TraceConfig {
 	c := TraceConfig{
 		HideLLMInvocationParameters: envBool(EnvHideLLMInvocationParameters),
@@ -72,6 +80,14 @@ func TraceConfigFromEnv() TraceConfig {
 		HideInputImages:             envBool(EnvHideInputImages),
 		HideInputText:               envBool(EnvHideInputText),
 		HideOutputText:              envBool(EnvHideOutputText),
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvHideErrorDetails))) {
+	case "true":
+		v := true
+		c.HideErrorDetails = &v
+	case "false":
+		v := false
+		c.HideErrorDetails = &v
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvBase64ImageMaxLength))); err == nil && v > 0 {
 		c.Base64ImageMaxLength = v
@@ -85,7 +101,13 @@ func envBool(name string) bool {
 
 // errorMessageAllowed reports whether the remote agent's error message may be
 // written, mirroring the error.message rule in TraceConfig.Mask.
-func (c TraceConfig) errorMessageAllowed() bool { return !c.HideInputs && !c.HideOutputs }
+func (c TraceConfig) errorMessageAllowed() bool {
+	if c.HideErrorDetails != nil {
+		return !*c.HideErrorDetails
+	}
+	return !(c.HideInputs || c.HideOutputs || c.HideInputMessages ||
+		c.HideOutputMessages || c.HideInputText || c.HideOutputText)
+}
 
 func (c TraceConfig) imageMax() int {
 	if c.Base64ImageMaxLength > 0 {
@@ -97,11 +119,9 @@ func (c TraceConfig) imageMax() int {
 // Mask applies the config to one attribute. It returns the value to write and
 // false when the attribute must be dropped. The rules and their order follow
 // fi_instrumentation.TraceConfig.mask in Python traceAI. This package adds
-// three rules for keys Python does not mask, the same as the other traceAI Go
-// modules: system instructions and tool-call arguments go with the inputs,
-// tool-call results with the outputs, and error.message is dropped when either
-// inputs or outputs are hidden, because a remote agent's error can quote the
-// request.
+// A2A content rules keep system instructions and tool-call arguments with inputs,
+// tool-call results with the outputs, and error details follow the explicit or
+// derived HideErrorDetails policy because an error can quote the request.
 func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	key := string(kv.Key)
 	in := strings.Contains(key, GenAIInputMessages)
@@ -126,7 +146,7 @@ func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 		return kv, false
 	case c.HideOutputs && key == GenAIToolCallResult:
 		return kv, false
-	case (c.HideInputs || c.HideOutputs) && key == ErrorMessage:
+	case !c.errorMessageAllowed() && (key == ErrorMessage || key == "exception.message" || key == "exception.stacktrace"):
 		return kv, false
 	case c.HideInputText && in && strings.Contains(key, MessageContent) && !strings.Contains(key, MessageContents):
 		return redacted, true

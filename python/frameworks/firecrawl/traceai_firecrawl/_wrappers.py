@@ -33,18 +33,41 @@ _ERROR_STATUS_CODE = "firecrawl.error.status_code"
 _ERROR_CODE = "firecrawl.error.code"
 _MAX_QUERY_LENGTH = 1024
 
-# One span per call. crawl polls internally, so it must not emit one span per page.
+# One span per user operation, not per internal poll or page.
 _CRAWL_METHODS = {"crawl", "start_crawl", "get_crawl_status", "cancel_crawl"}
-_JOB_ID_FIRST_ARG_METHODS = {"get_crawl_status", "cancel_crawl"}
-# Methods that return a CrawlJob. The SDK returns failed and cancelled jobs
-# without raising (methods/crawl.py wait_for_crawl_completion), so the span
-# status comes from the job.
-_JOB_STATUS_METHODS = {"crawl", "get_crawl_status"}
-# Of those, the methods whose span status follows the job (crawl waits for it).
-_JOB_OUTCOME_METHODS = {"crawl"}
+_EXTRACT_METHODS = {"extract", "start_extract", "get_extract_status"}
+_BATCH_METHODS = {
+    "batch_scrape", "start_batch_scrape", "wait_batch_scrape",
+    "get_batch_scrape_status", "get_batch_scrape_status_page",
+    "get_batch_scrape_errors", "cancel_batch_scrape",
+}
+_AGENT_METHODS = {"agent", "start_agent", "get_agent_status", "cancel_agent"}
+_BROWSER_METHODS = {"browser", "browser_execute", "delete_browser", "list_browsers"}
+_JOB_METHODS = _CRAWL_METHODS | _EXTRACT_METHODS | _BATCH_METHODS | _AGENT_METHODS
+_JOB_ID_FIRST_ARG_METHODS = {
+    "get_crawl_status", "cancel_crawl", "get_extract_status", "wait_batch_scrape",
+    "get_batch_scrape_status", "get_batch_scrape_errors", "cancel_batch_scrape",
+    "get_agent_status", "cancel_agent",
+}
+_CANCEL_METHODS = {"cancel_crawl", "cancel_batch_scrape", "cancel_agent"}
+# Blocking operations return failed/cancelled jobs without necessarily raising.
+# A successful status poll reports the job state but is not itself a failure.
+_JOB_OUTCOME_METHODS = {"crawl", "extract", "batch_scrape", "wait_batch_scrape", "agent"}
+_JOB_STATUS_METHODS = _JOB_OUTCOME_METHODS | {
+    "get_crawl_status", "start_extract", "get_extract_status",
+    "get_batch_scrape_status", "get_batch_scrape_status_page", "start_agent", "get_agent_status",
+}
 _ERROR_JOB_STATUSES = {"failed", "cancelled"}
+_SAFE_JOB_STATUSES = _ERROR_JOB_STATUSES | {"scraping", "processing", "completed"}
+# These responses can reject an operation without raising an SDK exception.
+_SUCCESS_METHODS = _EXTRACT_METHODS | _AGENT_METHODS | _BROWSER_METHODS
+_PAGE_COUNT_METHODS = {"crawl", "batch_scrape", "wait_batch_scrape"}
+_SESSION_ID = "firecrawl.session_id"
 # Methods whose arguments carry the requested output formats.
-_FORMAT_METHODS = {"scrape", "search", "crawl", "start_crawl"}
+_FORMAT_METHODS = {
+    "scrape", "search", "crawl", "start_crawl", "batch_scrape", "start_batch_scrape",
+    "extract", "start_extract",
+}
 # SDK 4.46.2 FormatString/model Literals and validation aliases. The finite
 # vocabulary bounds both label length and the deduplicated attribute list.
 _FORMAT_NAMES = {name: name for name in (
@@ -190,15 +213,17 @@ def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any
     return _job_id(None, kwargs)
 
 
-def _formats(kwargs: Mapping[str, Any], method_name: str) -> list[str]:
+def _formats(kwargs: Mapping[str, Any], method_name: str, async_batch: bool = False) -> list[str]:
     """Names of the requested formats. A format object's prompt or schema is
     content, so only its ``type`` is kept."""
     from firecrawl.v2.types import ScrapeFormats
 
-    scrape_options = kwargs.get("scrape_options")
+    # Async batch accepts options=ScrapeOptions and ignores top-level formats;
+    # the sync batch facade instead exposes formats directly.
+    scrape_options = kwargs.get("options" if async_batch else "scrape_options")
     # The SDK ignores convenience formats when scrape_options is supplied.
     # Search has no supported top-level formats argument.
-    if scrape_options is not None or method_name == "search":
+    if scrape_options is not None or method_name == "search" or async_batch:
         if isinstance(scrape_options, Mapping):
             formats = scrape_options.get("formats")
         else:
@@ -291,13 +316,23 @@ class _BaseWrapper:
             if host:
                 attributes["server.address"] = host
         if self._method_name in _FORMAT_METHODS:
-            formats = _formats(kwargs, self._method_name)
+            formats = _formats(
+                kwargs, self._method_name,
+                async_batch=isinstance(self, AsyncOperationWrapper) and self._method_name in _BATCH_METHODS,
+            )
             if formats:
                 attributes[_FORMATS] = formats
         if self._method_name in _CRAWL_METHODS:
             limit = kwargs.get("limit")
             if isinstance(limit, int):
                 attributes[_LIMIT] = limit
+        if self._method_name in ("browser_execute", "delete_browser"):
+            session_id = kwargs.get("session_id", args[0] if args else None)
+            if isinstance(session_id, str) and session_id:
+                safe_id = _redact(session_id, instance)
+                if safe_id is not None:
+                    attributes[_SESSION_ID] = safe_id
+        if self._method_name in _JOB_METHODS:
             job_id = _call_job_id(self._method_name, args, kwargs)
             if job_id:
                 safe_id = _redact(job_id, instance)
@@ -326,31 +361,43 @@ class _BaseWrapper:
             count = _document_count(result)
             if count is not None:
                 span.set_attribute(_RESULT_COUNT, count)
-        if self._method_name in _CRAWL_METHODS:
+        if self._method_name in _JOB_METHODS or self._method_name == "browser":
             job_id = _job_id(result, kwargs)
             if job_id:
                 safe_id = _redact(job_id, instance)
                 if safe_id is not None:
-                    span.set_attribute(_JOB_ID, safe_id)
-            if self._method_name == "crawl":
-                span.set_attribute(_PAGE_COUNT, _page_count(result))
-        if self._method_name == "cancel_crawl" and isinstance(result, bool):
+                    attribute = _SESSION_ID if self._method_name == "browser" else _JOB_ID
+                    span.set_attribute(attribute, safe_id)
+        if self._method_name in _PAGE_COUNT_METHODS:
+            span.set_attribute(_PAGE_COUNT, _page_count(result))
+        if self._method_name in _CANCEL_METHODS and isinstance(result, bool):
             span.set_attribute(_CANCELLED, result)
-        credits = getattr(result, "credits_used", None)
-        if isinstance(credits, int):
+        credits_attribute = "credits_billed" if self._method_name == "delete_browser" else "credits_used"
+        credits = getattr(result, credits_attribute, None)
+        if isinstance(credits, int) and not isinstance(credits, bool):
             span.set_attribute(_CREDITS_USED, credits)
         job_status = (
             getattr(result, "status", None) if self._method_name in _JOB_STATUS_METHODS else None
         )
-        if isinstance(job_status, str) and job_status:
+        # A bounded vocabulary prevents arbitrary response text entering metadata.
+        if not isinstance(job_status, str) or job_status not in _SAFE_JOB_STATUSES:
+            job_status = None
+        if job_status is not None:
             span.set_attribute(_STATUS, job_status)
-        # Only the blocking crawl() call's outcome is the job's outcome. A
-        # get_crawl_status poll that got an answer succeeded; it records the state.
         job_failed = self._method_name in _JOB_OUTCOME_METHODS and job_status in _ERROR_JOB_STATUSES
+        # Unlike status polls, blocking extract/agent return processing only
+        # when their SDK wait expires; the operation did not complete.
+        incomplete = self._method_name in {"extract", "agent"} and job_status in {"processing", "scraping"}
         if job_failed and job_status == "cancelled":
             span.set_attribute(_CANCELLED, True)
-        if job_failed:
-            span.set_status(Status(StatusCode.ERROR, job_status))
+        rejected = self._method_name in _SUCCESS_METHODS and getattr(result, "success", None) is False
+        exit_code = getattr(result, "exit_code", None) if self._method_name == "browser_execute" else None
+        execution_failed = (
+            self._method_name == "browser_execute" and getattr(result, "killed", None) is True
+        ) or (isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0)
+        if job_failed or incomplete or rejected or execution_failed:
+            reason = job_status if job_failed or incomplete else ("failed" if rejected else "execution_failed")
+            span.set_status(Status(StatusCode.ERROR, reason))
         else:
             span.set_status(Status(StatusCode.OK))
 
