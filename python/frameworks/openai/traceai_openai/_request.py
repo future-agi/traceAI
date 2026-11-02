@@ -1,6 +1,7 @@
 import logging
 from abc import ABC
 from contextlib import contextmanager
+from inspect import iscoroutinefunction
 from itertools import chain
 from types import ModuleType
 from typing import Any, Awaitable, Callable, Iterable, Iterator, Mapping, Optional, Tuple
@@ -11,6 +12,7 @@ from fi_instrumentation.fi_types import (
     SpanAttributes,
 )
 from openai import Omit
+from openai._legacy_response import LegacyAPIResponse
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -19,15 +21,24 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
+from traceai_openai._privacy import redact, request_credentials, response_credentials, safe_request
+from traceai_openai._request_context import capture_request_credentials
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
     _CompletionAccumulator,
     _ResponsesAccumulator,
+    _response_status,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_openai._span_io_handler import add_io_to_span_attributes
-from traceai_openai._stream import _AsyncStream, _ResponseAccumulator, _Stream
+from traceai_openai._stream import (
+    _AsyncRawResponse,
+    _AsyncStream,
+    _RawResponse,
+    _ResponseAccumulator,
+    _Stream,
+)
 from traceai_openai._utils import (
     _as_input_attributes,
     _finish_tracing,
@@ -58,12 +69,13 @@ class _WithTracer(ABC):
         attributes: Iterable[Tuple[str, AttributeValue]],
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
+        secrets: Tuple[str, ...] = (),
     ) -> Iterator[_WithSpan]:
         # Keep primary attributes so finalization can restore them after optional
         # details: OTel's bounded attribute map evicts the oldest entries.
         initial_attributes = {}
         try:
-            initial_attributes = dict(attributes)
+            initial_attributes = {key: redact(value, secrets) for key, value in attributes}
             span = self._tracer.start_span(name=span_name, attributes=initial_attributes)
         except Exception:
             logger.exception("Failed to start span")
@@ -76,6 +88,7 @@ class _WithTracer(ABC):
         ) as span:
             yield _WithSpan(
                 span=span,
+                secrets=secrets,
                 initial_attributes=initial_attributes,
                 context_attributes=dict(context_attributes),
                 extra_attributes=dict(extra_attributes),
@@ -115,6 +128,7 @@ class _WithOpenAI(ABC):
             return _ResponsesAccumulator(
                 request_parameters=request_parameters,
                 chat_completion_type=openai.types.responses.response.Response,
+                config=self._config,
                 response_attributes_extractor=self._response_attributes_extractor,
             )
         
@@ -208,56 +222,58 @@ class _WithOpenAI(ABC):
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
         not a stream.
         """
-        if hasattr(response, "parse") and callable(response.parse):
-            try:
-                response.parse()
-            except Exception:
-                logger.exception(f"Failed to parse response of type {type(response)}")
-
-        if self._is_streaming(response):
-            # Determine if the response is asynchronous
-            if self._is_async_stream(response):
-                stream_wrapper = _AsyncStream
-            else:
-                stream_wrapper = _Stream
-
-            # Get the response accumulator if available
-            response_accumulator_factory = self._response_accumulator_factories.get(
-                cast_to
+        response_accumulator_factory = self._response_accumulator_factories.get(cast_to)
+        accumulator_parameters = request_parameters
+        if cast_to is self._openai.types.chat.ChatCompletion and request_options is not None:
+            # Completion validation needs the on-wire choice count. Keep
+            # extra_body out of the existing exported request metadata.
+            _, accumulator_parameters = _parse_request_args(
+                (cast_to, request_options), include_extra_body=True,
             )
-            accumulator_parameters = request_parameters
-            if cast_to is self._openai.types.chat.ChatCompletion and request_options is not None:
-                # Completion validation needs the on-wire choice count. Keep
-                # extra_body out of the existing exported request metadata.
-                _, accumulator_parameters = _parse_request_args(
-                    (cast_to, request_options), include_extra_body=True,
+        response_accumulator = (
+            response_accumulator_factory(accumulator_parameters)
+            if response_accumulator_factory
+            else None
+        )
+
+        def on_parse(parsed: Any) -> Any:
+            if self._is_streaming(parsed):
+                stream_wrapper = _AsyncStream if self._is_async_stream(parsed) else _Stream
+                return stream_wrapper(
+                    stream=parsed,
+                    with_span=with_span,
+                    response_accumulator=response_accumulator,
                 )
-            response_accumulator = (
-                response_accumulator_factory(accumulator_parameters)
-                if response_accumulator_factory
-                else None
-            )
+            if isinstance(parsed, CreateEmbeddingResponse):
+                with_span.set_attribute(
+                    SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
+                )
+            add_io_to_span_attributes(with_span, None, parsed, config=self._config)
 
-            # Wrap the response with the appropriate stream wrapper
-            wrapped_stream = stream_wrapper(
-                stream=response,
-                with_span=with_span,
-                response_accumulator=response_accumulator,
-            )
-
-            return wrapped_stream
-
-        else:
             _finish_tracing(
-                status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                status=_response_status(parsed),
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,
-                    response=response,
+                    response=parsed,
                     response_attributes_extractor=self._response_attributes_extractor,
                 ),
             )
-            return response
+            return parsed
+
+        if hasattr(response, "parse") and callable(response.parse):
+            # Modern envelopes are deliberately lazy, even for non-SSE responses.
+            # Do not call async parse from sync I/O/attribute extraction paths.
+            raw_wrapper = (
+                _AsyncRawResponse if iscoroutinefunction(response.parse) else _RawResponse
+            )
+            raw = raw_wrapper(response, with_span, response_accumulator, on_parse)
+            if isinstance(response, LegacyAPIResponse):
+                # Preserve eager legacy non-stream telemetry. Stream parse caches
+                # remain SDK-owned, and every later explicit parse type is traced.
+                raw.parse()
+            return raw
+        return on_parse(response)
 
     def _raw_embeddings_json(self, response: CreateEmbeddingResponse) -> str:
         """The raw embeddings response; vectors are replaced by their dimension
@@ -294,6 +310,8 @@ class _Request(_WithTracer, _WithOpenAI):
             return wrapped(*args, **kwargs)
         try:
             cast_to, request_parameters = _parse_request_args(args)
+            secrets = request_credentials(instance, args[1], request_parameters)
+            request_parameters = safe_request(request_parameters)
             # Extract input data more robustly
             input_data = (
                 request_parameters.get("messages")
@@ -308,6 +326,7 @@ class _Request(_WithTracer, _WithOpenAI):
 
         with self._start_as_current_span(
             span_name=span_name,
+            secrets=secrets,
             attributes=chain(
                 self._get_attributes_from_instance(instance),
                 self._get_attributes_from_request(
@@ -327,22 +346,11 @@ class _Request(_WithTracer, _WithOpenAI):
             )
             add_io_to_span_attributes(with_span, input_data, None)
             try:
-                response = wrapped(*args, **kwargs)
+                with capture_request_credentials(instance, with_span):
+                    response = wrapped(*args, **kwargs)
+                with_span.add_secrets(request_credentials(instance, None, {}))
+                with_span.add_secrets(response_credentials(response))
 
-                if isinstance(response, CreateEmbeddingResponse):
-                    with_span.set_attribute(
-                        SpanAttributes.EMBEDDING_EMBEDDINGS,
-                        self._raw_embeddings_json(response),
-                    )
-
-                # Add output data to span attributes after getting response
-                if not self._is_streaming(response):
-                    add_io_to_span_attributes(
-                        with_span,
-                        None,
-                        response,
-                        is_streaming=self._is_streaming(response),
-                    )
                 return self._finalize_response(
                     response=response,
                     with_span=with_span,
@@ -350,7 +358,8 @@ class _Request(_WithTracer, _WithOpenAI):
                     request_parameters=request_parameters,
                     request_options=args[1],
                 )
-            except Exception as e:
+            except BaseException as e:
+                with_span.add_secrets(request_credentials(instance, getattr(e, "request", None), {}))
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
                     description=f"{type(e).__name__}: {e}",
@@ -372,6 +381,8 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             return await wrapped(*args, **kwargs)
         try:
             cast_to, request_parameters = _parse_request_args(args)
+            secrets = request_credentials(instance, args[1], request_parameters)
+            request_parameters = safe_request(request_parameters)
             # Extract input data more robustly
             input_data = (
                 request_parameters.get("messages")
@@ -386,6 +397,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             return await wrapped(*args, **kwargs)
         with self._start_as_current_span(
             span_name=span_name,
+            secrets=secrets,
             attributes=chain(
                 self._get_attributes_from_instance(instance),
                 self._get_attributes_from_request(
@@ -405,18 +417,14 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             )
             add_io_to_span_attributes(with_span, input_data, None)
             try:
-                response = await wrapped(*args, **kwargs)
-
-                if isinstance(response, CreateEmbeddingResponse):
-                    with_span.set_attribute(
-                        SpanAttributes.EMBEDDING_EMBEDDINGS,
-                        self._raw_embeddings_json(response),
-                    )
-
-                add_io_to_span_attributes(
-                    with_span, None, response, is_streaming=self._is_streaming(response)
-                )
-            except Exception as exception:
+                with capture_request_credentials(instance, with_span):
+                    response = await wrapped(*args, **kwargs)
+                with_span.add_secrets(request_credentials(instance, None, {}))
+                with_span.add_secrets(response_credentials(response))
+            except BaseException as exception:
+                with_span.add_secrets(request_credentials(
+                    instance, getattr(exception, "request", None), {}
+                ))
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -489,12 +497,6 @@ class _ResponseAttributes:
         request_parameters: Mapping[str, Any],
         response_attributes_extractor: _ResponseAttributesExtractor,
     ) -> None:
-        if hasattr(response, "parse") and callable(response.parse):
-            # E.g. see https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/_base_client.py#L518  # noqa: E501
-            try:
-                response = response.parse()
-            except Exception:
-                logger.exception(f"Failed to parse response of type {type(response)}")
         self._request_parameters = request_parameters
         self._response = response
         self._response_attributes_extractor = response_attributes_extractor
