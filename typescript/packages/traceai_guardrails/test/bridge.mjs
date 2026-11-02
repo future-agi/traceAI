@@ -56,11 +56,16 @@ const privateInput = '{"count":"synthetic-private-invalid-integer"}';
 try {
   for (const [protocol, Exporter] of [["json", JsonExporter], ["protobuf", ProtoExporter]]) {
     for (const compression of ["none", "gzip"]) {
-      for (const hideContent of [false, true]) {
+      for (const [hideInputs, hideOutputs, useEnv] of [
+        [false, false, false], [true, true, false],
+        [true, false, false], [true, false, true], [false, true, false],
+      ]) {
         received.length = 0;
+        const previous = process.env.FI_HIDE_INPUTS;
+        if (useEnv) process.env.FI_HIDE_INPUTS = "true";
         const exporter = new Exporter({ url: endpoint, compression, headers: { "x-fi-api-key": "synthetic-test-key" } });
         const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-        const inst = new GuardrailsInstrumentation({ traceConfig: { hideInputs: hideContent, hideOutputs: hideContent, hideErrorDetails: true } });
+        const inst = new GuardrailsInstrumentation({ traceConfig: { ...(useEnv ? {} : { hideInputs }), hideOutputs, hideErrorDetails: true } });
         inst.setTracerProvider(provider);
         try {
           // Pass the actual immutable ESM namespace, not a fake SDK or facade.
@@ -68,7 +73,12 @@ try {
           inst.manuallyInstrument(sdk);
           assert.equal(isPatched(), true);
           const parent = provider.getTracer("application").startSpan("parent");
-          const failed = await context.with(trace.setSpan(context.active(), parent), () => guard.parse(privateInput));
+          const failed = await context.with(trace.setSpan(context.active(), parent), () => guard.parse(privateInput, { numReasks: 0 }));
+          assert.equal(guard.history.last.inputs.numReasks, 0);
+          assert.equal(guard.history.last.iterations.length, 1);
+          assert.equal(guard.history.last.reaskPrompts.length, 0);
+          assert.equal(failed.rawLlmOutput, privateInput);
+          assert.ok(JSON.stringify(failed.reask).includes("synthetic-private-invalid-integer"));
           const passed = await context.with(trace.setSpan(context.active(), parent), () => guard.parse('{"count":7}'));
           assert.equal(failed.validationPassed, false);
           assert.equal(passed.validationPassed, true);
@@ -87,7 +97,21 @@ try {
             assert.equal(span.parentSpanId, spans.find(s => s.name === "parent").spanId);
           }
           assert.ok(guards[0].attributes.some(a => a.key === "guardrails.validation_passed"));
-          assert.equal(JSON.stringify(spans).includes("synthetic-private-invalid-integer"), !hideContent);
+          assert.equal(attr(guards[0], "guardrails.reask_count"), undefined);
+          assert.equal(JSON.stringify(spans).includes("synthetic-private-invalid-integer"), !hideInputs);
+          for (const key of ["output.value", "raw.output"]) {
+            if (hideOutputs) {
+              assert.equal(attr(guards[0], key).stringValue, "__REDACTED__");
+              assert.equal(attr(guards[1], key).stringValue, "__REDACTED__");
+            } else {
+              const rejected = JSON.parse(attr(guards[0], key).stringValue);
+              assert.equal(rejected.validationPassed, false);
+              assert.ok(!JSON.stringify(rejected).includes("synthetic-private-invalid-integer"));
+              assert.deepEqual(JSON.parse(attr(guards[1], key).stringValue), {
+                validatedOutput: { count: 7 }, validationPassed: true,
+              });
+            }
+          }
           assert.equal(received[0].headers["x-fi-api-key"], "synthetic-test-key");
           assert.equal(received[0].headers["content-encoding"], compression === "gzip" ? "gzip" : undefined);
           inst.disable();
@@ -100,8 +124,10 @@ try {
           await guard.parse(privateInput);
           await provider.forceFlush();
           assert.equal(allSpans().filter(s => s.name.startsWith("Guardrails parse")).length, 3);
-          console.log(JSON.stringify({ protocol, compression, hideContent, result: "PASS" }));
+          console.log(JSON.stringify({ protocol, compression, hideInputs, hideOutputs, useEnv, result: "PASS" }));
         } finally {
+          if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+          else process.env.FI_HIDE_INPUTS = previous;
           inst.disable();
           await provider.shutdown();
         }

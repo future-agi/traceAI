@@ -702,6 +702,14 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_google_genai_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-google-genai-sdk",
+      "package-name": "@traceai/google-genai-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_groq": {
       "release-type": "node",
       "component": "npm-traceai-groq",
@@ -953,7 +961,14 @@
       "package-name": "com.futureagi:traceai-java-parent",
       "skip-snapshot": true,
       "extra-files": [
-        {"type": "generic", "path": "java/compatibility/spring-ai/pom.xml"}
+        {
+          "type": "generic",
+          "path": "compatibility/spring-ai/pom.xml"
+        },
+        {
+          "type": "generic",
+          "path": "traceai-java-weaviate/README.md"
+        }
       ]
     },
     "go/a2a": {
@@ -1054,6 +1069,27 @@
         {
           "type": "docs",
           "section": "Documentation"
+        }
+      ]
+    },
+    "typescript/packages/traceai_elevenlabs": {
+      "release-type": "node",
+      "component": "npm-traceai-elevenlabs",
+      "package-name": "@traceai/elevenlabs",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "go/bedrock": {
+      "release-type": "go",
+      "component": "go/bedrock",
+      "package-name": "github.com/future-agi/traceAI/go/bedrock",
+      "tag-separator": "/",
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "client.go"
         }
       ]
     },

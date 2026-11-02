@@ -2,7 +2,6 @@
 
 import inspect
 import os
-from importlib import import_module
 from importlib.metadata import version
 from unittest.mock import patch
 
@@ -71,29 +70,22 @@ def test_native_telemetry_installed_source_and_opt_out_flags(monkeypatch):
             assert flag not in source
         assert "https://telemetry.crewai.com:4319" in source
         return
-    # Maintained CrewAI delegates to crewai-core; the repository-locked 0.152
-    # implements the same checks in CrewAI itself.
-    cls = (
-        import_module("crewai_core.telemetry").Telemetry
-        if version("crewai") == "1.15.33"
-        else Telemetry
-    )
+    # Exercise the installed entry point, whether CrewAI implements the checks
+    # itself or delegates to crewai-core. Source layout is not the contract.
     honored = (
         "CREWAI_DISABLE_TELEMETRY",
         "CREWAI_DISABLE_TRACKING",
         "OTEL_SDK_DISABLED",
     )
     ignored = ("CREWAI_TELEMETRY_OPT_OUT", "DO_NOT_TRACK")
-    source = inspect.getsource(cls._is_telemetry_disabled)
     for flag in honored + ignored:
         monkeypatch.setenv(flag, "false")
     assert not Telemetry._is_telemetry_disabled()
     for flag in honored:
-        assert flag in source
         monkeypatch.setenv(flag, "true")
-        assert Telemetry._is_telemetry_disabled()
+        assert Telemetry._is_telemetry_disabled(), flag
         monkeypatch.setenv(flag, "false")
+        assert not Telemetry._is_telemetry_disabled(), flag
     for flag in ignored:
-        assert flag not in source
         monkeypatch.setenv(flag, "true")
-    assert not Telemetry._is_telemetry_disabled()
+        assert not Telemetry._is_telemetry_disabled(), flag

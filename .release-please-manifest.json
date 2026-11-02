@@ -86,6 +86,7 @@
   "typescript/packages/traceai_genkit": "0.1.0",
   "typescript/packages/traceai_google_adk": "0.1.1",
   "typescript/packages/traceai_google_genai": "0.1.0",
+  "typescript/packages/traceai_google_genai_sdk": "0.1.0",
   "typescript/packages/traceai_groq": "0.1.0",
   "typescript/packages/traceai_guardrails": "0.1.1",
   "typescript/packages/traceai_huggingface": "0.1.1",
@@ -126,5 +127,7 @@
   "go/openai": "0.1.0",
   "csharp/src/FIInstrumentation": "1.0.0",
   "python": "1.2.2",
+  "typescript/packages/traceai_elevenlabs": "0.1.0",
+  "go/bedrock": "0.1.0",
   "typescript/packages/traceai_huggingface_transformers": "0.1.0"
 }

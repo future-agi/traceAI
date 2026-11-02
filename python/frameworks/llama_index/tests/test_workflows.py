@@ -7,6 +7,12 @@ which are checked again after OTLP protobuf serialization.
 import asyncio
 
 import pytest
+
+# Core before 0.12.43 does not install the standalone workflows package; its
+# embedded Workflow class is covered by test_workflow_outcomes.py.
+pytest.importorskip("workflows")
+pytest.importorskip("llama_index_instrumentation")
+
 from fi_instrumentation import TraceConfig
 from llama_index.core.instrumentation import get_dispatcher as core_dispatcher
 from llama_index.core.llms import MockLLM

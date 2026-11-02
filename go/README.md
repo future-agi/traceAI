@@ -1,6 +1,6 @@
 # traceAI for Go
 
-OpenTelemetry instrumentation for Go model clients and agents. Keep your existing SDK, add its middleware or callback, and export traces to Future AGI with the standard OTLP exporter.
+OpenTelemetry instrumentation for Go model clients and agents. Keep your existing SDK, add its middleware, callback or client adapter, and export traces to Future AGI with the standard OTLP exporter.
 
 ## Choose a module
 
@@ -10,6 +10,7 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 | --- | --- | --- | --- |
 | [OpenAI](openai/README.md) | `traceaiopenai` | `openai-go/v3` middleware | Chat Completions, including streaming and tool calls |
 | [Anthropic](anthropic/README.md) | `traceaianthropic` | `anthropic-sdk-go` middleware | Messages, including streaming and tool calls |
+| [Amazon Bedrock](bedrock/README.md) | `traceaibedrock` | AWS SDK v2 typed client adapter | Converse sync/stream; Anthropic Messages InvokeModel sync/stream |
 | [Google Gen AI](genai/README.md) | `traceaigenai` | HTTP transport | Gemini Developer API content generation and streaming |
 | [Eino](eino/README.md) | `traceaieino` | Eino callbacks | Agents, graphs, models, tools, retrieval and embedding components |
 | [A2A](a2a/README.md) | `traceaia2a` | `a2a-go/v2` client interceptor | Remote-agent calls over JSON-RPC, REST and gRPC |
@@ -30,9 +31,11 @@ go get github.com/future-agi/traceAI/go/openai@dev
 ```sh
 go get github.com/future-agi/traceAI/go/openai@latest
 go get github.com/future-agi/traceAI/go/anthropic@latest
+go get github.com/future-agi/traceAI/go/bedrock@latest
 go get github.com/future-agi/traceAI/go/genai@latest
 go get github.com/future-agi/traceAI/go/eino@latest
 go get github.com/future-agi/traceAI/go/a2a@latest
+go get github.com/future-agi/traceAI/go/lambda@latest
 ```
 
 Run `go get` inside your application's Go module (`go mod init example.com/my-app` if it has none). There is no umbrella `github.com/future-agi/traceAI/go` module and no local `replace` directive is needed.
@@ -144,8 +147,10 @@ Each module has its own semantic version. The first planned release is **v0.1.0*
 | --- | --- |
 | A2A | `go/a2a/v0.1.0` |
 | Anthropic | `go/anthropic/v0.1.0` |
+| Bedrock | `go/bedrock/v0.1.0` |
 | Eino | `go/eino/v0.1.0` |
 | Gen AI | `go/genai/v0.1.0` |
+| Lambda | `go/lambda/v0.1.0` |
 | OpenAI | `go/openai/v0.1.0` |
 
 The general tag scheme is `go/<module>/vX.Y.Z`; a repository-wide `vX.Y.Z` tag does not version these nested modules. Tags, not a separate binary upload, make Go modules discoverable to the Go proxy and pkg.go.dev. Release automation is managed separately; this directory does not create tags or publish releases. Pre-1.0 APIs may change between minor versions.
@@ -162,4 +167,4 @@ go build -o /tmp/traceai-example ./example
 go doc .
 ```
 
-Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all five modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.
+Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all seven modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.

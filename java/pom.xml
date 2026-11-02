@@ -60,6 +60,7 @@
         <module>traceai-java-mongodb</module>
         <module>traceai-java-redis</module>
         <module>traceai-java-azure-search</module>
+        <module>traceai-java-azure-search-v12</module>
         <module>traceai-java-pgvector</module>
         <module>traceai-java-elasticsearch</module>
 
@@ -109,6 +110,7 @@
         <mongodb.version>5.2.0</mongodb.version>
         <jedis.version>5.1.0</jedis.version>
         <azure-search.version>11.6.2</azure-search.version>
+        <azure-search-v12.version>12.0.3</azure-search-v12.version>
     </properties>
 
     <dependencyManagement>
@@ -311,6 +313,8 @@
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
                             <waitUntil>published</waitUntil>
+                            <!-- Central can take over the default 30 minutes to publish a full reactor bundle. -->
+                            <waitMaxTime>3600</waitMaxTime>
                         </configuration>
                     </plugin>
                 </plugins>
