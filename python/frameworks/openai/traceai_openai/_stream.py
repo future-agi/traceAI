@@ -1,5 +1,5 @@
 import logging
-from typing import Any, AsyncIterator, Generator, Iterator, Optional, Protocol, Tuple
+from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, Protocol, Tuple
 
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
@@ -73,20 +73,94 @@ class _ResponseCloseProxy(ObjectProxy):
 
 
 class _RawResponse(ObjectProxy):
-    """Preserve the raw SDK envelope and parse cache while tracing its stream."""
+    """Trace every parse-cache entry without eagerly reading a lazy envelope."""
 
-    def __init__(self, response: Any, parsed_stream: Any, stream: Any) -> None:
+    def __init__(
+        self,
+        response: Any,
+        with_span: _WithSpan,
+        response_accumulator: Optional[_ResponseAccumulator],
+        on_parse: Callable[[Any], Any],
+    ) -> None:
         super().__init__(response)
-        self._self_parsed_stream = parsed_stream
-        self._self_stream = stream
+        self._self_with_span = with_span
+        self._self_response_accumulator = response_accumulator
+        self._self_on_parse = on_parse
+        self._self_parsed = {}
+
+    @property
+    def _self_is_finished(self) -> bool:
+        return self._self_with_span.is_finished
+
+    def _trace_parsed(self, parsed: Any) -> Any:
+        # The SDK owns cache keys (including generic stream types). Cache by
+        # identity and retain the original through the proxy, so repeated parse
+        # calls return the same wrapper without collapsing distinct SDK entries.
+        key = id(parsed)
+        if key not in self._self_parsed:
+            self._self_parsed[key] = self._self_on_parse(parsed)
+        return self._self_parsed[key]
 
     def parse(self, *args: Any, **kwargs: Any) -> Any:
-        parsed = self.__wrapped__.parse(*args, **kwargs)
-        return self._self_stream if parsed is self._self_parsed_stream else parsed
+        try:
+            parsed = self.__wrapped__.parse(*args, **kwargs)
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        return self._trace_parsed(parsed)
 
     @property
     def http_response(self) -> Any:
-        return self._self_stream.response
+        return _ResponseCloseProxy(self.__wrapped__.http_response, self)
+
+    def close(self) -> None:
+        error = None
+        try:
+            self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
+    def _finish_tracing(self, status: Optional[trace_api.Status] = None) -> None:
+        if self._self_is_finished:
+            return
+        accumulator = self._self_response_accumulator
+        if status is None or status.status_code is not trace_api.StatusCode.ERROR:
+            get_status = getattr(accumulator, "get_status", None)
+            if get_status is not None:
+                status = get_status()
+            elif not self._self_parsed:
+                status = trace_api.Status(
+                    trace_api.StatusCode.ERROR, "Response closed before parsing"
+                )
+        if accumulator is not None:
+            _finish_tracing(self._self_with_span, accumulator, status)
+        else:
+            self._self_with_span.finish_tracing(status=status)
+
+
+class _AsyncRawResponse(_RawResponse):
+    """AsyncAPIResponse has awaitable parse/close; LegacyAPIResponse does not."""
+
+    async def parse(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            parsed = await self.__wrapped__.parse(*args, **kwargs)
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        return self._trace_parsed(parsed)
+
+    async def close(self) -> None:
+        error = None
+        try:
+            await self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
 
 
 class _Stream(ObjectProxy):  # type: ignore
