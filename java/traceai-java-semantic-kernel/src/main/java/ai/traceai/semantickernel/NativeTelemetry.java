@@ -185,8 +185,14 @@ final class NativeTelemetry {
         @Override
         public Mono<FunctionResult<T>> invokeAsync(Kernel kernel, @Nullable KernelArguments arguments,
                 @Nullable ContextVariableType<T> variableType, @Nullable InvocationContext invocationContext) {
-            return delegate.invokeAsync(routeKernel(kernel, invocation), arguments, variableType,
-                route(invocationContext, invocation));
+            return Mono.deferContextual(view -> {
+                // A retry can resubscribe before SK unwinds the failed attempt's thread-local
+                // scope. Its subscriber still carries the calling function's context, including
+                // when that caller is another TOOL rather than the invocation's root AGENT.
+                Context caller = ReactorOtelContext.read(view, invocation.context());
+                return ReactiveTracing.monoWithin(caller, () -> delegate.invokeAsync(
+                    routeKernel(kernel, invocation), arguments, variableType, route(invocationContext, invocation)));
+            });
         }
     }
 
@@ -497,6 +503,7 @@ final class NativeTelemetry {
         private volatile Long inputTokens;
         private volatile Long outputTokens;
         private volatile boolean hasTotal;
+        private volatile boolean hasErrorType;
 
         private InvocationSpan(Span delegate, TracedInvocation invocation, Mode mode) {
             this.delegate = delegate;
@@ -508,6 +515,9 @@ final class NativeTelemetry {
         @SuppressWarnings("unchecked")
         public <T> Span setAttribute(AttributeKey<T> key, T value) {
             String name = key.getKey();
+            if (SemanticConventions.ERROR_TYPE.equals(name) && value != null) {
+                hasErrorType = true;
+            }
             if (value instanceof Number && (LEGACY_INPUT_TOKENS.equals(name) || INPUT_TOKENS.getKey().equals(name))) {
                 inputTokens = ((Number) value).longValue();
                 delegate.setAttribute(INPUT_TOKENS, inputTokens);
@@ -542,6 +552,12 @@ final class NativeTelemetry {
             if (mode == Mode.ALIAS) {
                 return this;
             }
+            if (statusCode == StatusCode.ERROR && !hasErrorType) {
+                // Native model spans receive only a status message, not the Throwable. Do not
+                // parse potentially sensitive text; use OTel's generic classification. A later
+                // recordException or explicit error.type replaces this fallback with the cause.
+                delegate.setAttribute(SemanticConventions.ERROR_TYPE, "_OTHER");
+            }
             if (statusCode == StatusCode.ERROR && invocation.tracer().getConfig().isHideErrorDetails()) {
                 delegate.setStatus(StatusCode.ERROR);
             } else {
@@ -555,7 +571,7 @@ final class NativeTelemetry {
             if (mode == Mode.ALIAS) {
                 return this;
             }
-            delegate.setAttribute(SemanticConventions.ERROR_TYPE, exception.getClass().getName());
+            setAttribute(SemanticConventions.ERROR_TYPE, exception.getClass().getName());
             if (invocation.tracer().getConfig().isHideErrorDetails()) {
                 delegate.addEvent("exception", Attributes.of(
                     AttributeKey.stringKey("exception.type"), exception.getClass().getName()));

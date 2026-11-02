@@ -118,6 +118,11 @@ final class ReactiveTracing {
         }
     }
 
+    /** Assembles and subscribes native work under its subscriber's context, restoring it afterward. */
+    static <T> Mono<T> monoWithin(Context context, Supplier<Mono<T>> operation) {
+        return Mono.fromDirect(subscribeWithin(callWithin(context, operation), context));
+    }
+
     /** Subscribes with the span current, then restores the subscribing thread's context. */
     private static <T> Publisher<T> subscribeWithin(Publisher<T> source, Context context) {
         return subscriber -> callWithin(context, () -> {

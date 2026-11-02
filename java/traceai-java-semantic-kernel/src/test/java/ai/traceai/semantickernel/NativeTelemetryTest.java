@@ -207,6 +207,65 @@ class NativeTelemetryTest {
             assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void nativeModelErrorsKeepASafeClassification(boolean wrappedService, boolean hideDetails) {
+        openAi.mode(LocalOpenAi.Mode.SERVER_ERROR);
+        FITracer tracer = tracer(TraceConfig.builder().hideErrorDetails(hideDetails).build());
+        if (wrappedService) {
+            TracedChatCompletionService chat =
+                new TracedChatCompletionService(openAi.chatService(), "gpt-local", "openai", tracer);
+            assertThatThrownBy(() -> chat.getChatMessageContentsAsync("Say hello", null, null).block())
+                .hasMessageContaining(LocalOpenAi.ERROR_DETAIL);
+        } else {
+            Kernel kernel = Kernel.builder().withAIService(ChatCompletionService.class, openAi.chatService()).build();
+            assertThatThrownBy(() -> new TracedKernel(kernel, tracer).invokePromptAsync("Say hello").block())
+                .hasMessageContaining(LocalOpenAi.ERROR_DETAIL);
+        }
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(2);
+        SpanData llm = only(spans, "LLM");
+        assertThat(llm.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        // Native ChatCompletionSpan supplies only a status message, not the Throwable.
+        assertThat(llm.getAttributes().get(AttributeKey.stringKey(SemanticConventions.ERROR_TYPE)))
+            .isEqualTo("_OTHER");
+        if (hideDetails) {
+            assertThat(llm.getStatus().getDescription()).isEmpty();
+            assertThat(spans.toString()).doesNotContain(LocalOpenAi.ERROR_DETAIL);
+        } else {
+            assertThat(llm.getStatus().getDescription()).contains(LocalOpenAi.ERROR_DETAIL);
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void nativeErrorFallbackDoesNotReplaceAKnownType(boolean typeFirst, boolean exception) {
+        FITracer tracer = tracer(TraceConfig.builder().hideErrorDetails(true).build());
+        Span owner = provider.get("traceai-test").spanBuilder("owner").startSpan();
+        TracedInvocation invocation = new TracedInvocation(tracer, owner, Context.root().with(owner));
+        Span nativeSpan = NativeTelemetry.create(invocation).spanBuilder("chat.completions test").startSpan();
+        String expected = exception ? IllegalStateException.class.getName() : "synthetic_error";
+        if (!typeFirst) {
+            nativeSpan.setStatus(StatusCode.ERROR, "synthetic-sensitive-detail");
+        }
+        if (exception) {
+            nativeSpan.recordException(new IllegalStateException("synthetic-sensitive-detail"));
+        } else {
+            nativeSpan.setAttribute(SemanticConventions.ERROR_TYPE, expected);
+        }
+        if (typeFirst) {
+            nativeSpan.setStatus(StatusCode.ERROR, "synthetic-sensitive-detail");
+        }
+        nativeSpan.end();
+        owner.end();
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        assertThat(only(spans, "LLM").getAttributes().get(AttributeKey.stringKey(SemanticConventions.ERROR_TYPE)))
+            .isEqualTo(expected);
+        assertThat(spans.toString()).doesNotContain("synthetic-sensitive-detail");
+    }
+
     @Test
     void kernelInvocationIsLazyAndEachSubscriptionIsTracedSeparately() {
         Kernel kernel = Kernel.builder().withAIService(ChatCompletionService.class, openAi.chatService()).build();
