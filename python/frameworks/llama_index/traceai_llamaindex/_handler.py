@@ -400,7 +400,14 @@ class _Span(BaseSpan):
             pass
 
     def process_event(self, event: BaseEvent) -> None:
-        self._process_event(event)
+        try:
+            self._process_event(event)
+        except Exception:
+            # Reading attributes from an event must never keep a finished
+            # stream's span open until the sweeper ends it.
+            logger.exception(
+                f"Error processing event of type {event.__class__.__qualname__}"
+            )
         if not self.waiting_for_streaming:
             return
         if isinstance(event, STREAMING_FINISHED_EVENTS):
@@ -498,15 +505,24 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: EmbeddingEndEvent) -> None:
+        # The chunks are the embedded input text. fi-instrumentation-otel 1.2.2
+        # and earlier do not mask the embedding text or every vector copy, so
+        # the hide flags are applied here as well.
+        hide_text = _hides_embedding_text(self._config)
+        hide_vectors = bool(getattr(self._config, "hide_embedding_vectors", False))
         i = self._list_attr_len[EMBEDDING_EMBEDDINGS]
         for text, vector in zip(event.chunks, event.embeddings):
-            self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_TEXT}"] = text
-            self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_VECTOR}"] = vector
+            if not hide_text:
+                self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_TEXT}"] = text
+            if not hide_vectors:
+                self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_VECTOR}"] = vector
             i += 1
         self._list_attr_len[EMBEDDING_EMBEDDINGS] = i
-        self[OUTPUT_VALUE] = safe_json_dumps(event.embeddings)
-        self[EMBEDDING_EMBEDDINGS] = safe_json_dumps(event.embeddings)
-        self[OUTPUT_VALUE] = event.model_dump_json()
+        if not hide_vectors:
+            # The output of an embedding call is its vectors, not the chunks.
+            vectors = safe_json_dumps(event.embeddings)
+            self[EMBEDDING_EMBEDDINGS] = vectors
+            self[OUTPUT_VALUE] = vectors
 
     @_process_event.register
     def _(self, event: StreamChatStartEvent) -> None:
@@ -533,7 +549,7 @@ class _Span(BaseSpan):
     def _(self, event: StreamChatEndEvent) -> None:
         self[OUTPUT_VALUE] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
-        self._stream_content.clear()
+        self._stream_content = ""
         self._stream_chunks.clear()
 
     @_process_event.register
@@ -764,7 +780,8 @@ class _Span(BaseSpan):
                     for k, v in _get_tool_call(tool_call):
                         self[f"{prefix}.{i}.{MESSAGE_TOOL_CALLS}.{j}.{k}"] = v
 
-            if block := message.blocks:
+            # ChatMessage.blocks exists from llama-index-core 0.12.3.
+            if block := getattr(message, "blocks", None):
                 for index, block in enumerate(block):
                     if block.block_type == "audio":
                         self[
@@ -1159,6 +1176,13 @@ class EventHandler(BaseEventHandler, extra="allow"):
                     f"Error processing event of type {event.__class__.__qualname__}"
                 )
         return event
+
+
+def _hides_embedding_text(config: TraceConfig) -> bool:
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text")
+    )
 
 
 def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
