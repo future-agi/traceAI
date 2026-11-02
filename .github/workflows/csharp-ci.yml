@@ -1,0 +1,64 @@
+name: C# SDK CI
+
+on:
+  pull_request:
+    paths:
+      - 'csharp/**'
+      - '.github/workflows/csharp-ci.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'csharp/**'
+      - '.github/workflows/csharp-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: csharp-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: .NET 10 / OpenTelemetry ${{ matrix.otel }}
+    runs-on: macos-14
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        otel: ['1.11.2', '1.20.1']
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false'
+      # Keep vstest's IPC on IPv4 loopback, which the sandbox allows.
+      DOTNET_SYSTEM_NET_DISABLEIPV6: '1'
+      OTEL_VERSION: ${{ matrix.otel }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore dependencies
+        run: dotnet restore csharp/FIInstrumentation.sln -p:OpenTelemetryVersion="$OTEL_VERSION"
+      - name: Test without outbound network
+        run: |
+          cat > "$RUNNER_TEMP/offline.sb" <<'SANDBOX'
+          (version 1)
+          (allow default)
+          (deny network-outbound)
+          (allow network-outbound (remote ip "localhost:*"))
+          (allow network-outbound (remote unix-socket))
+          SANDBOX
+          sandbox-exec -f "$RUNNER_TEMP/offline.sb" dotnet test csharp/FIInstrumentation.sln \
+            --no-restore --configuration Release -p:OpenTelemetryVersion="$OTEL_VERSION" \
+            --logger 'trx;LogFileName=tests.trx' --results-directory TestResults
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: csharp-tests-otel-${{ matrix.otel }}
+          path: TestResults/*.trx
+          if-no-files-found: warn

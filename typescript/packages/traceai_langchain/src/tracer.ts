@@ -79,6 +79,46 @@ function recordRunError(span: Span, error: unknown, runError: string) {
   span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
 
+/** LangGraph control-flow signals, for errors that do not expose `is_bubble_up` */
+const GRAPH_BUBBLE_UP_NAMES = new Set([
+  "GraphBubbleUp",
+  "GraphInterrupt",
+  "NodeInterrupt",
+  "ParentCommand",
+  "GraphDrained",
+]);
+/** The bubble-ups that pause a graph for human input (`interrupt()`, `NodeInterrupt`) */
+const GRAPH_INTERRUPT_NAMES = new Set(["GraphInterrupt", "NodeInterrupt"]);
+
+/**
+ * The name of a LangGraph control-flow signal, or undefined for a real error.
+ * LangGraph pauses (`interrupt()`) and hands off (`Command.PARENT`) by throwing a
+ * `GraphBubbleUp` through the chain callbacks; the run itself did not fail.
+ * Matches LangGraph's own `isGraphBubbleUp` without importing LangGraph.
+ */
+function getGraphBubbleUpName(
+  error: unknown,
+  runError: string,
+): string | undefined {
+  if (error != null && typeof error === "object") {
+    const { name, is_bubble_up } = error as {
+      name?: unknown;
+      is_bubble_up?: unknown;
+    };
+    if (is_bubble_up === true) {
+      return typeof name === "string" ? name : "GraphBubbleUp";
+    }
+    return typeof name === "string" && GRAPH_BUBBLE_UP_NAMES.has(name)
+      ? name
+      : undefined;
+  }
+  if (error != null) {
+    return undefined;
+  }
+  const { name } = parseRunError(runError);
+  return name != null && GRAPH_BUBBLE_UP_NAMES.has(name) ? name : undefined;
+}
+
 export class LangChainTracer extends BaseTracer {
   private tracer: FITracer;
   private runs: Record<string, RunWithSpan | undefined> = {};
@@ -157,7 +197,11 @@ export class LangChainTracer extends BaseTracer {
       // @ts-ignore
       await super._startTrace(run);
     }
-    await this.startTracing(run);
+    // Transitional cores expose both _startTrace and onRunCreate. The super
+    // call can already have created the span through onRunCreate.
+    if (this.runs[run.id] == null) {
+      await this.startTracing(run);
+    }
   }
 
   /**
@@ -214,7 +258,19 @@ export class LangChainTracer extends BaseTracer {
       return;
     }
     const { span } = runWithSpan;
-    if (run.error != null) {
+    const bubbleUp =
+      run.error != null
+        ? getGraphBubbleUpName(this.runErrors[run.id], run.error)
+        : undefined;
+    if (bubbleUp != null) {
+      // A pause or handoff, not a failure: no exception, and no status message that
+      // could carry the interrupt payload.
+      if (GRAPH_INTERRUPT_NAMES.has(bubbleUp)) {
+        span.setAttribute("langgraph.interrupt", true);
+        span.addEvent("interrupt", { "langgraph.interrupt": true });
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+    } else if (run.error != null) {
       recordRunError(span, this.runErrors[run.id], run.error);
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
