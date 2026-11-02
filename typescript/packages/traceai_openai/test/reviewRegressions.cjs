@@ -396,11 +396,12 @@ if (OpenAI.Responses) {
       assert.deepEqual(actual.tools, [tool]);
       assertNoMarker(marker);
       const attrs = span().attributes;
+      // Export only the origin: even a path can contain bearer credentials.
       const expected = [
         {
           type: "mcp",
           server_label: "synthetic",
-          server_url: "https://example.invalid/mcp",
+          server_url: "https://example.invalid",
         },
       ];
       assert.deepEqual(JSON.parse(attrs["gen_ai.tool.definitions"]), expected);

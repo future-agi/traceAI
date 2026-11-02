@@ -68,3 +68,20 @@ const screenshotFile = {
   }],
 } satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
 void [predicted, predictedParts, suffix, screenshot, screenshotFile];
+
+const discoveredMcp = {
+  model: 'synthetic',
+  input: [{ type: 'tool_search_output', call_id: 'call-search', execution: 'client', tools: [{
+    type: 'mcp', server_label: 'synthetic', server_url: 'https://synthetic:private@example.invalid/mcp?api_key=private',
+    authorization: 'synthetic', headers: { 'X-Api-Key': 'synthetic' },
+  }] }],
+} satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
+const responseCustomCall = {
+  type: 'custom_tool_call', id: 'ctc-synthetic', call_id: 'call-synthetic',
+  name: 'code_exec', input: 'print(1)', status: 'completed',
+} satisfies OpenAI.Responses.ResponseCustomToolCallItem;
+const responseCustomHistory = {
+  model: 'synthetic', input: [responseCustomCall,
+    { type: 'custom_tool_call_output', call_id: responseCustomCall.call_id, output: '1' }],
+} satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
+void [discoveredMcp, responseCustomCall, client.responses.create(responseCustomHistory)];

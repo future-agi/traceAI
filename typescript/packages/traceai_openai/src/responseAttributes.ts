@@ -15,6 +15,23 @@ import { safelyJSONStringify } from "@traceai/fi-core";
 function serializeResponseItem(
   item: Exclude<ResponseInputItem | ResponseOutputItem, { role: string }>,
 ): Record<string, unknown> {
+  // Branch before the floor SDK's discriminated union so its existing cases
+  // retain strict type narrowing.
+  if ((item.type as string) === "custom_tool_call") {
+    const call = item as unknown as { call_id: string; name: string; input: string };
+    return {
+      role: "assistant",
+      tool_calls: [{
+        id: call.call_id,
+        type: "custom",
+        custom: { name: call.name, input: call.input },
+      }],
+    };
+  }
+  if ((item.type as string) === "custom_tool_call_output") {
+    const result = item as unknown as { call_id: string; output: unknown };
+    return { role: "tool", tool_call_id: result.call_id, content: result.output };
+  }
   switch (item.type) {
     case "function_call":
       return {

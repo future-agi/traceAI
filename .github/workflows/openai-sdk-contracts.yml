@@ -91,6 +91,7 @@ jobs:
               packages/traceai_openai/test/privacyContext.cjs \
               packages/traceai_openai/test/reviewRegressions.cjs \
               packages/traceai_openai/test/reviewRoundTwo.cjs \
+              packages/traceai_openai/test/reviewRoundThree.cjs \
               packages/traceai_openai/test/choiceIndexes.cjs
       - name: Typecheck current SDK request contracts
         if: matrix.sdk == '7.47.0'

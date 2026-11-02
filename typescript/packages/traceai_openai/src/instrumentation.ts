@@ -493,7 +493,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             };
             // Telemetry-only copy: MCP credentials must never reach any exported
             // duplicate, but the original SDK request must remain untouched.
-            const telemetryBody = { ...body, ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }) };
+            const telemetryBody = {
+              ...body,
+              ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }),
+              ...(body.input && { input: sanitizeResponsesInput(body.input) }),
+            };
             const { input: _messages, instructions: _instructions, prompt, ...parameters } = telemetryBody;
             const invocationParameters = {
               ...parameters,
@@ -786,6 +790,19 @@ function getLLMInputMessagesAttributes(
   };
 }
 
+/** URL userinfo, path, query and fragment may carry credentials. Export only the origin. */
+function sanitizeMcpServerURL(serverURL: string): string {
+  try {
+    const url = new URL(serverURL);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "[REDACTED]";
+    // Paths can themselves embed API tokens. Only the server origin is safe
+    // as telemetry metadata; the SDK still receives the original full URL.
+    return url.origin;
+  } catch {
+    return "[REDACTED]";
+  }
+}
+
 /** Remove MCP credentials from telemetry without mutating transport objects. */
 function sanitizeToolDefinitions(tools: { type: string }[]): { type: string }[] {
   return tools.map((tool) => {
@@ -794,7 +811,28 @@ function sanitizeToolDefinitions(tools: { type: string }[]): { type: string }[] 
     // custom header names can carry credentials too.
     const { authorization: _authorization, headers: _headers, ...definition } =
       tool as { type: string; authorization?: string; headers?: Record<string, string> };
-    return definition;
+    return {
+      ...definition,
+      ...("server_url" in definition && typeof definition.server_url === "string" && {
+        server_url: sanitizeMcpServerURL(definition.server_url),
+      }),
+    };
+  });
+}
+
+/** SDK 4 predates tool search; sanitize its loaded definitions when present. */
+function sanitizeResponsesInput(
+  input: ResponseCreateParamsBase["input"],
+): ResponseCreateParamsBase["input"] {
+  if (!Array.isArray(input)) return input;
+  return input.map((item) => {
+    if (item && typeof item === "object") {
+      const loaded = item as { type: string; tools?: { type: string }[] };
+      if (loaded.type === "tool_search_output" && Array.isArray(loaded.tools)) {
+        return { ...item, tools: sanitizeToolDefinitions(loaded.tools) } as unknown as typeof item;
+      }
+    }
+    return item;
   });
 }
 
