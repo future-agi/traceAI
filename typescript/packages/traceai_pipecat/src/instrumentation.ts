@@ -1,28 +1,9 @@
-/**
- * OpenTelemetry instrumentation for Pipecat.
- *
- * Pipecat is a voice AI pipeline framework for building conversational agents.
- * This instrumentation captures pipeline execution, frame processing,
- * and transport events.
- */
-
 import {
   InstrumentationBase,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  context,
-  trace,
-} from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-} from "@traceai/fi-semantic-conventions";
+import { context, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
+import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
 
 export interface PipecatInstrumentationConfig {
@@ -30,502 +11,154 @@ export interface PipecatInstrumentationConfig {
   traceConfig?: TraceConfigOptions;
 }
 
-/**
- * Pipecat Instrumentation class.
- *
- * Provides automatic instrumentation for the Pipecat voice AI SDK.
- */
+type ClientMethod = (...args: unknown[]) => unknown;
+type ClientPrototype = Record<string, ClientMethod>;
+const METHODS = {
+  connect: "client.connect",
+  disconnect: "client.disconnect",
+  action: "action",
+  sendMessage: "send_message",
+  sendClientMessage: "client.send_message",
+  sendClientRequest: "client.request",
+  sendText: "client.send_text",
+} as const;
+const owners = new WeakMap<object, PipecatInstrumentation>();
+let patchedCount = 0;
+
+/** Node operation tracing. For browser/ESM event tracing use observePipecatClient. */
 export class PipecatInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
-  private _traceConfig?: TraceConfigOptions;
-  private pipelineSpans: Map<string, Span> = new Map();
+  private traceConfig?: TraceConfigOptions;
+  private patches?: Map<ClientPrototype, string[]>;
+  private manualModules?: Set<unknown>;
 
   constructor(config: PipecatInstrumentationConfig = {}) {
-    super(
-      "@traceai/fi-instrumentation-pipecat",
-      VERSION,
-      config.instrumentationConfig || {}
-    );
-    this._traceConfig = config.traceConfig;
+    super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
+    this.traceConfig = config.traceConfig;
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this.traceConfig });
+  }
+
+  override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    this.refreshTracer();
+    for (const module of this.manualModules ?? []) this.patch(module);
+  }
+
+  override disable(): void {
+    super.disable();
+    for (const prototype of this.patches?.keys() ?? []) this.unpatchPrototype(prototype);
   }
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
+    return new InstrumentationNodeModuleDefinition(
       "@pipecat-ai/client-js",
-      ["^0.2.0", "^0.3.0"],
+      ["^0.3.0", "^1.16.0"],
       this.patch.bind(this),
-      this.unpatch.bind(this)
+      this.unpatch.bind(this),
     );
+  }
+
+  /** Supports CommonJS modules and immutable ESM namespace objects. */
+  manuallyInstrument(pipecatModule: unknown): void {
+    if (pipecatModule == null) return;
+    (this.manualModules ??= new Set()).add(pipecatModule);
+    if (this.isEnabled()) this.patch(pipecatModule);
+  }
+
+  private prototypes(module: unknown): ClientPrototype[] {
+    if (!module || typeof module !== "object") return [];
+    const exports = module as Record<string, { prototype?: ClientPrototype } | undefined>;
+    return [exports.RTVIClient?.prototype, exports.PipecatClient?.prototype]
+      .filter((prototype): prototype is ClientPrototype => !!prototype);
+  }
+
+  private patch(module: unknown): unknown {
+    for (const prototype of this.prototypes(module)) {
+      if (owners.has(prototype)) continue;
+      const methods: string[] = [];
+      for (const [method, operation] of Object.entries(METHODS)) {
+        if (typeof prototype[method] !== "function") continue;
+        const instrumentation = this;
+        this._wrap(prototype, method, (original: ClientMethod) => function (this: unknown, ...args: unknown[]) {
+          return instrumentation.traceOperation(original, this, args, operation);
+        });
+        methods.push(method);
+      }
+      if (methods.length) {
+        (this.patches ??= new Map()).set(prototype, methods);
+        owners.set(prototype, this);
+        patchedCount++;
+      }
+    }
     return module;
   }
 
-  /**
-   * Manually instrument the @pipecat-ai/client-js module.
-   */
-  manuallyInstrument(pipecatModule: any): void {
-    if (pipecatModule == null) return;
-    this.patch(pipecatModule);
+  private unpatch(module: unknown): void {
+    for (const prototype of this.prototypes(module)) this.unpatchPrototype(prototype);
   }
 
-  private patch(pipecatModule: any & { _fiPatched?: boolean }): any {
-    if (pipecatModule?._fiPatched || _isFIPatched) {
-      return pipecatModule;
-    }
-
-    const instrumentation = this;
-
-    // Wrap RTVIClient.connect
-    if (pipecatModule.RTVIClient?.prototype?.connect) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "connect",
-        (original: Function) => {
-          return function patchedConnect(this: any, ...args: any[]) {
-            return instrumentation.traceClientConnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.disconnect
-    if (pipecatModule.RTVIClient?.prototype?.disconnect) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "disconnect",
-        (original: Function) => {
-          return function patchedDisconnect(this: any, ...args: any[]) {
-            return instrumentation.traceClientDisconnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.action
-    if (pipecatModule.RTVIClient?.prototype?.action) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "action",
-        (original: Function) => {
-          return function patchedAction(this: any, ...args: any[]) {
-            return instrumentation.traceAction(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.sendMessage (for chat/text interactions)
-    if (pipecatModule.RTVIClient?.prototype?.sendMessage) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "sendMessage",
-        (original: Function) => {
-          return function patchedSendMessage(this: any, ...args: any[]) {
-            return instrumentation.traceSendMessage(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap Pipeline class if available
-    if (pipecatModule.Pipeline?.prototype?.run) {
-      this._wrap(
-        pipecatModule.Pipeline.prototype,
-        "run",
-        (original: Function) => {
-          return function patchedRun(this: any, ...args: any[]) {
-            return instrumentation.tracePipelineRun(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap FrameProcessor if available
-    if (pipecatModule.FrameProcessor?.prototype?.processFrame) {
-      this._wrap(
-        pipecatModule.FrameProcessor.prototype,
-        "processFrame",
-        (original: Function) => {
-          return function patchedProcessFrame(this: any, ...args: any[]) {
-            return instrumentation.traceFrameProcess(original, this, args);
-          };
-        }
-      );
-    }
-
-    pipecatModule._fiPatched = true;
-    _isFIPatched = true;
-    return pipecatModule;
+  private unpatchPrototype(prototype: ClientPrototype): void {
+    if (owners.get(prototype) !== this) return;
+    for (const method of this.patches?.get(prototype) ?? []) this._unwrap(prototype, method);
+    this.patches?.delete(prototype);
+    owners.delete(prototype);
+    patchedCount--;
   }
 
-  private unpatch(pipecatModule: any & { _fiPatched?: boolean }): void {
-    if (pipecatModule?.RTVIClient?.prototype?.connect) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "connect");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.disconnect) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "disconnect");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.action) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "action");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.sendMessage) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "sendMessage");
-    }
-    if (pipecatModule?.Pipeline?.prototype?.run) {
-      this._unwrap(pipecatModule.Pipeline.prototype, "run");
-    }
-    if (pipecatModule?.FrameProcessor?.prototype?.processFrame) {
-      this._unwrap(pipecatModule.FrameProcessor.prototype, "processFrame");
-    }
-    if (pipecatModule) {
-      pipecatModule._fiPatched = false;
-    }
-    _isFIPatched = false;
-  }
-
-  private async traceClientConnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const config = instance._config || instance.config || {};
-    const baseUrl = config.baseUrl || config.url || "unknown";
-
-    const span = this.fiTracer.startSpan("Pipecat Client Connect", {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "client.connect",
-        "pipecat.base_url": this.sanitizeUrl(baseUrl),
-        "pipecat.transport": config.transport || "unknown",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({
-          baseUrl: this.sanitizeUrl(baseUrl),
-          transport: config.transport,
-        }),
-      },
-    });
-
-    // Store for lifecycle tracking
-    const clientId = instance._id || generateId();
-    this.pipelineSpans.set(`client:${clientId}`, span);
-    instance._fiClientId = clientId;
-
-    const execContext = trace.setSpan(context.active(), span);
-
+  private traceOperation(original: ClientMethod, instance: unknown, args: unknown[], operation: string): unknown {
+    let span: Span;
     try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
+      span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          "fi.span.kind": "CHAIN",
+          "pipecat.telemetry_source": "client",
+          "pipecat.operation": operation,
+        },
       });
-
-      span.setAttributes({
-        "pipecat.connected": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ connected: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      // Don't end - will be ended on disconnect
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      this.pipelineSpans.delete(`client:${clientId}`);
-      throw error;
-    }
-  }
-
-  private async traceClientDisconnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const clientId = instance._fiClientId || "unknown";
-
-    const span = this.fiTracer.startSpan("Pipecat Client Disconnect", {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "client.disconnect",
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "pipecat.disconnected": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ disconnected: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      // End the connection span
-      const connectionSpan = this.pipelineSpans.get(`client:${clientId}`);
-      if (connectionSpan) {
-        connectionSpan.setStatus({ code: SpanStatusCode.OK });
-        connectionSpan.end();
-        this.pipelineSpans.delete(`client:${clientId}`);
-      }
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceAction(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const action = args[0] || {};
-    const actionName = action.action || action.name || "unknown";
-    const service = action.service || "unknown";
-
-    const span = this.fiTracer.startSpan(`Pipecat Action: ${actionName}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.TOOL,
-        "pipecat.operation": "action",
-        "pipecat.action_name": actionName,
-        "pipecat.service": service,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(action),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceSendMessage(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const message = args[0];
-    const messageType = typeof message === "object" ? message.type || "message" : "text";
-
-    const span = this.fiTracer.startSpan(`Pipecat Send Message: ${messageType}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        "pipecat.operation": "send_message",
-        "pipecat.message_type": messageType,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-      },
-    });
-
-    // Add LLM input message as JSON blob
-    if (typeof message === "string") {
-      span.setAttribute(
-        SemanticConventions.LLM_INPUT_MESSAGES,
-        safelyJSONStringify([{ role: "user", content: message }]) ?? "[]"
-      );
-    } else if (message?.content) {
-      span.setAttribute(
-        SemanticConventions.LLM_INPUT_MESSAGES,
-        safelyJSONStringify([{ role: message.role || "user", content: message.content }]) ?? "[]"
-      );
-    }
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async tracePipelineRun(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const pipelineName = instance.name || instance.constructor?.name || "Pipeline";
-
-    const span = this.fiTracer.startSpan(`Pipecat Pipeline: ${pipelineName}`, {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "pipeline.run",
-        "pipecat.pipeline_name": pipelineName,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({
-          pipeline: pipelineName,
-          args: args.length > 0 ? args[0] : null,
-        }),
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceFrameProcess(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const frame = args[0];
-    const frameType = frame?.type || frame?.constructor?.name || "unknown";
-    const processorName = instance.name || instance.constructor?.name || "FrameProcessor";
-
-    const span = this.fiTracer.startSpan(`Pipecat Process Frame: ${frameType}`, {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "frame.process",
-        "pipecat.frame_type": frameType,
-        "pipecat.processor": processorName,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private sanitizeUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      return `${parsed.protocol}//${parsed.host}`;
     } catch {
-      return url.split("?")[0]; // Remove query params at minimum
+      diag.warn("Pipecat client operation telemetry failed");
+      return original.apply(instance, args);
+    }
+    const finish = (code: SpanStatusCode) => {
+      try {
+        // Error messages and arguments may contain credentials or transcripts.
+        span.setStatus({ code });
+        span.end();
+      } catch {
+        diag.warn("Pipecat client operation telemetry failed");
+      }
+    };
+    try {
+      const result = context.with(trace.setSpan(context.active(), span), () => original.apply(instance, args));
+      if (result instanceof Promise) {
+        return result.then(
+          (value) => { finish(SpanStatusCode.OK); return value; },
+          (error: unknown) => { finish(SpanStatusCode.ERROR); throw error; },
+        );
+      }
+      finish(SpanStatusCode.OK);
+      return result;
+    } catch (error) {
+      finish(SpanStatusCode.ERROR);
+      throw error;
     }
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
+/** Whether a client prototype currently has operation tracing installed. */
+export function isPatched(): boolean { return patchedCount > 0; }
 
-/**
- * Check if the module has been patched.
- */
-export function isPatched(): boolean {
-  return _isFIPatched;
-}
-
-/**
- * Reset the patched state (for testing only).
- */
+/** @deprecated Disable instrumentation instances to restore their patches. */
 export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
-}
-
-// Helper functions
-
-function safeJsonStringify(obj: unknown): string {
-  try {
-    return JSON.stringify(obj);
-  } catch {
-    return String(obj);
-  }
-}
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
+  // Retained for compatibility. Clearing ownership without unwrapping would duplicate spans.
 }
