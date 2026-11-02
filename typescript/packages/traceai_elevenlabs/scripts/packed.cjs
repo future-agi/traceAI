@@ -48,6 +48,7 @@ if (stage === "prepare") {
     "byob.test.cjs",
     "contract.test.cjs",
     "edge.test.cjs",
+    "recall.test.cjs",
     "fixture.cjs",
     "customer.ts",
   ])
@@ -99,6 +100,7 @@ if (stage === "prepare") {
       path.join(directory, "test/byob.test.cjs"),
       path.join(directory, "test/contract.test.cjs"),
       path.join(directory, "test/edge.test.cjs"),
+      path.join(directory, "test/recall.test.cjs"),
     ],
     { env: { ...process.env, TRACEAI_PACKAGE: "@traceai/elevenlabs" } },
   );

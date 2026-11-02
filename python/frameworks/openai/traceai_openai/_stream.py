@@ -20,6 +20,8 @@ logger.addHandler(logging.NullHandler())
 class _ResponseAccumulator(Protocol):
     def process_chunk(self, chunk: Any) -> None: ...
 
+    def get_status(self) -> Optional[trace_api.Status]: ...
+
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
@@ -74,6 +76,16 @@ class _Stream(ObjectProxy):  # type: ignore
         finally:
             _finish_on_exit(self, exc)
 
+    def close(self) -> Any:
+        error = None
+        try:
+            return self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __iter__(self) -> Iterator[Any]:
         return self
 
@@ -115,6 +127,11 @@ class _Stream(ObjectProxy):  # type: ignore
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
@@ -164,18 +181,19 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, exc)
 
-    async def aclose(self) -> None:
-        # Intercept the SDK alias: delegating its bound method bypasses tracing.
-        # Finish here as well as in close(), so alias cleanup is independently
-        # safe even when the wrapped SDK owns close(). Finalization is idempotent.
+    async def close(self) -> Any:
         error = None
         try:
-            await self.close()
+            return await self.__wrapped__.close()
         except BaseException as exc:
             error = exc
             raise
         finally:
             _finish_on_exit(self, error)
+
+    async def aclose(self) -> Any:
+        # The SDK binds this alias to its own close method; route through ours.
+        return await self.close()
 
     def __aiter__(self):
         return self
@@ -218,6 +236,11 @@ class _AsyncStream(ObjectProxy):
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,

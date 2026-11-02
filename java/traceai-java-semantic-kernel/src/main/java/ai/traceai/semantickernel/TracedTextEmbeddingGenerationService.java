@@ -7,8 +7,6 @@ import ai.traceai.TraceAI;
 import com.microsoft.semantickernel.services.textembedding.Embedding;
 import com.microsoft.semantickernel.services.textembedding.TextEmbeddingGenerationService;
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.context.Scope;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -80,62 +78,38 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
         this(delegate, modelName, "openai");
     }
 
+    /**
+     * Traces one embedding request per subscription. Semantic Kernel has no native embedding span.
+     */
     @Override
     public Mono<List<Embedding>> generateEmbeddingsAsync(List<String> data) {
-        Span span = tracer.startSpan("Semantic Kernel Embedding Generation", FISpanKind.EMBEDDING);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
-            span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, modelName);
-
-            // Capture input
-            captureInput(span, data);
-
-            // Execute the request
-            return delegate.generateEmbeddingsAsync(data)
-                .doOnSuccess(embeddings -> {
-                    // Capture output
-                    captureOutput(span, embeddings);
-                    span.setStatus(StatusCode.OK);
-                })
-                .doOnError(error -> {
-                    tracer.setError(span, error);
-                })
-                .doFinally(signalType -> {
-                    span.end();
-                });
-        }
+        return ReactiveTracing.mono(tracer, "Semantic Kernel Embedding Generation", FISpanKind.EMBEDDING, false,
+            invocation -> {
+                Span span = invocation.span();
+                setModelAttributes(span);
+                captureInput(span, data);
+                return delegate.generateEmbeddingsAsync(data);
+            },
+            (invocation, embeddings) -> captureOutput(invocation.span(), embeddings));
     }
 
     @Override
     public Mono<Embedding> generateEmbeddingAsync(String data) {
-        Span span = tracer.startSpan("Semantic Kernel Single Embedding", FISpanKind.EMBEDDING);
-
-        try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
-            span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, modelName);
-
-            if (data != null) {
-                tracer.setInputValue(span, data);
-            }
-
-            return delegate.generateEmbeddingAsync(data)
-                .doOnSuccess(embedding -> {
-                    if (embedding != null && embedding.getVector() != null) {
-                        span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embedding.getVector().size());
-                    }
-                    span.setStatus(StatusCode.OK);
-                })
-                .doOnError(error -> {
-                    tracer.setError(span, error);
-                })
-                .doFinally(signalType -> {
-                    span.end();
-                });
-        }
+        return ReactiveTracing.mono(tracer, "Semantic Kernel Single Embedding", FISpanKind.EMBEDDING, false,
+            invocation -> {
+                Span span = invocation.span();
+                setModelAttributes(span);
+                if (data != null) {
+                    tracer.setInputValue(span, data);
+                }
+                return delegate.generateEmbeddingAsync(data);
+            },
+            (invocation, embedding) -> {
+                Span span = invocation.span();
+                if (embedding != null && embedding.getVector() != null) {
+                    span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embedding.getVector().size());
+                }
+            });
     }
 
     @Override
@@ -166,6 +140,16 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
         return tracer;
     }
 
+    private void setModelAttributes(Span span) {
+        span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
+        if (provider != null) {
+            span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
+        }
+        if (modelName != null) {
+            span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, modelName);
+        }
+    }
+
     private void captureInput(Span span, List<String> data) {
         if (data == null || data.isEmpty()) {
             return;
@@ -173,6 +157,9 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
 
         // Set the number of texts being embedded
         span.setAttribute("embedding.input_count", (long) data.size());
+        if (tracer.getConfig().isHideInputs()) {
+            return;
+        }
 
         // Capture input texts
         StringBuilder inputBuilder = new StringBuilder();

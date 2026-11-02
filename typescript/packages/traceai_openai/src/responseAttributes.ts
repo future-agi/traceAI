@@ -15,6 +15,23 @@ import { safelyJSONStringify } from "@traceai/fi-core";
 function serializeResponseItem(
   item: Exclude<ResponseInputItem | ResponseOutputItem, { role: string }>,
 ): Record<string, unknown> {
+  // Branch before the floor SDK's discriminated union so its existing cases
+  // retain strict type narrowing.
+  if ((item.type as string) === "custom_tool_call") {
+    const call = item as unknown as { call_id: string; name: string; input: string };
+    return {
+      role: "assistant",
+      tool_calls: [{
+        id: call.call_id,
+        type: "custom",
+        custom: { name: call.name, input: call.input },
+      }],
+    };
+  }
+  if ((item.type as string) === "custom_tool_call_output") {
+    const result = item as unknown as { call_id: string; output: unknown };
+    return { role: "tool", tool_call_id: result.call_id, content: result.output };
+  }
   switch (item.type) {
     case "function_call":
       return {
@@ -46,7 +63,12 @@ function serializeResponseItem(
         tool_calls: [{ id: item.id, function: { name: item.type, arguments: JSON.stringify(item.action) } }],
       };
     case "computer_call_output":
-      return { role: "tool", tool_call_id: item.call_id, content: JSON.stringify(item.output) };
+      // Retain image structure so image-only privacy rules can recognize it.
+      return {
+        role: "tool",
+        tool_call_id: item.call_id,
+        content: [{ ...item.output, type: "input_image" }],
+      };
     case "web_search_call":
       return {
         role: "assistant",
@@ -93,7 +115,7 @@ export function getResponsesInputMessagesAttributes(
   }
   if (typeof body.input === "string") {
     items.push({ content: body.input, role: "user" });
-  } else {
+  } else if (Array.isArray(body.input)) {
     items.push(...body.input);
   }
   const messages = items.map((item) => serializeResponseItemMessage(item));
@@ -136,7 +158,9 @@ export async function consumeResponseStreamEvents(
 
   for await (const event of stream) {
     switch (event.type) {
-      case "response.completed": {
+      case "response.completed":
+      case "response.failed":
+      case "response.incomplete": {
         response = event.response;
         break;
       }
