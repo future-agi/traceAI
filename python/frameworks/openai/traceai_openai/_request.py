@@ -202,6 +202,7 @@ class _WithOpenAI(ABC):
         with_span: _WithSpan,
         cast_to: type,
         request_parameters: Mapping[str, Any],
+        request_options: Any = None,
     ) -> Any:
         """
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
@@ -224,8 +225,15 @@ class _WithOpenAI(ABC):
             response_accumulator_factory = self._response_accumulator_factories.get(
                 cast_to
             )
+            accumulator_parameters = request_parameters
+            if cast_to is self._openai.types.chat.ChatCompletion and request_options is not None:
+                # Completion validation needs the on-wire choice count. Keep
+                # extra_body out of the existing exported request metadata.
+                _, accumulator_parameters = _parse_request_args(
+                    (cast_to, request_options), include_extra_body=True,
+                )
             response_accumulator = (
-                response_accumulator_factory(request_parameters)
+                response_accumulator_factory(accumulator_parameters)
                 if response_accumulator_factory
                 else None
             )
@@ -340,6 +348,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     with_span=with_span,
                     cast_to=cast_to,
                     request_parameters=request_parameters,
+                    request_options=args[1],
                 )
             except Exception as e:
                 status = trace_api.Status(
@@ -423,6 +432,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     with_span=with_span,
                     cast_to=cast_to,
                     request_parameters=request_parameters,
+                    request_options=args[1],
                 )
             except Exception:
                 logger.exception(
@@ -432,7 +442,9 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
         return response
 
 
-def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]]:
+def _parse_request_args(
+    args: Tuple[type, Any], *, include_extra_body: bool = False,
+) -> Tuple[type, Mapping[str, Any]]:
     # We don't use `signature(request).bind()` because `request` could have been monkey-patched
     # (incorrectly) by others and the signature at runtime may not match the original.
     # The targeted signature of `request` is here:
@@ -441,9 +453,9 @@ def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]
     json_data = getattr(args[1], "json_data", None)
     extra_json = getattr(args[1], "extra_json", None)
     # Mirror the SDK's shallow extra_body merge without mutating its options.
-    # Overrides (including Omit removals) affect both request metadata and the
-    # number of terminal choices required for a successful streamed completion.
-    if extra_json is not None:
+    # Overrides (including Omit removals) affect the number of terminal choices
+    # required for a successful stream, not the existing metadata contract.
+    if include_extra_body and extra_json is not None:
         if json_data is None:
             json_data = extra_json
         elif isinstance(json_data, Mapping) and isinstance(extra_json, Mapping):

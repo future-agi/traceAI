@@ -27,7 +27,9 @@ def test_parse_effective_body(json_data, extra_json, expected):
     options = SimpleNamespace(json_data=json_data, extra_json=extra_json)
     cast_to = openai.types.chat.ChatCompletion
 
-    actual_type, actual = _parse_request_args((cast_to, options))
+    _, metadata_parameters = _parse_request_args((cast_to, options))
+    assert metadata_parameters == (json_data or {})
+    actual_type, actual = _parse_request_args((cast_to, options), include_extra_body=True)
 
     assert actual_type is cast_to
     assert actual == expected

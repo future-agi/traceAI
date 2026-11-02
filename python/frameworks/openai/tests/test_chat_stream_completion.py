@@ -105,7 +105,7 @@ def test_completion_count_uses_effective_body(
             assert body["n"] == override_n
         return stream_response(chunks, done=True)
 
-    extra_body = {"n": override_n}
+    extra_body = {"n": override_n, "synthetic_extra": "not-exported"}
     params = dict(
         model=REQUEST_MODEL, messages=[{"role": "user", "content": "synthetic-input"}],
         stream=True, n=declared_n, extra_body=extra_body,
@@ -126,12 +126,17 @@ def test_completion_count_uses_effective_body(
             stream.close()
 
     assert len(wire_bodies) == 1
-    assert extra_body == {"n": override_n}
+    assert extra_body == {"n": override_n, "synthetic_extra": "not-exported"}
     span, attrs = only_span(exporter)
     assert span.status.status_code == expected_status
-    # Request metadata and completion detection must describe the same body.
-    expected_parameters = {k: v for k, v in wire_bodies[0].items() if k != "messages"}
-    assert json.loads(attrs["gen_ai.request.parameters"]) == expected_parameters
+    # This fix must not expand exported metadata to arbitrary extra_body fields.
+    parameters = json.loads(attrs["gen_ai.request.parameters"])
+    if declared_n is openai.NOT_GIVEN:
+        assert "n" not in parameters
+    else:
+        assert parameters["n"] == declared_n
+    assert "synthetic_extra" not in str(attrs)
+    assert "not-exported" not in str(attrs)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
