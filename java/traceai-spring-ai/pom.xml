@@ -68,6 +68,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Provided by the native application's Boot BOM; wrappers do not require the bridge. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

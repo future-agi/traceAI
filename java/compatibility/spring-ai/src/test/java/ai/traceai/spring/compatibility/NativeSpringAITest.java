@@ -2,11 +2,11 @@ package ai.traceai.spring.compatibility;
 
 import ai.traceai.FITracer;
 import ai.traceai.spring.SpringAIObservationFilter;
+import ai.traceai.spring.SpringAITracingObservationHandler;
 import ai.traceai.spring.TracedChatModel;
 import ai.traceai.spring.TracedEmbeddingModel;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.observation.ObservationRegistry;
-import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.otel.bridge.OtelCurrentTraceContext;
 import io.micrometer.tracing.otel.bridge.OtelTracer;
 import io.opentelemetry.api.common.AttributeKey;
@@ -61,6 +61,7 @@ class NativeSpringAITest {
             assertEquals(1, f.aiSpans().size(), "one model span; native HTTP spans may also be present");
             var span = f.spans().stream().filter(s -> "LLM".equals(attr(s, "fi.span.kind"))).findFirst().orElseThrow();
             assertEquals(parent.getSpanContext().getSpanId(), span.getParentSpanId());
+            assertEquals(io.opentelemetry.api.trace.StatusCode.OK, span.getStatus().getStatusCode());
             assertEquals("openai", attr(span, "gen_ai.provider.name"));
             assertEquals("synthetic-model", attr(span, "gen_ai.response.model"));
             assertEquals("3", attr(span, "gen_ai.usage.input_tokens"));
@@ -89,6 +90,7 @@ class NativeSpringAITest {
             model.stream(new Prompt(INPUT)).blockLast(Duration.ofSeconds(10));
             var span = f.onlySpan();
             assertEquals(OUTPUT, attr(span, "output.value"));
+            assertEquals(io.opentelemetry.api.trace.StatusCode.OK, span.getStatus().getStatusCode());
             assertEquals("2", attr(span, "gen_ai.usage.output_tokens"));
             f.exporter.reset();
             f.replies.add(new Reply(STREAM, "text/event-stream", 200));
@@ -190,7 +192,7 @@ class NativeSpringAITest {
                 .setResource(Resource.create(Attributes.of(AttributeKey.stringKey("project_name"), "spring-ai-test")))
                 .addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
             var tracer = new OtelTracer(sdk.get("spring-native"), new OtelCurrentTraceContext(), event -> {});
-            registry.observationConfig().observationHandler(new DefaultTracingObservationHandler(tracer)).observationFilter(filter);
+            registry.observationConfig().observationHandler(new SpringAITracingObservationHandler(tracer)).observationFilter(filter);
         }
         String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
         void reply(String body) { replies.add(new Reply(body, "application/json", 200)); }
