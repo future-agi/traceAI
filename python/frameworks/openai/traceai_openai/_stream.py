@@ -184,6 +184,10 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, error)
 
+    async def aclose(self) -> Any:
+        # The SDK alias must use our close path, not bypass span finalization.
+        return await self.close()
+
     def __aiter__(self):
         return self
 

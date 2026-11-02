@@ -1,6 +1,7 @@
 """Explicit close and task cancellation through the SDK's native HTTP transport."""
 
 import asyncio
+from contextlib import aclosing
 import inspect
 import json
 import os
@@ -130,8 +131,54 @@ def test_explicit_close_finishes_once(tracing, base_url, use_async, consumption)
         assert span.attributes["gen_ai.request.model"] == ARGS["model"]
 
 
-@pytest.mark.parametrize("use_async", [False, True])
-def test_close_failure_preserves_exception_and_finishes(tracing, base_url, use_async, monkeypatch):
+@pytest.mark.skipif(
+    not hasattr(openai.AsyncStream, "aclose"),
+    reason="This SDK version does not expose AsyncStream.aclose",
+)
+@pytest.mark.parametrize("consumption", ["empty", "partial", "exhausted"])
+@pytest.mark.parametrize("cleanup", ["aclose", "stdlib_aclosing"])
+def test_async_close_alias_finishes_once(tracing, base_url, consumption, cleanup):
+    async def run():
+        async with client(streaming, base_url, True) as sdk:
+            stream = await sdk.chat.completions.create(**ARGS, stream=True)
+
+            async def consume():
+                if consumption == "partial":
+                    await stream.__anext__()
+                elif consumption == "exhausted":
+                    async for _ in stream:
+                        pass
+
+            if cleanup == "stdlib_aclosing":
+                async with aclosing(stream):
+                    await consume()
+            else:
+                await consume()
+                assert await stream.aclose() is None
+            assert stream.response.is_closed
+            only_span(tracing, StatusCode.OK)
+            # Interleaved aliases and context cleanup must not export duplicates.
+            await stream.aclose()
+            await stream.close()
+            await stream.__aexit__(None, None, None)
+
+    asyncio.run(run())
+    span = only_span(tracing, StatusCode.OK)
+    if consumption != "empty":
+        assert span.attributes["output.value"] == "partial-answer"
+        assert span.attributes["gen_ai.request.model"] == ARGS["model"]
+
+
+@pytest.mark.parametrize("use_async,close_method", [
+    (False, "close"), (True, "close"),
+    pytest.param(True, "aclose", marks=pytest.mark.skipif(
+        not hasattr(openai.AsyncStream, "aclose"),
+        reason="This SDK version does not expose AsyncStream.aclose",
+    )),
+])
+def test_close_failure_preserves_exception_and_finishes(
+    tracing, base_url, use_async, close_method, monkeypatch,
+):
     error = RuntimeError("synthetic close failure")
     calls = []
 
@@ -147,8 +194,9 @@ def test_close_failure_preserves_exception_and_finishes(tracing, base_url, use_a
                 with monkeypatch.context() as patch:
                     patch.setattr(stream.response, "aclose", fail_close)
                     with pytest.raises(RuntimeError) as caught:
-                        await stream.close()
+                        await getattr(stream, close_method)()
                     assert caught.value is error
+                    only_span(tracing, StatusCode.ERROR)
                 await stream.close()
         asyncio.run(run())
     else:
@@ -241,7 +289,14 @@ def test_cancel_stream_iteration_finishes_before_close(tracing, base_url, hide_e
         assert sum(event.name == "exception" for event in span.events) == 1
 
 
-def test_cancel_async_close_finishes(tracing, base_url):
+@pytest.mark.parametrize("close_method", [
+    "close",
+    pytest.param("aclose", marks=pytest.mark.skipif(
+        not hasattr(openai.AsyncStream, "aclose"),
+        reason="This SDK version does not expose AsyncStream.aclose",
+    )),
+])
+def test_cancel_async_close_finishes(tracing, base_url, close_method):
     async def run():
         closing = asyncio.Event()
 
@@ -261,7 +316,7 @@ def test_cancel_async_close_finishes(tracing, base_url):
         async with client(handler, base_url, True) as sdk:
             stream = await sdk.chat.completions.create(**ARGS, stream=True)
             await stream.__anext__()
-            task = asyncio.create_task(stream.close())
+            task = asyncio.create_task(getattr(stream, close_method)())
             await asyncio.wait_for(closing.wait(), 2)
             task.cancel("synthetic close cancellation")
             with cancelled("synthetic close cancellation"):
