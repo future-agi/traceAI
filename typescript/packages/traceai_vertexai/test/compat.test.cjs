@@ -18,9 +18,9 @@ const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProces
 let instrumentation, requests, reply, failure, streamBody;
 const originalFetch = global.fetch;
 const response = (text = 'hello') => ({ candidates: [{ index: 0, content: { role: 'model', parts: [{ text }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 0, totalTokenCount: 3 } });
-function model(preview = false) {
+function model(preview = false, config = {}) {
   const vertex = new sdk.VertexAI({ project: 'synthetic-project', location: 'us-central1', googleAuthOptions: { authClient: { getAccessToken: async () => ({ token: 'synthetic-only' }) } } });
-  return (preview ? vertex.preview : vertex).getGenerativeModel({ model: 'gemini-test', generationConfig: { temperature: 0.2 } });
+  return (preview ? vertex.preview : vertex).getGenerativeModel({ model: 'gemini-test', generationConfig: { temperature: 0.2 }, ...config });
 }
 function instrument(config = {}) {
   instrumentation = new VertexAIInstrumentation(config);
@@ -166,6 +166,48 @@ test('zero countTokens result is preserved', async () => {
   assert.equal((await model().countTokens({ contents: [{ role: 'user', parts: [{ text: 'question' }] }] })).totalTokens, 0);
   assert.equal(exporter.getFinishedSpans()[0].attributes['vertexai.total_tokens'], 0);
 });
+
+for (const preview of [false, true]) {
+  test(`${preview ? 'preview' : 'stable'} countTokens captures the submitted request, not generation defaults`, async () => {
+    instrument();
+    const configured = model(preview, {
+      systemInstruction: 'MODEL_INSTRUCTION_NOT_COUNTED',
+      tools: [{ functionDeclarations: [{ name: 'MODEL_TOOL_NOT_COUNTED' }] }],
+      generationConfig: { temperature: 0.7, maxOutputTokens: 123 },
+    });
+    const request = { contents: [{ role: 'user', parts: [{ text: 'COUNTED_REQUEST' }] }] };
+    assert.equal((await configured.countTokens(request)).totalTokens, 0);
+    assert.deepEqual(requests[0].body, request);
+    const spans = exporter.getFinishedSpans();
+    assert.equal(spans.length, 1);
+    const attrs = spans[0].attributes;
+    assert.equal(attrs[S.GEN_AI_OPERATION_NAME], 'count_tokens');
+    assert.deepEqual(JSON.parse(attrs[S.LLM_INPUT_MESSAGES]), [{ role: 'user', content: [{ type: 'text', text: 'COUNTED_REQUEST' }] }]);
+    assert.equal(attrs['gen_ai.request.temperature'], undefined);
+    assert.equal(attrs['gen_ai.request.max_tokens'], undefined);
+    assert.equal(attrs['vertexai.total_tokens'], 0);
+  });
+
+  test(`${preview ? 'preview' : 'stable'} countTokens retains explicitly submitted instructions and tools`, async () => {
+    instrument();
+    const configured = model(preview, {
+      systemInstruction: 'MODEL_INSTRUCTION_NOT_COUNTED',
+      tools: [{ functionDeclarations: [{ name: 'MODEL_TOOL_NOT_COUNTED' }] }],
+      generationConfig: { temperature: 0.7 },
+    });
+    const request = {
+      contents: [{ role: 'user', parts: [{ text: 'COUNTED_REQUEST' }] }],
+      systemInstruction: { parts: [{ text: 'EXPLICIT_INSTRUCTION' }] },
+      tools: [{ functionDeclarations: [{ name: 'EXPLICIT_TOOL' }] }],
+    };
+    assert.equal((await configured.countTokens(request)).totalTokens, 0);
+    assert.deepEqual(requests[0].body, request);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    assert.match(attrs[S.LLM_INPUT_MESSAGES], /EXPLICIT_INSTRUCTION|EXPLICIT_TOOL/);
+    assert.doesNotMatch(attrs[S.LLM_INPUT_MESSAGES], /MODEL_INSTRUCTION_NOT_COUNTED|MODEL_TOOL_NOT_COUNTED/);
+    assert.equal(attrs['gen_ai.request.temperature'], undefined);
+  });
+}
 
 for (const flag of ['hideInputs', 'hideInputMessages', 'hideInputText', 'hideOutputs', 'hideOutputMessages', 'hideOutputText']) {
   test(`${flag} hides content including tool arguments without hiding model/usage`, async () => {

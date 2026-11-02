@@ -182,9 +182,12 @@ function inputAttributes(instance: SDKObject, request: any, method: string): Att
   const attributes: Attributes = {};
   if (contents.length > 32 || (chat && instance.historyInternal?.length > 31)) attributes["vertexai.capture.truncated"] = true;
   const messages = contents.slice(-32).map((content: SDKObject) => message(content, attributes));
-  const instruction = request?.systemInstruction ?? instance.systemInstruction;
+  // countTokens sends the explicit request verbatim; model generation defaults
+  // are not part of the counted payload, even when the model has them configured.
+  const counting = method === "countTokens";
+  const instruction = counting ? request?.systemInstruction : (request?.systemInstruction ?? instance.systemInstruction);
   if (instruction) messages.unshift(message(typeof instruction === "string" ? { role: "system", parts: [{ text: instruction }] } : { ...instruction, role: "system" }, attributes));
-  const tools = request?.tools ?? instance.tools;
+  const tools = counting ? request?.tools : (request?.tools ?? instance.tools);
   // Keep all content-bearing values inside message.content so FI's granular
   // text/messages privacy controls also hide tool arguments and declarations.
   if (Array.isArray(tools)) {
@@ -197,9 +200,11 @@ function inputAttributes(instance: SDKObject, request: any, method: string): Att
     attributes["vertexai.capture.truncated"] = true;
   }
   capture(attributes, S.LLM_INPUT_MESSAGES, messages, true);
-  const config = request?.generationConfig ?? instance.generationConfig;
-  for (const [name, key] of Object.entries({ temperature: "gen_ai.request.temperature", topP: "gen_ai.request.top_p", topK: "gen_ai.request.top_k", maxOutputTokens: "gen_ai.request.max_tokens" })) {
-    if (typeof config?.[name] === "number" && Number.isFinite(config[name])) attributes[key] = config[name];
+  if (!counting) {
+    const config = request?.generationConfig ?? instance.generationConfig;
+    for (const [name, key] of Object.entries({ temperature: "gen_ai.request.temperature", topP: "gen_ai.request.top_p", topK: "gen_ai.request.top_k", maxOutputTokens: "gen_ai.request.max_tokens" })) {
+      if (typeof config?.[name] === "number" && Number.isFinite(config[name])) attributes[key] = config[name];
+    }
   }
   return attributes;
 }
