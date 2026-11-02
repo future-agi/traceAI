@@ -1,64 +1,91 @@
 # @traceai/fi-instrumentation-livekit
 
-OpenTelemetry instrumentation for LiveKit real-time communication SDK. Part of traceAI, Future AGI's OpenTelemetry instrumentation libraries.
-
-[Documentation](https://docs.futureagi.com/docs/integrations/traceai/livekit) · [Source](https://github.com/future-agi/traceAI/tree/dev/typescript/packages/traceai_livekit) · [Issues](https://github.com/future-agi/traceAI/issues)
+Trace LiveKit room connections, track publishing, and audio/video frame capture in Future AGI from a Node.js application.
 
 ## Install
 
+Use Node.js 18 or later, or the newer Node version required by your LiveKit SDK.
+
 ```sh
-npm install @traceai/fi-instrumentation-livekit @traceai/fi-core @opentelemetry/instrumentation @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
-npm install livekit-client@"^2.0.0" @livekit/rtc-node@"^0.5.0"
+npm install @traceai/fi-instrumentation-livekit @traceai/fi-core @livekit/rtc-node
 ```
 
-The SDK ranges above match this instrumentor's module-version filters. Install
-only the SDKs your application uses. For Future AGI export, set `FI_API_KEY` and
-`FI_SECRET_KEY` in your environment; keep provider credentials outside source code.
+The instrumentor supports `@livekit/rtc-node >=0.3.0 <2` and `livekit-client >=1.0.0 <3`. Install only the SDK your application uses. It does not instrument `livekit-server-sdk` administration APIs.
 
-## Package entry points
+For LiveKit Agents' LLM and session traces, use the framework's native OpenTelemetry integration. This package adds RTC operation spans; it does not create conversation roots, transcripts, or LLM spans.
 
-This source revision fixes the package entry points. Both CommonJS `require()`
-and native Node ESM `import` use the same CommonJS implementation; this avoids
-broken, extensionless ESM build imports. The corrected packages still need a
-patch release. A previously published `0.1.0` tarball is not changed by this README.
+## Connect a room
 
-## Quick start
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your server environment. Set `LIVEKIT_URL` to your LiveKit server URL and `LIVEKIT_TOKEN` to a room access token. Keep these credentials out of client-side bundles.
 
-Load this setup **before** loading the SDK you want to instrument. This CommonJS
-example registers tracing; it does not make a provider request.
+Save the following as `trace-room.cjs` and run `node trace-room.cjs`:
 
 ```javascript
-const { context } = require("@opentelemetry/api");
-const { AsyncLocalStorageContextManager } = require("@opentelemetry/context-async-hooks");
 const { register, ProjectType } = require("@traceai/fi-core");
-// Standalone process only: if your OTel SDK already installs a context manager,
-// reuse it instead of registering another one.
-context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-const { registerInstrumentations } = require("@opentelemetry/instrumentation");
 const { LiveKitInstrumentation } = require("@traceai/fi-instrumentation-livekit");
-const tracerProvider = register({
+
+const provider = register({
   projectName: "livekit-app",
   projectType: ProjectType.OBSERVE,
+  endpoint: "https://api.futureagi.com/tracer/v1/traces",
 });
-registerInstrumentations({
-  tracerProvider, instrumentations: [new LiveKitInstrumentation()],
+const instrumentation = new LiveKitInstrumentation();
+instrumentation.setTracerProvider(provider);
+
+async function main() {
+  const rtc = await import("@livekit/rtc-node");
+  instrumentation.manuallyInstrument(rtc);
+  const room = new rtc.Room();
+  try {
+    await room.connect(process.env.LIVEKIT_URL, process.env.LIVEKIT_TOKEN);
+    // Publish tracks and capture frames using your application's normal LiveKit code.
+  } finally {
+    try {
+      await room.disconnect();
+    } finally {
+      instrumentation.disable();
+      await provider.shutdown();
+    }
+  }
+}
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
 });
 ```
 
-`register()` installs a tracer provider, not an async context manager. The
-explicit context manager above keeps nested asynchronous calls in one trace.
-Run your application's SDK calls after this setup. Call
-`await tracerProvider.shutdown()` when the application finishes to flush pending
-spans. For ESM, follow the documentation for your OpenTelemetry loader and SDK
-instead of assuming import order alone enables automatic patching.
+Open the `livekit-app` project in Future AGI to inspect `room.connect` and `room.disconnect` spans. A connect span ends when the connect call settles, not when the call's room eventually disconnects. Failed operations have error status. Audio and video capture spans contain frame metadata, not media bytes.
 
-## Compatibility and privacy
+If your application already has a tracer provider, pass it to `setTracerProvider()` rather than registering a second one. Reuse its async context manager to keep RTC operations under the active application span.
 
-This instruments the SDK hooks implemented by this package, not every API offered
-by the provider. The install ranges above are intentionally limited to the module versions this
-instrumentor patches; its peer declarations may be broader.
-Traces can contain prompts, responses, and tool data; configure capture and
-redaction before sending production traffic.
+## Use the client SDK
+
+For CommonJS, create the instrumentor and set its provider before requiring `livekit-client`; the automatic hook instruments newly constructed rooms and local participants.
+
+For ESM or a previously loaded client SDK, use the module returned by `manuallyInstrument()`:
+
+```javascript
+const client = instrumentation.manuallyInstrument(await import("livekit-client"));
+const room = new client.Room();
+```
+
+`livekit-client` implements room methods on each instance. If you already have a room, use `instrumentation.instrumentRoom(room)` instead. Repeated registration does not add duplicate spans. After disabling instrumentation, create a new manual registration if you enable it again.
+
+## Control sensitive data
+
+Tokens, URL credentials, URL paths, query strings, and raw audio/video are not captured as span attributes. Room names, participant identifiers, track names, publish options, and SDK error messages can still contain sensitive information. Use your collector's attribute filtering for identifying metadata, and configure content/error redaction when constructing the instrumentor:
+
+```javascript
+const instrumentation = new LiveKitInstrumentation({
+  traceConfig: {
+    hideInputs: true,
+    hideOutputs: true,
+    hideErrorDetails: true,
+  },
+});
+```
+
+Frame capture produces one span per frame. Apply sampling in your tracer provider for high-volume audio/video applications. Shut down the provider only when the application is finished so pending spans can be exported.
 
 ## License
 
