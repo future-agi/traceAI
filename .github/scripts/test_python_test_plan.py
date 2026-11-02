@@ -649,7 +649,7 @@ class WorkflowText(unittest.TestCase):
             "install_local_core",
             "Install privacy-dependent OpenAI packages with the local core",
             "if: matrix.package.name == 'openai' || matrix.package.name == 'vllm'",
-            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0',
+            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0 httpx==0.27.2',
         ),
         (
             "install_hatch",
@@ -685,7 +685,7 @@ class WorkflowText(unittest.TestCase):
         ],
         "install_local_core": [
             "python -m venv .venv",
-            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0',
+            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0 httpx==0.27.2',
             ".venv/bin/pip check",
         ],
         "install_hatch": [
