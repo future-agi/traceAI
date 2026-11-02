@@ -2,7 +2,7 @@ import {
   InstrumentationBase,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import { context, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
+import { context, createContextKey, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
 
@@ -22,6 +22,9 @@ const METHODS = {
   sendClientRequest: "client.request",
   sendText: "client.send_text",
 } as const;
+type ConnectionScope = { instance: object; active: boolean };
+type FinishSpan = (code: SpanStatusCode) => void;
+const CONNECTION_SCOPES = createContextKey("traceai.pipecat.connection-scopes");
 const owners = new WeakMap<object, PipecatInstrumentation>();
 let patchedCount = 0;
 
@@ -31,6 +34,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
   private traceConfig?: TraceConfigOptions;
   private patches?: Map<ClientPrototype, string[]>;
   private manualModules?: Set<unknown>;
+  private pendingConnections = new WeakMap<object, Set<FinishSpan>>();
 
   constructor(config: PipecatInstrumentationConfig = {}) {
     super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
@@ -115,6 +119,18 @@ export class PipecatInstrumentation extends InstrumentationBase {
   }
 
   private traceOperation(original: ClientMethod, instance: unknown, args: unknown[], operation: string): unknown {
+    const client = instance !== null && (typeof instance === "object" || typeof instance === "function") ? instance : undefined;
+    const parentContext = context.active();
+    const scopes = (parentContext.getValue(CONNECTION_SCOPES) as ConnectionScope[] | undefined) ?? [];
+    // connect(endpoint) asynchronously delegates to connect(params) on the same client.
+    // Do not suppress another client or a separate call outside this async scope.
+    if (operation === "client.connect" && scopes.some(scope => scope.active && scope.instance === client)) {
+      return original.apply(instance, args);
+    }
+    if (operation === "client.disconnect" && client) {
+      // Both supported SDKs can leave the bot-ready promise pending after disconnect.
+      for (const finish of this.pendingConnections.get(client) ?? []) finish(SpanStatusCode.ERROR);
+    }
     let span: Span;
     try {
       span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
@@ -129,7 +145,16 @@ export class PipecatInstrumentation extends InstrumentationBase {
       diag.warn("Pipecat client operation telemetry failed");
       return original.apply(instance, args);
     }
-    const finish = (code: SpanStatusCode) => {
+    const scope = operation === "client.connect" && client ? { instance: client, active: true } : undefined;
+    let finished = false;
+    const finish: FinishSpan = (code) => {
+      if (finished) return;
+      finished = true;
+      if (scope) {
+        const pending = this.pendingConnections.get(scope.instance);
+        pending?.delete(finish);
+        if (!pending?.size) this.pendingConnections.delete(scope.instance);
+      }
       try {
         // Error messages and arguments may contain credentials or transcripts.
         span.setStatus({ code });
@@ -138,18 +163,30 @@ export class PipecatInstrumentation extends InstrumentationBase {
         diag.warn("Pipecat client operation telemetry failed");
       }
     };
+    let operationContext = trace.setSpan(parentContext, span);
+    if (scope) {
+      const pending = this.pendingConnections.get(scope.instance) ?? new Set<FinishSpan>();
+      pending.add(finish);
+      this.pendingConnections.set(scope.instance, pending);
+      operationContext = operationContext.setValue(CONNECTION_SCOPES, [...scopes, scope]);
+    }
+    const settle = (code: SpanStatusCode) => {
+      // Cancellation ends the span, but recursion stays suppressed until the SDK settles.
+      if (scope) scope.active = false;
+      finish(code);
+    };
     try {
-      const result = context.with(trace.setSpan(context.active(), span), () => original.apply(instance, args));
+      const result = context.with(operationContext, () => original.apply(instance, args));
       if (result instanceof Promise) {
         return result.then(
-          (value) => { finish(SpanStatusCode.OK); return value; },
-          (error: unknown) => { finish(SpanStatusCode.ERROR); throw error; },
+          (value) => { settle(SpanStatusCode.OK); return value; },
+          (error: unknown) => { settle(SpanStatusCode.ERROR); throw error; },
         );
       }
-      finish(SpanStatusCode.OK);
+      settle(SpanStatusCode.OK);
       return result;
     } catch (error) {
-      finish(SpanStatusCode.ERROR);
+      settle(SpanStatusCode.ERROR);
       throw error;
     }
   }
