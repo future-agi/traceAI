@@ -83,6 +83,23 @@ for (const batch of [false, true]) {
   });
 }
 
+test('register installs W3C trace-context propagation for remote parents', async () => {
+  const memory = memoryProcessor();
+  setup({ spanProcessors: [memory.processor] });
+  const remote = propagation.extract(ROOT_CONTEXT, {
+    traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
+  });
+  assert.equal(trace.getSpanContext(remote)?.traceId, '11111111111111111111111111111111');
+  const tracer = trace.getTracer('remote-parent');
+  await context.with(remote, async () => {
+    await new Promise(resolve => setImmediate(resolve));
+    tracer.startSpan('remote-child').end();
+  });
+  const child = memory.exporter.getFinishedSpans()[0];
+  assert.equal(child.parentSpanContext?.spanId, '2222222222222222');
+  assert.equal(child.spanContext().traceId, '11111111111111111111111111111111');
+});
+
 test('batch:true queues spans until forceFlush, rather than exporting immediately', async () => {
   const receiver = await collector();
   const provider = setup({ endpoint: receiver.endpoint, batch: true });

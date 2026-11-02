@@ -3,6 +3,7 @@ import {
   context,
   createContextKey,
   diag,
+  propagation,
   TraceFlags,
   trace,
   SpanContext,
@@ -10,7 +11,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import { ProjectType, EvalTag, prepareEvalTags } from "./fi_types";
-import { ExportResult, ExportResultCode } from "@opentelemetry/core";
+import { ExportResult, ExportResultCode, W3CTraceContextPropagator } from "@opentelemetry/core";
 import {
   ReadableSpan,
   SpanExporter,
@@ -546,6 +547,9 @@ if (!projectName) {
   if (setGlobalTracerProvider) {
     if (trace.setGlobalTracerProvider(tracerProvider)) {
       ensureContextManager();
+      // The OTel API refuses to replace an application-owned propagator.
+      // Install a W3C default only when no propagator has already registered.
+      propagation.setGlobalPropagator(new W3CTraceContextPropagator());
       if (verbose) diag.info("register: Installed the global FI tracer provider.");
     } else {
       diag.warn(
