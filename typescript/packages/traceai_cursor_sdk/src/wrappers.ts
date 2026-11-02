@@ -182,46 +182,65 @@ export function wrapAgent<T>(agent: T, getContext: GetContext): T {
   if (!target || typeof target !== "object" || isPatched(target)) return agent;
   const original = target.send;
   if (typeof original !== "function") return agent;
-  const traced = function tracedSend(this: AgentLike, ...args: unknown[]) {
-    const ctx = getContext();
-    if (!ctx) return original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    let tracer: RunTracer | undefined;
-    try {
-      tracer = new RunTracer({
-        tracer: ctx.tracer,
-        policy: ctx.policy,
-        parentContext: otelContext.active(),
-        agent: this ?? target,
-        message: args[0],
-        sendOptions: args[1] as SendOptionsLike | undefined,
-        startTimeMs: clockMs(),
-      });
-    } catch (error) {
-      diag.debug(`${LOG}: tracing disabled for this run: ${error}`);
-    }
-    if (!tracer) return original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    const runTracer = tracer;
-    let pending: Promise<RunLike>;
-    try {
-      pending = original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    } catch (error) {
-      safe(() => runTracer.finish({ kind: "error", error }));
-      throw error;
-    }
-    return Promise.resolve(pending).then(
-      (run) => {
-        safe(() => watchRun(run, runTracer, ctx));
-        return run;
-      },
-      (error) => {
-        safe(() => runTracer.finish({ kind: "error", error }));
-        throw error;
-      },
-    );
-  };
-  if (!defineMethod(target, "send", traced)) return agent;
+  if (!defineMethod(target, "send", function tracedSend(this: AgentLike, ...args: unknown[]) {
+    return traceAgentRun(this, target, original, args, "send", getContext);
+  })) return agent;
+  // summarize() exists only in SDK >= 1.2. Feature-detect it so 1.0.x works unchanged.
+  const summarize = target.summarize;
+  if (typeof summarize === "function") {
+    defineMethod(target, "summarize", function tracedSummarize(this: AgentLike, ...args: unknown[]) {
+      return traceAgentRun(this, target, summarize, args, "summarize", getContext);
+    });
+  }
   markPatched(target);
   return agent;
+}
+
+function traceAgentRun(
+  receiver: AgentLike,
+  target: AgentLike,
+  original: (...args: never[]) => Promise<RunLike>,
+  args: unknown[],
+  operation: "send" | "summarize",
+  getContext: GetContext,
+): Promise<RunLike> {
+  const invoke = () => original.apply(receiver, args as never[]);
+  const ctx = getContext();
+  if (!ctx) return invoke();
+  let tracer: RunTracer | undefined;
+  try {
+    tracer = new RunTracer({
+      tracer: ctx.tracer,
+      policy: ctx.policy,
+      parentContext: otelContext.active(),
+      agent: receiver ?? target,
+      operation,
+      message: operation === "send" ? args[0] : undefined,
+      sendOptions: operation === "send" ? args[1] as SendOptionsLike | undefined : undefined,
+      startTimeMs: clockMs(),
+    });
+  } catch (error) {
+    diag.debug(`${LOG}: tracing disabled for this run: ${error}`);
+  }
+  if (!tracer) return invoke();
+  const runTracer = tracer;
+  let pending: Promise<RunLike>;
+  try {
+    pending = invoke();
+  } catch (error) {
+    safe(() => runTracer.finish({ kind: "error", error }));
+    throw error;
+  }
+  return Promise.resolve(pending).then(
+    (run) => {
+      safe(() => watchRun(run, runTracer, ctx));
+      return run;
+    },
+    (error) => {
+      safe(() => runTracer.finish({ kind: "error", error }));
+      throw error;
+    },
+  );
 }
 
 /**
