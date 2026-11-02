@@ -6,6 +6,9 @@ import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { SpanStatusCode } from "@opentelemetry/api";
+import { generateTraceConfig } from "@traceai/fi-core";
+import { sanitizeSpan } from "./privacy.js";
 
 export interface FISpanExporterConfig {
   /** Full OTLP traces endpoint URL. */
@@ -29,22 +32,23 @@ export interface FISpanExporterConfig {
  * (llm / agent / tool / chain / ...). Mastra emits `gen_ai.operation.name` but
  * NOT a span kind, so without this mapping every span renders as "unknown".
  */
-const SPAN_KIND_BY_TYPE: Partial<Record<SpanType, FISpanKind>> = {
-  [SpanType.AGENT_RUN]: FISpanKind.AGENT,
-  [SpanType.MODEL_GENERATION]: FISpanKind.LLM,
-  [SpanType.MODEL_INFERENCE]: FISpanKind.LLM,
-  [SpanType.MODEL_STEP]: FISpanKind.CHAIN,
-  [SpanType.TOOL_CALL]: FISpanKind.TOOL,
-  [SpanType.MCP_TOOL_CALL]: FISpanKind.TOOL,
-  [SpanType.CLIENT_TOOL_CALL]: FISpanKind.TOOL,
-  [SpanType.WORKFLOW_RUN]: FISpanKind.CHAIN,
-  [SpanType.WORKFLOW_STEP]: FISpanKind.CHAIN,
-  [SpanType.WORKFLOW_CONDITIONAL]: FISpanKind.CHAIN,
-  [SpanType.WORKFLOW_PARALLEL]: FISpanKind.CHAIN,
-  [SpanType.WORKFLOW_LOOP]: FISpanKind.CHAIN,
-  [SpanType.GENERIC]: FISpanKind.CHAIN,
-  [SpanType.RAG_EMBEDDING]: FISpanKind.EMBEDDING,
-  [SpanType.RAG_VECTOR_OPERATION]: FISpanKind.RETRIEVER,
+// String keys also work with the peer floor, whose enum lacks newer members.
+const SPAN_KIND_BY_TYPE: Readonly<Partial<Record<string, FISpanKind>>> = {
+  agent_run: FISpanKind.AGENT,
+  model_inference: FISpanKind.LLM,
+  model_step: FISpanKind.CHAIN,
+  tool_call: FISpanKind.TOOL,
+  mcp_tool_call: FISpanKind.TOOL,
+  client_tool_call: FISpanKind.TOOL,
+  provider_tool_call: FISpanKind.TOOL,
+  workflow_run: FISpanKind.CHAIN,
+  workflow_step: FISpanKind.CHAIN,
+  workflow_conditional: FISpanKind.CHAIN,
+  workflow_parallel: FISpanKind.CHAIN,
+  workflow_loop: FISpanKind.CHAIN,
+  generic: FISpanKind.CHAIN,
+  rag_embedding: FISpanKind.EMBEDDING,
+  rag_vector_operation: FISpanKind.RETRIEVER,
 };
 
 /**
@@ -76,7 +80,11 @@ export function enrichSpan(otelSpan: ReadableSpan, span: AnyExportedSpan): void 
   const attrs = otelSpan.attributes as Record<string, unknown>;
 
   // Span kind so the span isn't typed "unknown" in Future AGI.
-  const kind = SPAN_KIND_BY_TYPE[span.type];
+  // Let the official converter decide which generation is an actual request:
+  // the floor uses MODEL_GENERATION/chat; newer SDKs use MODEL_INFERENCE/chat.
+  const kind = span.type === SpanType.MODEL_GENERATION
+    ? (attrs["gen_ai.operation.name"] === "chat" ? FISpanKind.LLM : FISpanKind.CHAIN)
+    : SPAN_KIND_BY_TYPE[span.type];
   if (kind && attrs["gen_ai.span.kind"] == null) {
     attrs["gen_ai.span.kind"] = kind;
   }
@@ -87,6 +95,18 @@ export function enrichSpan(otelSpan: ReadableSpan, span: AnyExportedSpan): void 
   const s = span as { input?: unknown; output?: unknown };
   if (attrs["input.value"] == null) setIoValue(attrs, "input", s.input);
   if (attrs["output.value"] == null) setIoValue(attrs, "output", s.output);
+
+  // Older converters only look at errorInfo, but current runtimes communicate
+  // aborts/timeouts/interruptions through the authoritative termination fields.
+  const termination = span as { outcome?: string | null; stopReason?: string | null };
+  if (termination.outcome) attrs["mastra.span.outcome"] = termination.outcome;
+  if (termination.stopReason) attrs["mastra.span.stop_reason"] = termination.stopReason;
+  if (termination.outcome && termination.outcome !== "success" && otelSpan.status.code !== SpanStatusCode.ERROR) {
+    otelSpan.status.code = ["error", "abort"].includes(termination.outcome)
+      ? SpanStatusCode.ERROR
+      : SpanStatusCode.UNSET;
+    delete otelSpan.status.message;
+  }
 }
 
 /**
@@ -101,6 +121,9 @@ export class FIMastraSpanExporter extends BaseExporter {
   name = "future-agi";
   private readonly converter: SpanConverter;
   private readonly processor: BatchSpanProcessor;
+  private readonly traceConfig = generateTraceConfig();
+  private readonly pending = new Set<Promise<void>>();
+  private shutdownPromise?: Promise<void>;
 
   constructor(config: FISpanExporterConfig) {
     super();
@@ -124,26 +147,42 @@ export class FIMastraSpanExporter extends BaseExporter {
     );
   }
 
+  exportTracingEvent(event: TracingEvent): Promise<void> {
+    if (this.shutdownPromise) return Promise.resolve();
+    // Track from public entry: BaseExporter awaits its formatter before calling
+    // _exportTracingEvent, so tracking only conversion misses immediate shutdown.
+    const task = super.exportTracingEvent(event);
+    this.pending.add(task);
+    const cleanup = () => { this.pending.delete(task); };
+    void task.then(cleanup, cleanup);
+    return task;
+  }
+
   protected async _exportTracingEvent(event: TracingEvent): Promise<void> {
     if (event.type !== "span_ended") return;
     const span = event.exportedSpan;
     try {
       const otelSpan = await this.converter.convertSpan(span);
       enrichSpan(otelSpan, span);
-      this.processor.onEnd(otelSpan);
-    } catch (error) {
-      this.logger.error(
-        `[@traceai/mastra] Failed to export span ${span.id}`,
-        error as Error,
-      );
+      this.processor.onEnd(sanitizeSpan(otelSpan, this.traceConfig));
+    } catch {
+      // Conversion failures can quote sensitive input; do not send it to logs.
+      this.logger.error("[@traceai/mastra] Failed to convert or enqueue span");
     }
   }
 
+  private async drain(): Promise<void> {
+    while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+  }
+
   async flush(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    await this.drain();
     await this.processor.forceFlush();
   }
 
-  async shutdown(): Promise<void> {
-    await this.processor.shutdown();
+  shutdown(): Promise<void> {
+    this.shutdownPromise ??= this.drain().then(() => this.processor.shutdown());
+    return this.shutdownPromise;
   }
 }
