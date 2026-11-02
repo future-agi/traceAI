@@ -41,6 +41,40 @@ remain the application's responsibility. Use `TraceAI.Register` to configure
 tracing in code, and `TraceConfig` to control sensitive attribute capture.
 `TraceAI.Shutdown()` flushes pending telemetry when the application exits.
 
+## Hide sensitive content
+
+Configure masking before registering your tracer:
+
+```csharp
+var config = TraceConfig.Builder()
+    .HideInputs()
+    .HideOutputs()
+    .Build();
+
+var tracer = TraceAI.Register(options => options.TraceConfig = config);
+```
+
+These flags also default from `FI_HIDE_INPUTS` and `FI_HIDE_OUTPUTS`. Hidden values
+are replaced with `__REDACTED__` before object serialization. Masking applies to
+`FISpan` convenience methods and every `SetAttribute` overload.
+
+Use `FI_HIDE_INPUT_MESSAGES` or `FI_HIDE_OUTPUT_MESSAGES` to hide only message
+attributes. `FI_HIDE_INPUT_TEXT` and `FI_HIDE_OUTPUT_TEXT` also redact the whole
+corresponding message attribute, because messages are stored as a single JSON
+value. This removes message metadata along with text.
+
+Error messages and stack traces can contain the same sensitive content. By
+default, enabling any of these input/output hiding flags also omits error details:
+status descriptions, `error.message`, `exception.message`, and
+`exception.stacktrace`. Error status and exception types remain available.
+Set `FI_HIDE_ERROR_DETAILS=true` or call `.HideErrorDetails()` to hide error details
+without hiding inputs or outputs. An explicit `false` keeps error details even
+when content hiding is enabled; use that override only if those details are safe
+to export. Builder methods override their environment defaults.
+
+These controls apply to the `FISpan` API. Writing directly to its underlying
+`Activity`, or using another instrumentation library, bypasses this masking.
+
 ## Suppress tracing for sensitive work
 
 Wrap work that must not create FI spans in `SuppressTracing`. Your operations still

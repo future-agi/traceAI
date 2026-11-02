@@ -51,8 +51,7 @@ public class FISpan : IDisposable
     {
         if (!_recording) return;
 
-        var serialized = SerializeValue(value);
-        var masked = _config.Mask(SemanticConventions.InputValue, serialized);
+        var masked = _config.Mask(SemanticConventions.InputValue, () => SerializeValue(value));
         if (masked != null)
         {
             SetAttribute(SemanticConventions.InputValue, Truncate(masked));
@@ -64,8 +63,7 @@ public class FISpan : IDisposable
     {
         if (!_recording) return;
 
-        var serialized = SerializeValue(value);
-        var masked = _config.Mask(SemanticConventions.OutputValue, serialized);
+        var masked = _config.Mask(SemanticConventions.OutputValue, () => SerializeValue(value));
         if (masked != null)
         {
             SetAttribute(SemanticConventions.OutputValue, Truncate(masked));
@@ -77,8 +75,7 @@ public class FISpan : IDisposable
     {
         if (!_recording) return;
 
-        var json = SafeJsonSerialize(messages);
-        var masked = _config.Mask(SemanticConventions.GenAiInputMessages, json);
+        var masked = _config.Mask(SemanticConventions.GenAiInputMessages, () => SafeJsonSerialize(messages));
         if (masked != null)
             SetAttribute(SemanticConventions.GenAiInputMessages, Truncate(masked));
     }
@@ -87,8 +84,7 @@ public class FISpan : IDisposable
     {
         if (!_recording) return;
 
-        var json = SafeJsonSerialize(messages);
-        var masked = _config.Mask(SemanticConventions.GenAiOutputMessages, json);
+        var masked = _config.Mask(SemanticConventions.GenAiOutputMessages, () => SafeJsonSerialize(messages));
         if (masked != null)
             SetAttribute(SemanticConventions.GenAiOutputMessages, Truncate(masked));
     }
@@ -115,43 +111,50 @@ public class FISpan : IDisposable
     {
         if (!_recording) return;
 
-        _activity.SetStatus(ActivityStatusCode.Error, ex.Message);
-        SetAttribute(SemanticConventions.ErrorType, ex.GetType().FullName ?? ex.GetType().Name);
-        SetAttribute(SemanticConventions.ErrorMessage, ex.Message);
-        var errorEvent = new ActivityEvent("exception", tags: new ActivityTagsCollection
+        var type = ex.GetType().FullName ?? ex.GetType().Name;
+        var hideDetails = _config.HideErrorDetails;
+        _activity.SetStatus(ActivityStatusCode.Error, hideDetails ? null : ex.Message);
+        SetAttribute(SemanticConventions.ErrorType, type);
+        var tags = new ActivityTagsCollection { { "exception.type", type } };
+        if (!hideDetails)
         {
-            { "exception.type", ex.GetType().FullName },
-            { "exception.message", ex.Message },
-            { "exception.stacktrace", ex.StackTrace },
-        });
-        _activity.AddEvent(errorEvent);
+            SetAttribute(SemanticConventions.ErrorMessage, ex.Message);
+            tags.Add("exception.message", ex.Message);
+            tags.Add("exception.stacktrace", ex.StackTrace);
+        }
+        _activity.AddEvent(new ActivityEvent("exception", tags: tags));
     }
 
     // ── Generic attribute setters ───────────────────────────────
 
     public void SetAttribute(string key, string value)
     {
-        if (_recording) _activity.SetTag(key, value);
+        SetAttributeValue(key, value);
     }
 
     public void SetAttribute(string key, long value)
     {
-        if (_recording) _activity.SetTag(key, value);
+        SetAttributeValue(key, value);
     }
 
     public void SetAttribute(string key, double value)
     {
-        if (_recording) _activity.SetTag(key, value);
+        SetAttributeValue(key, value);
     }
 
     public void SetAttribute(string key, bool value)
     {
-        if (_recording) _activity.SetTag(key, value);
+        SetAttributeValue(key, value);
     }
 
     public void SetAttribute(string key, string[] values)
     {
-        if (_recording) _activity.SetTag(key, values);
+        SetAttributeValue(key, values);
+    }
+
+    private void SetAttributeValue(string key, object? value)
+    {
+        if (_recording) _activity.SetTag(key, _config.MaskAttribute(key, value));
     }
 
     // ── IDisposable ─────────────────────────────────────────────
@@ -189,7 +192,15 @@ public class FISpan : IDisposable
         }
         catch
         {
-            return value.ToString() ?? string.Empty;
+            try
+            {
+                return value.ToString() ?? string.Empty;
+            }
+            catch
+            {
+                // Tracing must not fail the application if both serialization paths fail.
+                return string.Empty;
+            }
         }
     }
 
