@@ -1,6 +1,7 @@
 """MongoDB command tracing with metadata-only Atlas Vector Search enrichment."""
 
 import logging
+from threading import Lock
 from typing import Any, Collection
 
 from opentelemetry import trace as trace_api
@@ -26,6 +27,7 @@ class MongoDBInstrumentor(BaseInstrumentor):
     """
 
     _owns_native = False
+    _start_lock = Lock()
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -61,6 +63,16 @@ class MongoDBInstrumentor(BaseInstrumentor):
         listener.success_hook = response_hook
         listener.failed_hook = failed_hook
         listener.capture_statement = False
+        # Upstream publishes a span only after its start callback returns. Keep
+        # that publication and our disable-time drain mutually exclusive.
+        original_start = listener.started
+
+        def locked_start(event: Any) -> None:
+            with self._start_lock:
+                original_start(event)
+
+        setattr(listener, "started", locked_start)
+        self._original_start = original_start
         self._owns_native = True
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -72,11 +84,13 @@ class MongoDBInstrumentor(BaseInstrumentor):
         # Disabled upstream listeners ignore completion events. End outstanding
         # commands once rather than retaining spans across a later enable cycle.
         if listener is not None:
-            pending = list(listener._span_dict.values())
-            listener._span_dict.clear()
-            for span in pending:
-                span.set_status(Status(StatusCode.ERROR, "Instrumentation disabled before command completed"))
-                span.end()
+            with self._start_lock:
+                pending = list(listener._span_dict.values())
+                listener._span_dict.clear()
+                setattr(listener, "started", self._original_start)
+                for span in pending:
+                    span.set_status(Status(StatusCode.ERROR, "Instrumentation disabled before command completed"))
+                    span.end()
         self._owns_native = False
 
 

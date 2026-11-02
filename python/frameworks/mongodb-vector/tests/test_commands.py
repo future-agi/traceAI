@@ -1,13 +1,16 @@
 """Offline driver-event contracts; no database or credentials required."""
 
 from datetime import timedelta
+from threading import Event, Thread
 import socket
+import time
 
 import pytest
 from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
 from opentelemetry.instrumentation.utils import suppress_instrumentation
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pymongo import MongoClient, monitoring
@@ -237,6 +240,44 @@ def test_disable_finishes_inflight_span(tracing):
     assert spans[0].status.status_code is StatusCode.ERROR
     assert not listener()._span_dict
     tracing[0].instrument(tracer_provider=tracing[1])
+
+
+def test_disable_during_command_start_does_not_retain_a_span(tracing):
+    instrumentor, provider, exporter = tracing
+    entered, resume = Event(), Event()
+
+    class PausedStart(SpanProcessor):
+        def on_start(self, span, parent_context=None):
+            entered.set()
+            assert resume.wait(5)
+
+    provider.add_span_processor(PausedStart())
+    command_listener = listener()
+    begin = started({"find": "rows"})
+    end = succeeded("find")
+    worker = Thread(target=command_listener.started, args=(begin,))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        disable = Thread(target=instrumentor.uninstrument)
+        disable.start()
+        deadline = time.monotonic() + 5
+        while command_listener.is_enabled and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert not command_listener.is_enabled
+    finally:
+        resume.set()
+        worker.join(5)
+        if "disable" in locals():
+            disable.join(5)
+    assert not worker.is_alive()
+    assert not disable.is_alive()
+    command_listener.succeeded(end)
+    assert not command_listener._span_dict
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code is StatusCode.ERROR
+    instrumentor.instrument(tracer_provider=provider)
 
 
 def test_external_native_instrumentation_is_not_duplicated_or_disabled(tracing):
