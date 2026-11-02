@@ -39,9 +39,10 @@ def harness():
     tracker = Tracker()
     provider.add_span_processor(tracker)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    settings = {"cancel": None, "tools": False}
+    settings = {"cancel": None, "tools": False, "requests": 0}
 
     def handler(request):
+        settings["requests"] += 1
         body = json.loads(request.content)
         base = {"id": "chatcmpl-synthetic", "created": 0, "model": body["model"]}
         if settings["cancel"]:

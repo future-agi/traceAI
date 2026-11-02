@@ -68,7 +68,7 @@ def _instrument(self: Any, **kwargs: Any) -> None:
         config=config,
     )
     run = _RunWrapper(self._tracer)
-    model = _ModelWrapper(self._tracer)
+    model = _ModelWrapper(self._tracer, hide_inputs=bool(config.hide_inputs))
     tool = _FunctionCallWrapper(self._tracer, hide_inputs=bool(config.hide_inputs))
     workflow = _WorkflowWrapper(self._tracer)
     execute = _WorkflowExecuteWrapper(self._tracer)

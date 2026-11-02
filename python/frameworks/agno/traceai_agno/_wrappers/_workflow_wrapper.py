@@ -13,6 +13,7 @@ from typing import (
 )
 
 from agno.run.workflow import WorkflowRunEvent, WorkflowRunOutput
+from agno.workflow.types import StepOutput
 from openinference.instrumentation import get_attributes_from_context
 from openinference.instrumentation.agno.utils import (
     _AGNO_ARUN_SPANNED_CONTEXT_KEY,
@@ -31,7 +32,12 @@ from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 
 from ._runs_wrapper import _set_run_status
-from ._stream import EagerSpanAsyncIterator, EagerSpanIterator, span_scope
+from ._stream import (
+    EagerSpanAsyncIterator,
+    EagerSpanCoroutine,
+    EagerSpanIterator,
+    span_scope,
+)
 
 
 def _get_input_from_args(arguments: Mapping[str, Any]) -> str:
@@ -462,7 +468,7 @@ class _WorkflowWrapper:
             finally:
                 span.end()
 
-        return non_stream_wrapper()
+        return EagerSpanCoroutine(non_stream_wrapper(), result, span)
 
     async def _arun_stream_continue(
         self,
@@ -736,6 +742,16 @@ class _WorkflowExecuteWrapper:
             span.end()
 
 
+def _set_step_status(span: Any, response: Any) -> None:
+    """A skipped failure or a paused executor is not a successful step."""
+    if not isinstance(response, StepOutput):
+        return
+    if not response.success or response.error:
+        span.set_status(trace_api.StatusCode.ERROR, "step execution failed")
+    elif not getattr(response, "is_paused", False):
+        span.set_status(trace_api.StatusCode.OK)
+
+
 class _StepWrapper:
     def __init__(self, tracer: trace_api.Tracer) -> None:
         self._tracer = tracer
@@ -796,7 +812,7 @@ class _StepWrapper:
                 )
 
             # Set output and return after restoring caller context.
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, result)
             output, mime_type = _extract_output(result)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
@@ -839,10 +855,11 @@ class _StepWrapper:
                     if ctx_token is not None:
                         context_api.detach(ctx_token)
 
-                final_response = response
+                if isinstance(response, StepOutput):
+                    final_response = response
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
                 output, mime_type = _extract_output(final_response)
@@ -929,7 +946,7 @@ class _StepWrapper:
                 with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                     response = await result
 
-                span.set_status(trace_api.StatusCode.OK)
+                _set_step_status(span, response)
                 output, mime_type = _extract_output(response)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
@@ -945,7 +962,7 @@ class _StepWrapper:
             finally:
                 span.end()
 
-        return non_stream_wrapper()
+        return EagerSpanCoroutine(non_stream_wrapper(), result, span)
 
     async def _arun_stream_continue(
         self,
@@ -972,10 +989,11 @@ class _StepWrapper:
                     if ctx_token is not None:
                         context_api.detach(ctx_token)
 
-                final_response = response
+                if isinstance(response, StepOutput):
+                    final_response = response
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
                 output, mime_type = _extract_output(final_response)
@@ -1062,7 +1080,7 @@ class _ParallelWrapper:
                 )
 
             # Set output
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, result)
             output, mime_type = _extract_output(result)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
@@ -1088,6 +1106,7 @@ class _ParallelWrapper:
     ) -> Any:
         """Continue streaming parallel execution with existing span"""
         accumulated_output = []
+        final_response = None
         iterator = iter(iterator)
         try:
             while True:
@@ -1105,11 +1124,13 @@ class _ParallelWrapper:
                     if ctx_token is not None:
                         context_api.detach(ctx_token)
 
+                if isinstance(response, StepOutput):
+                    final_response = response
                 if hasattr(response, "content") and response.content:
                     accumulated_output.append(str(response.content))
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, final_response)
             if accumulated_output:
                 span.set_attribute(OUTPUT_VALUE, "\n".join(accumulated_output))
                 span.set_attribute(OUTPUT_MIME_TYPE, TEXT)
@@ -1193,7 +1214,7 @@ class _ParallelWrapper:
                 with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                     response = await result
 
-                span.set_status(trace_api.StatusCode.OK)
+                _set_step_status(span, response)
                 output, mime_type = _extract_output(response)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
@@ -1209,7 +1230,7 @@ class _ParallelWrapper:
             finally:
                 span.end()
 
-        return non_stream_wrapper()
+        return EagerSpanCoroutine(non_stream_wrapper(), result, span)
 
     async def _aexecute_stream_continue(
         self,
@@ -1219,6 +1240,7 @@ class _ParallelWrapper:
     ) -> Any:
         """Continue streaming async parallel execution with existing span"""
         accumulated_output = []
+        final_response = None
         iterator = async_iter.__aiter__()
         try:
             while True:
@@ -1236,11 +1258,13 @@ class _ParallelWrapper:
                     if ctx_token is not None:
                         context_api.detach(ctx_token)
 
+                if isinstance(response, StepOutput):
+                    final_response = response
                 if hasattr(response, "content") and response.content:
                     accumulated_output.append(str(response.content))
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_step_status(span, final_response)
             if accumulated_output:
                 span.set_attribute(OUTPUT_VALUE, "\n".join(accumulated_output))
                 span.set_attribute(OUTPUT_MIME_TYPE, TEXT)

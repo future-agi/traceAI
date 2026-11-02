@@ -1,10 +1,13 @@
 # Adapted from OpenInference Agno 1.1.0 (Arize AI), Apache-2.0.
 # Modified by Future AGI; see NOTICE and LICENSE in this directory.
 
+import asyncio
 import json
+import threading
 from contextlib import aclosing, closing
+from dataclasses import fields, is_dataclass
 from enum import Enum
-from inspect import signature
+from inspect import Parameter, signature
 from os import getenv
 from typing import (
     Any,
@@ -37,8 +40,42 @@ from openinference.semconv.trace import (
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from pydantic import BaseModel
 
-from ._stream import aiterate, finish_span, iterate
+from ._stream import aiterate, finish_span, iterate, span_scope
+
+_MODEL_INVOCATION_KEY = context_api.create_key("traceai_agno.model_invocation")
+
+
+def _invocation_owner() -> Any:
+    # Context is inherited by child tasks, but their requests are independent.
+    try:
+        return asyncio.current_task() or threading.current_thread()
+    except RuntimeError:
+        return threading.current_thread()
+
+
+def _invocation_context(instance: Any, operation: str, wrapped: Any) -> Dict[str, Any]:
+    return {
+        _MODEL_INVOCATION_KEY: (
+            instance,
+            operation,
+            _invocation_owner(),
+            getattr(wrapped, "__func__", wrapped),
+        )
+    }
+
+
+def _is_delegated(instance: Any, operation: str, wrapped: Any) -> bool:
+    active = context_api.get_value(_MODEL_INVOCATION_KEY)
+    return (
+        isinstance(active, tuple)
+        and active[0] is instance
+        and active[1] == operation
+        and active[2] is _invocation_owner()
+        # Re-entering the same implementation is a separate request, not super().
+        and active[3] is not getattr(wrapped, "__func__", wrapped)
+    )
 
 
 def _get_gemini_vertexai_mode(model: Model) -> Optional[bool]:
@@ -122,16 +159,51 @@ def _bind_arguments(
 ) -> Dict[str, Any]:
     method_signature = signature(method)
     bound_args = method_signature.bind(*args, **kwargs)
+    instance = getattr(method, "__self__", None)
+    if (
+        args
+        and instance is not None
+        and any(
+            parameter.kind == Parameter.VAR_POSITIONAL
+            for parameter in method_signature.parameters.values()
+        )
+    ):
+        # A delegating override can hide positional parameter names behind *args.
+        # Use the first compatible concrete base signature, without calling it.
+        for cls in type(instance).__mro__:
+            candidate = cls.__dict__.get(method.__name__)
+            if candidate is None:
+                continue
+            try:
+                candidate_signature = signature(candidate)
+                if any(
+                    p.kind == Parameter.VAR_POSITIONAL
+                    for p in candidate_signature.parameters.values()
+                ):
+                    continue
+                candidate_arguments = candidate_signature.bind(
+                    instance, *args, **kwargs
+                )
+            except (TypeError, ValueError):
+                continue
+            method_signature, bound_args = candidate_signature, candidate_arguments
+            break
     bound_args.apply_defaults()
-    arguments = bound_args.arguments
-    arguments = OrderedDict(
-        {
-            key: value
-            for key, value in arguments.items()
-            if value is not None and value != {}
-        }
+    arguments: Dict[str, Any] = {}
+    for key, value in bound_args.arguments.items():
+        if key == "self" and value is instance:
+            continue
+        # Delegating provider overrides (e.g. MiniMax) accept **kwargs instead
+        # of repeating the base signature. Keep the outer span's real inputs.
+        if method_signature.parameters[key].kind == Parameter.VAR_KEYWORD:
+            arguments.update(value)
+        else:
+            arguments[key] = value
+    return OrderedDict(
+        (key, value)
+        for key, value in arguments.items()
+        if value is not None and value != {}
     )
-    return arguments
 
 
 def _llm_input_messages(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
@@ -180,8 +252,15 @@ def _llm_input_messages(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any
 
 
 def _llm_invocation_parameters(
-    model: Model, arguments: Optional[Mapping[str, Any]] = None
+    model: Model,
+    arguments: Optional[Mapping[str, Any]] = None,
+    *,
+    hide_inputs: bool = False,
 ) -> Iterator[Tuple[str, Any]]:
+    # Provider parameters can contain prompts, tools, schemas, or opaque payloads.
+    # No cross-provider denylist can reliably separate these from model settings.
+    if hide_inputs:
+        return
     request_kwargs = {}
     # TODO (v2.0.0): with the cleanup of the agno.models.base.Model class we will
     # handle these attributes in a more consistent way.
@@ -235,15 +314,39 @@ def _filter_sensitive_params(params: Dict[str, Any]) -> Dict[str, Any]:
             part in normalized for part in sensitive
         )
 
+    ancestors: set[int] = set()
+
     def clean(value: Any) -> Any:
-        if isinstance(value, Mapping):
-            return {
-                key: "[REDACTED]" if is_sensitive(key) else clean(item)
-                for key, item in value.items()
-            }
-        if isinstance(value, (list, tuple)):
-            return [clean(item) for item in value]
-        return value
+        if isinstance(value, Enum):
+            return clean(value.value)
+        if value is None or type(value) in (str, int, float, bool):
+            return value
+        identity = id(value)
+        if identity in ancestors or len(ancestors) >= 32:
+            return "[REDACTED]"
+        ancestors.add(identity)
+        try:
+            if isinstance(value, BaseModel):
+                # Unlike model_dump(mode="json"), iteration preserves raw nested
+                # values and does not invoke serializers before credential filtering.
+                return clean(dict(value))
+            if is_dataclass(value) and not isinstance(value, type):
+                return clean(
+                    {field.name: getattr(value, field.name) for field in fields(value)}
+                )
+            if isinstance(value, Mapping):
+                return {
+                    key: "[REDACTED]" if is_sensitive(key) else clean(item)
+                    for key, item in value.items()
+                    if isinstance(key, str)
+                }
+            if isinstance(value, (list, tuple)):
+                return [clean(item) for item in value]
+            # Never fall back to repr/str: opaque clients/configurations can embed
+            # authentication in their string representation.
+            return "[REDACTED]"
+        finally:
+            ancestors.remove(identity)
 
     return clean(params)
 
@@ -503,8 +606,9 @@ def _stream_output_messages(output: Dict[str, Any]) -> Iterator[Tuple[str, Any]]
 
 
 class _ModelWrapper:
-    def __init__(self, tracer: trace_api.Tracer) -> None:
+    def __init__(self, tracer: trace_api.Tracer, *, hide_inputs: bool = False) -> None:
         self._tracer = tracer
+        self._hide_inputs = hide_inputs
 
     def run(
         self,
@@ -513,7 +617,9 @@ class _ModelWrapper:
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or _is_delegated(instance, "invoke", wrapped):
             return wrapped(*args, **kwargs)
 
         arguments = _bind_arguments(wrapped, *args, **kwargs)
@@ -528,7 +634,11 @@ class _ModelWrapper:
                 OPENINFERENCE_SPAN_KIND: LLM,
                 **dict(_input_value_and_mime_type(arguments)),
                 **dict(_llm_input_messages(arguments)),
-                **dict(_llm_invocation_parameters(model, arguments)),
+                **dict(
+                    _llm_invocation_parameters(
+                        model, arguments, hide_inputs=self._hide_inputs
+                    )
+                ),
                 **dict(get_attributes_from_context()),
             },
         ) as span:
@@ -537,7 +647,8 @@ class _ModelWrapper:
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
 
-            response = wrapped(*args, **kwargs)
+            with span_scope(span, _invocation_context(instance, "invoke", wrapped)):
+                response = wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
             span.set_attributes(dict(_output_value_and_mime_type(output_message)))
 
@@ -583,7 +694,9 @@ class _ModelWrapper:
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or _is_delegated(instance, "invoke_stream", wrapped):
             yield from wrapped(*args, **kwargs)
             return
 
@@ -598,7 +711,11 @@ class _ModelWrapper:
                 attributes={
                     OPENINFERENCE_SPAN_KIND: LLM,
                     **dict(_input_value_and_mime_type(arguments)),
-                    **dict(_llm_invocation_parameters(model)),
+                    **dict(
+                        _llm_invocation_parameters(
+                            model, arguments, hide_inputs=self._hide_inputs
+                        )
+                    ),
                     **dict(_llm_input_messages(arguments)),
                     **dict(get_attributes_from_context()),
                 },
@@ -611,7 +728,10 @@ class _ModelWrapper:
             # Token usage will be set after streaming completes based on final response
 
             responses = []
-            with closing(iterate(iter(wrapped(*args, **kwargs)), span)) as iterator:
+            values = _invocation_context(instance, "invoke_stream", wrapped)
+            with span_scope(span, values):
+                source = iter(wrapped(*args, **kwargs))
+            with closing(iterate(source, span, values)) as iterator:
                 for chunk in iterator:
                     responses.append(chunk)
                     yield chunk
@@ -673,7 +793,9 @@ class _ModelWrapper:
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or _is_delegated(instance, "ainvoke", wrapped):
             return await wrapped(*args, **kwargs)
 
         arguments = _bind_arguments(wrapped, *args, **kwargs)
@@ -687,7 +809,11 @@ class _ModelWrapper:
             attributes={
                 OPENINFERENCE_SPAN_KIND: LLM,
                 **dict(_input_value_and_mime_type(arguments)),
-                **dict(_llm_invocation_parameters(model)),
+                **dict(
+                    _llm_invocation_parameters(
+                        model, arguments, hide_inputs=self._hide_inputs
+                    )
+                ),
                 **dict(_llm_input_messages(arguments)),
                 **dict(get_attributes_from_context()),
             },
@@ -697,7 +823,8 @@ class _ModelWrapper:
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
 
-            response = await wrapped(*args, **kwargs)
+            with span_scope(span, _invocation_context(instance, "ainvoke", wrapped)):
+                response = await wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
 
             # Extract and set token usage from the response
@@ -746,7 +873,9 @@ class _ModelWrapper:
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if context_api.get_value(
+            context_api._SUPPRESS_INSTRUMENTATION_KEY
+        ) or _is_delegated(instance, "ainvoke_stream", wrapped):
             async for response in wrapped(*args, **kwargs):  # type: ignore[attr-defined]
                 yield response
             return
@@ -763,7 +892,11 @@ class _ModelWrapper:
                 attributes={
                     OPENINFERENCE_SPAN_KIND: LLM,
                     **dict(_input_value_and_mime_type(arguments)),
-                    **dict(_llm_invocation_parameters(model)),
+                    **dict(
+                        _llm_invocation_parameters(
+                            model, arguments, hide_inputs=self._hide_inputs
+                        )
+                    ),
                     **dict(_llm_input_messages(arguments)),
                     **dict(get_attributes_from_context()),
                 },
@@ -776,7 +909,10 @@ class _ModelWrapper:
             # Token usage will be set after streaming completes based on final response
 
             responses = []
-            async with aclosing(aiterate(wrapped(*args, **kwargs), span)) as iterator:
+            values = _invocation_context(instance, "ainvoke_stream", wrapped)
+            with span_scope(span, values):
+                source = wrapped(*args, **kwargs)
+            async with aclosing(aiterate(source, span, values)) as iterator:
                 async for chunk in iterator:
                     responses.append(chunk)
                     yield chunk

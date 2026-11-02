@@ -1,5 +1,6 @@
 """Scope telemetry context to iterator advancement, never to caller code."""
 
+from collections.abc import Coroutine
 from contextlib import contextmanager
 from typing import Any, AsyncGenerator, AsyncIterator, Generator, Iterator
 
@@ -69,6 +70,77 @@ def finish_span(span: Any) -> Iterator[Any]:
         raise
     finally:
         span.end()
+
+
+class EagerSpanCoroutine(Coroutine[Any, Any, Any]):
+    """Own dispatcher resources even if a task is cancelled before its first send.
+
+    Agno's synchronous async-dispatchers perform validation immediately. Preserve
+    that behavior, but make pre-start throw/close release both the returned SDK
+    coroutine and its span. Once started, the finishing coroutine owns cleanup.
+    """
+
+    def __init__(self, coroutine: Any, source: Any, span: Any) -> None:
+        self._coroutine = coroutine
+        self._source = source
+        self._span = span
+        self._started = False
+        self._closed = False
+
+    def __await__(self) -> Any:
+        return self
+
+    def __iter__(self) -> Any:
+        return self
+
+    def __next__(self) -> Any:
+        return self.send(None)
+
+    def send(self, value: Any) -> Any:
+        self._started = True
+        self._source = None
+        try:
+            return self._coroutine.send(value)
+        except BaseException:
+            self._closed = True
+            raise
+
+    def throw(self, *args: Any) -> Any:
+        if self._started or self._closed:
+            try:
+                return self._coroutine.throw(*args)
+            except BaseException:
+                self._closed = True
+                raise
+        self._closed = True
+        with finish_span(self._span):
+            try:
+                # A never-started coroutine raises the injected exception without
+                # entering its body. finish_span records it and ends exactly once.
+                return self._coroutine.throw(*args)
+            finally:
+                self._close_source()
+
+    def _close_source(self) -> None:
+        source, self._source = self._source, None
+        if close := getattr(source, "close", None):
+            close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._started:
+            self._coroutine.close()
+        else:
+            with finish_span(self._span):
+                self._span.set_status(
+                    trace.StatusCode.ERROR, "coroutine closed before execution"
+                )
+                try:
+                    self._close_source()
+                finally:
+                    self._coroutine.close()
 
 
 class EagerSpanIterator(Iterator[Any]):
