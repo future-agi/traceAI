@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@cerebras/cerebras_cloud_sdk": "^1.0.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.2",
     "@opentelemetry/sdk-trace-base": "^1.29.0",
     "@opentelemetry/sdk-trace-node": "^1.29.0",
     "@types/jest": "^29.5.14",
