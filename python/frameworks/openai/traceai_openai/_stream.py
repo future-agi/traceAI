@@ -4,6 +4,7 @@ from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, 
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from traceai_openai._response_accumulator import _response_status
 from traceai_openai._utils import _finish_tracing
 from traceai_openai._with_span import _WithSpan
 from wrapt import ObjectProxy
@@ -87,6 +88,41 @@ class _RawResponse(ObjectProxy):
         self._self_response_accumulator = response_accumulator
         self._self_on_parse = on_parse
         self._self_parsed = {}
+        self._self_body_status: Optional[trace_api.Status] = None
+
+    def _record_body_consumption(self) -> None:
+        # read/text/json consume a non-SSE envelope without calling parse().
+        # Do not force SDK parsing (or its post_parser) on a raw-body caller.
+        # SSE still needs a terminal event from the traced iterator.
+        if (
+            self._self_is_finished
+            or self._self_body_status is not None
+            or getattr(self.__wrapped__, "_is_sse_stream", False)
+        ):
+            return
+        try:
+            body = self.__wrapped__.http_response.json()
+        except Exception:
+            body = None  # Successful raw reads need not contain JSON.
+        self._self_body_status = _response_status(body)
+
+    def _consume_body(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            result = getattr(self.__wrapped__, method)(*args, **kwargs)
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        self._record_body_consumption()
+        return result
+
+    def read(self, *args: Any, **kwargs: Any) -> Any:
+        return self._consume_body("read", *args, **kwargs)
+
+    def text(self, *args: Any, **kwargs: Any) -> Any:
+        return self._consume_body("text", *args, **kwargs)
+
+    def json(self, *args: Any, **kwargs: Any) -> Any:
+        return self._consume_body("json", *args, **kwargs)
 
     @property
     def _self_is_finished(self) -> bool:
@@ -129,7 +165,9 @@ class _RawResponse(ObjectProxy):
         accumulator = self._self_response_accumulator
         if status is None or status.status_code is not trace_api.StatusCode.ERROR:
             get_status = getattr(accumulator, "get_status", None)
-            if get_status is not None:
+            if self._self_body_status is not None:
+                status = self._self_body_status
+            elif get_status is not None:
                 status = get_status()
             elif not self._self_parsed:
                 status = trace_api.Status(
@@ -143,6 +181,24 @@ class _RawResponse(ObjectProxy):
 
 class _AsyncRawResponse(_RawResponse):
     """AsyncAPIResponse has awaitable parse/close; LegacyAPIResponse does not."""
+
+    async def _consume_body(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            result = await getattr(self.__wrapped__, method)(*args, **kwargs)
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        self._record_body_consumption()
+        return result
+
+    async def read(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._consume_body("read", *args, **kwargs)
+
+    async def text(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._consume_body("text", *args, **kwargs)
+
+    async def json(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._consume_body("json", *args, **kwargs)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         try:

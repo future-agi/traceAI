@@ -31,7 +31,14 @@ def request_credentials(instance: Any, options: Any, parameters: Mapping) -> tup
                     values.append(value)
                     if isinstance(value, str) and value.lower().startswith("bearer "):
                         values.append(value[7:])
-    tools = parameters.get("tools")
+    # extra_body is a shallow SDK override. Inspect its effective tools only
+    # for private redaction; never add extra_body to exported request metadata.
+    extra_json = getattr(options, "extra_json", None)
+    tools = (
+        extra_json["tools"]
+        if isinstance(extra_json, Mapping) and "tools" in extra_json
+        else parameters.get("tools")
+    )
     if isinstance(tools, (list, tuple)):
         for tool in tools:
             if isinstance(tool, Mapping) and tool.get("type") == "mcp":

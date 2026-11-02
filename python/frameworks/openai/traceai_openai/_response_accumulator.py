@@ -46,7 +46,12 @@ class _CanGetAttributesFromResponse(Protocol):
 
 
 def _response_status(response: Any) -> Status:
-    if getattr(response, "status", None) in {"failed", "cancelled", "incomplete"}:
+    status = (
+        response.get("status")
+        if isinstance(response, Mapping)
+        else getattr(response, "status", None)
+    )
+    if isinstance(status, str) and status in {"failed", "cancelled", "incomplete"}:
         # The vendor's error message can contain credentials or request content.
         return Status(StatusCode.ERROR, "Response did not complete")
     return Status(StatusCode.OK)
