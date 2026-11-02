@@ -70,10 +70,10 @@ let exporter: InMemorySpanExporter;
 let instrumentation: GroqInstrumentation;
 let server: Server;
 let wire: Buffer[];
-function instrument(hide = false) {
+function instrument(hide = false, traceConfig: { hideOutputText?: boolean; hideInputText?: boolean } = {}) {
   instrumentation = new GroqInstrumentation({
     instrumentationConfig: { enabled: false },
-    traceConfig: { hideInputs: hide, hideOutputs: hide },
+    traceConfig: { hideInputs: hide, hideOutputs: hide, ...traceConfig },
   });
   instrumentation.setTracerProvider(provider);
   instrumentation.enable();
@@ -145,6 +145,7 @@ it("aggregates explicit choice/tool indexes and terminal usage once", async () =
   expect(a[S.LLM_TOKEN_COUNT_TOTAL]).toBe(13);
   expect(a[S.LLM_TOKEN_COUNT_PROMPT]).toBe(8);
   expect(a[S.LLM_TOKEN_COUNT_COMPLETION]).toBe(5);
+  expect(a[S.LLM_MODEL_NAME]).toBe("requested-model");
   expect(a[S.GEN_AI_RESPONSE_MODEL]).toBe("actual-model");
   expect(a[S.GEN_AI_RESPONSE_ID]).toBe("chat-test");
   expect(JSON.parse(a[S.GEN_AI_RESPONSE_FINISH_REASONS] as string)).toEqual(["tool_calls", "stop"]);
@@ -159,6 +160,7 @@ it("aggregates explicit choice/tool indexes and terminal usage once", async () =
   expect(Number(attributes[S.LLM_TOKEN_COUNT_PROMPT].intValue)).toBe(8);
   expect(Number(attributes[S.LLM_TOKEN_COUNT_COMPLETION].intValue)).toBe(5);
   expect(JSON.parse(attributes[S.LLM_OUTPUT_MESSAGES].stringValue)).toEqual(messages);
+  expect(attributes[S.LLM_MODEL_NAME].stringValue).toBe("requested-model");
   expect(attributes[S.GEN_AI_RESPONSE_MODEL].stringValue).toBe("actual-model");
 });
 
@@ -193,6 +195,14 @@ it("forwards iterator throw and exposes the caller's exact error", async () => {
   expect(stream.controller.signal.aborted).toBe(true);
   expect(exporter.getFinishedSpans()).toHaveLength(1);
   expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
+});
+
+it("keeps the extracted SDK iterator async iterable", async () => {
+  const stream = await client().chat.completions.create({ ...params, stream: true });
+  const iterator = stream[Symbol.asyncIterator]();
+  expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
+  expect(await collect(iterator)).toEqual(chunks);
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
 });
 
 it("does not advance after a single next", async () => {
@@ -280,6 +290,8 @@ it("preserves non-stream results and promise catch/finally", async () => {
   expect(finallyCallback).toHaveBeenCalledTimes(1);
   expect(exporter.getFinishedSpans()).toHaveLength(1);
   expect(exporter.getFinishedSpans()[0].attributes[S.LLM_TOKEN_COUNT_TOTAL]).toBe(13);
+  expect(exporter.getFinishedSpans()[0].attributes[S.LLM_MODEL_NAME]).toBe("requested-model");
+  expect(exporter.getFinishedSpans()[0].attributes[S.GEN_AI_RESPONSE_MODEL]).toBe("actual-model");
 });
 
 it("preserves rejected API promises and raw response errors", async () => {
@@ -295,6 +307,19 @@ it("preserves rejected API promises and raw response errors", async () => {
 it("honors tracing suppression", async () => {
   await context.with(suppressTracing(context.active()), () => client(false).chat.completions.create(params));
   expect(exporter.getFinishedSpans()).toHaveLength(0);
+});
+
+it("masks reasoning and duplicate output payloads with only hideOutputText", async () => {
+  unpatch(); instrument(false, { hideOutputText: true });
+  await collect(await client().chat.completions.create({ ...params, stream: true }));
+  await provider.forceFlush();
+  const payload = wire[0].toString("utf8");
+  for (const secret of ["reason-end", "call-a", "call-b", "alpha", "beta"]) {
+    expect(payload).not.toContain(secret);
+  }
+  const attributes = exporter.getFinishedSpans()[0].attributes;
+  expect(JSON.parse(attributes[S.LLM_OUTPUT_MESSAGES] as string)[0].reasoning).toBe("__REDACTED__");
+  expect(attributes[S.LLM_TOKEN_COUNT_TOTAL]).toBe(13);
 });
 
 it("redacts input, reasoning, tools, and raw output on the OTLP wire", async () => {

@@ -47,7 +47,6 @@ function completionAttributes(result: Completion): Attributes {
     [S.OUTPUT_MIME_TYPE]: MimeType.JSON,
     [S.RAW_OUTPUT]: safelyJSONStringify(result) ?? undefined,
     [S.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(choices.map(c => c.message)) ?? undefined,
-    [S.LLM_MODEL_NAME]: result.model,
     [S.GEN_AI_RESPONSE_MODEL]: result.model,
     [S.GEN_AI_RESPONSE_ID]: result.id,
     [S.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(choices.map(c => c.finish_reason).filter(Boolean)) ?? undefined,
@@ -222,6 +221,7 @@ function observeStream(
       next: (...args) => run(() => iterator.next(...args)),
       return: value => run(() => iterator.return ? iterator.return(value) : Promise.resolve({ done: true, value }), true),
       throw: error => run(() => iterator.throw ? iterator.throw(error) : Promise.reject(error)),
+      [Symbol.asyncIterator]() { return this; },
     };
   }, stream.controller);
 }

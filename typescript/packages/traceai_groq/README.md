@@ -5,7 +5,7 @@ OpenTelemetry instrumentation for [Groq](https://groq.com/) - the fastest infere
 ## Features
 
 - Automatic tracing of Groq Chat Completions
-- Support for all Groq models (Mixtral, LLaMA 3, Gemma, etc.)
+- Support for Groq Chat Completions models available to your account
 - Tool/function calling tracing
 - Streaming response support
 - Token usage tracking
@@ -56,7 +56,7 @@ groqInstrumentation.manuallyInstrument({ Groq });
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const chatCompletion = await groq.chat.completions.create({
-  model: "mixtral-8x7b-32768",
+  model: "llama-3.1-8b-instant",
   messages: [
     { role: "user", content: "Explain quantum computing in simple terms" }
   ],
@@ -129,19 +129,9 @@ const response = await client.chat.completions.create({
 await tracerProvider.shutdown();
 ```
 
-## Supported Models
+## Models
 
-Groq offers blazing-fast inference for various open-source models:
-
-| Model | ID | Context Window |
-|-------|-----|----------------|
-| Mixtral 8x7B | `mixtral-8x7b-32768` | 32,768 tokens |
-| LLaMA 3.1 70B | `llama-3.1-70b-versatile` | 131,072 tokens |
-| LLaMA 3.1 8B | `llama-3.1-8b-instant` | 131,072 tokens |
-| LLaMA 3 70B | `llama3-70b-8192` | 8,192 tokens |
-| LLaMA 3 8B | `llama3-8b-8192` | 8,192 tokens |
-| Gemma 2 9B | `gemma2-9b-it` | 8,192 tokens |
-| LLaMA 3 Groq 70B (Tool Use) | `llama3-groq-70b-8192-tool-use-preview` | 8,192 tokens |
+The instrumentation traces Chat Completions independently of the model ID. The examples below use `llama-3.1-8b-instant` and `llama-3.3-70b-versatile`. Check [Groq's model list](https://console.groq.com/docs/models) for the models currently available to your account before running an example.
 
 ## Real-World Use Cases
 
@@ -156,7 +146,7 @@ async function chat(userMessage: string, conversationHistory: any[]) {
   conversationHistory.push({ role: "user", content: userMessage });
 
   const response = await groq.chat.completions.create({
-    model: "llama-3.1-8b-instant", // Fastest model for real-time chat
+    model: "llama-3.1-8b-instant", // Choose a model suited to your task
     messages: conversationHistory,
     temperature: 0.7,
     max_tokens: 500,
@@ -177,12 +167,12 @@ const response = await chat("I need help with my order", history);
 console.log(response);
 ```
 
-### 2. Code Generation with Mixtral
+### 2. Code generation
 
 ```typescript
 async function generateCode(prompt: string, language: string) {
   const response = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [
       {
         role: "system",
@@ -255,7 +245,7 @@ async function assistantWithTools(userQuery: string) {
   ];
 
   const response = await groq.chat.completions.create({
-    model: "llama3-groq-70b-8192-tool-use-preview",
+    model: "llama-3.3-70b-versatile",
     messages: [{ role: "user", content: userQuery }],
     tools,
     tool_choice: "auto",
@@ -284,7 +274,7 @@ const result = await assistantWithTools("What's the weather in Tokyo?");
 ```typescript
 async function streamChat(prompt: string) {
   const stream = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [{ role: "user", content: prompt }],
     stream: true,
   });
@@ -314,7 +304,7 @@ SDK helpers remain available: `.withResponse()` gives you the parsed result and 
 ```typescript
 async function summarizeDocument(document: string, maxWords: number = 100) {
   const response = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile", // Best for complex summarization
+    model: "llama-3.3-70b-versatile", // Choose a model suited to your task
     messages: [
       {
         role: "system",
@@ -338,7 +328,7 @@ async function summarizeDocument(document: string, maxWords: number = 100) {
 ```typescript
 async function extractStructuredData(text: string) {
   const response = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [
       {
         role: "system",
@@ -372,30 +362,21 @@ The instrumentation captures the following attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `llm.system` | Always "groq" |
-| `llm.provider` | Always "groq" |
-| `llm.model_name` | The model used (e.g., "mixtral-8x7b-32768") |
-| `llm.input_messages` | Input messages with role and content |
-| `llm.output_messages` | Output messages with role and content |
-| `llm.invocation_parameters` | Model parameters (temperature, max_tokens, etc.) |
-| `llm.token_count.prompt` | Number of input tokens |
-| `llm.token_count.completion` | Number of output tokens |
-| `llm.token_count.total` | Total tokens used |
-| `llm.tools` | Tool definitions if provided |
-| `message.tool_calls` | Tool calls made by the model |
+| `fi.span.kind` | `LLM` |
+| `gen_ai.provider.name` | `groq` |
+| `gen_ai.request.model` | Model requested by the application |
+| `gen_ai.response.model` | Model reported by Groq, when provided |
+| `gen_ai.input.messages` | Input messages with role and content |
+| `gen_ai.output.messages` | Output messages, including tool calls in the message JSON |
+| `gen_ai.request.parameters` | Requested model parameters |
+| `gen_ai.usage.input_tokens` | Input tokens, when provided |
+| `gen_ai.usage.output_tokens` | Output tokens, when provided |
+| `gen_ai.usage.total_tokens` | Total tokens, when provided |
+| `gen_ai.tool.definitions` | Tool definitions, when provided |
 
 ## Send traces to Future AGI
 
 Use the maintained `@traceai/fi-core` setup in [With TraceAI Core](#with-traceai-core). Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment. The core package configures the Future AGI exporter and project resource attributes; you do not need a custom exporter or a second tracer provider.
-
-## Why Groq?
-
-Groq's LPU (Language Processing Unit) inference engine provides:
-
-- **Ultra-low latency**: Up to 10x faster than GPU-based solutions
-- **Consistent performance**: Predictable response times
-- **Cost-effective**: Pay per token with no idle costs
-- **Open-source models**: Access to Mixtral, LLaMA, Gemma, and more
 
 ## Running Examples
 
@@ -408,14 +389,6 @@ cp .env.example .env
 
 pnpm install
 pnpm run example
-```
-
-## E2E Testing
-
-Run E2E tests with real API keys:
-
-```bash
-GROQ_API_KEY=your_key pnpm test -- --testPathPattern=e2e
 ```
 
 ## License
