@@ -6,9 +6,11 @@ from enum import Enum
 from types import AsyncGeneratorType, GeneratorType
 from typing import (
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Awaitable,
     Callable,
+    Generator,
     Iterator,
     Mapping,
     Optional,
@@ -28,7 +30,13 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 
-from ._stream import aiterate, finish_span, iterate
+from ._stream import (
+    EagerSpanAsyncIterator,
+    EagerSpanIterator,
+    aiterate,
+    finish_span,
+    iterate,
+)
 
 
 def _flatten(
@@ -239,6 +247,12 @@ class _FunctionCallWrapper:
         )
 
     def _handle_success_streaming(self, result: Any, span: trace_api.Span) -> Any:
+        return EagerSpanIterator(self._stream(result, span), result, span)
+
+    def _handle_async_success_streaming(self, result: Any, span: trace_api.Span) -> Any:
+        return EagerSpanAsyncIterator(self._astream(result, span), result, span)
+
+    def _stream(self, result: Any, span: trace_api.Span) -> Generator[Any, None, None]:
         function_result = ""
         with finish_span(span):
             with closing(iterate(iter(result), span)) as iterator:
@@ -258,9 +272,9 @@ class _FunctionCallWrapper:
             )
             span.set_status(trace_api.StatusCode.OK)
 
-    async def _handle_async_success_streaming(
+    async def _astream(
         self, result: Any, span: trace_api.Span
-    ) -> Any:
+    ) -> AsyncGenerator[Any, None]:
         function_result = ""
         with finish_span(span):
             async with aclosing(aiterate(result, span)) as iterator:

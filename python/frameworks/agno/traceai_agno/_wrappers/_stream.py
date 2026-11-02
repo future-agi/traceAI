@@ -1,7 +1,7 @@
 """Scope telemetry context to iterator advancement, never to caller code."""
 
 from contextlib import contextmanager
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncGenerator, AsyncIterator, Generator, Iterator
 
 from opentelemetry import context, trace
 
@@ -69,3 +69,88 @@ def finish_span(span: Any) -> Iterator[Any]:
         raise
     finally:
         span.end()
+
+
+class EagerSpanIterator(Iterator[Any]):
+    """Own an eager span until a lazy finishing generator takes over on next().
+
+    Closing a never-started Python generator does not execute its finally block.
+    Until the first advance, this owner must close the source and end the span.
+    After that, the finishing generator owns cleanup (including errors).
+    """
+
+    def __init__(
+        self, iterator: Generator[Any, None, None], source: Any, span: Any
+    ) -> None:
+        self._iterator = iterator
+        self._source = source
+        self._span = span
+        self._started = False
+        self._closed = False
+
+    def __next__(self) -> Any:
+        if self._closed:
+            raise StopIteration
+        self._started = True
+        # The finishing generator now owns the source; do not retain it after close.
+        self._source = None
+        try:
+            return next(self._iterator)
+        except BaseException:
+            self._closed = True
+            raise
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._started:
+            self._iterator.close()
+        else:
+            with finish_span(self._span), span_scope(self._span):
+                self._span.set_status(
+                    trace.StatusCode.ERROR, "stream closed before completion"
+                )
+                if close := getattr(self._source, "close", None):
+                    close()
+                self._iterator.close()
+
+
+class EagerSpanAsyncIterator(AsyncIterator[Any]):
+    """Async counterpart of EagerSpanIterator; aclose owns unstarted cleanup."""
+
+    def __init__(
+        self, iterator: AsyncGenerator[Any, None], source: Any, span: Any
+    ) -> None:
+        self._iterator = iterator
+        self._source = source
+        self._span = span
+        self._started = False
+        self._closed = False
+
+    async def __anext__(self) -> Any:
+        if self._closed:
+            raise StopAsyncIteration
+        self._started = True
+        # The finishing generator now owns the source; do not retain it after close.
+        self._source = None
+        try:
+            return await anext(self._iterator)
+        except BaseException:
+            self._closed = True
+            raise
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._started:
+            await self._iterator.aclose()
+        else:
+            with finish_span(self._span), span_scope(self._span):
+                self._span.set_status(
+                    trace.StatusCode.ERROR, "stream closed before completion"
+                )
+                if close := getattr(self._source, "aclose", None):
+                    await close()
+                await self._iterator.aclose()

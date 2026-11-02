@@ -12,6 +12,7 @@ from typing import (
     Tuple,
 )
 
+from agno.run.workflow import WorkflowRunEvent, WorkflowRunOutput
 from openinference.instrumentation import get_attributes_from_context
 from openinference.instrumentation.agno.utils import (
     _AGNO_ARUN_SPANNED_CONTEXT_KEY,
@@ -28,6 +29,9 @@ from openinference.semconv.trace import (
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+
+from ._runs_wrapper import _set_run_status
+from ._stream import EagerSpanAsyncIterator, EagerSpanIterator, span_scope
 
 
 def _get_input_from_args(arguments: Mapping[str, Any]) -> str:
@@ -183,6 +187,24 @@ def _workflow_run_arguments(
         yield USER_ID, user_id
 
 
+def _set_workflow_status(span: Any, response: Any) -> None:
+    """Prefer the real output status; older/event-only streams lack run_output."""
+    run_output = getattr(response, "run_output", None)
+    output = run_output if run_output is not None else response
+    if isinstance(output, WorkflowRunOutput):
+        _set_run_status(span, output)
+        return
+    event = getattr(response, "event", None)
+    if event == WorkflowRunEvent.workflow_completed.value:
+        span.set_status(trace_api.StatusCode.OK)
+    elif event in (
+        WorkflowRunEvent.workflow_cancelled.value,
+        WorkflowRunEvent.workflow_error.value,
+    ):
+        span.set_status(trace_api.StatusCode.ERROR, f"workflow event: {event}")
+    # Paused and incomplete workflows are not successful runs.
+
+
 class _WorkflowWrapper:
     def __init__(self, tracer: trace_api.Tracer) -> None:
         self._tracer = tracer
@@ -228,37 +250,21 @@ class _WorkflowWrapper:
             ),
         )
 
-        workflow_token = None
-        result = None
+        is_streaming = False
         try:
-            with trace_api.use_span(span, end_on_exit=False):
-                workflow_token = _setup_node_context(node_id)
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                 result = wrapped(*args, **kwargs)
+                is_streaming = hasattr(result, "__next__")
 
-                # Check if result is an iterator (streaming)
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
+            if is_streaming:
+                return EagerSpanIterator(
+                    self._run_stream_continue(result, span, node_id, instance),
+                    result,
+                    span,
                 )
 
-                if is_streaming:
-                    if workflow_token:
-                        try:
-                            context_api.detach(workflow_token)
-                            workflow_token = None
-                        except Exception:
-                            pass
-                    return self._run_stream_continue(result, span, node_id, instance)
-
-                # Non-streaming mode - detach token immediately while still in span context
-                if workflow_token:
-                    try:
-                        context_api.detach(workflow_token)
-                        workflow_token = None
-                    except Exception:
-                        pass
-
-            # Set output and workflow ID (outside use_span but token already detached)
-            span.set_status(trace_api.StatusCode.OK)
+            # Set output and workflow ID after restoring caller context.
+            _set_workflow_status(span, result)
             output, mime_type = _extract_output(result)
             if output:
                 span.set_attribute(OUTPUT_VALUE, output)
@@ -279,26 +285,14 @@ class _WorkflowWrapper:
 
             return result
 
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
 
         finally:
-            # Cleanup for non-streaming (streaming handles its own)
-            if result is not None:
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
-                )
-            else:
-                is_streaming = False
-
+            # The returned iterator owns streaming cleanup.
             if not is_streaming:
-                if workflow_token:
-                    try:
-                        context_api.detach(workflow_token)
-                    except Exception:
-                        pass
                 span.end()
 
     def _run_stream_continue(
@@ -330,7 +324,7 @@ class _WorkflowWrapper:
                 final_response = response
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_workflow_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
                 output, mime_type = _extract_output(final_response)
@@ -353,7 +347,7 @@ class _WorkflowWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -407,52 +401,39 @@ class _WorkflowWrapper:
             ),
         )
 
-        # Setup context and call wrapped to detect streaming
-        workflow_token = None
-        is_streaming = False
-        with trace_api.use_span(span, end_on_exit=False):
-            workflow_token = _setup_node_context(node_id)
-            try:
+        # Agno's async entrypoint is a synchronous dispatcher. It can fail
+        # before returning a coroutine/iterator (for example input validation).
+        try:
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                 result = wrapped(*args, **kwargs)
-
-                # Check if result is an async iterator (streaming)
                 is_streaming = hasattr(result, "__aiter__")
-            finally:
-                if workflow_token is not None:
-                    context_api.detach(workflow_token)
-                    workflow_token = None
+        except BaseException as error:
+            span.set_status(
+                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+            )
+            span.record_exception(error)
+            span.end()
+            raise
 
         if is_streaming:
-            return self._arun_stream_continue(result, span, node_id, instance)
+            return EagerSpanAsyncIterator(
+                self._arun_stream_continue(result, span, node_id, instance),
+                result,
+                span,
+            )
 
         # Non-streaming mode - return coroutine that handles it
         async def non_stream_wrapper() -> Any:
-            nonlocal workflow_token
-            ctx_token = None
-            spanned_token = None
             try:
-                ctx_token = context_api.attach(trace_api.set_span_in_context(span))
-                if workflow_token is None:
-                    workflow_token = _setup_node_context(node_id)
-                # Set the context-local marker so _WorkflowExecuteWrapper.aexecute
-                # skips creating its own span. This token is scoped to this coroutine's
-                # context and never leaks into background tasks created by _arun_background.
-                spanned_token = _setup_arun_spanned_context()
+                with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
+                    # Suppress only the inner workflow execution in this task.
+                    spanned_token = _setup_arun_spanned_context()
+                    try:
+                        response = await result
+                    finally:
+                        context_api.detach(spanned_token)
 
-                response = await result
-
-                # Detach tokens immediately after execution completes
-                if workflow_token is not None:
-                    context_api.detach(workflow_token)
-                    workflow_token = None
-                if spanned_token is not None:
-                    context_api.detach(spanned_token)
-                    spanned_token = None
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
-                    ctx_token = None
-
-                span.set_status(trace_api.StatusCode.OK)
+                _set_workflow_status(span, response)
                 output, mime_type = _extract_output(response)
                 if output:
                     span.set_attribute(OUTPUT_VALUE, output)
@@ -473,18 +454,12 @@ class _WorkflowWrapper:
 
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.set_status(trace_api.StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 raise
 
             finally:
-                if spanned_token is not None:
-                    context_api.detach(spanned_token)
-                if workflow_token is not None:
-                    context_api.detach(workflow_token)
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
                 span.end()
 
         return non_stream_wrapper()
@@ -522,7 +497,7 @@ class _WorkflowWrapper:
                 final_response = response
                 yield response
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_workflow_status(span, final_response)
             # Extract output only from the final response
             if final_response is not None:
                 output, mime_type = _extract_output(final_response)
@@ -545,7 +520,7 @@ class _WorkflowWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -650,7 +625,12 @@ class _WorkflowExecuteWrapper:
                 context_api.detach(ctx_token)
                 ctx_token = None
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_workflow_status(
+                span,
+                workflow_run_response
+                if workflow_run_response is not None
+                else response,
+            )
             self._apply_run_output_attributes(
                 span,
                 instance,
@@ -661,7 +641,7 @@ class _WorkflowExecuteWrapper:
 
             return response
 
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -743,12 +723,12 @@ class _WorkflowExecuteWrapper:
 
                 yield event
 
-            span.set_status(trace_api.StatusCode.OK)
+            _set_workflow_status(span, workflow_run_response)
             self._apply_run_output_attributes(span, instance, workflow_run_response)
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -804,36 +784,18 @@ class _StepWrapper:
             ),
         )
 
-        step_token = None
-        result = None
+        is_streaming = False
         try:
-            with trace_api.use_span(span, end_on_exit=False):
-                step_token = _setup_node_context(node_id)
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                 result = wrapped(*args, **kwargs)
+                is_streaming = hasattr(result, "__next__")
 
-                # Check if result is an iterator (streaming)
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
+            if is_streaming:
+                return EagerSpanIterator(
+                    self._run_stream_continue(result, span, node_id), result, span
                 )
 
-                if is_streaming:
-                    if step_token:
-                        try:
-                            context_api.detach(step_token)
-                            step_token = None
-                        except Exception:
-                            pass
-                    return self._run_stream_continue(result, span, node_id)
-
-                # Non-streaming mode - detach token immediately while still in span context
-                if step_token:
-                    try:
-                        context_api.detach(step_token)
-                        step_token = None
-                    except Exception:
-                        pass
-
-            # Set output and return (outside use_span but token already detached)
+            # Set output and return after restoring caller context.
             span.set_status(trace_api.StatusCode.OK)
             output, mime_type = _extract_output(result)
             if output:
@@ -842,26 +804,14 @@ class _StepWrapper:
 
             return result
 
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
 
         finally:
-            # Cleanup for non-streaming (streaming handles its own)
-            if result is not None:
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
-                )
-            else:
-                is_streaming = False
-
+            # The returned iterator owns streaming cleanup.
             if not is_streaming:
-                if step_token:
-                    try:
-                        context_api.detach(step_token)
-                    except Exception:
-                        pass
                 span.end()
 
     def _run_stream_continue(
@@ -902,7 +852,7 @@ class _StepWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -954,42 +904,30 @@ class _StepWrapper:
             ),
         )
 
-        # Setup context and call wrapped to detect streaming
-        step_token = None
-        is_streaming = False
-        with trace_api.use_span(span, end_on_exit=False):
-            step_token = _setup_node_context(node_id)
-            result = wrapped(*args, **kwargs)
-
-            # Check if result is an async iterator (streaming)
-            is_streaming = hasattr(result, "__aiter__")
-            if is_streaming and step_token:
-                try:
-                    context_api.detach(step_token)
-                    step_token = None
-                except Exception:
-                    pass
+        # Agno's async entrypoint is a synchronous dispatcher. It can fail
+        # before returning a coroutine/iterator (for example input validation).
+        try:
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
+                result = wrapped(*args, **kwargs)
+                is_streaming = hasattr(result, "__aiter__")
+        except BaseException as error:
+            span.set_status(
+                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+            )
+            span.record_exception(error)
+            span.end()
+            raise
 
         if is_streaming:
-            return self._arun_stream_continue(result, span, node_id)
+            return EagerSpanAsyncIterator(
+                self._arun_stream_continue(result, span, node_id), result, span
+            )
 
         # Non-streaming mode - return coroutine that handles it
         async def non_stream_wrapper() -> Any:
-            nonlocal step_token
-            ctx_token = None
             try:
-                ctx_token = context_api.attach(trace_api.set_span_in_context(span))
-                if step_token is None:
-                    step_token = _setup_node_context(node_id)
-                response = await result
-
-                # Detach tokens immediately after execution completes
-                if step_token is not None:
-                    context_api.detach(step_token)
-                    step_token = None
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
-                    ctx_token = None
+                with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
+                    response = await result
 
                 span.set_status(trace_api.StatusCode.OK)
                 output, mime_type = _extract_output(response)
@@ -999,16 +937,12 @@ class _StepWrapper:
 
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.set_status(trace_api.StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 raise
 
             finally:
-                if step_token is not None:
-                    context_api.detach(step_token)
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
                 span.end()
 
         return non_stream_wrapper()
@@ -1051,7 +985,7 @@ class _StepWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -1116,36 +1050,16 @@ class _ParallelWrapper:
             ),
         )
 
-        parallel_token = None
-        result = None
+        is_streaming = False
         try:
-            with trace_api.use_span(span, end_on_exit=False):
-                parallel_token = _setup_node_context(node_id)
-
-                # Context propagation is now handled by Agno's copy_context().run
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
                 result = wrapped(*args, **kwargs)
+                is_streaming = hasattr(result, "__next__")
 
-                # Check if result is a sync iterator (streaming mode)
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
+            if is_streaming:
+                return EagerSpanIterator(
+                    self._execute_stream_continue(result, span, node_id), result, span
                 )
-
-                if is_streaming:
-                    if parallel_token:
-                        try:
-                            context_api.detach(parallel_token)
-                            parallel_token = None
-                        except Exception:
-                            pass
-                    return self._execute_stream_continue(result, span, node_id)
-
-                # Non-streaming mode - detach token immediately
-                if parallel_token:
-                    try:
-                        context_api.detach(parallel_token)
-                        parallel_token = None
-                    except Exception:
-                        pass
 
             # Set output
             span.set_status(trace_api.StatusCode.OK)
@@ -1156,27 +1070,14 @@ class _ParallelWrapper:
 
             return result
 
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
 
         finally:
-            # Cleanup for non-streaming (streaming handles its own)
-            # Note: execute only handles sync methods, no need to check for async iterators
-            if result is not None:
-                is_streaming = hasattr(result, "__iter__") and not isinstance(
-                    result, (str, bytes)
-                )
-            else:
-                is_streaming = False
-
+            # The returned iterator owns streaming cleanup.
             if not is_streaming:
-                if parallel_token:
-                    try:
-                        context_api.detach(parallel_token)
-                    except Exception:
-                        pass
                 span.end()
 
     def _execute_stream_continue(
@@ -1215,7 +1116,7 @@ class _ParallelWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise
@@ -1267,43 +1168,30 @@ class _ParallelWrapper:
             ),
         )
 
-        # Setup context and call wrapped to detect streaming
-        parallel_token = None
-        is_streaming = False
-        with trace_api.use_span(span, end_on_exit=False):
-            parallel_token = _setup_node_context(node_id)
-
-            result = wrapped(*args, **kwargs)
-
-            # Check if result is an async iterator (streaming)
-            is_streaming = hasattr(result, "__aiter__")
-            if is_streaming and parallel_token:
-                try:
-                    context_api.detach(parallel_token)
-                    parallel_token = None
-                except Exception:
-                    pass
+        # Agno's async entrypoint is a synchronous dispatcher. It can fail
+        # before returning a coroutine/iterator (for example input validation).
+        try:
+            with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
+                result = wrapped(*args, **kwargs)
+                is_streaming = hasattr(result, "__aiter__")
+        except BaseException as error:
+            span.set_status(
+                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+            )
+            span.record_exception(error)
+            span.end()
+            raise
 
         if is_streaming:
-            return self._aexecute_stream_continue(result, span, node_id)
+            return EagerSpanAsyncIterator(
+                self._aexecute_stream_continue(result, span, node_id), result, span
+            )
 
         # Non-streaming async mode - return coroutine that handles it
         async def non_stream_wrapper() -> Any:
-            nonlocal parallel_token
-            ctx_token = None
             try:
-                ctx_token = context_api.attach(trace_api.set_span_in_context(span))
-                if parallel_token is None:
-                    parallel_token = _setup_node_context(node_id)
-                response = await result
-
-                # Detach tokens immediately after execution completes
-                if parallel_token is not None:
-                    context_api.detach(parallel_token)
-                    parallel_token = None
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
-                    ctx_token = None
+                with span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}):
+                    response = await result
 
                 span.set_status(trace_api.StatusCode.OK)
                 output, mime_type = _extract_output(response)
@@ -1313,16 +1201,12 @@ class _ParallelWrapper:
 
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.set_status(trace_api.StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 raise
 
             finally:
-                if parallel_token is not None:
-                    context_api.detach(parallel_token)
-                if ctx_token is not None:
-                    context_api.detach(ctx_token)
                 span.end()
 
         return non_stream_wrapper()
@@ -1363,7 +1247,7 @@ class _ParallelWrapper:
 
         except (StopIteration, StopAsyncIteration):
             raise
-        except Exception as e:
+        except BaseException as e:
             span.set_status(trace_api.StatusCode.ERROR, str(e))
             span.record_exception(e)
             raise

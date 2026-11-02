@@ -173,7 +173,10 @@ def _llm_input_messages(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any
             yield from process_message(i, message)
     tools = arguments.get("tools", [])
     for tool_index, tool in enumerate(tools):
-        yield f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}", safe_json_dumps(tool)
+        yield (
+            f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}",
+            safe_json_dumps(_filter_sensitive_params(tool)),
+        )
 
 
 def _llm_invocation_parameters(
