@@ -85,6 +85,37 @@ for (const preview of [false, true]) {
   });
 }
 
+for (const preview of [false, true]) {
+  for (const streaming of [false, true]) {
+    for (const [label, usage] of [
+      ['positive', { cachedContentTokenCount: 80, thoughtsTokenCount: 5 }],
+      ['zero', { cachedContentTokenCount: 0, thoughtsTokenCount: 0 }],
+      ['absent', {}],
+    ]) {
+      test(`${preview ? 'preview' : 'stable'} ${streaming ? 'streaming' : 'unary'} preserves ${label} cache and reasoning usage under FI semantic keys`, async () => {
+        instrument();
+        // Provider JSON can include thoughtsTokenCount even when the SDK types omit it.
+        Object.assign(reply.usageMetadata, usage);
+        const m = model(preview);
+        const result = await (streaming ? m.generateContentStream('question') : m.generateContent('question'));
+        const aggregate = await result.response;
+        await settle();
+        assert.deepEqual(aggregate.usageMetadata, reply.usageMetadata);
+        const spans = exporter.getFinishedSpans();
+        assert.equal(spans.length, 1);
+        const attributes = spans[0].attributes;
+        assert.deepEqual([
+          attributes[S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ],
+          attributes[S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING],
+        ], [usage.cachedContentTokenCount, usage.thoughtsTokenCount]);
+        assert.equal(attributes[S.LLM_TOKEN_COUNT_PROMPT], 3);
+        assert.equal(attributes[S.LLM_TOKEN_COUNT_COMPLETION], 0);
+        assert.equal(attributes[S.LLM_TOKEN_COUNT_TOTAL], 3);
+      });
+    }
+  }
+}
+
 test('constructor privacy config applies without a second enable call', async () => {
   instrument({ traceConfig: { hideInputs: true, hideOutputs: true } });
   await model().generateContent('private-question');

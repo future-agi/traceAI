@@ -232,7 +232,7 @@ function outputAttributes(response: SDKObject, counting: boolean): Attributes {
     attributes[S.GEN_AI_RESPONSE_FINISH_REASONS] = response.candidates.slice(0, 32).map((candidate: SDKObject) => candidate.finishReason).filter((reason: unknown) => typeof reason === "string").map((reason: string) => reason.slice(0, 128));
   }
   const usage = response.usageMetadata;
-  for (const [name, key] of Object.entries({ promptTokenCount: S.LLM_TOKEN_COUNT_PROMPT, candidatesTokenCount: S.LLM_TOKEN_COUNT_COMPLETION, totalTokenCount: S.LLM_TOKEN_COUNT_TOTAL, cachedContentTokenCount: "gen_ai.usage.cache_read.input_tokens", thoughtsTokenCount: "gen_ai.usage.reasoning.output_tokens" })) {
+  for (const [name, key] of Object.entries({ promptTokenCount: S.LLM_TOKEN_COUNT_PROMPT, candidatesTokenCount: S.LLM_TOKEN_COUNT_COMPLETION, totalTokenCount: S.LLM_TOKEN_COUNT_TOTAL, cachedContentTokenCount: S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, thoughtsTokenCount: S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING })) {
     if (typeof usage?.[name] === "number" && Number.isFinite(usage[name]) && usage[name] >= 0) attributes[key] = usage[name];
   }
   return attributes;
