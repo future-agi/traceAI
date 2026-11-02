@@ -163,7 +163,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: ${{ runner.temp }}/dist
-          # First-time projects listed in config.json pypi_bootstrap_token upload with the bootstrap token; everything else uses trusted publishing.
+          # Projects listed in config.json pypi_bootstrap_token upload with the bootstrap token until they have a trusted publisher; everything else uses trusted publishing.
           password: ${{ matrix.pypi_bootstrap && secrets.PYPI_BOOTSTRAP_TOKEN || secrets.PYPI_API_TOKEN }}
           print-hash: true
       - name: Verify public registry availability
@@ -230,7 +230,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: ${{ runner.temp }}/dist
-          # First-time projects listed in config.json pypi_bootstrap_token upload with the bootstrap token; everything else uses trusted publishing.
+          # Projects listed in config.json pypi_bootstrap_token upload with the bootstrap token until they have a trusted publisher; everything else uses trusted publishing.
           password: ${{ matrix.pypi_bootstrap && secrets.PYPI_BOOTSTRAP_TOKEN || secrets.PYPI_API_TOKEN }}
           print-hash: true
       - name: Verify public registry availability

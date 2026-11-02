@@ -12,7 +12,7 @@ This package traces the SDK inside your Node process. It is not the Cursor IDE h
 npm install @traceai/cursor-sdk @traceai/fi-core @cursor/sdk
 ```
 
-`@cursor/sdk` is a peer dependency. Nothing in this package imports it at runtime.
+`@cursor/sdk` is a peer dependency. Nothing in this package imports it at runtime. Supported releases are **1.0.37 through 1.2.0** (peer range `>=1.0.37 <2`), on Node **22.13+**, as required by the Cursor SDK. The prior `>=1.0.0` floor was inaccurate: published 1.0.7 has a synchronous `Agent.create()` and no token-usage event, while this wrapper follows the async factory contract verified from 1.0.37 onward. The package preserves 1.0.37 support by checking for newer APIs at runtime.
 
 ## Use
 
@@ -61,7 +61,7 @@ try {
 
 ### What the wrapper does and does not do
 
-- It patches the static `Agent.create` and `Agent.resume`, and `send`, `stream` and `wait` on the agent and run objects they return. You get the SDK's own objects back, and `run.stream()` yields the SDK's own events unchanged.
+- It patches the static `Agent.create` and `Agent.resume`, and `send`, `stream` and `wait` on the agent and run objects they return. On SDK 1.2+, it also traces `agent.summarize()` runs and emits content-free `cursor.summary` status/fallback events; a summary error does not imply the run failed (Cursor can fall back to a trimmed transcript). Older SDKs without `summarize()` work unchanged. You get the SDK's own objects back, and `run.stream()` yields the SDK's own events unchanged.
 - It never reads the run's event stream on its own. The local runtime's stream is a single-consumer queue, so a second reader would steal your events. In this version, tool, thinking and assistant spans exist only for events your code reads through `run.stream()`. (The SDK's per-send `onStep` / `onDelta` callbacks could feed them without the stream; this version does not use them.)
 - Tracing failures are logged with `diag.debug` and never reach your code.
 
@@ -149,7 +149,7 @@ Call `await shutdown(tracerProvider)` before a short script exits. It closes eve
 ## Troubleshooting
 
 - No spans: call `manuallyInstrument(CursorSDK)` before `Agent.create()`. With ESM, the automatic require hook does not see `import`.
-- Only a `Cursor Agent create` span, `AuthenticationError (401)`: the API key is wrong (or revoked). Create a user API key in the Cursor dashboard ([grok.com/dashboard](https://grok.com/dashboard); new keys start with `grok_`), or use `Cursor.auth.login()`.
+- Only a `Cursor Agent create` span, `AuthenticationError (401)`: the API key is wrong (or revoked). Create a user API key in the [Cursor dashboard](https://cursor.com/dashboard), or use `Cursor.auth.login()`.
 - A `Cursor Agent run` span with ERROR status and no error code about a second after it starts, with a working key and no tool spans: the model or its settings are not in your plan. With content on, `cursor.error.message` reads `Model unavailable on <plan> ...`. Pass a model and params that `Cursor.models.list()` returns for your key, for example `{ id: "composer-2.5", params: [{ id: "fast", value: "false" }] }` on Plus.
 - A `Cursor Agent run` span with ERROR status (`cursor.run.status=error`) a few seconds after `send()`, and no tool spans: no API key at all (no `apiKey`, no `CURSOR_API_KEY`, no stored login). `Agent.create()` succeeds without a key; the run is rejected once it starts (`[unknown] Invalid User API Key` in `RunResult.error`).
 - `RunResult.error.message` says `Weekly usage limit reached`: the account has exhausted its allowance. Wait for the reset or add credits in Cursor; changing the tracing settings cannot remove this limit. The example exits non-zero for failed runs.
@@ -161,11 +161,12 @@ Call `await shutdown(tracerProvider)` before a short script exits. It closes eve
 ## Tests
 
 ```bash
-pnpm test                           # jest: fake SDK with the real 1.0.37/1.0.38 shapes and control flow, plus event sequences recorded from live runs
-HOME="$(mktemp -d)" pnpm run test:contract
+pnpm test                           # synthetic SDK flows and recorded 1.0.38 event sequences
+pnpm run test:contract:offline      # real installed SDK types + loopback OTLP/JSON wire and privacy check
+HOME="$(mktemp -d)" pnpm run test:contract # optional network-backed error-path check
 ```
 
-`test:contract` builds the package, type-checks the real `@cursor/sdk` types against the structural types the wrapper reads (`contract/sdk_types.ts`), checks the CommonJS auto-instrumentation hook, and runs the real SDK without an account (network to api.cursor.com): wrong-key `Agent.create` / `Agent.prompt` and unknown-agent `Agent.resume` (identical error to the caller, no message, stack or path exported by default, full text with content on), and a missing-key local run through `send()` / `stream()` / `wait()` that asserts the exporter receives only this package's spans.
+`test:contract:offline` builds and type-checks against the installed real SDK, checks the CommonJS require hook, and sends a synthetic `summarize()` run through the actual OTLP HTTP exporter to a localhost receiver (no Cursor account or outbound network). The SDK's remote agent transport is stubbed; this is not a live summarization run. The separate `test:contract` also runs the real SDK without an account (network to api.cursor.com): wrong-key `Agent.create` / `Agent.prompt` and unknown-agent `Agent.resume` (identical error to the caller, no message, stack or path exported by default, full text with content on), and a missing-key local run through `send()` / `stream()` / `wait()` that asserts the exporter receives only this package's spans.
 
 ## Live vendor verification (2026-10-20)
 

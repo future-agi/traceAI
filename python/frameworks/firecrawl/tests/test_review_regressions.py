@@ -209,10 +209,15 @@ def test_f2_format_aliases_match_vendor_payload(fake, telemetry, use_async):
     assert HTML not in wire
 
 
-def test_f5_readme_usage_registers_observe(fake, telemetry):
+def test_f5_readme_usage_registers_observe(fake, telemetry, monkeypatch):
     import ast
     from pathlib import Path
+    from _firecrawl_fake import crawl_status
 
+    monkeypatch.setenv("FIRECRAWL_API_KEY", KEY)
+    fake.routes[("POST", "/v2/batch/scrape")] = (
+        200, {"success": True, "id": "batch-1", "url": "https://example.com"})
+    fake.routes[("GET", "/v2/batch/scrape/batch-1")] = (200, crawl_status("completed"))
     readme = Path(__file__).resolve().parents[1] / "README.md"
     snippet = readme.read_text().split("```python\n", 1)[1].split("```", 1)[0]
     tree = ast.parse(snippet)
@@ -233,9 +238,11 @@ def test_f5_readme_usage_registers_observe(fake, telemetry):
             telemetry[2].uninstrument()
         if "tracer_provider" in namespace:
             namespace["tracer_provider"].shutdown()
-    assert fake.calls == [("POST", "/v2/scrape")]
+    assert fake.calls == [
+        ("POST", "/v2/scrape"), ("POST", "/v2/batch/scrape"), ("GET", "/v2/batch/scrape/batch-1")]
     exports = telemetry[0].requests()
-    assert exports and len(telemetry[0].spans()) == 1
+    assert exports and len(telemetry[0].spans()) == 2
+    assert [span["name"] for span in telemetry[0].spans()] == ["firecrawl.scrape", "firecrawl.batch_scrape"]
     for export in exports:
         for resource in export["resource_attributes"]:
             assert resource["project_name"] == "firecrawl"

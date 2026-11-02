@@ -296,7 +296,7 @@ describe("Ollama Instrumentation - Version", () => {
   it("should export version", () => {
     const { VERSION } = require("../version");
     expect(typeof VERSION).toBe("string");
-    expect(VERSION).toBe("0.1.0");
+    expect(VERSION).toBe(require("../../package.json").version);
   });
 });
 

@@ -417,3 +417,41 @@ def test_together_provider_on_sync_and_async_calls(make_tracer, use_async, outco
     )
     if outcome == "error":
         assert span.status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("consume_first", [False, True])
+def test_chat_explicit_close_finishes_span_before_exhaustion(
+    make_tracer, use_async, consume_first
+):
+    """Closing a partial SDK stream must finish exactly one traced span."""
+    exporter = make_tracer()
+    params = {
+        "model": REQUEST_MODEL,
+        "messages": [{"role": "user", "content": "q"}],
+        "stream": True,
+    }
+
+    async def run_async():
+        async with async_client(lambda _: chat_stream()) as c:
+            stream = await c.chat.completions.create(**params)
+            if consume_first:
+                assert (await stream.__anext__()).choices[0].delta.content == "Tok"
+            assert not exporter.get_finished_spans()
+            await stream.close()
+            await stream.close()
+            assert stream.response.is_closed
+
+    def run_sync():
+        with client(lambda _: chat_stream()) as c:
+            stream = c.chat.completions.create(**params)
+            if consume_first:
+                assert next(stream).choices[0].delta.content == "Tok"
+            assert not exporter.get_finished_spans()
+            stream.close()
+            stream.close()
+            assert stream.response.is_closed
+
+    asyncio.run(run_async()) if use_async else run_sync()
+    span, _ = only_span(exporter)
+    assert span.status.status_code == StatusCode.OK

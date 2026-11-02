@@ -18,7 +18,7 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
-    "test:contract": "pnpm run build && node contract/run_real_sdk.mjs",
+    "test:contract": "pnpm run build && node contract/run_real_sdk.mjs && node contract/otlp_wire.mjs",
     "prepare": "pnpm run build"
   },
   "keywords": [
@@ -54,7 +54,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
-    "@openai/codex-sdk": "0.162.1",
+    "@openai/codex-sdk": "0.166.0",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.10",
