@@ -263,3 +263,146 @@ test('bounded capture marks truncation while leaving the SDK response intact', a
   assert.ok(span.attributes[S.LLM_OUTPUT_MESSAGES].length < 10000);
   assert.ok(span.attributes[S.LLM_INPUT_MESSAGES].length < 10000);
 });
+
+for (const preview of [false, true]) {
+  for (const method of ['sendMessage', 'sendMessageStream']) {
+    test(`${preview ? 'preview' : 'stable'} ${method} captures strings in request arrays without mutating them`, async () => {
+      instrument();
+      const request = ['ARRAY_STRING_SENTINEL', { text: 'part-object' }];
+      const result = await model(preview).startChat()[method](request);
+      await result.response; await settle();
+      assert.deepEqual(request, ['ARRAY_STRING_SENTINEL', { text: 'part-object' }]);
+      assert.equal(requests[0].body.contents.at(-1).parts[0].text, request[0]);
+      const messages = JSON.parse(exporter.getFinishedSpans()[0].attributes[S.LLM_INPUT_MESSAGES]);
+      assert.deepEqual(messages.at(-1).content, request.map(part => ({ type: 'text', text: typeof part === 'string' ? part : part.text })));
+    });
+
+    test(`${preview ? 'preview' : 'stable'} ${method} budgets the current turn before recent history`, async () => {
+      instrument();
+      const history = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? 'model' : 'user', parts: [{ text: `history-${i} ${'h'.repeat(4000)}` }] }));
+      const result = await model(preview).startChat({ history })[method]('CURRENT_QUESTION_SENTINEL');
+      await result.response; await settle();
+      assert.equal(requests[0].body.contents.at(-1).parts[0].text, 'CURRENT_QUESTION_SENTINEL');
+      const span = exporter.getFinishedSpans()[0];
+      const messages = JSON.parse(span.attributes[S.LLM_INPUT_MESSAGES]);
+      assert.deepEqual(messages.at(-1), { role: 'user', content: [{ type: 'text', text: 'CURRENT_QUESTION_SENTINEL' }] });
+      assert.match(JSON.stringify(messages.at(-2)), /history-9/);
+      assert.equal(span.attributes['vertexai.capture.truncated'], true);
+      assert.ok(span.attributes[S.LLM_INPUT_MESSAGES].length < 26000);
+      assert.ok(messages.every(message => typeof message.role === 'string' && Array.isArray(message.content)));
+      const indices = messages.slice(0, -1).map(message => Number(message.content[0].text.match(/history-(\d+)/)[1]));
+      assert.deepEqual(indices, [...indices].sort((a, b) => a - b));
+    });
+  }
+
+  for (const method of ['generateContent', 'generateContentStream']) {
+    test(`${preview ? 'preview' : 'stable'} ${method} carries scoped FI context and OTel parent`, async () => {
+      instrument();
+      const fi = local('@traceai/fi-core');
+      const parent = provider.getTracer('test').startSpan('parent');
+      const ctx = fi.setUser(fi.setSession(trace.setSpan(context.active(), parent), { sessionId: 'synthetic-session' }), { userId: 'synthetic-user' });
+      try {
+        const result = await context.with(ctx, () => model(preview)[method]('question'));
+        await result.response; await settle();
+        const span = exporter.getFinishedSpans()[0];
+        assert.equal(span.attributes['session.id'], 'synthetic-session');
+        assert.equal(span.attributes['user.id'], 'synthetic-user');
+        assert.equal(span.parentSpanContext.spanId, parent.spanContext().spanId);
+        await model(preview).generateContent('unscoped');
+        assert.equal(exporter.getFinishedSpans()[1].attributes['session.id'], undefined);
+        assert.equal(exporter.getFinishedSpans()[1].attributes['user.id'], undefined);
+      } finally { parent.end(); }
+    });
+  }
+}
+
+for (const method of ['generateContent', 'generateContentStream']) {
+  test(`${method} preserves output message and part structure when the budget runs out`, async () => {
+    instrument();
+    reply.candidates = Array.from({ length: 8 }, (_, index) => ({ index, content: { role: 'model', parts: [{ text: 'r'.repeat(4000) }] }, finishReason: 'STOP' }));
+    const result = await model()[method]('question');
+    const aggregate = await result.response; await settle();
+    assert.equal(aggregate.candidates.length, 8);
+    assert.equal(aggregate.candidates[7].content.parts[0].text.length, 4000);
+    const span = exporter.getFinishedSpans()[0];
+    const messages = JSON.parse(span.attributes[S.LLM_OUTPUT_MESSAGES]);
+    assert.ok(messages.length > 0);
+    for (const message of messages) {
+      assert.equal(message.role, 'model');
+      assert.ok(Array.isArray(message.content));
+      for (const part of message.content) {
+        assert.equal(part.type, 'text');
+        assert.equal(typeof part.text, 'string');
+      }
+    }
+    assert.equal(span.attributes['vertexai.capture.truncated'], true);
+    assert.ok(span.attributes[S.LLM_OUTPUT_MESSAGES].length < 26000);
+  });
+}
+
+test('large instructions and tool declarations cannot spend the current request budget', async () => {
+  instrument();
+  await model().generateContent({
+    systemInstruction: { parts: Array.from({ length: 10 }, () => ({ text: 's'.repeat(4000) })) },
+    tools: [{ functionDeclarations: Array.from({ length: 10 }, (_, i) => ({ name: `tool_${i}`, description: 'd'.repeat(4000) })) }],
+    contents: [{ role: 'user', parts: [{ text: 'CURRENT_QUESTION_SENTINEL' }] }],
+  });
+  const span = exporter.getFinishedSpans()[0];
+  const messages = JSON.parse(span.attributes[S.LLM_INPUT_MESSAGES]);
+  assert.deepEqual(messages.at(-1), { role: 'user', content: [{ type: 'text', text: 'CURRENT_QUESTION_SENTINEL' }] });
+  assert.ok(messages.every(message => typeof message.role === 'string' && Array.isArray(message.content)));
+  assert.equal(span.attributes['vertexai.capture.truncated'], true);
+});
+
+test('budget exhaustion within a message preserves part envelopes and does not modify responses', async () => {
+  instrument();
+  reply.candidates[0].content.parts = Array.from({ length: 20 }, (_, i) => i % 2
+    ? { functionCall: { name: `tool_${i}`, args: { payload: 'a'.repeat(4000) } } }
+    : { text: 't'.repeat(4000) });
+  const result = await model().generateContent('question');
+  const span = exporter.getFinishedSpans()[0];
+  const messages = JSON.parse(span.attributes[S.LLM_OUTPUT_MESSAGES]);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'model');
+  for (const part of messages[0].content) {
+    assert.ok(part.type === 'text' || part.type === 'tool_call');
+    if (part.type === 'text') assert.equal(typeof part.text, 'string');
+    else { assert.equal(typeof part.name, 'string'); assert.ok(Object.hasOwn(part, 'arguments')); }
+  }
+  assert.equal(result.response.candidates[0].content.parts.length, 20);
+  assert.equal(span.attributes['vertexai.capture.truncated'], true);
+  assert.ok(span.attributes[S.LLM_OUTPUT_MESSAGES].length < 26000);
+});
+
+test('FI context attributes are privacy-masked and cannot override observed model/provider', async () => {
+  instrument({ traceConfig: { hideInputs: true } });
+  const fi = local('@traceai/fi-core');
+  const ctx = fi.setAttributes(fi.setSession(context.active(), { sessionId: 'synthetic-session' }), {
+    [S.INPUT_VALUE]: 'CONTEXT_SECRET', [S.LLM_PROVIDER]: 'incorrect', [S.LLM_MODEL_NAME]: 'incorrect',
+  });
+  await context.with(ctx, () => model().generateContent('question'));
+  const span = exporter.getFinishedSpans()[0];
+  assert.equal(span.attributes['session.id'], 'synthetic-session');
+  assert.equal(span.attributes[S.LLM_PROVIDER], 'google');
+  assert.equal(span.attributes[S.LLM_MODEL_NAME], 'gemini-test');
+  assert.doesNotMatch(JSON.stringify(span.attributes), /CONTEXT_SECRET|question/);
+});
+
+test('concurrent streaming calls keep their own FI session and user context', async () => {
+  instrument();
+  const fi = local('@traceai/fi-core');
+  await Promise.all(['first', 'second'].map(async id => {
+    const ctx = fi.setUser(fi.setSession(context.active(), { sessionId: `session-${id}` }), { userId: `user-${id}` });
+    const result = await context.with(ctx, () => model().generateContentStream(id));
+    await result.response;
+  }));
+  await settle();
+  const spans = exporter.getFinishedSpans();
+  assert.equal(spans.length, 2);
+  for (const id of ['first', 'second']) {
+    const span = spans.find(span => span.attributes['session.id'] === `session-${id}`);
+    assert.ok(span);
+    assert.equal(span.attributes['user.id'], `user-${id}`);
+    assert.equal(JSON.parse(span.attributes[S.LLM_INPUT_MESSAGES])[0].content[0].text, id);
+  }
+});

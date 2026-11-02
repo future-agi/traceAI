@@ -5,7 +5,7 @@ import {
 import {
   Attributes, Span, SpanKind, SpanStatusCode, TracerProvider, context, diag, trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, getAttributesFromContext } from "@traceai/fi-core";
 import { SemanticConventions as S, FISpanKind } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
@@ -118,6 +118,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       span = this.fiTracer.startSpan(`Vertex AI ${method}`, {
         kind: SpanKind.CLIENT,
         attributes: {
+          ...getAttributesFromContext(context.active()),
           [S.FI_SPAN_KIND]: FISpanKind.LLM,
           [S.LLM_PROVIDER]: "google",
           [S.LLM_MODEL_NAME]: model,
@@ -195,7 +196,7 @@ function inputAttributes(instance: SDKObject, request: any, method: string): Att
     messages.splice(prefix, messages.length - 32);
     attributes["vertexai.capture.truncated"] = true;
   }
-  capture(attributes, S.LLM_INPUT_MESSAGES, messages);
+  capture(attributes, S.LLM_INPUT_MESSAGES, messages, true);
   const config = request?.generationConfig ?? instance.generationConfig;
   for (const [name, key] of Object.entries({ temperature: "gen_ai.request.temperature", topP: "gen_ai.request.top_p", topK: "gen_ai.request.top_k", maxOutputTokens: "gen_ai.request.max_tokens" })) {
     if (typeof config?.[name] === "number" && Number.isFinite(config[name])) attributes[key] = config[name];
@@ -208,7 +209,8 @@ function message(content: SDKObject, attributes: Attributes): SDKObject {
   const parts = Array.isArray(content?.parts) ? content.parts.slice(0, 32) : [];
   return {
     role: ["user", "model", "system", "function"].includes(content?.role) ? content.role : "user",
-    content: parts.map((part: SDKObject) => {
+    content: parts.map((part: SDKObject | string) => {
+      if (typeof part === "string") return { type: "text", text: part };
       if (typeof part?.text === "string") return { type: "text", text: part.text };
       if (part?.functionCall) return { type: "tool_call", name: part.functionCall.name, arguments: part.functionCall.args };
       if (part?.functionResponse) return { type: "tool_result", name: part.functionResponse.name, response: part.functionResponse.response };
@@ -237,7 +239,7 @@ function outputAttributes(response: SDKObject, counting: boolean): Attributes {
 }
 
 /** Bound content before serialization; do not retain chunks or serialize whole SDK objects. */
-function capture(attributes: Attributes, key: string, value: unknown): void {
+function capture(attributes: Attributes, key: string, messages: SDKObject[], newestFirst = false): void {
   let budget = 24_000;
   let truncated = false;
   const bound = (item: any, depth = 0): any => {
@@ -253,18 +255,49 @@ function capture(attributes: Attributes, key: string, value: unknown): void {
     if (item === null || typeof item === "boolean" || typeof item === "number") return item;
     if (Array.isArray(item)) {
       truncated ||= item.length > 32;
-      return item.slice(0, 32).map(entry => bound(entry, depth + 1));
+      const result = [];
+      for (const entry of item.slice(0, 32)) {
+        if (budget <= 0) { truncated = true; break; }
+        result.push(bound(entry, depth + 1));
+      }
+      return result;
     }
     if (item && typeof item === "object") {
       const result: Record<string, unknown> = Object.create(null);
       const keys = Object.keys(item);
       truncated ||= keys.length > 32;
-      for (const name of keys.slice(0, 32)) result[name.slice(0, 128)] = bound(item[name], depth + 1);
+      for (const name of keys.slice(0, 32)) {
+        if (budget <= 0) { truncated = true; break; }
+        const boundedName = name.slice(0, 128);
+        truncated ||= name.length > boundedName.length;
+        budget -= boundedName.length;
+        result[boundedName] = bound(item[name], depth + 1);
+      }
       return result;
     }
     return undefined;
   };
-  attributes[key] = JSON.stringify(bound(value));
+  const captured: SDKObject[] = [];
+  // Spend the input budget on the current turn, then recent history. Restore
+  // chronological order afterwards; output candidates retain provider order.
+  for (const message of newestFirst ? [...messages].reverse() : messages) {
+    if (budget < 128) { truncated = true; break; }
+    budget -= 64; // Reserve the role/content envelope; never truncate it.
+    const content: SDKObject[] = [];
+    for (const part of message.content) {
+      if (budget < 64) { truncated = true; break; }
+      budget -= 64; // Reserve the part envelope, including its fixed type.
+      const capturedPart: SDKObject = {};
+      // These keys come from message(), not arbitrary SDK objects. Only payloads
+      // use the recursive limiter, so exhaustion cannot turn messages/parts into strings.
+      for (const [name, value] of Object.entries(part)) {
+        capturedPart[name] = name === "type" ? value : bound(value);
+      }
+      content.push(capturedPart);
+    }
+    captured.push({ role: message.role, content });
+  }
+  attributes[key] = JSON.stringify(newestFirst ? captured.reverse() : captured);
   if (truncated) attributes["vertexai.capture.truncated"] = true;
 }
 
