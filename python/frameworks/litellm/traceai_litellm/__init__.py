@@ -39,6 +39,7 @@ from fi_instrumentation.fi_types import (
     MessageAttributes,
     MessageContentAttributes,
     SpanAttributes,
+    ToolCallAttributes,
 )
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from litellm.types.utils import Choices, EmbeddingResponse, ImageResponse, ModelResponse
@@ -101,6 +102,8 @@ def is_iterable_of(lst: Iterable[object], tp: T) -> bool:
 def _get_attributes_from_message_param(
     message: Mapping[str, Any],
 ) -> Iterator[Tuple[str, AttributeValue]]:
+    if hasattr(message, "model_dump"):
+        message = message.model_dump()
     if not hasattr(message, "get"):
         return
     if role := message.get("role"):
@@ -116,6 +119,34 @@ def _get_attributes_from_message_param(
             for index, c in list(enumerate(content)):
                 for key, value in _get_attributes_from_message_content(c):
                     yield f"{MessageAttributes.MESSAGE_CONTENTS}.{index}.{key}", value
+
+    for field, attribute in (
+        ("name", MessageAttributes.MESSAGE_NAME),
+        ("tool_call_id", MessageAttributes.MESSAGE_TOOL_CALL_ID),
+    ):
+        if value := message.get(field):
+            yield attribute, value
+    if function := message.get("function_call"):
+        if name := function.get("name"):
+            yield MessageAttributes.MESSAGE_FUNCTION_CALL_NAME, name
+        if arguments := function.get("arguments"):
+            yield MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON, arguments
+    for index, tool in enumerate(message.get("tool_calls") or []):
+        prefix = f"{MessageAttributes.MESSAGE_TOOL_CALLS}.{index}"
+        if tool_id := tool.get("id"):
+            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tool_id
+        function = tool.get("function") or {}
+        if name := function.get("name"):
+            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}", name
+        if arguments := function.get("arguments"):
+            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}", arguments
+
+
+def _has_tool_context(message):
+    return any(
+        message.get(key)
+        for key in ("tool_calls", "tool_call_id", "function_call", "name")
+    )
 
 
 def _get_attributes_from_message_content(
@@ -171,7 +202,12 @@ def _instrument_func_type_completion(
             _set_span_attribute(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
-        if eval_input := process_messages.get("eval_input"):
+        if any(_has_tool_context(message) for message in messages):
+            # Keep tool IDs, arguments and results connected in the full conversation.
+            _set_span_attribute(
+                span, SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
+            )
+        elif eval_input := process_messages.get("eval_input"):
             _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
 
         for index, input_message in list(enumerate(messages)):
@@ -234,27 +270,28 @@ def _instrument_func_type_image_generation(
 
 
 def _finalize_span(span: trace_api.Span, result: Any) -> None:
-    _set_raw_output(span, result)
+    # Embedding vectors must only use the canonical, privacy-filtered attributes.
+    # Serializing the response elsewhere bypasses FI_HIDE_EMBEDDING_VECTORS.
+    if not isinstance(result, EmbeddingResponse):
+        _set_raw_output(span, result)
     if isinstance(result, ModelResponse):
         if (choices := result.choices) and len(choices) > 0:
             choice = choices[0]
             if isinstance(choice, Choices):
-                if output := choice.message.content:
-                    _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, output)
+                if choice.message.content and not _has_tool_context(choice.message):
+                    _set_span_attribute(
+                        span, SpanAttributes.OUTPUT_VALUE, choice.message.content
+                    )
                 for key, value in _get_attributes_from_message_param(choice.message):
                     _set_span_attribute(
                         span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{key}", value
                     )
     elif isinstance(result, EmbeddingResponse):
-        if result_data := result.data:
-            first_embedding = result_data[0]
+        for index, embedding in enumerate(result.data or []):
             _set_span_attribute(
                 span,
-                f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{0}.{EmbeddingAttributes.EMBEDDING_VECTOR}",
-                json.dumps(first_embedding.get("embedding", [])),
-            )
-            _set_span_attribute(
-                span, SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(result_data)
+                f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{EmbeddingAttributes.EMBEDDING_VECTOR}",
+                json.dumps(embedding.get("embedding", [])),
             )
     elif isinstance(result, ImageResponse):
         _set_span_attribute(
@@ -368,14 +405,23 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             for key, param in signature.parameters.items():
                 if param.kind is inspect.Parameter.VAR_KEYWORD:
                     request.update(request.pop(key, {}))
-            # Retry helpers accept only *args/**kwargs; their arguments are completion's.
-            if "args" in request:
-                request.pop("args")
-                request.update(
-                    inspect.signature(self.original_litellm_funcs["completion"])
-                    .bind_partial(*args)
-                    .arguments
-                )
+            # Async endpoints and retry helpers may expose only *args/**kwargs.
+            endpoint = {
+                "acompletion": "completion",
+                "completion_with_retries": "completion",
+                "acompletion_with_retries": "completion",
+                "aembedding": "embedding",
+                "aimage_generation": "image_generation",
+            }.get(name)
+            for key, param in signature.parameters.items():
+                if param.kind is inspect.Parameter.VAR_POSITIONAL and key in request:
+                    positional = request.pop(key)
+                    if endpoint:
+                        request.update(
+                            inspect.signature(self.original_litellm_funcs[endpoint])
+                            .bind_partial(*positional)
+                            .arguments
+                        )
         except (TypeError, ValueError):
             request = dict(kwargs)
         # Capture generation inputs/settings, not arbitrary SDK control objects,
@@ -394,7 +440,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         try:
             with _provider_context(span):
                 result = original(*args, **kwargs)
-            if request.get("stream"):
+            if request.get("stream") and hasattr(result, "__next__"):
                 return StreamingIteratorWrapper(result, span)
             _observe(_finalize_span, span, result)
             span.set_status(trace_api.StatusCode.OK)
@@ -417,7 +463,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         try:
             with _provider_context(span):
                 result = await original(*args, **kwargs)
-            if request.get("stream"):
+            if request.get("stream") and hasattr(result, "__anext__"):
                 return AsyncStreamingIteratorWrapper(result, span)
             _observe(_finalize_span, span, result)
             span.set_status(trace_api.StatusCode.OK)
@@ -525,6 +571,7 @@ class _StreamState:
         self.span_cm = span_cm
         self.processed_chunks = []
         self.content_string = ""
+        self.has_tool_context = False
         self._ended = False
         self._closed = False
 
@@ -539,6 +586,7 @@ class _StreamState:
         choices = chunk.get("choices") or []
         if choices:
             delta = choices[0].get("delta") or {}
+            self.has_tool_context |= _has_tool_context(delta)
             content = delta.get("content")
             if isinstance(content, str):
                 self.content_string += content
@@ -555,7 +603,11 @@ class _StreamState:
             _set_span_attribute(
                 self.span,
                 SpanAttributes.OUTPUT_VALUE,
-                self.content_string or safe_json_dumps(self.processed_chunks),
+                (
+                    self.content_string
+                    if self.content_string and not self.has_tool_context
+                    else safe_json_dumps(self.processed_chunks)
+                ),
             )
             if error is None:
                 self.span.set_status(trace_api.StatusCode.OK)
@@ -570,6 +622,21 @@ class _StreamState:
                 )
             else:
                 self.span.end()
+
+
+def _stream_close_method(stream, *, asynchronous=False):
+    """Use the SDK close API, or its provider stream on older LiteLLM versions."""
+    seen = set()
+    while stream is not None and id(stream) not in seen:
+        seen.add(id(stream))
+        if asynchronous and callable(close := getattr(stream, "aclose", None)):
+            return close
+        if callable(close := getattr(stream, "close", None)):
+            return close
+        if not isinstance(stream, litellm.CustomStreamWrapper):
+            break
+        stream = stream.completion_stream
+    return None
 
 
 class StreamingIteratorWrapper(_StreamState):
@@ -600,7 +667,7 @@ class StreamingIteratorWrapper(_StreamState):
             return
         self._closed = True
         try:
-            close = getattr(self.iterator, "close", None)
+            close = _stream_close_method(self.iterator)
             if close is not None:
                 with _provider_context(self.span):
                     close()
@@ -649,10 +716,12 @@ class AsyncStreamingIteratorWrapper(_StreamState):
             return
         self._closed = True
         try:
-            close = getattr(self.async_iterator, "aclose", None)
+            close = _stream_close_method(self.async_iterator, asynchronous=True)
             if close is not None:
                 with _provider_context(self.span):
-                    await close()
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
         except BaseException as error:
             self._finish(error)
             raise

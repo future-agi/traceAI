@@ -30,9 +30,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
 litellm = ">=1.43.0"
-fi-instrumentation-otel = ">=0.1.11"
-
-[tool.poetry.group.dev.dependencies]
+fi-instrumentation-otel = ">=1.2.2"
 # LiteLLM imports tenacity lazily for its optional retry helpers.
 tenacity = ">=8.2.3"
 

@@ -49,12 +49,13 @@ jobs:
           python -m venv .venv
           if [ "$SDK" = floor ]; then
             # PyPI no longer serves 1.43.0; use its immutable upstream release commit.
-            .venv/bin/pip install -e python -e python/frameworks/litellm \
+            .venv/bin/pip install -e python/frameworks/litellm \
               'litellm @ git+https://github.com/BerriAI/litellm.git@4603eedcc13bfab2da5a82aed209e6ef496c384d' \
-              'openai==1.40.0' 'httpx==0.27.2' pytest pytest-asyncio tenacity
+              'fi-instrumentation-otel==1.2.2' 'openai==1.40.0' 'httpx==0.27.2' \
+              pytest pytest-asyncio
           else
-            .venv/bin/pip install -e python -e python/frameworks/litellm \
-              --upgrade litellm pytest pytest-asyncio tenacity
+            .venv/bin/pip install -e python/frameworks/litellm \
+              --upgrade litellm pytest pytest-asyncio
           fi
           .venv/bin/pip check
       - name: Run with outbound network disabled

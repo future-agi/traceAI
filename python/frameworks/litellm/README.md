@@ -12,14 +12,14 @@ pip install traceAI-litellm
 ```
 
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+### Set environment variables
 
-```python
-import os
+Set your Future AGI credentials for telemetry and your own OpenAI API key for the examples below. Future AGI credentials do not authenticate model inference; OpenAI bills inference to your OpenAI account. When you use another provider through LiteLLM, configure that provider's credentials instead.
 
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+```bash
+export FI_API_KEY="your-future-agi-api-key"
+export FI_SECRET_KEY="your-future-agi-secret-key"
+export OPENAI_API_KEY="your-openai-api-key"
 ```
 
 ## Quickstart
