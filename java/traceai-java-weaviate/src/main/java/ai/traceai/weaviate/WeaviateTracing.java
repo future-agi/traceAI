@@ -14,6 +14,7 @@ import io.weaviate.client6.v1.api.collections.query.QueryResponseGrouped;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
@@ -133,7 +134,19 @@ final class WeaviateTracing {
         }
 
         @Override public boolean cancel(boolean mayInterruptIfRunning) {
-            return source.cancel(mayInterruptIfRunning);
+            boolean cancelled = source.cancel(mayInterruptIfRunning);
+            if (cancelled) {
+                // Another thread may still be ending the span after cancelling
+                // source. Success must not escape before this future is terminal.
+                // Join this future, not a dependent stage: user continuations
+                // need not finish before cancellation can return.
+                try {
+                    super.join();
+                } catch (CancellationException | CompletionException ignored) {
+                    // Observe publication without throwing the terminal outcome.
+                }
+            }
+            return cancelled;
         }
 
         @Override public boolean complete(T value) {
