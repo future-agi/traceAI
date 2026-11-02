@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only release inventory and registry plan for all five SDK ecosystems.
+"""Read-only release inventory and registry plan for all SDK ecosystems.
 
 --check validates Python and npm runtime versions and release-please coverage without network.
---offline inventories publishable packages without registry calls. --only NAME ...
+--offline inventories packages without registry calls (Ruby is explicitly deferred). --only NAME ...
 limits the plan. --root allows a separate source tree. No command publishes anything.
 The release publisher, not release-please, owns tags and GitHub releases.
 """
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path(__file__).resolve().parent / "config.json"
 PYTHON_CORE = {"fi-instrumentation-otel"}
 TS_CORE = {"@traceai/fi-core", "@traceai/fi-semantic-conventions"}
-ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget")
+ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget", "ruby")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 # npm packages that report their own version at runtime keep it in a VERSION or
 # INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
@@ -162,6 +162,25 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
                     "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
                     "tag": f"nuget-{name}-v{version}", "core": False,
                     "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # Ruby is tracked for release-please/version consistency, but the publishing
+    # workflow has no RubyGems lane yet. Keep it explicitly skipped in config.json.
+    for f in sorted((root / "ruby").glob("*/*.gemspec")):
+        text = f.read_text()
+        name_match = re.search(r"^\s*spec\.name\s*=\s*['\"]([^'\"]+)['\"]", text, re.M)
+        version_match = re.search(r"^\s*spec\.version\s*=\s*['\"]([^'\"]+)['\"]", text, re.M)
+        if not name_match or not version_match:
+            raise ValueError(f"{f}: Ruby gem name and version must be literal")
+        name, version = name_match.group(1), version_match.group(1)
+        source = f.parent / "lib/traceai/openai.rb"
+        declared = {f.name: version}
+        if source.is_file():
+            runtime = re.search(r"^\s*VERSION\s*=\s*['\"]([^'\"]+)['\"]", source.read_text(), re.M)
+            if runtime:
+                declared[str(source.relative_to(f.parent))] = runtime.group(1)
+        path = str(f.parent.relative_to(root))
+        out.append({"ecosystem": "ruby", "name": name, "version": version,
+                    "dir": path, "tag": f"ruby-{name}-v{version}", "core": False,
+                    "changelog": f"{path}/CHANGELOG.md", "declared": declared})
     return out
 
 
