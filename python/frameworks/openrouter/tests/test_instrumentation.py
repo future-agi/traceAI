@@ -127,6 +127,27 @@ def test_responses_and_beta_alias(spans):
     assert all(s.attributes.get("gen_ai.usage.output_tokens") == 2 for s in finished), [dict(s.attributes) for s in finished]
 
 
+def test_responses_stream_final_event_usage(spans):
+    response = {"id": "resp_1", "object": "response", "created_at": 1, "completed_at": 2,
+                "error": None, "frequency_penalty": None, "incomplete_details": None,
+                "instructions": None, "metadata": None, "model": "vendor/served",
+                "output": [], "output_text": "Tokyo", "parallel_tool_calls": False,
+                "presence_penalty": None, "status": "completed", "temperature": None,
+                "tool_choice": "auto", "tools": [], "top_p": None,
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+                          "input_tokens_details": {"cached_tokens": 0},
+                          "output_tokens_details": {"reasoning_tokens": 0}}}
+    event = {"type": "response.completed", "sequence_number": 1, "response": response}
+    payload = "data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n"
+    client = sdk(lambda req: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=payload.encode()))
+    stream = client.responses.send(model="vendor/request", input="Japan?", stream=True)
+    assert list(stream)
+    a = attributes(spans)
+    assert a["gen_ai.response.model"] == "vendor/served"
+    assert a["gen_ai.usage.output_tokens"] == 2
+    assert a["output.value"] == "Tokyo"
+
+
 def test_stream_early_close_marks_incomplete_without_claiming_final_text(spans):
     chunks = [{"id": "chat-1", "object": "chat.completion.chunk", "created": 1,
                "model": "vendor/served", "choices": [{"index": 0, "delta": {"content": "Tok"}, "finish_reason": None}]}]

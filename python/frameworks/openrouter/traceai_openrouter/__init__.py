@@ -114,11 +114,27 @@ class _Stream:
         return getattr(self._source, name)
 
     def _observe(self, chunk: Any) -> None:
+        # Responses SSE events carry final usage on response.completed, not on
+        # the event itself. The final response supersedes individual deltas.
+        event_type = _field(chunk, "type")
+        completed = _field(chunk, "response")
+        if event_type in ("response.completed", "response.failed") and completed:
+            _result(self._span, completed, False)
+            if event_type == "response.failed":
+                self._span.set_status(Status(StatusCode.ERROR))
+            if self._content:
+                text = _text(completed)
+                if text:
+                    self._pieces = [text[:_LIMIT]]
+                    self._length = len(self._pieces[0])
+            return
         _result(self._span, chunk, False)
         if self._content and self._length < _LIMIT:
-            text = _text(chunk)[: _LIMIT - self._length]
-            self._pieces.append(text)
-            self._length += len(text)
+            text = _field(chunk, "delta") if event_type == "response.output_text.delta" else _text(chunk)
+            if isinstance(text, str):
+                text = text[: _LIMIT - self._length]
+                self._pieces.append(text)
+                self._length += len(text)
 
     def _finish(self, complete: bool = True) -> None:
         if not self._ended:
