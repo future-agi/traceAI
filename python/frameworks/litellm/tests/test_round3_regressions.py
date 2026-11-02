@@ -106,5 +106,3 @@ async def test_audio_and_text_input_both_preserved(with_tool, asynchronous):
     assert marker in json.dumps(requests[0])
     actual = attrs(exporter)
     assert marker in json.dumps(actual), {"with_tool": with_tool, "actual": actual}
-
-
