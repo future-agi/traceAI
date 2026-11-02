@@ -24,8 +24,8 @@ jobs:
         include:
           - {python: '3.10', openai: '1.0.0', core: source, shared: false}
           - {python: '3.10', openai: '1.69.0', core: source, shared: true}
-          - {python: '3.12', openai: '3.42.0', core: source, shared: true}
-          - {python: '3.12', openai: '3.42.0', core: '1.2.2', shared: true}
+          - {python: '3.12', openai: '3.42.1', core: source, shared: true}
+          - {python: '3.12', openai: '3.42.1', core: '1.2.2', shared: true}
     steps:
       - uses: actions/checkout@v4
         with:
