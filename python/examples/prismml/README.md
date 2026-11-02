@@ -61,7 +61,7 @@ python src/app.py --prompt "What is the capital of France?"
 python src/app.py --stream --prompt "What is the capital of France?"
 ```
 
-The application prints the answer and flushes traces before exiting. `--model` overrides `PRISMML_MODEL`. An unset or empty project name uses `prismml-bonsai`.
+The application prints the answer and flushes traces before exiting. If a stream ends without a finish reason, it exits with status 1; treat any printed text as a partial answer and retry. `--model` overrides `PRISMML_MODEL`. An unset or empty project name uses `prismml-bonsai`.
 
 ## Code
 

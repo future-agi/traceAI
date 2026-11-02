@@ -124,10 +124,21 @@ def main(argv=None) -> int:
                 stream=args.stream,
             )
             if args.stream:
-                for chunk in response:
-                    if chunk.choices:
-                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                completed = False
+                with response:
+                    for chunk in response:
+                        for choice in chunk.choices:
+                            if choice.index == 0:
+                                print(choice.delta.content or "", end="", flush=True)
+                                if choice.finish_reason is not None:
+                                    completed = True
                 print()
+                # The SDK accepts EOF or [DONE] without a terminal choice. Tracing
+                # is passive, so the application must reject an incomplete reply.
+                if not completed:
+                    print("The response ended before a finish reason; retry the request.",
+                          file=sys.stderr)
+                    return 1
             else:
                 print(response.choices[0].message.content or "")
     finally:
