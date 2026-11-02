@@ -92,7 +92,7 @@ The setup above hides input, output and error text. Set the corresponding `trace
 
 Message/text-hiding options also hide generic payloads in the corresponding direction, including structured model results. Agent outputs capture the final `result`, not the agent's memory or intermediate iterations.
 
-Embedding model outputs are omitted. Set `hideEmbeddingVectors: true` (or `FI_HIDE_EMBEDDING_VECTORS=true`) to redact fields named `embedding`, `embeddings`, `vector` or `vectors` at any depth in enclosing payloads. Custom payloads may copy sensitive data into other fields or strings; keep `hideInputs` and `hideOutputs` enabled to omit all such content. Configure any other instrumentors separately.
+Embedding model outputs are omitted. Set `hideEmbeddingVectors: true` (or `FI_HIDE_EMBEDDING_VECTORS=true`) to redact fields named `embedding`, `embeddings`, `vector` or `vectors` at any depth in captured input payloads. To prevent vectors copied into other output fields from leaking, `@traceai/fi-core` masks the **entire** generic `output.value` on agent, tool and workflow spans in this mode, including public answers and labels. Application return values are unchanged. Custom inputs may also copy vectors into other fields or strings; set `hideInputs: true` to omit all input content when you cannot control the input shape. Configure other instrumentors separately.
 
 ## Existing applications
 

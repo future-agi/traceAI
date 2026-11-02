@@ -380,8 +380,10 @@ for (const configSource of ['environment', 'options']) {
       assert.ok(!JSON.stringify(wire).includes('0.123456789'));
       assert.ok(!JSON.stringify(wire).includes('0.987654321'));
       for (const span of spans().filter(s => kind(s) !== 'EMBEDDING')) {
-        assert.ok(span.attributes[SC.OUTPUT_VALUE].includes('public-'));
-        assert.ok(span.attributes[SC.OUTPUT_VALUE].includes('__REDACTED__'));
+        assert.equal(span.attributes[SC.OUTPUT_VALUE], '__REDACTED__',
+          'fi-core masks entire opaque outputs when vector hiding is enabled');
+        assert.ok(span.attributes[SC.INPUT_VALUE].includes('public-') || span.attributes[SC.INPUT_VALUE].includes('embed'));
+        assert.ok(!span.attributes[SC.INPUT_VALUE].includes('0.123456789'));
       }
     } finally {
       if (previous === undefined) delete process.env.FI_HIDE_EMBEDDING_VECTORS;
