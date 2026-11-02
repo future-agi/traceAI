@@ -10,6 +10,10 @@ describe("providerForResource", () => {
     ["api.x.ai", "xai"],
     ["api.together.ai", "together"],
     ["inference.baseten.co", "baseten"],
+    ["model-abc123.api.baseten.co", "baseten"],
+    ["model-abc123-us-east.api.baseten.co", "baseten"],
+    ["model-a.api.baseten.co", "baseten"],
+    [`model-${"a".repeat(57)}.api.baseten.co`, "baseten"],
     ["dashscope.aliyuncs.com", "dashscope"],
     ["dashscope-intl.aliyuncs.com", "dashscope"],
     ["dashscope-us.aliyuncs.com", "dashscope"],
@@ -43,6 +47,16 @@ describe("providerForResource", () => {
     { _client: { baseURL: "https://my-fireworks-proxy.example/inference/v1" } },
   ])("falls back safely for %p", (resource) => {
     expect(providerForResource(resource)).toBe("openai");
+  });
+
+  it.each([
+    "baseten.co", "api.baseten.co", "other.baseten.co", "other.api.baseten.co",
+    "model-.api.baseten.co", "model-abc-.api.baseten.co", "model-_abc.api.baseten.co",
+    "model-abc.other.api.baseten.co", "prefix-model-abc.api.baseten.co",
+    "model-abc.api.baseten.co.evil.test", "model-abc.api.notbaseten.co",
+    `model-${"a".repeat(58)}.api.baseten.co`,
+  ])("does not attribute unrelated or invalid Baseten host %s", (host) => {
+    expect(providerForResource({ _client: { baseURL: `https://${host}/v1` } })).toBe("openai");
   });
 
   it("does not fail the application when resource access throws", () => {

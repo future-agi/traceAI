@@ -223,6 +223,12 @@ Choose a model available to your gateway account. `gen_ai.provider.name` comes f
 
 Streaming spans finish when you consume the stream, encounter an iteration error or leave the loop early. Consume or close streams before shutting down the tracer provider. Request and response content is captured by default; use the instrumentation's `traceConfig` input/output and error-detail hiding options for sensitive data.
 
+## Baseten
+
+Use the same instrumentor with [Baseten Model APIs](https://docs.baseten.co/inference/model-apis/overview) at `https://inference.baseten.co/v1`, or an [OpenAI-compatible dedicated deployment](https://docs.baseten.co/reference/inference-api/overview). Set the client's `apiKey` to your Baseten key and copy the deployment's exact `baseURL`.
+
+`gen_ai.provider.name=baseten` identifies both the hosted endpoint and dedicated or regional `model-*.api.baseten.co` endpoints, including streamed and failed calls. Other `baseten.co` subdomains are not inferred to be model endpoints. Available APIs and model identifiers depend on the deployment engine and version. This route instruments the OpenAI SDK, not Baseten's separate Performance Client; do not add a second instrumentor for the same calls.
+
 ## Fireworks AI
 
 Point the client at Fireworks' [OpenAI-compatible endpoint](https://docs.fireworks.ai/tools-sdks/openai-compatibility). Requests to `api.fireworks.ai` produce `gen_ai.provider.name=fireworks` for chat completions, completions and embeddings, including streamed and failed requests:

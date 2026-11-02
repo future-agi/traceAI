@@ -108,7 +108,15 @@ for (const operation of ['chat', 'completions', 'embeddings', 'responses']) {
     });
   }
 }
-for (const [url, expected] of [['https://API.PERPLEXITY.AI./v1', 'perplexity'], ['https://api.perplexity.ai.evil.test/v1', 'openai'], ['https://ai-gateway.vercel.sh/v1', 'vercel']]) {
+for (const [url, expected] of [
+  ['https://API.PERPLEXITY.AI./v1', 'perplexity'],
+  ['https://api.perplexity.ai.evil.test/v1', 'openai'],
+  ['https://ai-gateway.vercel.sh/v1', 'vercel'],
+  ['https://inference.baseten.co/v1', 'baseten'],
+  ['https://model-abc123.api.baseten.co/environments/production/sync/v1', 'baseten'],
+  ['https://MODEL-ABC123-US-EAST.API.BASETEN.CO./sync/v1', 'baseten'],
+  ['https://model-abc123.api.baseten.co.evil.test/v1', 'openai'],
+]) {
   test(`attribution follows normalized host: ${url}`, async () => {
     client.baseURL = url;
     try { await call('chat'); await spans(1, expected); } finally { client.baseURL = 'https://api.perplexity.ai/v1'; }
