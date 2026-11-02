@@ -73,7 +73,7 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
       if (failCount) { res.statusCode = 400; data = { error: 'InvalidArgumentError', message: 'synthetic failure' }; }
       else data = 2;
     } else if (route.endsWith('/query') || route.endsWith('/search')) {
-      const size = body.searches?.length || 1;
+      const size = body.searches?.length || body.query_embeddings?.length || 1;
       data = { ids: Array.from({ length: size }, () => ['doc1', 'doc2']),
         documents: [['PRIVATE_DOCUMENT', 'PRIVATE_DOCUMENT']], metadatas: [[{}, {}]],
         distances: [[0.1, 0.2]], scores: [[0.1, 0.2]], include: ['documents'], select: [] };
@@ -148,6 +148,43 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
       getNearestNeighbors: async (params) => { calls.push(params); return { data: { ids: [['doc1']] } }; },
     };
     collection = new sdk.Collection('test_collection', api);
+    await t.test('legacy positional writes, reads and envelopes preserve SDK values', async () => {
+      const returned = { data: { ids: ['doc1', 'doc2'] } };
+      api.add = async params => { calls.push(params); return returned; };
+      api.get = async params => { calls.push(params); return returned; };
+      api._delete = async params => { calls.push(params); return returned; };
+      const ids = ['doc1', 'doc2'];
+      const vectors = [[0.1, 0.2], [0.3, 0.4]];
+      const docs = ['first', 'second'];
+      assert.equal(await once('add', () => collection.add(ids, vectors, undefined, docs, false), {
+        'db.vector.upsert.count': 2, 'db.vector.upsert.dimensions': 2, 'db.vector.documents.count': 2,
+      }), returned);
+      assert.equal(calls.at(-1).addEmbedding.ids, ids);
+      assert.equal(calls.at(-1).addEmbedding.embeddings, vectors);
+      assert.equal(calls.at(-1).addEmbedding.documents, docs);
+      assert.equal(calls.at(-1).addEmbedding.increment_index, false);
+      for (const limit of [2, 0]) {
+        assert.equal(await once('get', () => collection.get(ids, undefined, limit, 0), {
+          'db.vector.get.ids_count': 2, 'db.vector.query.top_k': limit, 'db.vector.results.count': 2,
+        }), returned);
+        assert.equal(calls.at(-1).getEmbedding.ids, ids);
+        assert.equal(calls.at(-1).getEmbedding.limit, limit);
+        assert.equal(calls.at(-1).getEmbedding.offset, 0);
+      }
+      await once('get', () => collection.get(undefined, undefined, 3), {
+        'db.vector.query.top_k': 3, 'db.vector.results.count': 2,
+      });
+      for (const limit of [3, 0, undefined]) {
+        assert.equal(await once('peek', () => collection.peek(limit), {
+          'db.vector.query.top_k': limit ?? 10, 'db.vector.results.count': 2,
+        }), returned);
+        assert.equal(calls.at(-1).getEmbedding.limit, limit ?? 10);
+      }
+      assert.equal(await once('delete', () => collection.delete(ids), {
+        'db.vector.delete.count': 2,
+      }), returned);
+      assert.equal(calls.at(-1).deleteEmbedding.ids, ids);
+    });
     const embeddings = [[0.1, 0.2]];
     const where = { field: 'value' };
     for (const nResults of [3, undefined, 0]) {
@@ -219,6 +256,54 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
       const fork = await collection.fork({ name: 'fork_collection' });
       await once('count', () => fork.count());
     }
+    await t.test('batched query counts every returned row', async () => {
+      const result = await once('query', () => collection.query({
+        queryEmbeddings: [[0.1, 0.2], [0.3, 0.4]], nResults: 2,
+      }), { 'db.vector.results.count': 4 });
+      assert.equal(result.ids.flat().length, 4);
+    });
+    await t.test('embedding rejections preserve null and mark the span as error', async () => {
+      const generate = embeddingFunction.generate;
+      try {
+        embeddingFunction.generate = async () => { throw null; };
+        exporter.reset();
+        let caught = Symbol('not thrown');
+        try { await collection.query({ queryTexts: ['synthetic-input'] }); } catch (e) { caught = e; }
+        assert.equal(caught, null);
+        assert.equal(exporter.getFinishedSpans().length, 1);
+        assert.equal(exporter.getFinishedSpans()[0].status.code, SpanStatusCode.ERROR);
+      } finally { embeddingFunction.generate = generate; }
+    });
+    await t.test('embedding database operations retain their own child spans', async () => {
+      const generate = embeddingFunction.generate;
+      try {
+        embeddingFunction.generate = async () => { await collection.count(); return [[0.1, 0.2]]; };
+        exporter.reset();
+        const begin = requests.length;
+        await collection.query({ queryTexts: ['synthetic-input'] });
+        assert.equal(requests.slice(begin).filter(r => r.url.split('?')[0].endsWith('/count')).length, 1);
+        assert.equal(requests.slice(begin).filter(r => r.url.split('?')[0].endsWith('/query')).length, 1);
+        const spans = exporter.getFinishedSpans();
+        assert.deepEqual(spans.map(s => s.name).sort(), ['chroma count', 'chroma query']);
+        const count = spans.find(s => s.name === 'chroma count');
+        const query = spans.find(s => s.name === 'chroma query');
+        assert.equal(count.parentSpanContext.spanId, query.spanContext().spanId);
+      } finally { embeddingFunction.generate = generate; }
+    });
+    await t.test('independent nested queries are not mistaken for superclass delegation', async () => {
+      const generate = embeddingFunction.generate;
+      try {
+        embeddingFunction.generate = async () => {
+          await collection.query({ queryEmbeddings: [[0.3, 0.4]] });
+          return [[0.1, 0.2]];
+        };
+        exporter.reset();
+        await collection.query({ queryTexts: ['synthetic-input'] });
+        const spans = exporter.getFinishedSpans();
+        assert.deepEqual(spans.map(s => s.name), ['chroma query', 'chroma query']);
+        assert.equal(spans[0].parentSpanContext.spanId, spans[1].spanContext().spanId);
+      } finally { embeddingFunction.generate = generate; }
+    });
     // A thrown SDK error is propagated and recorded once.
     failCount = true;
     exporter.reset();
@@ -228,6 +313,26 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
     failCount = false;
   }
 
+  await t.test('input hiding removes filters from exported spans, not SDK requests', async () => {
+    const previous = process.env.FI_HIDE_INPUTS;
+    try {
+      process.env.FI_HIDE_INPUTS = 'true';
+      inst.disable(); inst.enable();
+      const where = { private_note: 'SYNTHETIC_PRIVATE_FILTER' };
+      await once('query', () => early
+        ? collection.query([[0.1, 0.2]], 2, where)
+        : collection.query({ queryEmbeddings: [[0.1, 0.2]], nResults: 2, where }), {
+        'db.vector.query.filter': undefined,
+      });
+      if (!early) assert.deepEqual(requests.at(-1).body.where, where);
+      await provider.forceFlush();
+      assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_FILTER'), false);
+    } finally {
+      if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+      else process.env.FI_HIDE_INPUTS = previous;
+      inst.disable(); inst.enable();
+    }
+  });
   // Existing objects, not just future factory results, follow enable/disable.
   inst.disable();
   assert.equal(isPatched(), false);
@@ -319,4 +424,64 @@ test('empty modules, independent modules, owner isolation and pending factories'
     assert.equal(Second.prototype.count, originals[1]);
     assert.equal(isPatched(), false);
   } finally { inst.disable(); other.disable(); await provider.shutdown(); }
+});
+
+
+test('every operation preserves arbitrary rejection identity and error status', async (t) => {
+  class ManualOnlyInstrumentation extends ChromaDBInstrumentation { init() { return []; } }
+  const exporter = new InMemorySpanExporter();
+  const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const inst = new ManualOnlyInstrumentation({ traceConfig: { hideErrorDetails: true } });
+  inst.setTracerProvider(provider);
+  try {
+    for (const op of ['add', 'query', 'get', 'update', 'upsert', 'delete', 'count', 'peek', 'search']) {
+      await t.test(op, async () => {
+        let failure;
+        class Collection { async [op]() { throw failure; } }
+        inst.manuallyInstrument({ Collection });
+        for (const value of [null, undefined, 'PRIVATE_ERROR', new Error('PRIVATE_ERROR'), { message: 'PRIVATE_ERROR' }, 42]) {
+          failure = value;
+          exporter.reset();
+          let caught = Symbol('not thrown');
+          try { await new Collection()[op]({}); } catch (e) { caught = e; }
+          assert.equal(caught, value);
+          const spans = exporter.getFinishedSpans();
+          assert.equal(spans.length, 1);
+          assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
+          assert.equal(JSON.stringify([spans[0].status, spans[0].events]).includes('PRIVATE_ERROR'), false);
+        }
+      });
+    }
+  } finally { inst.disable(); await provider.shutdown(); }
+});
+
+test('explicit hideInputs overrides environment without serializing hidden filters', async () => {
+  class ManualOnlyInstrumentation extends ChromaDBInstrumentation { init() { return []; } }
+  const exporter = new InMemorySpanExporter();
+  const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const previous = process.env.FI_HIDE_INPUTS;
+  try {
+    for (const hideInputs of [true, false]) {
+      process.env.FI_HIDE_INPUTS = String(!hideInputs);
+      const inst = new ManualOnlyInstrumentation({ traceConfig: { hideInputs } });
+      inst.setTracerProvider(provider);
+      try {
+        let received;
+        class Collection { async query(params) { received = params; return { ids: [] }; } }
+        inst.manuallyInstrument({ Collection });
+        const where = hideInputs ? { toJSON() { throw new Error('must not serialize hidden data'); } }
+          : { field: 'public' };
+        const params = { where };
+        exporter.reset();
+        await new Collection().query(params);
+        assert.equal(received, params);
+        assert.equal(exporter.getFinishedSpans()[0].attributes['db.vector.query.filter'],
+          hideInputs ? undefined : JSON.stringify(where));
+      } finally { inst.disable(); }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+    else process.env.FI_HIDE_INPUTS = previous;
+    await provider.shutdown();
+  }
 });

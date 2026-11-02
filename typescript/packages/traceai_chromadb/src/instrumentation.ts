@@ -7,6 +7,7 @@ import {
   context,
   trace,
   SpanKind,
+  Span,
   SpanStatusCode,
   Attributes,
   TracerProvider,
@@ -30,11 +31,15 @@ const VectorDBConventions = {
   DB_VECTOR_DELETE_COUNT: "db.vector.delete.count",
   DB_VECTOR_COLLECTION_NAME: "db.vector.collection.name",
 } as const;
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
 
 // Suppression must also work when the caller uses a BasicTracerProvider without
 // installing an OpenTelemetry context manager. Do not change global OTel state.
-const activeCollection = new AsyncLocalStorage<object>();
+const activeCollection = new AsyncLocalStorage<{
+  instance: object;
+  operation: string;
+  owner: object;
+}>();
 const wrappedFunctions = new WeakSet<Function>();
 let patchCount = 0;
 
@@ -74,6 +79,7 @@ export interface ChromaDBInstrumentationConfig extends InstrumentationConfig {
 export class ChromaDBInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private hideInputs!: boolean;
   // Lazy initialization: InstrumentationBase calls enable() from its constructor.
   private patches?: Patch[];
   private modules?: Set<any>;
@@ -96,10 +102,9 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
   }
 
   private refreshTracer(): void {
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    const traceConfig = generateTraceConfig(this._traceConfig);
+    this.hideInputs = traceConfig.hideInputs;
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
   }
 
   public override setTracerProvider(provider: TracerProvider): void {
@@ -171,20 +176,20 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     };
     const instrumentation = this;
     for (const [name, handler] of Object.entries(handlers)) {
-      this.patchMethod(prototype, name, (original) => function (this: any, ...args: any[]) {
-        // Handles delegate to their base implementation; peek delegates to get.
-        // Keep one database span without suppressing unrelated child spans.
-        if (activeCollection.getStore() === this) {
-          return original.apply(this, args);
-        }
-        // Early v1 query(embeddings, nResults, where) uses positional args.
-        // Normalize only the span metadata; forward the SDK args unchanged.
-        const params = name === "query" && Array.isArray(args[0])
-          ? { nResults: args[1], where: args[2] }
-          : args[0];
-        return activeCollection.run(this, () =>
-          handler.call(instrumentation, () => original.apply(this, args), this, params)
+      this.patchMethod(prototype, name, (original, owner) => function (this: any, ...args: any[]) {
+        const active = activeCollection.getStore();
+        // Suppress only known SDK delegation: a handle calling its base method,
+        // or peek calling get. User callbacks may issue independent operations
+        // on the same collection (including another query).
+        const delegated = active && active.instance === this && (
+          (active.operation === name && Object.prototype.isPrototypeOf.call(owner, active.owner)) ||
+          (active.operation === "peek" && name === "get")
         );
+        return activeCollection.run({ instance: this, operation: name, owner }, () => {
+          if (delegated) return original.apply(this, args);
+          const params = instrumentation.getOperationParams(name, args);
+          return handler.call(instrumentation, () => original.apply(this, args), this, params);
+        });
       });
     }
     this.patchFactory(prototype, "fork");
@@ -215,7 +220,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
   private patchMethod(
     prototype: any,
     name: string,
-    wrap: (original: Function) => Function
+    wrap: (original: Function, owner: object) => Function
   ): void {
     // Patch the owner, not an inherited copy. This also instruments unexported
     // base classes without retaining every collection instance in memory.
@@ -229,7 +234,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       const original = descriptor.value;
       if (typeof original !== "function" || wrappedFunctions.has(original) ||
           (!descriptor.configurable && !descriptor.writable)) return;
-      const wrapped = wrap(original);
+      const wrapped = wrap(original, target);
       const instrumentation = this;
       const patch: Patch = {
         target, name, descriptor, active: true,
@@ -257,6 +262,53 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       patchCount--;
     }
     this.patches = [];
+  }
+
+  /** Normalize metadata only; the original SDK always receives its exact args. */
+  private getOperationParams(operation: string, args: any[]): any {
+    const first = args[0];
+    if (operation === "peek" && (first === undefined || typeof first === "number")) {
+      return { limit: first ?? 10 };
+    }
+    if (first !== undefined && !Array.isArray(first) && typeof first !== "string") return first;
+    switch (operation) {
+      case "query":
+        return { nResults: args[1], where: args[2] };
+      case "add":
+      case "update":
+      case "upsert":
+        return {
+          ids: typeof first === "string" ? [first] : first,
+          embeddings: typeof args[1]?.[0] === "number" ? [args[1]] : args[1],
+          documents: typeof args[3] === "string" ? [args[3]] : args[3],
+        };
+      case "get":
+        return { ids: first, where: args[1], limit: args[2] };
+      case "delete":
+        return { ids: first, where: args[1] };
+      default:
+        return first;
+    }
+  }
+
+  private recordError(span: Span, error: unknown): void {
+    // JavaScript promises can reject with any value, not just Error objects.
+    // Do not dereference/serialize arbitrary rejections or replace their identity.
+    const exception = error instanceof Error || typeof error === "string" ? error : { name: "Error" };
+    span.recordException(exception);
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: error instanceof Error ? error.message : typeof error === "string" ? error : undefined,
+    });
+  }
+
+  private recordResultCount(span: Span, result: any): void {
+    // Early Chroma get/peek return Axios envelopes; newer SDKs return data.
+    const ids = result?.ids ?? result?.data?.ids;
+    if (Array.isArray(ids)) {
+      span.setAttribute(VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
+        ids.reduce((count: number, row: unknown) => count + (Array.isArray(row) ? row.length : 1), 0));
+    }
   }
 
   private getCollectionName(instance: any): string {
@@ -312,9 +364,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -332,7 +383,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     const nResults = params?.nResults ?? params?.n_results ?? 10;
     attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = nResults;
 
-    if (params?.where) {
+    if (!this.hideInputs && params?.where) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_FILTER] =
         JSON.stringify(params.where);
     }
@@ -355,22 +406,12 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      // Add result attributes
-      if (result?.ids) {
-        const resultCount = Array.isArray(result.ids[0])
-          ? result.ids[0].length
-          : result.ids.length;
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          resultCount
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -393,17 +434,11 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         trace.setSpan(context.active(), span),
         () => original.call(instance, searches)
       );
-      if (Array.isArray(result?.ids)) {
-        span.setAttribute(VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.ids.reduce((count: number, ids: unknown) => count + (Array.isArray(ids) ? ids.length : 1), 0));
-      }
+      this.recordResultCount(span, result);
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (error: unknown) {
-      const exception = error instanceof Error || typeof error === "string" ? error : { name: "Error" };
-      span.recordException(exception);
-      span.setStatus({ code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : typeof error === "string" ? error : undefined });
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -422,7 +457,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       attributes["db.vector.get.ids_count"] = params.ids.length;
     }
 
-    if (params?.limit) {
+    if (params?.limit != null) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] =
         params.limit;
     }
@@ -438,18 +473,12 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      if (result?.ids) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.ids.length
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -479,9 +508,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -516,9 +544,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -550,9 +577,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -583,9 +609,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -600,7 +625,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     const collectionName = this.getCollectionName(instance);
     const attributes = this.getCommonAttributes("peek", collectionName);
 
-    if (params?.limit) {
+    if (params?.limit != null) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] =
         params.limit;
     }
@@ -616,18 +641,12 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      if (result?.ids) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.ids.length
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
