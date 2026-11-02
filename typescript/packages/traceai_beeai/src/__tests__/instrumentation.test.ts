@@ -1,4 +1,11 @@
 import { BeeAIInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
+import { VERSION } from "../version";
+
+describe("VERSION", () => {
+  it("matches the package manifest", () => {
+    expect(VERSION).toBe(require("../../package.json").version);
+  });
+});
 
 // The real SDK and OTLP contracts are in contract.test.cjs. These small tests
 // isolate patch ownership and the synchronous, identity-preserving return contract.

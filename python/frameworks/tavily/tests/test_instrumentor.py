@@ -17,10 +17,12 @@ from _support import attrs, instrumented, new_provider  # noqa: E402
 from _tavily_fake import TAVILY_KEY, FakeTavily  # noqa: E402
 
 _METHODS = [
-    ("tavily.tavily", "TavilyClient", "search"),
-    ("tavily.tavily", "TavilyClient", "extract"),
-    ("tavily.async_tavily", "AsyncTavilyClient", "search"),
-    ("tavily.async_tavily", "AsyncTavilyClient", "extract"),
+    (module, client, method)
+    for module, client in (
+        ("tavily.tavily", "TavilyClient"),
+        ("tavily.async_tavily", "AsyncTavilyClient"),
+    )
+    for method in ("search", "extract", "map", "crawl", "research", "get_research")
 ]
 
 

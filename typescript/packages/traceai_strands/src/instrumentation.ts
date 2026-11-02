@@ -1,8 +1,8 @@
 /**
  * OpenTelemetry instrumentation for AWS Strands Agents SDK.
  *
- * This module provides tracing for the @strands-agents/sdk by wrapping
- * agent execution and tool calls.
+ * Legacy SDK 0.1.x outer-invocation instrumentation. SDK 1.23+ applications
+ * use StrandsSpanExporter with the framework's native OpenTelemetry spans.
  */
 
 import {
@@ -21,7 +21,6 @@ import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
@@ -39,6 +38,7 @@ export interface StrandsInstrumentationConfig {
 export class StrandsInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private patchedModules?: Set<object>;
 
   constructor(config: StrandsInstrumentationConfig = {}) {
     super(
@@ -47,6 +47,8 @@ export class StrandsInstrumentation extends InstrumentationBase {
       config.instrumentationConfig || {}
     );
     this._traceConfig = config.traceConfig;
+    // InstrumentationBase invokes enable() before the subclass config exists.
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
   override enable(): void {
@@ -55,6 +57,11 @@ export class StrandsInstrumentation extends InstrumentationBase {
       tracer: this.tracer,
       traceConfig: this._traceConfig,
     });
+  }
+
+  override disable(): void {
+    for (const module of this.patchedModules ?? []) this.unpatch(module);
+    super.disable();
   }
 
   protected init() {
@@ -74,10 +81,15 @@ export class StrandsInstrumentation extends InstrumentationBase {
     this.patch(strandsModule);
   }
 
-  private patch(strandsModule: any & { _fiPatched?: boolean }): any {
-    if (strandsModule?._fiPatched || _isFIPatched) {
+  private patch(strandsModule: any): any {
+    // Modern Strands owns its complete span lifecycle (including streaming and
+    // orchestration). Leave its ESM namespace and Agent prototype untouched.
+    // Configure StrandsSpanExporter on the application's OTel provider instead.
+    if (typeof strandsModule?.AgentTrace === "function") {
       return strandsModule;
     }
+    const prototype = strandsModule?.Agent?.prototype;
+    if (!prototype || patchedPrototypes.has(prototype)) return strandsModule;
 
     const instrumentation = this;
 
@@ -107,22 +119,21 @@ export class StrandsInstrumentation extends InstrumentationBase {
       );
     }
 
-    strandsModule._fiPatched = true;
-    _isFIPatched = true;
+    // ESM namespace objects are immutable. Track ownership outside the module.
+    (this.patchedModules ??= new Set()).add(strandsModule);
+    patchedPrototypes.add(prototype);
     return strandsModule;
   }
 
-  private unpatch(strandsModule: any & { _fiPatched?: boolean }): void {
+  private unpatch(strandsModule: any): void {
+    if (!this.patchedModules?.delete(strandsModule)) return;
     if (strandsModule?.Agent?.prototype?.invoke) {
       this._unwrap(strandsModule.Agent.prototype, "invoke");
     }
     if (strandsModule?.Agent?.prototype?.run) {
       this._unwrap(strandsModule.Agent.prototype, "run");
     }
-    if (strandsModule) {
-      strandsModule._fiPatched = false;
-    }
-    _isFIPatched = false;
+    patchedPrototypes.delete(strandsModule.Agent.prototype);
   }
 
   private async traceAgentInvoke(
@@ -294,21 +305,21 @@ export class StrandsInstrumentation extends InstrumentationBase {
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
+// A prototype can be owned by only one legacy instrumentation instance.
+const patchedPrototypes = new Set<object>();
 
 /**
  * Check if the module has been patched.
  */
 export function isPatched(): boolean {
-  return _isFIPatched;
+  return patchedPrototypes.size > 0;
 }
 
 /**
  * Resets the internal patched state. Intended for testing only.
  */
 export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
+  patchedPrototypes.clear();
 }
 
 // Helper functions
