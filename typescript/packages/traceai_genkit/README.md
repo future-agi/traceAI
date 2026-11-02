@@ -143,10 +143,12 @@ new FIGenkitSpanProcessor({ tracerProvider, traceConfig: { hideInputs: true, hid
 |---|---|
 | `FI_HIDE_INPUTS` / `hideInputs` | Input-side keys dropped, `input.value` = `__REDACTED__`, no `input.mime_type`, and the error message rule below |
 | `FI_HIDE_OUTPUTS` / `hideOutputs` | Output-side keys dropped, `output.value` = `__REDACTED__`, no `output.mime_type`, and the error message rule below |
-| `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | The same, on model spans only (a model span's input is the message list, its output the response message) |
-| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | On model spans, every `text` and `reasoning` part becomes `__REDACTED__`; roles, tool requests, finish reason and usage stay |
+| `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | The same, on model action spans and their surrounding `generate` spans, which carry copies of the request and response messages |
+| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | On model and `generate` spans, every `text` and `reasoning` part becomes `__REDACTED__`; roles, tool requests, finish reason and usage stay |
 | `FI_HIDE_EMBEDDING_VECTORS` | On embedder spans, every vector becomes `__REDACTED__` |
 | `FI_HIDE_ERROR_DETAILS` / `hideErrorDetails` | Omit status descriptions and error detail attributes on spans and events. When unset, enabled by any input/output/message/text hide flag |
+
+A generation response can include a copy of its request. `hideInputs` or `hideInputMessages` removes that embedded request from both `genkit:output` and `output.value`, without removing the model's reply. `hideInputText` redacts the embedded request's text and reasoning instead. If a generation response is truncated or cannot be parsed, the processor redacts that response when these input flags or error hiding require field-level masking.
 
 Hidden or not, tokens, finish reason, model, provider, kinds, names and session are exported: they are read from Genkit's span before anything is hidden.
 
@@ -159,7 +161,7 @@ Never exported, in either mode:
 | Stack frames and local file paths in any exported string (content included) | frames removed; the working directory becomes `[cwd]`, the home directory `~`, other absolute local paths, `file://` URLs and Windows paths `[path]`. URL paths and Genkit action paths (`genkit:path`) are left alone |
 | Emails and this machine's user and host names in the span status message and `exception.message` | replaced by `<email>` / `<redacted>` |
 
-Error messages can quote prompts, tool arguments, or rejected structured output. Set `FI_HIDE_ERROR_DETAILS=true` or `traceConfig: { hideErrorDetails: true }` to omit status descriptions, `exception.message`, `exception.stacktrace`, `error.message`, and namespaced attributes ending in `.exception.message`, `.exception.stacktrace`, `.error.message`, or `.error_message`. This applies to span attributes and all event attributes. The status code, exception event, error type, timestamps, and other metadata remain. Your app still receives the full error.
+Error messages can quote prompts, tool arguments, or rejected structured output. Set `FI_HIDE_ERROR_DETAILS=true` or `traceConfig: { hideErrorDetails: true }` to omit status descriptions, `exception.message`, `exception.stacktrace`, `error.message`, and namespaced attributes ending in `.exception.message`, `.exception.stacktrace`, `.error.message`, or `.error_message`. This applies to span attributes and all event attributes. In native generation responses it also removes `finishMessage`, `error.message`, and `error.details`, retaining `error.status`, the finish reason, and usage. The status code, exception event, error type, timestamps, and other metadata remain. Your app still receives the full error.
 
 When `hideErrorDetails` is unset, any of `hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText`, or `hideOutputText` enables it, including their environment-variable equivalents. `hideEmbeddingVectors` alone does not. An explicit `hideErrorDetails: false` or `FI_HIDE_ERROR_DETAILS=false` opts out, even when content is hidden, so error messages may expose that content. Options take precedence over environment variables. For `FI_HIDE_ERROR_DETAILS`, `true` and `false` are case-insensitive and whitespace is trimmed; an empty or invalid value falls back to derivation from the content flags.
 
