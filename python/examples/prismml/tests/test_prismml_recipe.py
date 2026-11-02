@@ -25,10 +25,6 @@ from _fake_openai import (
     FakeOpenAI, chat_response, stream_body,
 )
 
-# traceai-openai 0.1.10 and earlier omit gen_ai.request.model on streamed and failed
-# calls; later versions (future-agi/traceAI#249) record the requested model there.
-# Accept both so this recipe passes on either version.
-
 ROOT = Path(__file__).resolve().parents[1]
 FI_API_KEY = "placeholder-fi-api-key"
 FI_SECRET_KEY = "placeholder-fi-secret-key"
@@ -267,9 +263,7 @@ def test_stream_accumulation_and_usage(traced, include_usage):
     assert body.get("stream_options") == ({"include_usage": True} if include_usage else None)
     span, attrs = one_span(traced)
     assert attrs["output.value"] == ANSWER
-    # traceai-openai records the model only from a non-streamed response; flip
-    # this when the instrumentor records the request model.
-    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
+    assert attrs["gen_ai.request.model"] == REQUEST_MODEL
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, USAGE_ATTRIBUTES if include_usage else {})
     assert any(event["name"] == "First Token Stream Event" for event in span["events"])
@@ -285,7 +279,7 @@ def test_textless_stream_has_no_raw_response_fallback(traced):
     assert len(seen) == 1
     _, attrs = one_span(traced)
     assert attrs["output.value"] == ""
-    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
+    assert attrs["gen_ai.request.model"] == REQUEST_MODEL
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, {})
 
@@ -304,9 +298,7 @@ def test_synthetic_401_records_error_without_key(traced):
     assert len(exceptions) == 1
     assert "Synthetic fixture rejection" in json.dumps(exceptions)
     assert LOCAL_KEY not in json.dumps(span)
-    # traceai-openai records the model only from a non-streamed response; flip
-    # this when the instrumentor records the request model.
-    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
+    assert attrs["gen_ai.request.model"] == REQUEST_MODEL
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, {})
     assert_export_separation(traced[0], traced[2])
@@ -688,7 +680,7 @@ def test_app_subprocess_chat_and_stream(tmp_path, stream, env_project):
         assert attrs["output.value"] == ANSWER
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
         if stream:
-            assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
+            assert attrs["gen_ai.request.model"] == REQUEST_MODEL
         else:
             assert attrs["gen_ai.request.model"] == RESPONSE_MODEL
         assert_usage(attrs, {} if stream else USAGE_ATTRIBUTES)
@@ -739,26 +731,63 @@ def test_readme_and_requirements_contract():
             if ast.unparse(node.func).startswith("os.environ.") and node.args:
                 if isinstance(node.args[0], ast.Constant):
                     assert node.args[0].value in readme
-    headings = ["## Install", "## Configure", "## Run", "## Code",
-                "## What you see in Future AGI", "## Provider specifics", "## Privacy",
-                "## Limits / not covered", "## Tests"]
+    headings = ["## Install", "## Start the local server", "## Configure", "## Run",
+                "## Code", "## View traces", "## Privacy", "## Troubleshooting"]
     assert [readme.index(heading) for heading in headings] == sorted(readme.index(heading) for heading in headings)
-    for paths in ("python/examples/prismml/src:python:python/frameworks/openai:python/tests",
-                  "python/examples/prismml/src:python/tests"):
-        assert f'PYTHONPATH="{paths}"' in readme
-    assert readme.count("pytest python/examples/prismml/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs") == 2
-    assert "--with 'traceAI-openai==0.1.10'" in readme
-    assert "--with 'fi-instrumentation-otel==1.1.0'" in readme
-    assert "TBD" not in readme
-    assert "## Real-server check" in readme
-    assert "Ternary-Bonsai-2-2B-PQ2_0.gguf" in readme
-    assert "The automated contract suite uses a local fake" in readme
-    assert "not 27B tool calling, vision, or MLX" in readme
+    for diary in ("## Real-server check", "## Tests", "fixture", "Full suite", "future-agi/traceAI#"):
+        assert diary not in readme
+    assert "https://api.futureagi.com/tracer/v1/traces" in readme
     requirements = (ROOT / "requirements.txt").read_text().splitlines()
-    assert [line for line in requirements if not line.startswith("#")] == [
-        "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0"]
+    assert [line for line in requirements if line and not line.startswith("#")] == [
+        "openai==3.42.1", "traceAI-openai==0.1.12", "fi-instrumentation-otel==1.2.2"]
     for path in ROOT.rglob("*"):
         if path.is_file() and "__pycache__" not in path.parts and path.suffix in {".py", ".md", ".txt"}:
             text = path.read_text()
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", text), str(path)
             assert not re.search(r"\bsk-[A-Za-z0-9]{16,}\b", text), str(path)
+
+
+def test_readme_code_exports_one_span(monkeypatch, capsys):
+    """Execute the customer example with real registration and OTLP export."""
+    readme = (ROOT / "README.md").read_text()
+    code = re.search(r"## Code\n.*?```python\n(.*?)```", readme, re.S).group(1)
+    with Receiver() as receiver, FakeOpenAI() as fake:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        monkeypatch.setenv("PRISMML_BASE_URL", fake.base_url)
+        monkeypatch.setenv("FI_PROJECT_NAME", "prismml-readme-example")
+        namespace = {}
+        try:
+            exec(compile(code, str(ROOT / "README.md"), "exec"), namespace)
+            assert capsys.readouterr().out.strip() == ANSWER
+            assert len(fake.requests()) == 1
+            assert fake.requests()[0]["path"] == "/v1/chat/completions"
+            spans = receiver.spans()
+            assert len(spans) == 1
+            attrs = attributes(spans[0])
+            assert attrs["gen_ai.span.kind"] == "LLM"
+            assert attrs["gen_ai.provider.name"] == "openai"
+            assert attrs["gen_ai.request.model"] == RESPONSE_MODEL
+            assert attrs["output.value"] == ANSWER
+            assert_usage(attrs, USAGE_ATTRIBUTES)
+            assert_export_separation(receiver, "prismml-readme-example")
+        finally:
+            OpenAIInstrumentor().uninstrument()
+            if "provider" in namespace:
+                namespace["provider"].shutdown()
+
+
+def test_ci_covers_published_source_and_sdk_bounds():
+    import yaml
+
+    workflow = ROOT.parents[2] / ".github/workflows/prismml-recipe-tests.yml"
+    job = yaml.safe_load(workflow.read_text())["jobs"]["recipe"]
+    cells = job["strategy"]["matrix"]["include"]
+    expected = {
+        (packages, python, sdk)
+        for packages in ("published", "source")
+        for python, sdk in (("3.10", "1.69.0"), ("3.13", "3.42.1"))
+    }
+    assert {(cell["packages"], cell["python"], cell["openai"]) for cell in cells} == expected
+    installs = "\n".join(step.get("run", "") for step in job["steps"])
+    assert 'openai==${{ matrix.openai }}' in installs
+    assert "pip check" in installs
