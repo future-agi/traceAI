@@ -99,6 +99,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
   private manuallyPatchedModule?: typeof openai;
+  // Only the instance that applied a patch may remove it. Another instrumentor
+  // sharing the module returns early from patch() but is still asked to unpatch.
+  private readonly patchedModules = new WeakSet<object>();
 
   constructor({
     instrumentationConfig,
@@ -567,6 +570,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     }
 
     _isFIPatched = true;
+    this.patchedModules.add(module);
     try {
       // This can fail if the module is made immutable via the runtime or bundler
       module.fiPatched = true;
@@ -585,6 +589,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     moduleVersion?: string,
   ) {
     // diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
+    if (!moduleExports || !this.patchedModules.delete(moduleExports)) return;
     this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
