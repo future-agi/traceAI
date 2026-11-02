@@ -1147,12 +1147,12 @@ importers:
 
   packages/traceai_instructor:
     dependencies:
-      '@instructor-ai/instructor':
-        specifier: ^1.0.0
-        version: 1.7.0(zod@4.3.6)
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
+      '@opentelemetry/core':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/instrumentation':
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
@@ -1163,21 +1163,36 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
+      '@instructor-ai/instructor':
+        specifier: 1.7.0
+        version: 1.7.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76)
+      '@opentelemetry/otlp-transformer':
+        specifier: 0.202.0
+        version: 0.202.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-base':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-node':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@traceai/openai':
+        specifier: 0.1.14
+        version: 0.1.14(openai@4.58.0(zod@3.25.76))
       '@types/jest':
         specifier: ^29.5.14
         version: 29.5.14
       '@types/node':
         specifier: ^22.10.10
         version: 22.15.33
+      instructor-floor:
+        specifier: npm:@instructor-ai/instructor@1.0.0
+        version: '@instructor-ai/instructor@1.0.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76)'
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3))
+      openai:
+        specifier: 4.58.0
+        version: 4.58.0(zod@3.25.76)
       rimraf:
         specifier: ^6.0.1
         version: 6.1.2
@@ -1190,6 +1205,9 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.8.3
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
 
   packages/traceai_lancedb:
     dependencies:
@@ -3668,6 +3686,12 @@ packages:
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
 
+  '@instructor-ai/instructor@1.0.0':
+    resolution: {integrity: sha512-FGh1KX97nJnkreAGVg135rI68wkuTedQ6nkaFgFXXer/CQc4Gxn6spI0fA/F4DYnGlRcPl+STddUn/sEoFyGsQ==}
+    peerDependencies:
+      openai: '>=4.28.0'
+      zod: '>=3.22.4'
+
   '@instructor-ai/instructor@1.7.0':
     resolution: {integrity: sha512-7ifu2ZzFBMSOtkY2X5dd2RCxQvfO6Bx+Ag/9V+FkamLGGGciazlTKsEyQR6KSn7BXADLWLIDV296S+O+CifE/A==}
     peerDependencies:
@@ -6003,6 +6027,11 @@ packages:
 
   '@traceai/fi-semantic-conventions@1.0.0':
     resolution: {integrity: sha512-P+idlTaWs5YBURzUcJ8dPut9Y32I8E2FxMJfQbU8xISoWOW2xX6w5+Ri7Xt0Ve/NJ6XvbgMqojN3aGH3ZJBaLw==}
+
+  '@traceai/openai@0.1.14':
+    resolution: {integrity: sha512-EMfHcOCZvNoIF0fbLqKVPv6+LdlZT8hS6mXI5Hcrt8iS2IH36WyOmyLe/b/cm/BrWeY4egKZCu/+ulNghcw3Iw==}
+    peerDependencies:
+      openai: ^4.0.0 || ^5.0.0
 
   '@tsconfig/node10@1.0.11':
     resolution: {integrity: sha512-DcRjDCujK/kCk/cUe8Xz8ZSpm8mS3mNNpta+jGCA6USEDfktlNvm1+IuZ9eTcDbNk41BHwpHHeW+N1lKCz4zOw==}
@@ -9257,6 +9286,15 @@ packages:
       zod:
         optional: true
 
+  openai@4.58.0:
+    resolution: {integrity: sha512-iEjwfZ+3ZOyf/Rjfca0vrDA2y4Lt7W3auf2ZJGt6+puyvzGYwp22da4mrNcYJkcek7SngOqiQI3h/44XCSCO6A==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.23.8
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
   openai@4.98.0:
     resolution: {integrity: sha512-TmDKur1WjxxMPQAtLG5sgBSCJmX7ynTsGmewKzoDwl1fRxtbLOsiR0FA/AOAAtYUmP6azal+MYQuOENfdU+7yg==}
     hasBin: true
@@ -10750,6 +10788,12 @@ packages:
   zod-from-json-schema@0.5.2:
     resolution: {integrity: sha512-/dNaicfdhJTOuUd4RImbLUE2g5yrSzzDjI/S6C2vO2ecAGZzn9UcRVgtyLSnENSmAOBRiSpUdzDS6fDWX3Z35g==}
 
+  zod-stream@1.0.1:
+    resolution: {integrity: sha512-sjSzr/cyfwLeWAltDw3uWS4cAnvhtacD7TeMU0JoS/xm1NJKeIQL05qY2WYUfrSh9ftPf41F1+ysvz02ttWQwA==}
+    peerDependencies:
+      openai: '>=4.24.1'
+      zod: '>=3.22.4'
+
   zod-stream@3.0.0:
     resolution: {integrity: sha512-BfW8KI+FCEMQOAIf8Qgc2q67iZ+LZ/zzk7alU45FWiZIrBSt0JMxNVGuc3o1yTpGFVk3zXiHt3TZvmUiad/9nw==}
     peerDependencies:
@@ -10765,6 +10809,12 @@ packages:
     resolution: {integrity: sha512-pM/SU9d3YAggzi6MtR4h7ruuQlqKtad8e9S0fmxcMi+ueAK5Korys/aWcV9LIIHTVbj01NdzxcnXSN+O74ZIVA==}
     peerDependencies:
       zod: ^3.25 || ^4
+
+  zod-validation-error@2.1.0:
+    resolution: {integrity: sha512-VJh93e2wb4c3tWtGgTa0OF/dTt/zoPCPzXq4V11ZjxmEAFaPi/Zss1xIZdEB5RD8GD00U0/iVXgqkF77RV7pdQ==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      zod: ^3.18.0
 
   zod-validation-error@3.5.4:
     resolution: {integrity: sha512-+hEiRIiPobgyuFlEojnqjJnhFvg4r/i3cqgcm67eehZf/WBaK3g6cD02YU9mtdVxZjv8CzCA9n/Rhrs3yAAvAw==}
@@ -12920,6 +12970,20 @@ snapshots:
   '@humanwhocodes/module-importer@1.0.1': {}
 
   '@humanwhocodes/retry@0.4.3': {}
+
+  '@instructor-ai/instructor@1.0.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76)':
+    dependencies:
+      openai: 4.58.0(zod@3.25.76)
+      zod: 3.25.76
+      zod-stream: 1.0.1(openai@4.58.0(zod@3.25.76))(zod@3.25.76)
+      zod-validation-error: 2.1.0(zod@3.25.76)
+
+  '@instructor-ai/instructor@1.7.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76)':
+    dependencies:
+      openai: 4.58.0(zod@3.25.76)
+      zod: 3.25.76
+      zod-stream: 3.0.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76)
+      zod-validation-error: 3.5.4(zod@3.25.76)
 
   '@instructor-ai/instructor@1.7.0(zod@4.3.6)':
     dependencies:
@@ -16269,12 +16333,12 @@ snapshots:
       '@grpc/grpc-js': 1.14.3
       '@grpc/proto-loader': 0.7.15
       '@opentelemetry/api': 1.9.1
-      '@opentelemetry/context-async-hooks': 2.0.1(@opentelemetry/api@1.9.1)
+      '@opentelemetry/context-async-hooks': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/core': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-trace-otlp-grpc': 0.202.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-trace-otlp-http': 0.202.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources': 2.7.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-trace-base': 2.0.1(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-node': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.41.1
       '@protobuf-ts/grpc-transport': 2.11.1(@grpc/grpc-js@1.14.3)
@@ -16287,6 +16351,16 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
       uuid: 11.1.0
+
+  '@traceai/openai@0.1.14(openai@4.58.0(zod@3.25.76))':
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/instrumentation': 0.202.0(@opentelemetry/api@1.9.1)
+      '@traceai/fi-core': 1.1.0
+      '@traceai/fi-semantic-conventions': 1.0.0
+      openai: 4.58.0(zod@3.25.76)
+    transitivePeerDependencies:
+      - supports-color
 
   '@tsconfig/node10@1.0.11': {}
 
@@ -20502,6 +20576,22 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
+  openai@4.58.0(zod@3.25.76):
+    dependencies:
+      '@types/node': 18.19.100
+      '@types/node-fetch': 2.6.12
+      '@types/qs': 6.14.0
+      abort-controller: 3.0.0
+      agentkeepalive: 4.6.0
+      form-data-encoder: 1.7.2
+      formdata-node: 4.4.1
+      node-fetch: 2.7.0
+      qs: 6.16.0
+    optionalDependencies:
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - encoding
+
   openai@4.98.0(ws@8.21.0)(zod@3.24.4):
     dependencies:
       '@types/node': 18.19.100
@@ -21207,6 +21297,11 @@ snapshots:
   safer-buffer@2.1.2: {}
 
   sax@1.4.4: {}
+
+  schema-stream@3.2.2(zod@3.25.76):
+    dependencies:
+      ramda: 0.29.1
+      zod: 3.25.76
 
   schema-stream@3.2.2(zod@4.3.6):
     dependencies:
@@ -22131,6 +22226,20 @@ snapshots:
     dependencies:
       zod: 4.3.6
 
+  zod-stream@1.0.1(openai@4.58.0(zod@3.25.76))(zod@3.25.76):
+    dependencies:
+      openai: 4.58.0(zod@3.25.76)
+      schema-stream: 3.2.2(zod@3.25.76)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+
+  zod-stream@3.0.0(openai@4.58.0(zod@3.25.76))(zod@3.25.76):
+    dependencies:
+      openai: 4.58.0(zod@3.25.76)
+      schema-stream: 3.2.2(zod@3.25.76)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+
   zod-stream@3.0.0(zod@4.3.6):
     dependencies:
       schema-stream: 3.2.2(zod@4.3.6)
@@ -22156,6 +22265,14 @@ snapshots:
   zod-to-json-schema@3.25.1(zod@4.6.5):
     dependencies:
       zod: 4.6.5
+
+  zod-validation-error@2.1.0(zod@3.25.76):
+    dependencies:
+      zod: 3.25.76
+
+  zod-validation-error@3.5.4(zod@3.25.76):
+    dependencies:
+      zod: 3.25.76
 
   zod-validation-error@3.5.4(zod@4.3.6):
     dependencies:
