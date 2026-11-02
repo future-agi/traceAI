@@ -415,6 +415,148 @@ class NativeTelemetryTest {
         assertThat(KernelProbe.seen).isEqualTo("plugins=2 functions=6 service=true");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"prompt", "arguments", "context", "function"})
+    void nestedPromptCallsUseInvocationTelemetryWithoutGlobalSdk(String route) {
+        GlobalOpenTelemetry.resetForTest();
+        Kernel kernel = nestedPromptKernel(route);
+
+        var result = new TracedKernel(kernel, tracer())
+            .invokeAsync(kernel.<String>getFunction("nested", "ask")).block();
+
+        assertThat(result.getResult()).isEqualTo(LocalOpenAi.ANSWER);
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(3);
+        SpanData agent = only(spans, "AGENT");
+        SpanData tool = only(spans, "TOOL");
+        SpanData llm = only(spans, "LLM");
+        assertThat(tool.getParentSpanId()).isEqualTo(agent.getSpanId());
+        assertThat(llm.getParentSpanId()).isEqualTo(tool.getSpanId());
+        assertThat(llm.getAttributes().get(TOTAL_TOKENS)).isEqualTo(10L);
+        assertThat(spans).allSatisfy(span -> {
+            assertThat(span.getInstrumentationScopeInfo().getName()).isEqualTo("traceai-test");
+            assertThat(span.getTraceId()).isEqualTo(agent.getTraceId());
+        });
+        assertThat(openAi.requests).hasValue(1);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"prompt", "arguments", "context", "function"})
+    void nestedPromptErrorsDoNotEscapePrivacyControls(String route) {
+        openAi.mode(LocalOpenAi.Mode.SERVER_ERROR);
+        Kernel kernel = nestedPromptKernel(route);
+        TracedKernel traced = new TracedKernel(kernel,
+            tracer(TraceConfig.builder().hideErrorDetails(true).build()));
+
+        assertThatThrownBy(() -> traced.invokeAsync(kernel.<String>getFunction("nested", "ask")).block())
+            .hasMessageContaining(LocalOpenAi.ERROR_DETAIL);
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(3);
+        only(spans, "AGENT");
+        only(spans, "TOOL");
+        only(spans, "LLM");
+        assertThat(spans).allSatisfy(span -> {
+            assertThat(span.getInstrumentationScopeInfo().getName()).isEqualTo("traceai-test");
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(span.getStatus().getDescription()).isEmpty();
+            assertThat(span.toString()).doesNotContain(LocalOpenAi.ERROR_DETAIL);
+            assertThat(span.getEvents()).allSatisfy(event -> {
+                assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.message"))).isNull();
+                assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.stacktrace"))).isNull();
+            });
+        });
+    }
+
+    private Kernel nestedPromptKernel(String route) {
+        return Kernel.builder().withAIService(ChatCompletionService.class, openAi.chatService())
+            .withPlugin(KernelPluginFactory.createFromObject(new NestedPrompt(route), "nested")).build();
+    }
+
+    public static class NestedPrompt {
+        private final String route;
+
+        NestedPrompt(String route) { this.route = route; }
+
+        @DefineKernelFunction(name = "ask", returnType = "java.lang.String")
+        public Mono<String> ask(Kernel kernel) {
+            var arguments = com.microsoft.semantickernel.semanticfunctions.KernelArguments.builder()
+                .withVariable("question", "inner question").build();
+            com.microsoft.semantickernel.orchestration.FunctionInvocation<String> call;
+            switch (route) {
+                case "arguments":
+                    call = kernel.invokePromptAsync("{{$question}}", arguments);
+                    break;
+                case "context":
+                    call = kernel.invokePromptAsync("{{$question}}", arguments,
+                        com.microsoft.semantickernel.orchestration.InvocationContext.builder().build());
+                    break;
+                case "function":
+                    call = kernel.invokeAsync(KernelFunction.<String>createFromPrompt("inner question").build());
+                    break;
+                default:
+                    call = kernel.invokePromptAsync("inner question");
+            }
+            return call.map(com.microsoft.semantickernel.orchestration.FunctionResult::getResult);
+        }
+    }
+
+    @Test
+    void copyingTheRoutedKernelPreservesServicesAndHonoursOverrides() throws Exception {
+        KernelCapture capture = new KernelCapture();
+        ChatCompletionService original = openAi.chatService();
+        ChatCompletionService replacement = openAi.chatService();
+        Kernel kernel = Kernel.builder().withAIService(ChatCompletionService.class, original)
+            .withPlugin(KernelPluginFactory.createFromObject(capture, "capture")).build();
+
+        assertKernelCopies(kernel, original, replacement);
+        new TracedKernel(kernel, tracer()).invokeAsync(kernel.<String>getFunction("capture", "save")).block();
+        assertKernelCopies(capture.kernel, original, replacement);
+    }
+
+    private static void assertKernelCopies(Kernel kernel, ChatCompletionService original,
+            ChatCompletionService replacement) throws Exception {
+        assertThat(Kernel.from(kernel).build().getService(ChatCompletionService.class)).isSameAs(original);
+        assertThat(Kernel.from(kernel).withAIService(ChatCompletionService.class, replacement).build()
+            .getService(ChatCompletionService.class)).isSameAs(replacement);
+        assertThat(kernel.toBuilder().withAIService(ChatCompletionService.class, replacement).build()
+            .getService(ChatCompletionService.class)).isSameAs(replacement);
+        // The copied collection must also be available to a replacement selector provider.
+        assertThat(Kernel.from(kernel)
+            .withServiceSelector(com.microsoft.semantickernel.services.OrderedAIServiceSelector::new)
+            .build().getService(ChatCompletionService.class)).isSameAs(original);
+    }
+
+    @Test
+    void copyingTheRoutedKernelRetainsTheCustomSelectorProvider() throws Exception {
+        KernelCapture capture = new KernelCapture();
+        ChatCompletionService original = openAi.chatService();
+        ChatCompletionService replacement = openAi.chatService();
+        var selections = new java.util.concurrent.atomic.AtomicInteger();
+        Kernel kernel = Kernel.builder().withAIService(ChatCompletionService.class, original)
+            .withServiceSelector(services -> {
+                selections.incrementAndGet();
+                return new com.microsoft.semantickernel.services.OrderedAIServiceSelector(services);
+            })
+            .withPlugin(KernelPluginFactory.createFromObject(capture, "capture")).build();
+        new TracedKernel(kernel, tracer()).invokeAsync(kernel.<String>getFunction("capture", "save")).block();
+
+        int before = selections.get();
+        assertThat(Kernel.from(capture.kernel).withAIService(ChatCompletionService.class, replacement).build()
+            .getService(ChatCompletionService.class)).isSameAs(replacement);
+        assertThat(selections.get()).isEqualTo(before + 1);
+    }
+
+    public static class KernelCapture {
+        Kernel kernel;
+
+        @DefineKernelFunction(name = "save", returnType = "java.lang.String")
+        public String save(Kernel kernel) {
+            this.kernel = kernel;
+            return "captured";
+        }
+    }
+
     private Kernel pluginKernel(DelayedPlugin plugin) {
         return Kernel.builder()
             .withAIService(ChatCompletionService.class, openAi.chatService())

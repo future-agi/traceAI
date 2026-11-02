@@ -9,6 +9,7 @@ import com.microsoft.semantickernel.hooks.KernelHook.PreToolCallHook;
 import com.microsoft.semantickernel.hooks.KernelHooks;
 import com.microsoft.semantickernel.hooks.PreToolCallEvent;
 import com.microsoft.semantickernel.implementation.telemetry.SemanticKernelTelemetry;
+import com.microsoft.semantickernel.orchestration.FunctionInvocation;
 import com.microsoft.semantickernel.orchestration.FunctionResult;
 import com.microsoft.semantickernel.orchestration.InvocationContext;
 import com.microsoft.semantickernel.orchestration.InvocationReturnMode;
@@ -199,10 +200,57 @@ final class NativeTelemetry {
         private final TracedInvocation invocation;
 
         RoutedKernel(Kernel delegate, TracedInvocation invocation) {
-            super(new AIServiceCollection(), ignored -> delegate.getServiceSelector(),
+            this(delegate, invocation, copyServices(delegate));
+        }
+
+        private RoutedKernel(Kernel delegate, TracedInvocation invocation, AIServiceCollection services) {
+            // Kernel.from(view) reads the superclass's private fields, not our getters. Supply a
+            // real service snapshot and a provider that rebuilds the original selector against
+            // the copy's services. A constant selector would silently ignore withAIService(...).
+            super(services, copied -> copied == services ? delegate.getServiceSelector()
+                    : copySelector(delegate, copied),
                 new ArrayList<>(delegate.getPlugins()), delegate.getGlobalKernelHooks());
             this.delegate = delegate;
             this.invocation = invocation;
+        }
+
+        private static AIServiceCollection copyServices(Kernel delegate) {
+            AIServiceCollection snapshot = new AIServiceCollection();
+            // The builder exposes its copied collection to a selector provider. Use that public
+            // API rather than reflecting into Kernel's private fields. Do not invoke the user's
+            // selector factory again merely to create the tracing view.
+            delegate.toBuilder().withServiceSelector(services -> {
+                snapshot.putAll(services);
+                return delegate.getServiceSelector();
+            }).build();
+            return snapshot;
+        }
+
+        private static AIServiceSelector copySelector(Kernel delegate, AIServiceCollection services) {
+            Kernel.Builder builder = delegate.toBuilder();
+            services.forEach((type, service) -> copyService(builder, type, service));
+            return builder.build().getServiceSelector();
+        }
+
+        private static <S extends AIService> void copyService(Kernel.Builder builder,
+                Class<S> type, AIService service) {
+            builder.withAIService(type, type.cast(service));
+        }
+
+        @Override
+        public <T> FunctionInvocation<T> invokeAsync(KernelFunction<T> function) {
+            return RoutedFunction.wrap(function, invocation).invokeAsync(this);
+        }
+
+        @Override
+        public <T> FunctionInvocation<T> invokePromptAsync(String prompt, KernelArguments arguments) {
+            return invokeAsync(KernelFunction.<T>createFromPrompt(prompt).build()).withArguments(arguments);
+        }
+
+        @Override
+        public <T> FunctionInvocation<T> invokePromptAsync(String prompt, KernelArguments arguments,
+                InvocationContext context) {
+            return this.<T>invokePromptAsync(prompt, arguments).withInvocationContext(context);
         }
 
         @Override
