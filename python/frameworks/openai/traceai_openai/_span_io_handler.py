@@ -98,7 +98,11 @@ def _json_output_for(output_data: Any) -> Optional[str]:
         return None
     if isinstance(output_data, Response):
         # Lead with the answer text (the SDK's `output_text`) so previews show it.
-        body = json.loads(output_data.model_dump_json(exclude_none=True))
+        # Errors are not assistant output. Keep vendor details out of the raw
+        # output fallback, whose privacy policy is independent of error masking.
+        body = json.loads(
+            output_data.model_dump_json(exclude_none=True, exclude={"error"})
+        )
         output_text = getattr(output_data, "output_text", None)
         if output_text:
             body = {"output_text": output_text, **body}
