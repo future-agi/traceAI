@@ -1,0 +1,182 @@
+package traceaia2a_test
+
+import (
+	"compress/gzip"
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	traceaia2a "github.com/future-agi/traceAI/go/a2a"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/proto"
+)
+
+// Use the stock exporter, not a hand-built approximation of OTLP attributes.
+// JSON is not a supported output format of otlptracehttp; it emits protobuf.
+func TestServerOTLPWirePrivacy(t *testing.T) {
+	for _, compression := range []otlptracehttp.Compression{otlptracehttp.NoCompression, otlptracehttp.GzipCompression} {
+		name := "plain"
+		if compression == otlptracehttp.GzipCompression {
+			name = "gzip"
+		}
+		t.Run(name, func(t *testing.T) {
+			requests := make(chan *collectortrace.ExportTraceServiceRequest, 10)
+			sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/traces" || r.Header.Get("Content-Type") != "application/x-protobuf" {
+					t.Error("wrong OTLP endpoint or content type")
+				}
+				var reader io.Reader = r.Body
+				if compression == otlptracehttp.GzipCompression {
+					if r.Header.Get("Content-Encoding") != "gzip" {
+						t.Error("missing gzip header")
+					}
+					gz, err := gzip.NewReader(r.Body)
+					if err != nil {
+						t.Error(err)
+						w.WriteHeader(400)
+						return
+					}
+					defer gz.Close()
+					reader = gz
+				} else if r.Header.Get("Content-Encoding") != "" {
+					t.Error("unexpected compression")
+				}
+				body, err := io.ReadAll(reader)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				if strings.Contains(string(body), marker) {
+					t.Error("private content reached OTLP wire")
+				}
+				msg := &collectortrace.ExportTraceServiceRequest{}
+				if err := proto.Unmarshal(body, msg); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				requests <- msg
+				w.Header().Set("Content-Type", "application/x-protobuf")
+			}))
+			defer sink.Close()
+			exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpointURL(sink.URL+"/v1/traces"), otlptracehttp.WithCompression(compression))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
+			defer func() { _ = tp.Shutdown(context.Background()) }()
+			client := serverClient(t, "jsonrpc", completes(), tp, traceaia2a.TraceConfig{HideInputs: true, HideOutputs: true})
+			for _, err := range client.SendStreamingMessage(context.Background(), userMessage(marker)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: "missing"}); err == nil {
+				t.Fatal("expected protocol error")
+			}
+			authClient := serverClient(t, "jsonrpc", endsIn(a2a.TaskStateAuthRequired, marker), tp, traceaia2a.TraceConfig{HideInputs: true, HideOutputs: true})
+			result, err := authClient.SendMessage(context.Background(), userMessage("authorize"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task, ok := result.(*a2a.Task); !ok || task.Status.State != a2a.TaskStateAuthRequired {
+				t.Fatalf("expected auth-required snapshot, got %v", result)
+			}
+			tracing := traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp))
+			policy := responsePolicy{after: func(context.Context, *a2asrv.CallContext, *a2asrv.Response) error {
+				return a2a.NewError(a2a.ErrUnsupportedOperation, "policy rejection "+marker)
+			}}
+			policyClient := serverClient(t, "jsonrpc", repliesWithMessage(), tp, traceaia2a.TraceConfig{HideInputs: true, HideOutputs: true},
+				a2asrv.WithCallInterceptors(tracing.Wrap(policy)))
+			if _, err := policyClient.SendMessage(context.Background(), userMessage(marker)); !errors.Is(err, a2a.ErrUnsupportedOperation) {
+				t.Fatalf("want policy rejection, got %v", err)
+			}
+			for _, err := range policyClient.SendStreamingMessage(context.Background(), userMessage(marker)) {
+				if !errors.Is(err, a2a.ErrUnsupportedOperation) {
+					t.Fatalf("want streamed policy rejection, got %v", err)
+				}
+			}
+			if len(requests) != 10 {
+				t.Fatalf("want five client/server pairs, got %d exports", len(requests))
+			}
+			byID := map[string]*tracepb.Span{}
+			serverCount := 0
+			for len(requests) > 0 {
+				for _, rs := range (<-requests).ResourceSpans {
+					for _, ss := range rs.ScopeSpans {
+						if ss.Scope.Name != traceaia2a.ScopeName {
+							t.Fatal("wrong instrumentation scope")
+						}
+						for _, s := range ss.Spans {
+							byID[string(s.SpanId)] = s
+							if s.Kind == tracepb.Span_SPAN_KIND_SERVER {
+								serverCount++
+							}
+							if strings.Contains(s.String(), marker) {
+								t.Fatal("private content in decoded OTLP")
+							}
+						}
+					}
+				}
+			}
+			if len(byID) != 10 || serverCount != 5 {
+				t.Fatalf("unexpected wire span counts: %d total, %d server", len(byID), serverCount)
+			}
+			policyErrors := 0
+			for _, s := range byID {
+				if s.Kind == tracepb.Span_SPAN_KIND_SERVER {
+					p := byID[string(s.ParentSpanId)]
+					if p == nil || p.Kind != tracepb.Span_SPAN_KIND_CLIENT || string(p.TraceId) != string(s.TraceId) {
+						t.Fatal("OTLP parent chain broken")
+					}
+				}
+				rejected := false
+				for _, attr := range s.Attributes {
+					if attr.Key == traceaia2a.ErrorType && attr.Value.GetStringValue() == "UNSUPPORTED_OPERATION" {
+						rejected = true
+					}
+				}
+				if rejected {
+					policyErrors++
+					if s.Status.Code != tracepb.Status_STATUS_CODE_ERROR || len(s.Events) != 0 {
+						t.Fatal("policy rejection lost or rejected output recorded")
+					}
+					continue
+				}
+				if s.Name == "a2a.SendMessage" {
+					redacted := false
+					for _, attr := range s.Attributes {
+						if attr.Key == traceaia2a.OutputValue && attr.Value.GetStringValue() == "__REDACTED__" {
+							redacted = true
+						}
+					}
+					if !redacted || s.Status.Code != tracepb.Status_STATUS_CODE_OK {
+						t.Fatal("wire auth-required snapshot must retain redacted output and OK status")
+					}
+				}
+				if s.Kind != tracepb.Span_SPAN_KIND_SERVER {
+					continue
+				}
+				if s.Name == "a2a.SendStreamingMessage" && (len(s.Events) != 4 || s.Status.Code != tracepb.Status_STATUS_CODE_OK) {
+					t.Fatal("wire stream shape changed")
+				}
+				if s.Name == "a2a.GetTask" && s.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
+					t.Fatal("wire error status missing")
+				}
+			}
+			if policyErrors != 4 {
+				t.Fatalf("want four client/server policy errors, got %d", policyErrors)
+			}
+		})
+	}
+}
