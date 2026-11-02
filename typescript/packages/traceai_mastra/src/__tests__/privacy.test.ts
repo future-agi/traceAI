@@ -118,3 +118,42 @@ describe("Mastra complete credential and PII policy", () => {
     expect(JSON.stringify(sanitizeSpan(span, generateTraceConfig({ piiRedaction: false })))).toContain("customer@example.test");
   });
 });
+
+describe("Mastra serialized credential boundaries", () => {
+  it.each(["secretAccessKey", "secret_access_key", "secret-access-key", "accessKeyId", "AWS_SECRET_ACCESS_KEY",
+    "credentials.secretAccessKey", "aws.sessionToken"])("scrubs AWS field %s", key => {
+    const span = converted({ [key]: "PRIVATE_AWS", "input.value": JSON.stringify({ [key]: "PRIVATE_AWS", keep: "safe" }) });
+    const original = JSON.stringify(span);
+    const result = sanitizeSpan(span, generateTraceConfig());
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_AWS");
+    expect(result.attributes["input.value"]).toContain("safe");
+    expect(JSON.stringify(span)).toBe(original);
+  });
+
+  it.each([
+    'Cookie: first=PRIVATE_FIRST; second=PRIVATE_SECOND',
+    'Set-Cookie: sid=PRIVATE_FIRST; Path=/; Secure',
+    'Request failed; Cookie: first=PRIVATE_FIRST; second=PRIVATE_SECOND\nRetry after 2 seconds',
+    'secretAccessKey=PRIVATE_FIRST access_key_id=PRIVATE_SECOND',
+    'Request failed: ' + JSON.stringify(JSON.stringify({ headers: { Authorization: 'Bearer PRIVATE_FIRST', Cookie: 'first=PRIVATE_SECOND; sid=PRIVATE_THIRD' }, keep: 'safe' })),
+    JSON.stringify(JSON.stringify(JSON.stringify({ secretAccessKey: 'PRIVATE_FIRST' }))),
+  ])("scrubs serialized/text credentials without mutating the source: %s", message => {
+    const span = converted({ "input.value": message });
+    span.status.message = message;
+    span.events[0].attributes = { "exception.message": message };
+    const original = JSON.stringify(span);
+    const result = sanitizeSpan(span, generateTraceConfig());
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+    expect(JSON.stringify(span)).toBe(original);
+    if (message.includes("Retry after")) expect(result.status.message).toContain("Retry after 2 seconds");
+  });
+
+  it("retains ordinary quoted diagnostics and bounds nested serialization", () => {
+    const safe = 'Request failed: {"message":"not authorized", "count":2}';
+    const result = sanitizeSpan(converted({ "input.value": safe }), generateTraceConfig());
+    expect(result.attributes["input.value"]).toBe(safe);
+    let nested: unknown = { secretAccessKey: "PRIVATE_DEEP" };
+    for (let i = 0; i < 40; i++) nested = { nested };
+    expect(JSON.stringify(sanitizeSpan(converted({ "input.value": JSON.stringify(nested) }), generateTraceConfig()))).not.toContain("PRIVATE_DEEP");
+  });
+});

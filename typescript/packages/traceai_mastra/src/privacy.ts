@@ -23,7 +23,7 @@ const OUTPUT_KEYS = new Set<string>([
   "gen_ai.completion", "gen_ai.tool.call.result",
 ]);
 const ERROR_DETAIL = /\.(?:exception\.(?:message|stacktrace)|error\.message|error_message)$/;
-const CREDENTIAL = /(?:^|_)(?:api_?key|secret_?key|private_?key|client_?secret|access_?token|refresh_?token|id_?token|authorization|password|secret|token|cookie|set_?cookie)$/;
+const CREDENTIAL = /(?:^|_)(?:api_?key|secret_?key|secret_?access_?key|access_?key_?id|private_?key|client_?secret|access_?token|refresh_?token|id_?token|authorization|password|secret|token|cookie|set_?cookie)$/;
 
 function isCredentialKey(key: string): boolean {
   const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[.-]/g, "_").toLowerCase();
@@ -32,7 +32,11 @@ function isCredentialKey(key: string): boolean {
 
 // Also match quoted fields inside non-JSON error text. Consume the complete
 // quoted value or Basic/Bearer scheme + payload, not just its first word.
-const CREDENTIAL_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization|api[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|token|cookie|set[_-]?cookie)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer|Basic)\s+[^\s,;}"']+|[^\s,;}"']+)/gi;
+const CREDENTIAL_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization|api[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?key[_-]?id|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|token)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer|Basic)\s+[^\s,;}"']+|[^\s,;}"']+)/gi;
+// A Cookie header is a list, not one scalar token. In unstructured diagnostics
+// conservatively consume the complete header line, including every semicolon.
+const COOKIE_ASSIGNMENT = /\b((?:set[_-]?)?cookie)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n"']+)/gi;
+const JSON_STRING = /"(?:\\.|[^"\\])*"/g;
 
 /** Mask structured credentials even on older SDKs without a default data filter. */
 function redactCredentials(value: unknown, depth = 0): unknown {
@@ -46,14 +50,28 @@ function redactCredentials(value: unknown, depth = 0): unknown {
   if (typeof value !== "string") return value;
   // The native converter serializes object-valued inputs, outputs and metadata.
   const trimmed = value.trimStart();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+  if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith('"')) {
     try {
       return JSON.stringify(redactCredentials(JSON.parse(value), depth + 1));
     } catch {
       // Not JSON: handle credential assignments in plain text below.
     }
   }
-  return value.replace(CREDENTIAL_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`);
+  // Error prefixes can surround JSON-stringified JSON. Decode complete string
+  // literals before inspecting their contents, retaining the original encoding
+  // and bounding recursive decoding with the same depth limit as objects.
+  const decoded = value.replace(JSON_STRING, literal => {
+    try {
+      const text = JSON.parse(literal) as string;
+      const scrubbed = redactCredentials(text, depth + 1);
+      return scrubbed === text ? literal : JSON.stringify(scrubbed);
+    } catch {
+      return literal;
+    }
+  });
+  return decoded
+    .replace(COOKIE_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`)
+    .replace(CREDENTIAL_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`);
 }
 
 function sanitizeValue(value: AttributeValue, config: TraceConfig): AttributeValue {

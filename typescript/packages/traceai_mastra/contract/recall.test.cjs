@@ -358,3 +358,108 @@ test('integration version is deterministic on the OTLP resource and scope', asyn
   assert.equal(spans[0].scope.version, VERSION);
   assert.equal(spans[0].resource['telemetry.sdk.version'], VERSION);
 });
+
+// Round-two recall: credential serialization and older-converter context gaps.
+test('AWS credentials never leave native tool I/O with content capture enabled', async () => {
+  setup().startSpan({ type: SpanType.TOOL_CALL, name: 'aws-tool', input: {
+    credentials: { accessKeyId: 'PRIVATE_AWS_ID', secretAccessKey: 'PRIVATE_AWS_SECRET', sessionToken: 'PRIVATE_AWS_SESSION' },
+    keep: 'safe-input',
+  } }).end({ output: { secret_access_key: 'PRIVATE_OUTPUT_SECRET', keep: 'safe-output' } });
+  await flush();
+  assert.equal(spans.length, 1);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_/);
+  assert.match(spans[0].attrs['input.value'], /safe-input/);
+  assert.match(spans[0].attrs['output.value'], /safe-output/);
+});
+for (const message of [
+  'Request failed; Cookie: sessionid=PRIVATE_FIRST_COOKIE; sid=PRIVATE_SECOND_COOKIE',
+  'Request failed; Set-Cookie: sid=PRIVATE_COOKIE; HttpOnly; Secure',
+  'Request failed; encoded config: ' + JSON.stringify(JSON.stringify({ headers: { Authorization: 'Bearer PRIVATE_ESCAPED_AUTH' }, keep: 'safe' })),
+  'Request failed; encoded config: ' + JSON.stringify(JSON.stringify(JSON.stringify({ credentials: { secretAccessKey: 'PRIVATE_ENCODED_SECRET' } }))),
+]) test(`serialized credentials are scrubbed in status and exception events: ${message}`, async () => {
+  setup().startSpan({ type: SpanType.TOOL_CALL, name: 'serialized-error' }).error({ error: new Error(message), endSpan: true });
+  await flush();
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].status.code, 2);
+  assert.ok(spans[0].events.length > 0);
+  assert.doesNotMatch(JSON.stringify(spans), /PRIVATE_/);
+});
+test('a real agent remains nested under its remote parent with every supported converter', async () => {
+  const { Mastra } = req('@mastra/core');
+  const { Agent } = req('@mastra/core/agent');
+  setup();
+  const model = { specificationVersion: 'v2', provider: 'synthetic', modelId: 'synthetic', supportedUrls: {},
+    doGenerate: async () => ({ content: [{ type: 'text', text: 'safe' }], finishReason: 'stop',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, warnings: [] }) };
+  const agent = new Agent({ id: 'remote', name: 'Remote agent', instructions: 'Answer', model });
+  const mastra = new Mastra({ agents: { agent }, observability: obs });
+  await mastra.getAgent('agent').generate('question', { tracingOptions: {
+    traceId: '11111111111111111111111111111111', parentSpanId: '2222222222222222',
+  } });
+  await flush();
+  const root = spans.find(span => span.attrs['gen_ai.span.kind'] === 'AGENT');
+  assert.ok(root);
+  assert.equal(root.traceId, Buffer.from('11111111111111111111111111111111', 'hex').toString('base64'));
+  assert.equal(root.parentSpanId, Buffer.from('2222222222222222', 'hex').toString('base64'));
+  assert.equal(new Set(spans.map(span => span.spanId)).size, spans.length);
+});
+test('native remote parentage and explicit links survive conversion without duplicates', async () => {
+  const instance = setup();
+  const root = instance.startSpan({ type: SpanType.AGENT_RUN, name: 'linked-agent',
+    tracingOptions: { traceId: '11111111111111111111111111111111', parentSpanId: '2222222222222222' },
+    links: [{ traceId: '33333333333333333333333333333333', spanId: '4444444444444444' }],
+  });
+  instance.startSpan({ type: SpanType.TOOL_CALL, name: 'local-child', parent: root }).end();
+  root.end();
+  await flush();
+  const agent = spans.find(span => span.attrs['gen_ai.span.kind'] === 'AGENT');
+  const child = spans.find(span => span.attrs['gen_ai.span.kind'] === 'TOOL');
+  assert.equal(spans.length, 2);
+  assert.equal(agent.parentSpanId, Buffer.from('2222222222222222', 'hex').toString('base64'));
+  assert.equal(child.parentSpanId, agent.spanId);
+  // The old runtime cannot produce links; old converters still must retain
+  // links supplied by newer runtimes (the mixed row runs this assertion).
+  if (supportsOutcomes) {
+    assert.equal(agent.links.length, 1);
+    assert.equal(agent.links[0].traceId, Buffer.from('33333333333333333333333333333333', 'hex').toString('base64'));
+    assert.equal(agent.links[0].spanId, Buffer.from('4444444444444444', 'hex').toString('base64'));
+  }
+});
+test('all native workflow control-flow kinds are classified as chains', async () => {
+  const instance = setup();
+  for (const type of [SpanType.WORKFLOW_SLEEP, SpanType.WORKFLOW_WAIT_EVENT, SpanType.WORKFLOW_CONDITIONAL_EVAL]) {
+    assert.ok(type);
+    instance.startSpan({ type, name: type }).end();
+  }
+  await flush();
+  assert.equal(spans.length, 3);
+  for (const span of spans) assert.equal(span.attrs['gen_ai.span.kind'], 'CHAIN');
+});
+test('a successful real workflow sleep is classified without duplicating its spans', async () => {
+  const { Mastra } = req('@mastra/core');
+  const { createWorkflow, createStep } = req('@mastra/core/workflows');
+  const { z } = req('zod');
+  setup();
+  const schema = z.object({ q: z.string() });
+  const step = createStep({ id: 'safe-step', inputSchema: schema, outputSchema: schema, execute: async ({ inputData }) => inputData });
+  const workflow = createWorkflow({ id: 'sleep-workflow', inputSchema: schema, outputSchema: schema }).then(step).sleep(1).commit();
+  const mastra = new Mastra({ workflows: { workflow }, observability: obs });
+  const run = await mastra.getWorkflow('workflow').createRun();
+  const result = await run.start({ inputData: { q: 'safe' } });
+  assert.equal(result.status, 'success');
+  await flush();
+  const sleeps = spans.filter(span => span.attrs['mastra.span.type'] === 'workflow_sleep');
+  assert.equal(sleeps.length, 1);
+  for (const span of spans) assert.equal(span.attrs['gen_ai.span.kind'], 'CHAIN');
+  assert.equal(new Set(spans.map(span => span.spanId)).size, spans.length);
+});
+test('an explicit native link survives even the oldest converter', { skip: !supportsOutcomes }, async () => {
+  setup().startSpan({ type: SpanType.AGENT_RUN, name: 'linked-root',
+    links: [{ traceId: '33333333333333333333333333333333', spanId: '4444444444444444' }],
+  }).end();
+  await flush();
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].links?.length, 1);
+  assert.equal(spans[0].links[0].traceId, Buffer.from('33333333333333333333333333333333', 'hex').toString('base64'));
+  assert.equal(spans[0].links[0].spanId, Buffer.from('4444444444444444', 'hex').toString('base64'));
+});

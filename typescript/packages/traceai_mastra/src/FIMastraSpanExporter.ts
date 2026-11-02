@@ -8,7 +8,7 @@ import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode, TraceFlags } from "@opentelemetry/api";
 import { generateTraceConfig } from "@traceai/fi-core";
 import { sanitizeSpan } from "./privacy.js";
 import { VERSION } from "./version.js";
@@ -60,6 +60,9 @@ const SPAN_KIND_BY_TYPE: Readonly<Partial<Record<string, FISpanKind>>> = {
   workflow_conditional: FISpanKind.CHAIN,
   workflow_parallel: FISpanKind.CHAIN,
   workflow_loop: FISpanKind.CHAIN,
+  workflow_sleep: FISpanKind.CHAIN,
+  workflow_wait_event: FISpanKind.CHAIN,
+  workflow_conditional_eval: FISpanKind.CHAIN,
   generic: FISpanKind.CHAIN,
   rag_embedding: FISpanKind.EMBEDDING,
   rag_vector_operation: FISpanKind.RETRIEVER,
@@ -132,6 +135,40 @@ export function enrichSpan(
   }
 }
 
+/** Preserve context fields that older supported converters do not understand. */
+export function reconcileSpanContext(otelSpan: ReadableSpan, span: AnyExportedSpan): ReadableSpan {
+  // Structural view also compiles against the floor's pre-link span interface.
+  const native = span as AnyExportedSpan & {
+    externalParentSpanId?: string;
+    links?: ReadonlyArray<{ traceId: string; spanId: string }>;
+  };
+  const parentId = native.parentSpanId ?? native.externalParentSpanId;
+  const links = [...otelSpan.links];
+  const linked = new Set(links.map(link => `${link.context.traceId}:${link.context.spanId}`));
+  for (const link of native.links ?? []) {
+    const key = `${link.traceId}:${link.spanId}`;
+    if (linked.has(key)) continue;
+    linked.add(key);
+    links.push({ context: {
+      traceId: link.traceId,
+      spanId: link.spanId,
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: true,
+    } });
+  }
+  return {
+    ...otelSpan,
+    // Keep a converter's richer context and link attributes when present.
+    parentSpanContext: otelSpan.parentSpanContext ?? (parentId ? {
+      traceId: span.traceId,
+      spanId: parentId,
+      traceFlags: otelSpan.spanContext().traceFlags,
+      isRemote: native.parentSpanId == null,
+    } : undefined),
+    links,
+  };
+}
+
 /**
  * Mastra v1 observability exporter for Future AGI.
  *
@@ -199,6 +236,7 @@ export class FIMastraSpanExporter extends BaseExporter {
         otelSpan = await this.converter.convertSpan({ ...span, type: converterType } as AnyExportedSpan);
         otelSpan.attributes["mastra.span.type"] = span.type;
       }
+      otelSpan = reconcileSpanContext(otelSpan, span);
       enrichSpan(otelSpan, span, inferenceEnabled);
       const generationWrapper = span.type === SpanType.MODEL_GENERATION && inferenceEnabled;
       this.processor.onEnd(sanitizeSpan({

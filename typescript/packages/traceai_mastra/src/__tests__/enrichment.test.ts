@@ -1,7 +1,7 @@
 import { SpanType } from "@mastra/core/observability";
 import type { AnyExportedSpan } from "@mastra/core/observability";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { enrichSpan } from "../FIMastraSpanExporter";
+import { enrichSpan, reconcileSpanContext } from "../FIMastraSpanExporter";
 
 function fakeOtelSpan(
   attributes: Record<string, unknown> = {},
@@ -27,6 +27,9 @@ describe("enrichSpan — gen_ai.span.kind mapping", () => {
     [SpanType.MCP_TOOL_CALL, "TOOL"],
     ["client_tool_call", "TOOL"],
     [SpanType.WORKFLOW_RUN, "CHAIN"],
+    ["workflow_sleep", "CHAIN"],
+    ["workflow_wait_event", "CHAIN"],
+    ["workflow_conditional_eval", "CHAIN"],
     [SpanType.GENERIC, "CHAIN"],
   ])("maps %s -> %s", (type, kind) => {
     const otelSpan = fakeOtelSpan();
@@ -138,5 +141,44 @@ describe("enrichSpan — mismatched converter versions", () => {
     const converted = fakeOtelSpan({ "gen_ai.operation.name": "model_generation" });
     enrichSpan(converted, fakeMastraSpan(SpanType.MODEL_GENERATION), false);
     expect(converted.attributes["gen_ai.span.kind"]).toBe("LLM");
+  });
+});
+
+describe("context reconciliation across converter versions", () => {
+  const traceId = "11111111111111111111111111111111";
+  const parentId = "2222222222222222";
+  const nativeLink = { traceId: "33333333333333333333333333333333", spanId: "4444444444444444" };
+  function converted(): ReadableSpan {
+    return { ...fakeOtelSpan(), links: [], spanContext: () => ({ traceId, spanId: "5555555555555555", traceFlags: 1 }) } as ReadableSpan;
+  }
+  it("recovers an external parent and native links without mutating either input", () => {
+    const native = { ...fakeMastraSpan(SpanType.AGENT_RUN), traceId, externalParentSpanId: parentId,
+      links: [nativeLink, nativeLink] } as unknown as AnyExportedSpan;
+    const otel = converted();
+    const original = JSON.stringify({ native, otel });
+    const result = reconcileSpanContext(otel, native);
+    expect(result.parentSpanContext).toEqual({ traceId, spanId: parentId, traceFlags: 1, isRemote: true });
+    expect(result.links).toEqual([{ context: { ...nativeLink, traceFlags: 1, isRemote: true } }]);
+    expect(JSON.stringify({ native, otel })).toBe(original);
+  });
+  it("uses a local parent before an inherited external parent", () => {
+    const native = { ...fakeMastraSpan(SpanType.TOOL_CALL), traceId, parentSpanId: parentId,
+      externalParentSpanId: "6666666666666666" } as unknown as AnyExportedSpan;
+    expect(reconcileSpanContext(converted(), native).parentSpanContext).toEqual({ traceId, spanId: parentId, traceFlags: 1, isRemote: false });
+  });
+  it("retains current converter context and link metadata without appending duplicates", () => {
+    const otel = { ...converted(), parentSpanContext: { traceId, spanId: parentId, traceFlags: 0, isRemote: true },
+      links: [{ context: { ...nativeLink, traceFlags: 0 }, attributes: { reason: "handoff" } }],
+    } as ReadableSpan;
+    const native = { ...fakeMastraSpan(SpanType.AGENT_RUN), links: [nativeLink] } as unknown as AnyExportedSpan;
+    const result = reconcileSpanContext(otel, native);
+    expect(result.parentSpanContext).toBe(otel.parentSpanContext);
+    expect(result.links).toEqual(otel.links);
+    expect(result.links).not.toBe(otel.links);
+  });
+  it("does not invent parentage or links for a root", () => {
+    const result = reconcileSpanContext(converted(), fakeMastraSpan(SpanType.AGENT_RUN));
+    expect(result.parentSpanContext).toBeUndefined();
+    expect(result.links).toEqual([]);
   });
 });
