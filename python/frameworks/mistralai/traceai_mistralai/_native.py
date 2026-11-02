@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
-from contextlib import contextmanager
+import re
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from threading import RLock
 from typing import Any
@@ -139,7 +141,8 @@ class _NativeInstrumentation:
 
     The native hook owns request context and span creation. The adapter routes
     those spans and fills HTTP-error and conversation-stream gaps. Do not patch
-    chat or agent methods alongside this hook: that would duplicate native spans.
+    chat or agent methods to create spans alongside this hook. Method observers
+    below only hold the existing span open through SDK response validation.
     """
 
     _FIELDS = (
@@ -159,6 +162,7 @@ class _NativeInstrumentation:
         from mistralai.extra.observability.otel import TracedResponse
         from mistralai.client.utils.eventstreaming import EventStream, EventStreamAsync
 
+        self._response_scope = ContextVar("mistral_response_scope", default=None)
         self._originals = []
         for cls, method, wrapper in (
             (TracingHook, "before_request", self._before_request),
@@ -170,6 +174,57 @@ class _NativeInstrumentation:
         ):
             self._originals.append((cls, method, getattr(cls, method)))
             wrap_function_wrapper(cls, method, wrapper)
+
+        # The native hook ends buffered responses before generated methods
+        # deserialize them. Observe those methods without creating any spans.
+        # A per-call context keeps concurrent sync/async requests independent.
+        from mistralai.client.agents import Agents
+        from mistralai.client.chat import Chat
+        from mistralai.client.conversations import Conversations
+        from mistralai.client.embeddings import Embeddings
+        from mistralai.client.fim import Fim
+
+        for cls, methods in (
+            (Chat, ("complete", "stream")),
+            (Agents, ("complete", "stream")),
+            (Embeddings, ("create",)),
+            (Fim, ("complete", "stream")),
+            (
+                Conversations,
+                (
+                    "start",
+                    "append",
+                    "restart",
+                    "start_stream",
+                    "append_stream",
+                    "restart_stream",
+                ),
+            ),
+        ):
+            for method in methods:
+                for name, wrapper in (
+                    (method, self._call),
+                    (method + "_async", self._call_async),
+                ):
+                    self._originals.append((cls, name, getattr(cls, name)))
+                    wrap_function_wrapper(cls, name, wrapper)
+
+    @contextmanager
+    def _call_scope(self):
+        with ExitStack() as scope:
+            token = self._response_scope.set(scope)
+            try:
+                yield
+            finally:
+                self._response_scope.reset(token)
+
+    def _call(self, wrapped, instance, args, kwargs):
+        with self._call_scope():
+            return wrapped(*args, **kwargs)
+
+    async def _call_async(self, wrapped, instance, args, kwargs):
+        with self._call_scope():
+            return await wrapped(*args, **kwargs)
 
     def _before_request(self, wrapped, instance, args, kwargs):
         with self._lock:
@@ -229,6 +284,12 @@ class _NativeInstrumentation:
         return wrapped(*args, **kwargs)
 
     def _after_success(self, wrapped, instance, args, kwargs):
+        response = kwargs.get("response", args[1] if len(args) > 1 else None)
+        span = instance._get_span(response)
+        scope = self._response_scope.get()
+        if isinstance(span, _NativeSpan) and scope is not None:
+            # Enter before the hook queues end(), leave after SDK validation.
+            scope.enter_context(span.observe_iteration())
         response = wrapped(*args, **kwargs)
         span = getattr(response, "span", None)
         if isinstance(span, _NativeSpan):
@@ -262,9 +323,10 @@ class _NativeInstrumentation:
             parts = []
             tool_calls = {}
             data_lines = []
-            for line in bytes(instance._accumulated_sse).decode(
-                "utf-8", errors="replace"
-            ).splitlines() + [""]:
+            # SSE delimiters are CR/LF only. Unicode separators are valid JSON
+            # string content and must not split a message delta's data field.
+            payload = bytes(instance._accumulated_sse).decode("utf-8", errors="replace")
+            for line in re.split(r"\r\n|\r|\n", payload) + [""]:
                 if line.startswith("data:"):
                     data_lines.append(line[5:].lstrip())
                 elif not line and data_lines:

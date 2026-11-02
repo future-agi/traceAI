@@ -16,7 +16,6 @@ from typing import (
     Type,
 )
 
-from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from opentelemetry.util.types import AttributeValue
 from traceai_mistralai._utils import _to_dict
 
@@ -42,7 +41,6 @@ class _ChatCompletionAccumulator:
         "_request_parameters",
         "_response_attributes_extractor",
         "_chat_completion_type",
-        "_content",
     )
 
     def __init__(
@@ -56,7 +54,6 @@ class _ChatCompletionAccumulator:
         self._response_attributes_extractor = response_attributes_extractor
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
-        self._content: List[str] = []
         self._values = _ValuesAccumulator(
             data=_ValuesAccumulator(
                 choices=_IndexedAccumulator(
@@ -86,14 +83,6 @@ class _ChatCompletionAccumulator:
                 choice["message"] = choice.pop("delta")
         self._values += accumulated
 
-        if "choices" in raw_chunk.get("data", {}):
-            choices = raw_chunk["data"]["choices"]
-            if choices and isinstance(choices, list):
-                delta = choices[0].get("delta", {})
-                content = delta.get("content")
-                if content is not None:
-                    self._content.append(content)
-
     def _result(self) -> Optional[Dict[str, Any]]:
         if self._is_null:
             return None
@@ -102,8 +91,8 @@ class _ChatCompletionAccumulator:
         return self._cached_result
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.OUTPUT_VALUE, "".join(self._content)
-        yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value
+        # The reconstructed semantic messages carry the output and its policy.
+        yield from ()
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):

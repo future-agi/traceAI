@@ -345,7 +345,9 @@ def test_existing_clients_suppression_reenable_and_parent():
             instrumentor.instrument(tracer_provider=provider)
             instrumentor.instrument(tracer_provider=provider)
             if NATIVE:
-                assert type(client.chat).complete is original
+                # A lifecycle observer now holds native spans through decoding;
+                # it delegates to the original method without creating spans.
+                assert type(client.chat).complete.__wrapped__ is original
             with provider.get_tracer("parent").start_as_current_span(
                 "parent"
             ) as parent:
@@ -356,6 +358,7 @@ def test_existing_clients_suppression_reenable_and_parent():
             assert len(spans) == 2
             assert spans[0].parent.span_id == parent.get_span_context().span_id
             instrumentor.uninstrument()
+            assert type(client.chat).complete is original
             exporter.clear()
             client.chat.complete(**params("chat"))
             assert not exporter.get_finished_spans()

@@ -44,7 +44,15 @@ class _NativeTraceConfig(ObjectProxy):
         key: str,
         value: Union[AttributeValue, Callable[[], AttributeValue]],
     ) -> Optional[AttributeValue]:
-        value = self.__wrapped__.mask(key, value)
+        # Native OTel splits invocation parameters into individual attributes.
+        # Keep model identity, but apply the core's aggregate parameter policy
+        # to every other request parameter, including future SDK additions.
+        policy_key = (
+            SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+            if key.startswith("gen_ai.request.") and key != "gen_ai.request.model"
+            else key
+        )
+        value = self.__wrapped__.mask(policy_key, value)
         if key in ("http.url", "url.full") and isinstance(value, str):
             # SDK HTTP metadata is independent of message-hiding flags. Never
             # export proxy userinfo, including percent-encoded credentials.

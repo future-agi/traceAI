@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import warnings
 from abc import ABC
 from contextlib import contextmanager
 from inspect import Signature, signature
@@ -19,7 +18,6 @@ from typing import (
 
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
     FiSpanKindValues,
     SpanAttributes,
 )
@@ -38,8 +36,6 @@ from traceai_mistralai._response_attributes_extractor import (
 from traceai_mistralai._stream import _AsyncStream, _Stream
 from traceai_mistralai._utils import (
     _finish_tracing,
-    _process_input_messages,
-    _raw_input,
 )
 from traceai_mistralai._with_span import _WithSpan
 
@@ -108,15 +104,8 @@ class _WithMistralAI(ABC):
         request_parameters: Dict[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind()
-        try:
-            yield from _process_input_messages(request_parameters.get("messages", []))
-            yield from _raw_input(request_parameters)
-            # yield from _as_input_attributes(_io_value_and_type(request_parameters))
-        except Exception:
-            logger.exception(
-                f"Failed to get input attributes from request parameters of "
-                f"type {type(request_parameters)}"
-            )
+        # Messages already have policy-aware semantic attributes. Raw payload
+        # copies bypass selective text/message/image and parameter privacy.
 
     def _get_extra_attributes_from_request(
         self,
@@ -388,26 +377,9 @@ class _ResponseAttributes:
         self._response_attributes_extractor = response_attributes_extractor
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        if hasattr(self._response, "model_dump_json") and callable(
-            self._response.model_dump_json
-        ):
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    value = self._response.model_dump_json(exclude_unset=True)
-                assert isinstance(value, str)
-                output_value = (
-                    json.loads(value)
-                    .get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
-
-                yield SpanAttributes.OUTPUT_VALUE, value
-                yield SpanAttributes.OUTPUT_VALUE, output_value
-                yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
-            except Exception:
-                logger.exception("Failed to get model dump json")
+        # Export output only through the semantic message attributes below.
+        # Generic output.value is not covered by selective message privacy.
+        yield from ()
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         yield from self._response_attributes_extractor.get_attributes_from_response(
