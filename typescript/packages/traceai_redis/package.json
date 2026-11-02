@@ -1,6 +1,6 @@
 {
   "name": "@traceai/redis",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TraceAI instrumentation for Redis Vector Search (RediSearch)",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -16,6 +16,7 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
+    "test:contract": "node --test test/*.test.cjs",
     "lint": "eslint . --ext .ts"
   },
   "keywords": [

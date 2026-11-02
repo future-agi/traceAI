@@ -90,7 +90,8 @@ def test_the_changelog_has_an_entry_for_the_package_version():
     # Same layout as the other framework packages (e.g. groq).
     version = re.search(r'^version = "([^"]+)"$', PYPROJECT.read_text(), re.M).group(1)
     assert CHANGELOG.is_file()
-    heading = r"^## \[{0}\] - \d{{4}}-\d{{2}}-\d{{2}}$".format(re.escape(version))
+    # Hand-written "## [x.y.z] - YYYY-MM-DD" or release-please "## [x.y.z](compare-url) (YYYY-MM-DD)".
+    heading = r"^## \[{0}\](?: - \d{{4}}-\d{{2}}-\d{{2}}$|\(\S+\) \(\d{{4}}-\d{{2}}-\d{{2}}\)$)".format(re.escape(version))
     assert re.search(heading, CHANGELOG.read_text(), re.M), version
 
 
