@@ -5,7 +5,7 @@ Send Cognee's native OpenTelemetry spans to Future AGI without additional instru
 Requires Python 3.10–3.13, Cognee 1.6.5 or later, and `fi-instrumentation-otel>=1.2.2,<2`.
 
 ```bash
-pip install "cognee[tracing]==1.6.5" "traceai-cognee==0.1.0"
+pip install --upgrade "cognee[tracing]>=1.6.5" traceai-cognee
 export COGNEE_TRACING_ENABLED=true
 export FI_API_KEY="YOUR_FI_API_KEY"
 export FI_SECRET_KEY="YOUR_FI_SECRET_KEY"
