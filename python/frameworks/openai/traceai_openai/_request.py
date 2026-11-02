@@ -16,6 +16,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
+from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
@@ -57,11 +58,12 @@ class _WithTracer(ABC):
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
     ) -> Iterator[_WithSpan]:
-        # Because OTEL has a default limit of 128 attributes, we split our attributes into
-        # two tiers, where the addition of "extra_attributes" is deferred until the end
-        # and only after the "attributes" are added.
+        # Keep primary attributes so finalization can restore them after optional
+        # details: OTel's bounded attribute map evicts the oldest entries.
+        initial_attributes = {}
         try:
-            span = self._tracer.start_span(name=span_name, attributes=dict(attributes))
+            initial_attributes = dict(attributes)
+            span = self._tracer.start_span(name=span_name, attributes=initial_attributes)
         except Exception:
             logger.exception("Failed to start span")
             span = INVALID_SPAN
@@ -73,6 +75,7 @@ class _WithTracer(ABC):
         ) as span:
             yield _WithSpan(
                 span=span,
+                initial_attributes=initial_attributes,
                 context_attributes=dict(context_attributes),
                 extra_attributes=dict(extra_attributes),
             )
@@ -140,12 +143,12 @@ class _WithOpenAI(ABC):
     def _get_attributes_from_instance(
         self, instance: Any
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        # The provider is the vendor behind the client's base_url, not the SDK:
-        # known OpenAI-compatible hosts get their own label, anything else "openai".
+        # Explicit client attribution wins; never guess the vendor of a local server.
         base_url = getattr(instance, "base_url", None)
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider_from_host(
-            getattr(base_url, "host", None)
-        )
+        provider = _get_client_provider(instance)
+        if provider is None:
+            provider = provider_from_host(getattr(base_url, "host", None))
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider
 
     def _get_attributes_from_request(
         self,

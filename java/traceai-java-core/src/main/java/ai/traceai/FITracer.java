@@ -76,6 +76,23 @@ public class FITracer {
      * @return the started span
      */
     public Span startSpan(String name, FISpanKind kind, Context parent) {
+        return startSpan(name, kind, parent, ContextAttributes.getAttributesFromContext());
+    }
+
+    /**
+     * Starts a span with an explicit parent and a complete FI attribute snapshot.
+     * Unlike the other overloads, this does not inherit the consuming thread's FI attributes.
+     * Capture {@link ContextAttributes#getAttributesFromContext()} when scheduling deferred work;
+     * an empty snapshot intentionally means no caller identity attributes.
+     *
+     * @param name the span name
+     * @param kind the FI span kind
+     * @param parent the parent context
+     * @param contextAttributes the caller's complete FI attribute snapshot, not null
+     * @return the started span
+     */
+    public Span startSpan(String name, FISpanKind kind, Context parent, Map<String, String> contextAttributes) {
+        java.util.Objects.requireNonNull(contextAttributes, "contextAttributes");
         SpanBuilder builder = tracer.spanBuilder(name)
             .setSpanKind(SpanKind.INTERNAL)
             .setParent(parent);
@@ -83,8 +100,7 @@ public class FITracer {
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
         span.setAttribute(SemanticConventions.GEN_AI_SPAN_KIND, kind.getValue().toLowerCase());
-        applyContextAttributes(span);
-
+        contextAttributes.forEach(span::setAttribute);
         return span;
     }
 

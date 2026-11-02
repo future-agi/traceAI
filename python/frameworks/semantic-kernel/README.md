@@ -4,11 +4,19 @@ Future AGI tracing for [Semantic Kernel](https://github.com/microsoft/semantic-k
 
 > **Experimental upstream diagnostics. Python only.** This is not the Java package (`java/traceai-java-semantic-kernel`), not .NET Semantic Kernel, and not Microsoft Agent Framework (use `traceAI-agent-framework` for that). Semantic Kernel marks its GenAI diagnostics `@experimental`, so the span names and keys below can change in a future Semantic Kernel release.
 
+## Connector support
+
+Use this adapter with Semantic Kernel's `OpenAIChatCompletion` or Azure OpenAI's `AzureChatCompletion`. Both use Semantic Kernel's shared model diagnostics, including streaming. Agent and tool spans come from Semantic Kernel's native diagnostics; this package maps them rather than adding a second tracing layer.
+
+> **Azure AI Inference is not supported by this adapter.** `AzureAIInferenceChatCompletion` is a different connector from `AzureChatCompletion`. Its model calls use Azure SDK tracing and create fresh diagnostics settings per call. `instrument()` does not enable those settings, route the Azure SDK's tracer, or apply this adapter's content and privacy controls to Azure SDK spans. Do not turn on the `SEMANTICKERNEL_EXPERIMENTAL_GENAI_*` flags as a workaround: Azure SDK content recording can remain enabled even with `sensitive=False` or `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS`. If your deployment is Azure OpenAI, use `AzureChatCompletion`; that is not a replacement for an Azure AI Inference endpoint.
+
+Other connectors are not a blanket support promise: this adapter only configures Semantic Kernel's shared diagnostics and processes spans whose instrumentation scope is `semantic_kernel` or `semantic_kernel.*`. It does not configure separate provider SDKs or add missing model or retrieval spans.
+
 ## What it does
 
 `SemanticKernelInstrumentor().instrument()`:
 
-1. Turns on Semantic Kernel's GenAI diagnostics **in process**. You do not export `SEMANTICKERNEL_EXPERIMENTAL_GENAI_ENABLE_OTEL_DIAGNOSTICS`. Semantic Kernel builds its `ModelDiagnosticSettings` objects when its modules are imported, so setting the environment variable afterwards has no effect; `instrument()` sets the fields on those objects instead. Calling it before or after you build the kernel both work.
+1. Turns on Semantic Kernel's **shared** GenAI diagnostics in process. You do not export `SEMANTICKERNEL_EXPERIMENTAL_GENAI_ENABLE_OTEL_DIAGNOSTICS`. The shared diagnostics modules build their `ModelDiagnosticSettings` objects when imported, so setting the environment variable afterwards does not update those instances; `instrument()` sets their fields instead. Calling it before or after you build the kernel both work. This does not enable the separate Azure AI Inference path described above.
 2. Points Semantic Kernel's module-level tracers at the tracer provider you pass. Semantic Kernel creates them from the *global* provider, and `fi_instrumentation.register()` does not set the global provider by default.
 3. Installs a mapping-only span processor ahead of the exporter: span kind, provider alias, total tokens, session, content default.
 
@@ -56,6 +64,8 @@ A runnable example with a mocked model (no model key) is in [`examples/basic_age
 - **Do not also enable a client-level instrumentor for the same model calls** (`traceAI-openai`, `traceAI-anthropic`, `traceAI-litellm`, ...). Semantic Kernel already puts `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` on its `chat` span, and this package keeps them there. A client instrumentor adds a second `LLM` span for the same request with the same tokens, and the processor only touches Semantic Kernel spans, so Observe's trace and session token sums count every model call twice. Use one or the other: this package for the Semantic Kernel tree, or the client instrumentor alone.
 
 ## Sensitive content
+
+These controls apply only to Semantic Kernel-scoped spans. They do not filter spans or logs emitted independently by Azure SDKs or other instrumentors.
 
 > **Warning.** `sensitive=True` turns on Semantic Kernel's *sensitive* diagnostics. Semantic Kernel then puts agent input and output messages, tool-call arguments and tool results on spans, this package adds model-call prompts and completions to the `chat` spans, and all of it is copied to `input.value` / `output.value`. Leave `sensitive=False` (the default) unless you want that text stored in Future AGI.
 
@@ -115,34 +125,8 @@ Not available: retrieval spans (memory/vector connectors were not inspected), ca
 - A full batch queue (default 2048) drops spans inside OpenTelemetry; the agent does not see it.
 - If a stream is abandoned mid-way, Semantic Kernel owns the span end; this package does not open a second span to close it.
 
-## Tested versions
+## Compatibility
 
-| `semantic-kernel` | Python | Resolved alongside |
-|---|---|---|
-| 1.45.0 (latest stable on 2026-10-16) | 3.12 (re-verification, 63 tests plus a live run against a local Future AGI) | `openai` 3.33.0; `fi-instrumentation-otel` 1.1.0 |
-| 1.44.1 | 3.10, 3.11, 3.12, 3.13 | `openai` 3.24.0; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
-| 1.38.0 (floor) | 3.10, 3.11, 3.12, 3.13 (re-verification: 63 tests on 3.10) | `openai` 1.109.1; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
+Requires Python 3.10–3.13 and `semantic-kernel>=1.38.0,<2`. Earlier Semantic Kernel releases use different diagnostic operation names and agent attributes. The diagnostics are experimental upstream; review this adapter's compatibility before upgrading Semantic Kernel.
 
-Semantic Kernel's own classifiers stop at Python 3.12; both versions install on 3.13 and the full suite passes there.
-
-Semantic Kernel added agent diagnostics in 1.19.0, but the surface this package reads (three module-level settings objects, `chat` / `invoke_agent` / `execute_tool` operation strings, `gen_ai.input.messages` agent keys) is identical from 1.38.0 to 1.44.1 and differs before it (for example `chat.completions` and `gen_ai.agent.invocation_input` up to 1.37.x). Hence the 1.38.0 floor.
-
-Azure AI Inference connector: it builds its own `ModelDiagnosticSettings()` from the environment at call time (`connectors/ai/azure_ai_inference/services/azure_ai_inference_tracing.py` 25) and is not switched by `instrument()`.
-
-## Tests
-
-```bash
-PYTHONPATH="python/frameworks/semantic-kernel:python:python/tests" uv run --no-project --python 3.11 --prerelease=allow \
-  --with pytest --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-exporter-otlp-proto-http \
-  --with wrapt --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
-  --with 'semantic-kernel==1.44.1' \
-  pytest python/frameworks/semantic-kernel/tests -q -p no:cacheprovider --noconftest -o addopts=''
-```
-
-Swap `--python` for 3.10, 3.12 or 3.13 and `semantic-kernel==1.38.0` for the floor. For the OpenTelemetry floor, pin `opentelemetry-api==1.29.0`, `opentelemetry-sdk==1.29.0`, `opentelemetry-exporter-otlp-proto-http==1.29.0` and `opentelemetry-proto==1.29.0` in the `--with` list.
-
-`semantic-kernel` 1.38.0+ depends on the pre-release `azure-ai-agents>=1.2.0b3`, so uv needs `--prerelease=allow` (or an explicit `azure-ai-agents>=1.2.0b3` pin). `wrapt` is there for `fi_instrumentation`, not for this package.
-
-- `tests/test_processor.py`: synthetic spans with Semantic Kernel's exact names and keys, including an id-less tool call under the auto function invocation loop and the `TraceConfig` hide flags.
-- `tests/test_instrument.py`: switches flip without env vars, `Kernel.invoke` / `KernelFunction.invoke` are untouched, one processor after two calls, tracers routed and restored, a real id-less auto-invoked tool, warn-and-skip for a moved module or a non-SDK provider, a user-installed processor left alone, `TraceConfig` / `FI_HIDE_*` on real spans, and the `add_span_processor` ordering note.
-- `tests/test_contract_harness.py`: real Semantic Kernel, real `register()` exporter, shared harness `Receiver`, loopback fake OpenAI server, placeholder keys.
+If you install with `uv`, use `uv pip install --prerelease=allow traceAI-semantic-kernel`: Semantic Kernel requires the pre-release `azure-ai-agents` dependency.
