@@ -16,15 +16,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for Weaviate Java client.
- * Wraps the WeaviateClient to provide automatic tracing of all vector operations.
+ * Legacy Weaviate v5 wrapper for the operations exposed by this class.
+ * Retained for applications using {@code io.weaviate:client:5.5.0}; it does not accept client6.
+ * For new collection-based applications, use {@link TracedWeaviateCollection} or
+ * {@link TracedWeaviateCollectionAsync}. Upgrade the application and server before migrating.
  *
  * <p>Usage:</p>
  * <pre>
- * WeaviateClient client = WeaviateClient.builder()
- *     .scheme("http")
- *     .host("localhost:8080")
- *     .build();
+ * WeaviateClient client = new WeaviateClient(
+ *     new io.weaviate.client.Config("http", "localhost:8080"));
  * TracedWeaviateClient traced = new TracedWeaviateClient(client);
  *
  * Result&lt;GraphQLResponse&gt; result = traced.nearVectorSearch(

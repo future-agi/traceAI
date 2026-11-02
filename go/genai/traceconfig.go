@@ -21,6 +21,7 @@ const (
 	EnvHideInputImages             = "FI_HIDE_INPUT_IMAGES"
 	EnvHideInputText               = "FI_HIDE_INPUT_TEXT"
 	EnvHideOutputText              = "FI_HIDE_OUTPUT_TEXT"
+	EnvHideErrorDetails            = "FI_HIDE_ERROR_DETAILS"
 	EnvBase64ImageMaxLength        = "FI_BASE64_IMAGE_MAX_LENGTH"
 )
 
@@ -38,8 +39,7 @@ type TraceConfig struct {
 	// HideLLMInvocationParameters drops gen_ai.request.parameters.
 	HideLLMInvocationParameters bool
 	// HideInputs redacts input.value and drops input messages, system
-	// instructions and tool-call arguments. HideInputs or HideOutputs also
-	// drops the API error message.
+	// instructions and tool-call arguments.
 	HideInputs bool
 	// HideOutputs redacts output.value and drops output messages and tool-call
 	// results.
@@ -54,6 +54,11 @@ type TraceConfig struct {
 	HideInputText bool
 	// HideOutputText redacts the text of output messages.
 	HideOutputText bool
+	// HideErrorDetails drops API error messages from attributes and status
+	// descriptions. Nil derives the setting from HideInputs, HideOutputs,
+	// HideInputMessages, HideOutputMessages, HideInputText and HideOutputText.
+	// An explicit true or false overrides that derivation, as in core traceAI.
+	HideErrorDetails *bool
 	// Base64ImageMaxLength redacts data: image URLs longer than this. Zero
 	// means DefaultBase64ImageMaxLength.
 	Base64ImageMaxLength int
@@ -73,6 +78,11 @@ func TraceConfigFromEnv() TraceConfig {
 		HideInputText:               envBool(EnvHideInputText),
 		HideOutputText:              envBool(EnvHideOutputText),
 	}
+	switch value := strings.ToLower(strings.TrimSpace(os.Getenv(EnvHideErrorDetails))); value {
+	case "true", "false":
+		hide := value == "true"
+		c.HideErrorDetails = &hide
+	}
 	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvBase64ImageMaxLength))); err == nil && v > 0 {
 		c.Base64ImageMaxLength = v
 	}
@@ -85,7 +95,12 @@ func envBool(name string) bool {
 
 // errorMessageAllowed reports whether the API's error message may be written
 // into the span status, which TraceConfig.Mask does not see.
-func (c TraceConfig) errorMessageAllowed() bool { return !c.HideInputs && !c.HideOutputs }
+func (c TraceConfig) errorMessageAllowed() bool {
+	if c.HideErrorDetails != nil {
+		return !*c.HideErrorDetails
+	}
+	return !(c.HideInputs || c.HideOutputs || c.HideInputMessages || c.HideOutputMessages || c.HideInputText || c.HideOutputText)
+}
 
 func (c TraceConfig) imageMax() int {
 	if c.Base64ImageMaxLength > 0 {
@@ -96,11 +111,11 @@ func (c TraceConfig) imageMax() int {
 
 // Mask applies the config to one attribute. It returns the value to write and
 // false when the attribute must be dropped. The rules and their order follow
-// fi_instrumentation.TraceConfig.mask in Python traceAI. This package adds
-// three rules for keys Python does not mask: system instructions and tool-call
-// arguments go with the inputs, tool-call results with the outputs, and the
-// API's error message is dropped when either inputs or outputs are hidden,
-// because an API error can quote the request.
+// fi_instrumentation.TraceConfig.mask in Python traceAI. System instructions
+// and tool-call arguments go with the inputs, tool-call results with the
+// outputs, and the
+// API's error message follows HideErrorDetails because an API error can
+// quote the request or response.
 func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	key := string(kv.Key)
 	in := strings.Contains(key, GenAIInputMessages)
@@ -125,7 +140,7 @@ func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 		return kv, false
 	case c.HideOutputs && key == GenAIToolCallResult:
 		return kv, false
-	case (c.HideInputs || c.HideOutputs) && key == ErrorMessage:
+	case !c.errorMessageAllowed() && key == ErrorMessage:
 		return kv, false
 	case c.HideInputText && in && strings.Contains(key, MessageContent) && !strings.Contains(key, MessageContents):
 		return redacted, true

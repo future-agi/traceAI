@@ -32,6 +32,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
+from traceai_anthropic._native import _NativeTracing
 from traceai_anthropic._stream import _MessagesStream, _Stream
 from traceai_anthropic._utils import _finish_request_error
 from traceai_anthropic._with_span import _WithSpan
@@ -48,10 +49,29 @@ class _WithTracer(ABC):
     Base class for wrappers that need a tracer.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        native_tracing: Optional[_NativeTracing] = None,
+        **kwargs: Any,
+    ) -> None:
 
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._native_tracing = native_tracing
+
+    def _without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """The original method for this call, with the SDK's duplicate native span turned off."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span(wrapped, instance)
+
+    def _without_native_span_async(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """`_without_native_span` for coroutine methods."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span_async(wrapped, instance)
 
     @contextmanager
     def _start_as_current_span(
@@ -245,6 +265,7 @@ class _MessagesWrapper(_BaseWrapper):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = dict(arguments).pop("messages", None)
@@ -337,6 +358,7 @@ class _AsyncMessagesWrapper(_WithTracer):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
+        wrapped = self._without_native_span_async(wrapped, instance)
 
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
@@ -409,6 +431,7 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
     ):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = arguments.get("messages", None)
