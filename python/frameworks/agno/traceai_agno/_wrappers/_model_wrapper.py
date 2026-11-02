@@ -283,7 +283,7 @@ def _llm_invocation_parameters(
         yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(filtered_kwargs)
 
 
-def _filter_sensitive_params(params: Dict[str, Any]) -> Dict[str, Any]:
+def _filter_sensitive_params(params: Mapping[str, Any]) -> Dict[str, Any]:
     """Redact credentials recursively without modifying the model's request.
 
     Header containers are omitted wholesale: gateway authentication can use

@@ -132,6 +132,20 @@ def _set_run_status(span: trace_api.Span, run_response: Any) -> None:
     # Paused, incomplete and missing final results are not successful runs.
 
 
+def _finish_stream_status(
+    span: trace_api.Span, run_response: Any, terminal_completed: bool = False
+) -> None:
+    if run_response is not None:
+        output = _extract_run_response_output(run_response)
+        if output:
+            span.set_attribute(OUTPUT_VALUE, output)
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+    if terminal_completed:
+        span.set_status(trace_api.StatusCode.OK)
+    else:
+        _set_run_status(span, run_response)
+
+
 def _strip_method_args(arguments: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: value for key, value in arguments.items() if key not in ("self", "cls")
@@ -235,10 +249,29 @@ def _agent_run_attributes(
                     tool_names.append(tool.name)
                 elif isinstance(tool, Toolkit):
                     tool_names.extend([f for f in tool.functions.keys()])
+                elif isinstance(tool, dict):
+                    # Agno accepts built-in tool configuration dictionaries. Do not
+                    # stringify them: hosted tools can contain authentication.
+                    builtin_type = tool.get("type")
+                    allowed_types = {
+                        "mcp",
+                        "web_search",
+                        "file_search",
+                        "code_interpreter",
+                        "computer",
+                        "image_generation",
+                    }
+                    tool_names.append(
+                        builtin_type
+                        if isinstance(builtin_type, str)
+                        and builtin_type in allowed_types
+                        else "builtin"
+                    )
                 elif callable(tool):
                     tool_names.append(tool.__name__)
                 else:
-                    tool_names.append(str(tool))
+                    # Unknown objects can carry arbitrary secrets in __str__.
+                    tool_names.append(type(tool).__name__)
             yield f"agno{key_suffix}.tools", tool_names
 
 
@@ -448,6 +481,7 @@ class _RunWrapper:
         hide_run_output = options.get("yield_run_output") is not True
         options["yield_run_output"] = True
         run_response = None
+        terminal_completed = False
         try:
             with closing(
                 iterate(
@@ -461,19 +495,21 @@ class _RunWrapper:
                         span.set_attribute("agno.run.id", run_id)
                     if isinstance(response, (RunOutput, TeamRunOutput)):
                         run_response = response
+                        terminal_completed = response.status == RunStatus.completed
                         if hide_run_output:
                             continue
                     yield response
-            if run_response is not None:
-                output = _extract_run_response_output(run_response)
-                if output:
-                    span.set_attribute(OUTPUT_VALUE, output)
-                    span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-            _set_run_status(span, run_response)
+            _finish_stream_status(span, run_response, terminal_completed)
         except BaseException as error:
-            span.set_status(
-                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
-            )
+            if isinstance(error, GeneratorExit) and terminal_completed:
+                # Agno's workflow consumer closes an agent iterator immediately
+                # after receiving its terminal RunOutput. This is completion,
+                # unlike closing an iterator before the terminal result.
+                _finish_stream_status(span, run_response, terminal_completed)
+            else:
+                span.set_status(
+                    trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+                )
             if not isinstance(error, GeneratorExit):
                 span.record_exception(error)
             raise
@@ -628,6 +664,7 @@ class _RunWrapper:
         hide_run_output = options.get("yield_run_output") is not True
         options["yield_run_output"] = True
         run_response = None
+        terminal_completed = False
         try:
             async with aclosing(
                 aiterate(
@@ -641,19 +678,21 @@ class _RunWrapper:
                         span.set_attribute("agno.run.id", run_id)
                     if isinstance(response, (RunOutput, TeamRunOutput)):
                         run_response = response
+                        terminal_completed = response.status == RunStatus.completed
                         if hide_run_output:
                             continue
                     yield response
-            if run_response is not None:
-                output = _extract_run_response_output(run_response)
-                if output:
-                    span.set_attribute(OUTPUT_VALUE, output)
-                    span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-            _set_run_status(span, run_response)
+            _finish_stream_status(span, run_response, terminal_completed)
         except BaseException as error:
-            span.set_status(
-                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
-            )
+            if isinstance(error, GeneratorExit) and terminal_completed:
+                # Agno's workflow consumer closes an agent iterator immediately
+                # after receiving its terminal RunOutput. This is completion,
+                # unlike closing an iterator before the terminal result.
+                _finish_stream_status(span, run_response, terminal_completed)
+            else:
+                span.set_status(
+                    trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+                )
             if not isinstance(error, GeneratorExit):
                 span.record_exception(error)
             raise
