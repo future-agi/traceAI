@@ -8,7 +8,7 @@ This integration provides support for using OpenTelemetry with the Litellm frame
 1. **Install traceAI Litellm**
 
 ```bash
-pip install pip install traceAI-litellm
+pip install traceAI-litellm
 ```
 
 
@@ -45,6 +45,8 @@ from traceai_litellm import LiteLLMInstrumentor
 
 LiteLLMInstrumentor().instrument(tracer_provider=trace_provider)
 ```
+
+Use one tracing integration for each LiteLLM call. Do not also enable LiteLLM's native OpenTelemetry callback for calls traced by this instrumentor.
 
 ### Create Litellm Components
 Set up your Litellm client with built-in observability.

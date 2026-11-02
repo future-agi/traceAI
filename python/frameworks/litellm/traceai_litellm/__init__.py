@@ -1,4 +1,6 @@
 import json
+import inspect
+from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
 from typing import (
@@ -16,6 +18,7 @@ from typing import (
 
 import litellm
 import logging
+
 logger = logging.getLogger(__name__)
 try:
     from fi.evals import Protect
@@ -48,6 +51,38 @@ from opentelemetry.util.types import AttributeValue
 from traceai_litellm.package import _instruments
 from traceai_litellm.version import __version__
 from wrapt import wrap_function_wrapper
+
+_REQUEST_FIELDS = frozenset(
+    {
+        "model",
+        "messages",
+        "input",
+        "prompt",
+        "temperature",
+        "top_p",
+        "n",
+        "stream",
+        "stream_options",
+        "stop",
+        "max_tokens",
+        "max_completion_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "logit_bias",
+        "seed",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "functions",
+        "function_call",
+        "parallel_tool_calls",
+        "encoding_format",
+        "dimensions",
+        "size",
+        "quality",
+        "style",
+    }
+)
 
 
 # Helper functions to set span attributes
@@ -119,7 +154,9 @@ def _instrument_func_type_completion(
         litellm.acompletion_with_retries() (async version of completion_with_retries)
     """
     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
-    _set_span_attribute(span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value)
+    _set_span_attribute(
+        span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
+    )
     _set_span_attribute(
         span, SpanAttributes.GEN_AI_REQUEST_MODEL, kwargs.get("model", "unknown_model")
     )
@@ -147,7 +184,9 @@ def _instrument_func_type_completion(
         k: v for k, v in kwargs.items() if k not in ["model", "messages"]
     }
     _set_span_attribute(
-        span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, json.dumps(invocation_params)
+        span,
+        SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+        safe_json_dumps(invocation_params),
     )
 
 
@@ -185,7 +224,9 @@ def _instrument_func_type_image_generation(
         litellm.aimage_generation() (async version of image_generation)
     """
     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
-    _set_span_attribute(span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value)
+    _set_span_attribute(
+        span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
+    )
     if model := kwargs.get("model"):
         _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model)
     if prompt := kwargs.get("prompt"):
@@ -216,32 +257,37 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                 span, SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(result_data)
             )
     elif isinstance(result, ImageResponse):
-        _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_ROLE}", "assistant")
-        for idx,img_data in enumerate(result.data):
-            _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image")
+        _set_span_attribute(
+            span,
+            f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_ROLE}",
+            "assistant",
+        )
+        for idx, img_data in enumerate(result.data):
+            _set_span_attribute(
+                span,
+                f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}",
+                "image",
+            )
             if img_data:
                 if isinstance(img_data, Image) and (
                     url := (img_data.url or img_data.b64_json)
                 ):
-                    _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
+                    _set_span_attribute(
+                        span,
+                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
+                        url,
+                    )
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
                 elif isinstance(img_data, dict) and (
                     url := (img_data.get("url") or img_data.get("b64_json"))
                 ):
-                    _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
+                    _set_span_attribute(
+                        span,
+                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
+                        url,
+                    )
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
-    if hasattr(result, "usage"):
-        _set_span_attribute(
-            span, SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, result.usage["prompt_tokens"]
-        )
-        _set_span_attribute(
-            span,
-            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
-            result.usage["completion_tokens"],
-        )
-        _set_span_attribute(
-            span, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, result.usage["total_tokens"]
-        )
+    _set_usage(span, getattr(result, "usage", None))
 
 
 class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
@@ -276,14 +322,16 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "aimage_generation": self._aimage_generation_wrapper,
         }
         if Protect is not None:
-            self._original_protect = Protect.protect
+            self._original_protect = inspect.getattr_static(Protect, "protect")
             wrap_function_wrapper(
                 module="fi.evals",
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+            self._wrapped_protect = inspect.getattr_static(Protect, "protect")
         else:
             self._original_protect = None
+            self._wrapped_protect = None
 
         for func_name, func_wrapper in functions_to_instrument.items():
             if hasattr(litellm, func_name):
@@ -303,332 +351,325 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) in LiteLLMInstrumentor.original_litellm_funcs.items():
             setattr(litellm, func_name, original_func)
         self.original_litellm_funcs.clear()
+        if Protect is not None and inspect.getattr_static(
+            Protect, "protect"
+        ) is getattr(self, "_wrapped_protect", None):
+            Protect.protect = self._original_protect
+        self._original_protect = None
+        self._wrapped_protect = None
         self._tracer = None
+
+    def _request(self, name, args, kwargs):
+        """Bind positional arguments without changing the provider call."""
+        try:
+            signature = inspect.signature(self.original_litellm_funcs[name])
+            bound = signature.bind_partial(*args, **kwargs)
+            request = dict(bound.arguments)
+            for key, param in signature.parameters.items():
+                if param.kind is inspect.Parameter.VAR_KEYWORD:
+                    request.update(request.pop(key, {}))
+            # Retry helpers accept only *args/**kwargs; their arguments are completion's.
+            if "args" in request:
+                request.pop("args")
+                request.update(
+                    inspect.signature(self.original_litellm_funcs["completion"])
+                    .bind_partial(*args)
+                    .arguments
+                )
+        except (TypeError, ValueError):
+            request = dict(kwargs)
+        # Capture generation inputs/settings, not arbitrary SDK control objects,
+        # credentials, HTTP headers, callbacks, or provider-specific secrets.
+        return {key: value for key, value in request.items() if key in _REQUEST_FIELDS}
+
+    def _call(self, name, annotate, args, kwargs):
+        original = self.original_litellm_funcs[name]
+        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return original(*args, **kwargs)
+        request = self._request(name, args, kwargs)
+        span = self._tracer.start_span(
+            name, attributes=dict(get_attributes_from_context())
+        )
+        _observe(annotate, span, request)
+        try:
+            with _provider_context(span):
+                result = original(*args, **kwargs)
+            if request.get("stream"):
+                return StreamingIteratorWrapper(result, span)
+            _observe(_finalize_span, span, result)
+            span.set_status(trace_api.StatusCode.OK)
+        except BaseException as error:
+            _record_error(span, error)
+            span.end()
+            raise
+        span.end()
+        return result
+
+    async def _acall(self, name, annotate, args, kwargs):
+        original = self.original_litellm_funcs[name]
+        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return await original(*args, **kwargs)
+        request = self._request(name, args, kwargs)
+        span = self._tracer.start_span(
+            name, attributes=dict(get_attributes_from_context())
+        )
+        _observe(annotate, span, request)
+        try:
+            with _provider_context(span):
+                result = await original(*args, **kwargs)
+            if request.get("stream"):
+                return AsyncStreamingIteratorWrapper(result, span)
+            _observe(_finalize_span, span, result)
+            span.set_status(trace_api.StatusCode.OK)
+        except BaseException as error:
+            _record_error(span, error)
+            span.end()
+            raise
+        span.end()
+        return result
 
     @wraps(litellm.completion)
     def _completion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["completion"](*args, **kwargs)
-        streaming = kwargs.get("stream", False)
-        if not streaming:
-            with self._tracer.start_as_current_span(
-                name="completion", attributes=dict(get_attributes_from_context())
-            ) as span:
-                try:
-                    _instrument_func_type_completion(span, kwargs)
-                    result = self.original_litellm_funcs["completion"](*args, **kwargs)
-                    _finalize_span(span, result)
-                    span.set_status(trace_api.StatusCode.OK)
-                    return result
-                except Exception as e:
-                    span.record_exception(e)
-                    raise
-        else:
-            span_cm = self._tracer.start_as_current_span(
-                name="completion", attributes=dict(get_attributes_from_context())
-            )
-            span = span_cm.__enter__()
-            try:
-                _instrument_func_type_completion(span, kwargs)
-                original_iterator = self.original_litellm_funcs["completion"](
-                    *args, **kwargs
-                )
-                return StreamingIteratorWrapper(original_iterator, span, span_cm)
-            except Exception as e:
-                span.record_exception(e)
-                raise
+        return self._call("completion", _instrument_func_type_completion, args, kwargs)
 
     @wraps(litellm.acompletion)
     async def _acompletion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return await self.original_litellm_funcs["acompletion"](*args, **kwargs)
-        streaming = kwargs.get("stream", False)
-        if not streaming:
-            with self._tracer.start_as_current_span(
-                name="acompletion", attributes=dict(get_attributes_from_context())
-            ) as span:
-                try:
-                    _instrument_func_type_completion(span, kwargs)
-                    result = await self.original_litellm_funcs["acompletion"](
-                        *args, **kwargs
-                    )
-                    _finalize_span(span, result)
-                    span.set_status(trace_api.StatusCode.OK)
-                    return result
-                except Exception as e:
-                    span.record_exception(e)
-                    raise
-        else:
-            span_cm = self._tracer.start_as_current_span(
-                name="acompletion", attributes=dict(get_attributes_from_context())
-            )
-            span = span_cm.__enter__()
-            try:
-                _instrument_func_type_completion(span, kwargs)
-                original_async_iterator = await self.original_litellm_funcs[
-                    "acompletion"
-                ](*args, **kwargs)
-                return AsyncStreamingIteratorWrapper(
-                    original_async_iterator, span, span_cm
-                )
-            except Exception as e:
-                span.set_status(
-                    trace_api.StatusCode.ERROR,
-                    description=f"{e.__class__.__name__}: {e}",
-                )
-                span.record_exception(e)
-                span_cm.__exit__(e, type(e), e.__traceback__)
-                raise
+        return await self._acall(
+            "acompletion", _instrument_func_type_completion, args, kwargs
+        )
 
     @wraps(litellm.completion_with_retries)
-    def _completion_with_retries_wrapper(
-        self, *args: Any, **kwargs: Any
-    ) -> ModelResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["completion_with_retries"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="completion_with_retries",
-            attributes=dict(get_attributes_from_context()),
-        ) as span:
-            try:
-                _instrument_func_type_completion(span, kwargs)
-                result = self.original_litellm_funcs["completion_with_retries"](
-                    *args, **kwargs
-                )
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    def _completion_with_retries_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call(
+            "completion_with_retries", _instrument_func_type_completion, args, kwargs
+        )
 
     @wraps(litellm.acompletion_with_retries)
-    async def _acompletion_with_retries_wrapper(
-        self, *args: Any, **kwargs: Any
-    ) -> ModelResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return await self.original_litellm_funcs["acompletion_with_retries"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="acompletion_with_retries",
-            attributes=dict(get_attributes_from_context()),
-        ) as span:
-            try:
-                _instrument_func_type_completion(span, kwargs)
-                result = await self.original_litellm_funcs[
-                    "acompletion_with_retries"
-                ](*args, **kwargs)
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    async def _acompletion_with_retries_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._acall(
+            "acompletion_with_retries", _instrument_func_type_completion, args, kwargs
+        )
 
     @wraps(litellm.embedding)
-    def _embedding_wrapper(self, *args: Any, **kwargs: Any) -> EmbeddingResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["embedding"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="embedding", attributes=dict(get_attributes_from_context())
-        ) as span:
-            try:
-                _instrument_func_type_embedding(span, kwargs)
-                result = self.original_litellm_funcs["embedding"](*args, **kwargs)
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    def _embedding_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("embedding", _instrument_func_type_embedding, args, kwargs)
 
     @wraps(litellm.aembedding)
-    async def _aembedding_wrapper(self, *args: Any, **kwargs: Any) -> EmbeddingResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return await self.original_litellm_funcs["aembedding"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="aembedding", attributes=dict(get_attributes_from_context())
-        ) as span:
-            try:
-                _instrument_func_type_embedding(span, kwargs)
-                result = await self.original_litellm_funcs["aembedding"](
-                    *args, **kwargs
-                )
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    async def _aembedding_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._acall(
+            "aembedding", _instrument_func_type_embedding, args, kwargs
+        )
 
     @wraps(litellm.image_generation)
-    def _image_generation_wrapper(self, *args: Any, **kwargs: Any) -> ImageResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["image_generation"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="image_generation", attributes=dict(get_attributes_from_context())
-        ) as span:
-            try:
-                _instrument_func_type_image_generation(span, kwargs)
-                result = self.original_litellm_funcs["image_generation"](
-                    *args, **kwargs
-                )
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    def _image_generation_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call(
+            "image_generation", _instrument_func_type_image_generation, args, kwargs
+        )
 
     @wraps(litellm.aimage_generation)
-    async def _aimage_generation_wrapper(
-        self, *args: Any, **kwargs: Any
-    ) -> ImageResponse:
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return await self.original_litellm_funcs["aimage_generation"](
-                *args, **kwargs
-            )  # type:ignore
-        with self._tracer.start_as_current_span(
-            name="aimage_generation", attributes=dict(get_attributes_from_context())
-        ) as span:
-            try:
-                _instrument_func_type_image_generation(span, kwargs)
-                result = await self.original_litellm_funcs["aimage_generation"](
-                    *args, **kwargs
-                )
-                _finalize_span(span, result)
-                span.set_status(trace_api.StatusCode.OK)
-                return result  # type:ignore
-            except Exception as e:
-                span.record_exception(e)
-                raise
+    async def _aimage_generation_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._acall(
+            "aimage_generation", _instrument_func_type_image_generation, args, kwargs
+        )
 
     def _set_wrapper_attr(self, func_wrapper: Any) -> None:
         func_wrapper.__func__.is_wrapper = True
 
 
-class StreamingIteratorWrapper:
-    def __init__(self, iterator: Iterator[Any], span: trace_api.Span, span_cm):
-        self.iterator = iterator
+def _observe(function, *args):
+    """Telemetry extraction must not change a successful SDK operation."""
+    try:
+        function(*args)
+    except Exception:
+        # Do not log request, response, or exception content (which can include secrets).
+        logger.debug("Could not extract LiteLLM telemetry")
+
+
+@contextmanager
+def _provider_context(span):
+    # Keep a span current only during provider work, never across a yielded chunk.
+    # Suppress nested LiteLLM/OpenAI instrumentation for the same request.
+    with trace_api.use_span(
+        span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+    ):
+        token = context_api.attach(
+            context_api.set_value(_SUPPRESS_INSTRUMENTATION_KEY, True)
+        )
+        try:
+            yield
+        finally:
+            context_api.detach(token)
+
+
+def _record_error(span, error):
+    span.set_status(trace_api.StatusCode.ERROR)
+    span.record_exception(error)
+
+
+def _set_usage(span, usage):
+    if hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    if not isinstance(usage, Mapping):
+        return
+    for key, attribute in (
+        ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+        ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+        ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+    ):
+        _set_span_attribute(span, attribute, usage.get(key))
+
+
+class _StreamState:
+    def __init__(self, span, span_cm=None):
         self.span = span
         self.span_cm = span_cm
         self.processed_chunks = []
         self.content_string = ""
+        self._ended = False
+        self._closed = False
+
+    def _process(self, chunk):
+        if hasattr(chunk, "to_dict"):
+            chunk = chunk.to_dict()
+        elif hasattr(chunk, "__dict__"):
+            chunk = chunk.__dict__
+        if not isinstance(chunk, Mapping):
+            return
+        self.processed_chunks.append(chunk)
+        choices = chunk.get("choices") or []
+        if choices:
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str):
+                self.content_string += content
+        _set_usage(self.span, chunk.get("usage"))
+        _set_span_attribute(
+            self.span, SpanAttributes.GEN_AI_RESPONSE_MODEL, chunk.get("model")
+        )
+
+    def _finish(self, error=None):
+        if self._ended:
+            return
+        self._ended = True
+        try:
+            _set_span_attribute(
+                self.span,
+                SpanAttributes.OUTPUT_VALUE,
+                self.content_string or safe_json_dumps(self.processed_chunks),
+            )
+            if error is None:
+                self.span.set_status(trace_api.StatusCode.OK)
+            else:
+                _record_error(self.span, error)
+        finally:
+            if self.span_cm is not None:
+                self.span_cm.__exit__(
+                    type(error) if error else None,
+                    error,
+                    error.__traceback__ if error else None,
+                )
+            else:
+                self.span.end()
+
+
+class StreamingIteratorWrapper(_StreamState):
+    def __init__(self, iterator: Iterator[Any], span: trace_api.Span, span_cm=None):
+        super().__init__(span, span_cm)
+        self.iterator = iterator
 
     def __iter__(self):
         return self
 
     def __next__(self):
+        if self._ended:
+            raise StopIteration
         try:
-            chunk = next(self.iterator)
-            # Process chunk
-            if hasattr(chunk, "to_dict"):
-                chunk_dict = chunk.to_dict()
-            elif hasattr(chunk, "__dict__"):
-                chunk_dict = chunk.__dict__
-            else:
-                chunk_dict = chunk
-
-            self.processed_chunks.append(chunk_dict)
-
-            if (
-                content := chunk_dict.get("choices", [{}])[0]
-                .get("delta", {})
-                .get("content")
-            ):
-                self.content_string += content
-
-            return chunk
+            with _provider_context(self.span):
+                chunk = next(self.iterator)
         except StopIteration:
-            # After the iterator is exhausted, set the span attributes
-            _set_span_attribute(
-                self.span,
-                SpanAttributes.OUTPUT_VALUE,
-                safe_json_dumps(self.processed_chunks),
-            )
-            _set_span_attribute(
-                self.span, SpanAttributes.OUTPUT_VALUE, self.content_string
-            )
-            self.span.set_status(trace_api.StatusCode.OK)
-            # End the span
-            self.span_cm.__exit__(None, None, None)
+            self._finish()
             raise
-        except Exception as e:
-            self.span.record_exception(e)
+        except BaseException as error:
+            self._finish(error)
             raise
+        _observe(self._process, chunk)
+        return chunk
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self.iterator, "close", None)
+            if close is not None:
+                with _provider_context(self.span):
+                    close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # If the iterator exits early, we need to close the span
-        self.span_cm.__exit__(exc_type, exc_value, traceback)
+        if exc_value is not None:
+            self._finish(exc_value)
+        self.close()
 
 
-class AsyncStreamingIteratorWrapper:
+class AsyncStreamingIteratorWrapper(_StreamState):
     def __init__(
-        self, async_iterator: AsyncIterator[Any], span: trace_api.Span, span_cm
+        self, async_iterator: AsyncIterator[Any], span: trace_api.Span, span_cm=None
     ):
+        super().__init__(span, span_cm)
         self.async_iterator = async_iterator
-        self.span = span
-        self.span_cm = span_cm
-        self.processed_chunks = []
-        self.content_string = ""
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        if self._ended:
+            raise StopAsyncIteration
         try:
-            chunk = await self.async_iterator.__anext__()
-            # Process chunk
-            if hasattr(chunk, "to_dict"):
-                chunk_dict = chunk.to_dict()
-            elif hasattr(chunk, "__dict__"):
-                chunk_dict = chunk.__dict__
-            else:
-                chunk_dict = chunk
-
-            self.processed_chunks.append(chunk_dict)
-
-            if (
-                content := chunk_dict.get("choices", [{}])[0]
-                .get("delta", {})
-                .get("content")
-            ):
-                self.content_string += content
-
-            return chunk
+            with _provider_context(self.span):
+                chunk = await self.async_iterator.__anext__()
         except StopAsyncIteration:
-            # After the iterator is exhausted, set the span attributes
-            _set_span_attribute(
-                self.span,
-                SpanAttributes.OUTPUT_VALUE,
-                safe_json_dumps(self.processed_chunks),
-            )
-            _set_span_attribute(
-                self.span, SpanAttributes.OUTPUT_VALUE, self.content_string
-            )
-            self.span.set_status(trace_api.StatusCode.OK)
-            # End the span
-            self.span_cm.__exit__(None, None, None)
+            self._finish()
             raise
-        except Exception as e:
-            self.span.record_exception(e)
+        except BaseException as error:
+            self._finish(error)
             raise
+        _observe(self._process, chunk)
+        return chunk
+
+    async def aclose(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self.async_iterator, "aclose", None)
+            if close is not None:
+                with _provider_context(self.span):
+                    await close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish()
 
     async def close(self):
-        # Explicitly close the span if needed
-        self.span_cm.__exit__(None, None, None)
+        # Compatibility with the previous wrapper's async close() method.
+        await self.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        if exc_value is not None:
+            self._finish(exc_value)
+        await self.aclose()
 
 
 def _set_raw_output(span: trace_api.Span, result: Any) -> None:
