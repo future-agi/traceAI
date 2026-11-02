@@ -4,10 +4,11 @@ import logging
 from typing import Any, Mapping, Optional
 
 from opentelemetry import trace as trace_api
+from wrapt import ObjectProxy
+
 from traceai_groq._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_groq._utils import _finish_tracing
 from traceai_groq._with_span import _WithSpan
-from wrapt import ObjectProxy
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -34,10 +35,12 @@ class _StreamState:
         status = trace_api.Status(trace_api.StatusCode.OK)
         try:
             _finish_tracing(
-                with_span=self.span, status=status,
+                with_span=self.span,
+                status=status,
                 attributes=self.extractor.get_attributes(response=response),
                 extra_attributes=self.extractor.get_extra_attributes(
-                    response=response, request_parameters=self.request_parameters,
+                    response=response,
+                    request_parameters=self.request_parameters,
                 ),
             )
         finally:

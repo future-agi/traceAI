@@ -13,6 +13,7 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
+
 from traceai_groq._utils import (
     _as_input_attributes,
     _extract_eval_input,
@@ -65,7 +66,7 @@ class _RequestAttributesExtractor:
             yield from _as_input_attributes(
                 _io_value_and_type(input_data),
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to get input attributes from request parameters of "
                 f"type {type(request_parameters)}"
@@ -84,17 +85,21 @@ class _RequestAttributesExtractor:
 
         if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
             for i, tool in enumerate(tools):
-                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(
-                    tool
+                yield (
+                    f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}",
+                    safe_json_dumps(tool),
                 )
 
-        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
-            invocation_params
+        yield (
+            SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+            safe_json_dumps(invocation_params),
         )
 
-        if (input_messages := request_parameters.get("messages")) and isinstance(
-            input_messages, Iterable
-        ) and not isinstance(input_messages, OneShotIterator):
+        if (
+            (input_messages := request_parameters.get("messages"))
+            and isinstance(input_messages, Iterable)
+            and not isinstance(input_messages, OneShotIterator)
+        ):
             for index, input_message in list(enumerate(input_messages)):
                 for key, value in self._get_attributes_from_message_param(
                     input_message
@@ -119,7 +124,10 @@ class _RequestAttributesExtractor:
             elif isinstance(content, Iterable):
                 for index, c in list(enumerate(content)):
                     for key, value in self._get_attributes_from_message_content(c):
-                        yield f"{MessageAttributes.MESSAGE_CONTENTS}.{index}.{key}", value
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{index}.{key}",
+                            value,
+                        )
 
         if name := get_attribute(message, "name"):
             yield MessageAttributes.MESSAGE_NAME, name
@@ -165,7 +173,6 @@ class _RequestAttributesExtractor:
         self,
         content: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-
         content = dict(content)
         type_ = content.pop("type", None)
         if type_ is None:
@@ -178,8 +185,9 @@ class _RequestAttributesExtractor:
         elif type_ == "image_url":
             if image := content.pop("image_url"):
                 yield f"{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
-                yield f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image.get(
-                    "url", ""
+                yield (
+                    f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
+                    image.get("url", ""),
                 )
 
 

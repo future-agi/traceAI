@@ -18,6 +18,7 @@ from groq import NOT_GIVEN, APIResponse, AsyncAPIResponse
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
+
 from traceai_groq._raw_response import _AsyncRawResponse, _RawResponse
 from traceai_groq._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_groq._response_attributes_extractor import _ResponseAttributesExtractor

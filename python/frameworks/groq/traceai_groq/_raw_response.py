@@ -4,7 +4,6 @@ No network body is fetched by instrumentation. Response and parsed stream share 
 completion state, so their independent close paths can only export one span.
 """
 
-import json
 from typing import Any
 
 from wrapt import ObjectProxy
@@ -18,29 +17,8 @@ class _ResponseProxy(ObjectProxy):
         self._self_state = state
         self._self_streams = {}
 
-    def _self_finish_read(self) -> None:
-        if not self.__wrapped__.is_closed or self._self_state.finished:
-            return
-        if self._self_state.request_parameters.get("stream", False):
-            # The SDK/HTTPX has already cached the fully read body. Decode SSE
-            # from that cache without consuming the SDK stream returned by parse().
-            # This retains prefetch-then-parse and its cached stream identity.
-            try:
-                data = []
-                for line in self.__wrapped__.http_response.content.splitlines():
-                    if line.startswith(b"data:"):
-                        data.append(line[5:].strip())
-                    elif not line and data:
-                        payload = b"\n".join(data)
-                        if payload != b"[DONE]":
-                            self._self_state.capture(json.loads(payload))
-                        data.clear()
-                if data and b"\n".join(data) != b"[DONE]":
-                    self._self_state.capture(json.loads(b"\n".join(data)))
-            except Exception:
-                # Telemetry must never alter a successful native read.
-                pass
-        self._self_state.finish()
+    def _self_read_complete(self) -> bool:
+        return self.__wrapped__.is_closed and not self._self_state.finished
 
     def _self_wrap_parsed(self, parsed: Any, proxy_type: type) -> Any:
         # The SDK caches parse() results per target type. Preserve that identity
@@ -52,6 +30,21 @@ class _ResponseProxy(ObjectProxy):
 
 
 class _RawResponse(_ResponseProxy):
+    def _self_finish_read(self) -> None:
+        if not self._self_read_complete():
+            return
+        if self._self_state.request_parameters.get("stream", False):
+            # Reparse HTTPX's cached body using the SDK's SSE decoder. _parse()
+            # creates an independent stream; the caller's parse() cache and
+            # subsequent iteration are untouched, even after a full prefetch.
+            try:
+                for chunk in self.__wrapped__._parse():
+                    self._self_state.capture(chunk)
+            except Exception:
+                # Telemetry cannot change the result of a successful native read.
+                pass
+        self._self_state.finish()
+
     def parse(self, *args: Any, **kwargs: Any) -> Any:
         parsed = self._self_call("parse", *args, **kwargs)
         if not self._self_state.request_parameters.get("stream", False):
@@ -111,6 +104,17 @@ class _RawResponse(_ResponseProxy):
 
 
 class _AsyncRawResponse(_ResponseProxy):
+    async def _self_finish_read(self) -> None:
+        if not self._self_read_complete():
+            return
+        if self._self_state.request_parameters.get("stream", False):
+            try:
+                async for chunk in self.__wrapped__._parse():
+                    self._self_state.capture(chunk)
+            except Exception:
+                pass
+        self._self_state.finish()
+
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         parsed = await self._self_call("parse", *args, **kwargs)
         if not self._self_state.request_parameters.get("stream", False):
@@ -127,17 +131,17 @@ class _AsyncRawResponse(_ResponseProxy):
 
     async def read(self, *args: Any, **kwargs: Any) -> Any:
         result = await self._self_call("read", *args, **kwargs)
-        self._self_finish_read()
+        await self._self_finish_read()
         return result
 
     async def text(self, *args: Any, **kwargs: Any) -> Any:
         result = await self._self_call("text", *args, **kwargs)
-        self._self_finish_read()
+        await self._self_finish_read()
         return result
 
     async def json(self, *args: Any, **kwargs: Any) -> Any:
         result = await self._self_call("json", *args, **kwargs)
-        self._self_finish_read()
+        await self._self_finish_read()
         return result
 
     async def close(self) -> Any:
