@@ -54,6 +54,19 @@ jobs:
             @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             @opentelemetry/exporter-trace-otlp-proto@0.202.0 @opentelemetry/otlp-transformer@0.202.0 \
             typescript@5.8.3 @types/node@22.15.29
+      - name: Install a non-hoisted package consumer
+        run: |
+          mkdir -p "$RUNNER_TEMP/strict-consumer"
+          cat > "$RUNNER_TEMP/strict-consumer/package.json" <<JSON
+          {"private":true,"dependencies":{"@traceai/openai":"file:$RUNNER_TEMP/openai.tgz","openai":"${{ matrix.sdk }}"},"pnpm":{"overrides":{"@traceai/fi-core":"file:$RUNNER_TEMP/core.tgz"}}}
+          JSON
+          pnpm --dir "$RUNNER_TEMP/strict-consumer" install --ignore-scripts \
+            --config.hoist=false --config.shamefully-hoist=false
+      - name: Network-isolated non-hoisted imports
+        run: |
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" OPENAI_STRICT_CONSUMER_DIR="$RUNNER_TEMP/strict-consumer" \
+            node --test packages/traceai_openai/test/strictImports.cjs
       - name: Network-isolated automatic and manual SDK contracts
         env:
           OPENAI_CONSUMER_DIR: ${{ runner.temp }}/consumer
@@ -76,7 +89,9 @@ jobs:
             env PATH="$PATH" OPENAI_CONSUMER_DIR="$OPENAI_CONSUMER_DIR" \
             node --test packages/traceai_openai/test/recallRegressions.cjs \
               packages/traceai_openai/test/privacyContext.cjs \
-              packages/traceai_openai/test/reviewRegressions.cjs
+              packages/traceai_openai/test/reviewRegressions.cjs \
+              packages/traceai_openai/test/reviewRoundTwo.cjs \
+              packages/traceai_openai/test/choiceIndexes.cjs
       - name: Typecheck current SDK request contracts
         if: matrix.sdk == '7.47.0'
         env:

@@ -46,3 +46,25 @@ const parallelDelta: OpenAI.Chat.Completions.ChatCompletionChunk = {
 };
 void [client.responses.create(storedPrompt), client.responses.create(mcp),
   client.chat.completions.create(request), client.completions.create(stream), customDelta, parallelDelta];
+
+const predicted = {
+  model: 'gpt-4.1', messages: [{ role: 'user', content: 'Rewrite this document' }],
+  prediction: { type: 'content', content: 'SYNTHETIC-PREDICTED-PRIVATE' },
+} satisfies OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+const predictedParts = {
+  ...predicted, prediction: { type: 'content', content: [{ type: 'text', text: 'SYNTHETIC-PREDICTED-PRIVATE' }] },
+} satisfies OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+const suffix = {
+  model: 'gpt-3.5-turbo-instruct', prompt: 'hello', suffix: 'SYNTHETIC-SUFFIX-PRIVATE',
+} satisfies OpenAI.Completions.CompletionCreateParamsNonStreaming;
+const screenshot = {
+  model: 'computer-use-preview', input: [{ type: 'computer_call_output', call_id: 'call_synthetic',
+    output: { type: 'computer_screenshot', image_url: 'https://example.invalid/SYNTHETIC-SCREENSHOT-PRIVATE' },
+  }],
+} satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
+const screenshotFile = {
+  ...screenshot, input: [{ type: 'computer_call_output', call_id: 'call_synthetic',
+    output: { type: 'computer_screenshot', file_id: 'file-SYNTHETIC-SCREENSHOT-PRIVATE' },
+  }],
+} satisfies OpenAI.Responses.ResponseCreateParamsNonStreaming;
+void [predicted, predictedParts, suffix, screenshot, screenshotFile];

@@ -219,7 +219,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           ...args: Parameters<ChatCompletionCreateType>
         ) {
           const body = args[0];
-          const { messages: _messages, ...invocationParameters } = body;
+          // Prediction text is input content, captured only in maskable payloads.
+          const { messages: _messages, prediction: _prediction, ...invocationParameters } = body;
 
           // diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
           
@@ -283,8 +284,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                // Override the model from the value sent by the server
-                [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                 [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
@@ -323,7 +322,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           ...args: Parameters<CompletionsCreateType>
         ) {
           const body = args[0];
-          const { prompt: _prompt, ...invocationParameters } = body;
+          // Suffix is input text, not an unmasked tuning parameter.
+          const { prompt: _prompt, suffix: _suffix, ...invocationParameters } = body;
           const span = instrumentation.fiTracer.startSpan(
             `OpenAI Completions`,
             {
@@ -369,7 +369,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                 [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
@@ -385,7 +384,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               result = observeStream(result, span, (chunks) => {
                 span.setAttributes({
                   ...getStreamMetadataAttributes(chunks),
-                  [SemanticConventions.OUTPUT_VALUE]: chunks.map((chunk) => chunk.choices[0]?.text ?? "").join(""),
+                  [SemanticConventions.OUTPUT_VALUE]: chunks
+                    .map((chunk) => chunk.choices.find((choice) => choice.index === 0)?.text ?? "")
+                    .join(""),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(chunks) ?? "",
                 });
@@ -555,7 +556,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 span.setAttributes({
                   [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(output),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_MODEL_NAME]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                   ...getResponsesOutputMessagesAttributes(result),
@@ -1087,7 +1087,7 @@ async function consumeChatCompletionStreamChunks(
   const allChunks: ChatCompletionChunk[] = [];
   for await (const chunk of stream) {
     allChunks.push(chunk);
-    const choice = chunk.choices[0];
+    const choice = chunk.choices.find((choice) => choice.index === 0);
     if (!choice) continue;
     streamResponse += choice.delta.content ?? "";
     for (const tool of choice.delta.tool_calls ?? []) {

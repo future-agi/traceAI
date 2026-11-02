@@ -46,7 +46,12 @@ function serializeResponseItem(
         tool_calls: [{ id: item.id, function: { name: item.type, arguments: JSON.stringify(item.action) } }],
       };
     case "computer_call_output":
-      return { role: "tool", tool_call_id: item.call_id, content: JSON.stringify(item.output) };
+      // Retain image structure so image-only privacy rules can recognize it.
+      return {
+        role: "tool",
+        tool_call_id: item.call_id,
+        content: [{ ...item.output, type: "input_image" }],
+      };
     case "web_search_call":
       return {
         role: "assistant",
