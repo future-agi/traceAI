@@ -9,7 +9,8 @@ from ._structured import redact_structured
 
 # Explicit keys: unknown native attributes may contain user content or credentials.
 _SAFE = frozenset({'gen_ai.operation.name', 'gen_ai.system', 'gen_ai.request.model',
-                   'gen_ai.response.model', 'gen_ai.usage.input_tokens',
+                   'gen_ai.response.model', 'gen_ai.provider.name',
+                   'gen_ai.embeddings.dimension.count', 'gen_ai.usage.input_tokens',
                    'gen_ai.usage.output_tokens', 'gen_ai.usage.total_tokens',
                    'llm.token_count.prompt', 'llm.token_count.completion',
                    'llm.token_count.total', 'cognee.search.type'})
@@ -28,7 +29,9 @@ def _wire_number(value):
 def _safe_value(value):
     return _wire_number(value) or (isinstance(value, str) and len(value) <= 256 and all(c.isalnum() or c in '._-/' for c in value))
 
-def _kind(name):
+def _kind(name, attrs):
+    if attrs.get('gen_ai.operation.name') == 'embeddings':
+        return 'EMBEDDING'
     if name == 'memory.retrieve' or name.startswith('cognee.search'):
         return 'RETRIEVER'
     if name == 'cognee.observe.acreate_structured_output':
@@ -46,8 +49,10 @@ def project(span, project_name, capture_content):
     for key in _KIND_KEYS:
         if key in attrs and _safe_value(attrs[key]):
             out[key] = attrs[key]
-    if not any(k in out for k in _KIND_KEYS) and _kind(span.name):
-        out['fi.span.kind'] = _kind(span.name)
+    if not any(k in out for k in _KIND_KEYS):
+        kind = _kind(span.name, out)
+        if kind:
+            out['fi.span.kind'] = kind
     if capture_content:
         for key in _CONTENT:
             value = _content(attrs.get(key))
