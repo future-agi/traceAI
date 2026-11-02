@@ -69,7 +69,8 @@ def test_incomplete_then_recovered_sends_only_new_spans(job, receiver, trajector
     first = import_job(job, settings=receiver.settings)
     assert first.sent == 1 and first.incomplete == 1
     existing = {s.span_id for s in spans(receiver)}
-    assert import_job(job, settings=receiver.settings).skipped == 1
+    replay = import_job(job, settings=receiver.settings)
+    assert replay.skipped == 1 and replay.incomplete == 1
     path.write_text(json.dumps(trajectory))
     second = import_job(job, settings=receiver.settings)
     assert second.sent == 1 and second.conflicts == 0 and second.incomplete == 0
@@ -91,6 +92,34 @@ def test_recovery_delivery_failure_leaves_provisional_ack(job, receiver, traject
     retried = import_job(job, settings=receiver.settings)
     assert retried.sent == 1 and retried.conflicts == 0
     assert initial.isdisjoint({s.span_id for s in spans(receiver)[len(initial) + 1 :]})
+
+
+def test_recovery_rejects_changes_to_already_delivered_spans(
+    job, receiver, trajectory
+):
+    path = job / "trial-1" / "agent" / "trajectory.json"
+    trajectory["continued_trajectory_ref"] = "later.json"
+    trajectory["steps"][0]["message"] = "SYNTHETIC-OLD-INPUT"
+    path.write_text(json.dumps(trajectory))
+    settings = replace(receiver.settings, capture_content=True)
+    first = import_job(job, settings=settings)
+    assert first.sent == 1 and first.incomplete == 1
+    trajectory["steps"][0]["message"] = "SYNTHETIC-NEW-INPUT"
+    path.write_text(json.dumps(trajectory))
+    changed = import_job(job, settings=settings)
+    assert changed.conflicts == 1 and changed.sent == 0 and changed.incomplete == 1
+    assert len(receiver.requests) == 1
+    assert b"SYNTHETIC-NEW-INPUT" not in receiver.requests[0][2]
+    assert import_job(job, settings=settings).conflicts == 1
+
+
+def test_skipped_incomplete_trial_remains_incomplete(job, receiver, trajectory):
+    trajectory["continued_trajectory_ref"] = "later.json"
+    (job / "trial-1" / "agent" / "trajectory.json").write_text(json.dumps(trajectory))
+    assert import_job(job, settings=receiver.settings).incomplete == 1
+    replay = import_job(job, settings=receiver.settings)
+    assert replay.skipped == 1 and replay.incomplete == 1
+    assert len(receiver.requests) == 1
 
 
 def test_changed_trial_result_still_conflicts_after_incomplete(

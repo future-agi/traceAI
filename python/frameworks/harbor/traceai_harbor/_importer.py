@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import stat
@@ -17,6 +18,7 @@ from harbor.models.job.result import JobResult
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 from ._artifacts import ArtifactError, directory, read_json
 from ._convert import convert_trial
@@ -88,16 +90,28 @@ def _is_digest(value: object) -> bool:
     )
 
 
+def _span_hash(span: Span) -> str:
+    # The incomplete marker on the already-delivered root cannot be updated when
+    # a trajectory recovers. Ignore only that known, documented transition.
+    stable = Span()
+    stable.CopyFrom(span)
+    if span.name == "Harbor trial":
+        attrs = [a for a in stable.attributes if a.key != "harbor.trace.incomplete"]
+        stable.ClearField("attributes")
+        stable.attributes.extend(attrs)
+    return hashlib.sha256(stable.SerializeToString(deterministic=True)).hexdigest()
+
+
 def _acknowledged(state: int, trial_id: str) -> dict | None:
     try:
         manifest = read_json(state, trial_id + ".json")
     except FileNotFoundError:
         return None
-    if not isinstance(manifest, dict) or manifest.get("version") not in {1, 2}:
+    if not isinstance(manifest, dict) or manifest.get("version") not in {1, 2, 3}:
         raise ArtifactError("invalid_manifest")
     if not _is_digest(manifest.get("digest")):
         raise ArtifactError("invalid_manifest")
-    if manifest["version"] == 2:
+    if manifest["version"] in {2, 3}:
         ids = manifest.get("span_ids")
         if (
             not _is_digest(manifest.get("result_digest"))
@@ -112,6 +126,14 @@ def _acknowledged(state: int, trial_id: str) -> dict | None:
             )
         ):
             raise ArtifactError("invalid_manifest")
+        if manifest["version"] == 3:
+            hashes = manifest.get("span_hashes")
+            if (
+                not isinstance(hashes, dict)
+                or set(hashes) != set(ids)
+                or not all(_is_digest(h) for h in hashes.values())
+            ):
+                raise ArtifactError("invalid_manifest")
     return manifest
 
 
@@ -122,7 +144,7 @@ def _acknowledge(
     *,
     incomplete: bool = False,
     result_digest: str = "",
-    span_ids: list[str] | None = None,
+    span_hashes: dict[str, str] | None = None,
 ) -> None:
     temporary = ".pending-" + uuid4().hex
     fd = os.open(
@@ -136,10 +158,11 @@ def _acknowledge(
             manifest = {"version": 1, "digest": digest}
             if incomplete:
                 manifest = {
-                    "version": 2,
+                    "version": 3,
                     "digest": digest,
                     "result_digest": result_digest,
-                    "span_ids": span_ids,
+                    "span_ids": sorted(span_hashes or {}),
+                    "span_hashes": span_hashes,
                 }
             stream.write(json.dumps(manifest).encode())
             stream.flush()
@@ -207,14 +230,17 @@ def _import(
                             convert_trial(root, name, job_id, settings)
                         )
                         materialized += 1
+                        summary.incomplete += int(incomplete)
                         previous = _acknowledged(state, trial_id)
                         if previous is not None and previous["digest"] == digest:
                             summary.skipped += 1
                             continue
                         if previous is not None and (
-                            previous["version"] != 2
+                            previous["version"] != 3
                             or previous["result_digest"] != result_digest
                         ):
+                            # Version 2 recorded IDs without their content. A
+                            # changed artifact cannot be safely reconciled.
                             summary.conflicts += 1
                             errors["artifact_conflict"] += 1
                             continue
@@ -222,17 +248,29 @@ def _import(
                         # recovery, deliver only newly reconstructed span IDs;
                         # never replay or mutate previously accepted spans.
                         request = ExportTraceServiceRequest.FromString(payload)
-                        seen = set(previous["span_ids"]) if previous else set()
-                        all_ids = set(seen)
+                        seen = previous["span_hashes"] if previous else {}
+                        current = {
+                            s.span_id.hex(): _span_hash(s)
+                            for resource in request.resource_spans
+                            for scope in resource.scope_spans
+                            for s in scope.spans
+                        }
+                        if len(current) != sum(
+                            len(scope.spans)
+                            for resource in request.resource_spans
+                            for scope in resource.scope_spans
+                        ):
+                            raise ArtifactError("duplicate_span_id")
+                        if any(current.get(sid) != digest for sid, digest in seen.items()):
+                            summary.conflicts += 1
+                            errors["artifact_conflict"] += 1
+                            continue
                         new_count = 0
                         for resource in request.resource_spans:
                             for scope in resource.scope_spans:
                                 fresh = [
-                                    s
-                                    for s in scope.spans
-                                    if s.span_id.hex() not in seen
+                                    s for s in scope.spans if s.span_id.hex() not in seen
                                 ]
-                                all_ids.update(s.span_id.hex() for s in fresh)
                                 new_count += len(fresh)
                                 scope.ClearField("spans")
                                 scope.spans.extend(fresh)
@@ -249,9 +287,8 @@ def _import(
                             digest,
                             incomplete=incomplete,
                             result_digest=result_digest,
-                            span_ids=sorted(all_ids),
+                            span_hashes=current,
                         )
-                        summary.incomplete += int(incomplete)
                     except DeliveryError as exc:
                         summary.failed += 1
                         errors[str(exc)] += 1

@@ -2,12 +2,12 @@
 
 import json
 import shutil
-import pytest
-import harbor_atif2otel
-from harbor.models.trajectories import Trajectory
 from dataclasses import replace
 
+import harbor_atif2otel
+import pytest
 from conftest import attrs, spans
+from harbor.models.trajectories import Trajectory
 from traceai_harbor import import_job
 
 
@@ -98,6 +98,7 @@ def test_review_tool_arguments_json_strings_redacted(job, receiver, trajectory):
 
 def test_review_real_harbor_hermes_serializer(job, receiver):
     from types import SimpleNamespace
+
     from harbor.agents.installed.hermes import Hermes
 
     agent = SimpleNamespace(version=lambda: "synthetic", model_name="synthetic-model")
@@ -136,6 +137,38 @@ def test_current_schema_label_preserved(job, receiver, trajectory):
     assert any(
         attrs(s).get("atif.schema_version") == "ATIF-v1.8" for s in spans(receiver)
     )
+
+
+def test_v18_tool_argument_audio_shape_is_not_a_content_part(
+    job, receiver, trajectory
+):
+    trajectory = valid_trajectory(trajectory)
+    trajectory["schema_version"] = "ATIF-v1.8"
+    trajectory["steps"][1]["tool_calls"][0]["arguments"] = {
+        "media": {"type": "audio", "label": "synthetic-not-a-content-part"},
+        "schema_version": "ATIF-v1.8",
+    }
+    assert Trajectory.model_validate(trajectory)
+    (job / "trial-1" / "agent" / "trajectory.json").write_text(json.dumps(trajectory))
+    result = import_job(job, settings=replace(receiver.settings, capture_content=True))
+    assert result.sent == 1 and result.incomplete == 0
+    assert {attrs(s).get("fi.span.kind") for s in spans(receiver)} >= {
+        "AGENT", "LLM", "TOOL"
+    }
+    assert b"synthetic-not-a-content-part" in receiver.requests[0][2]
+
+
+def test_observation_audio_content_part_remains_incomplete(job, receiver, trajectory):
+    trajectory = valid_trajectory(trajectory)
+    trajectory["schema_version"] = "ATIF-v1.8"
+    trajectory["steps"][1]["observation"]["results"][0]["content"] = [
+        {"type": "audio", "source": {"media_type": "audio/wav", "path": "sound.wav"}}
+    ]
+    assert Trajectory.model_validate(trajectory)
+    (job / "trial-1" / "agent" / "trajectory.json").write_text(json.dumps(trajectory))
+    summary = import_job(job, settings=receiver.settings)
+    assert summary.incomplete == 1
+    assert not any(attrs(s).get("fi.span.kind") == "LLM" for s in spans(receiver))
 
 
 def test_audio_requires_converter_support(job, receiver, trajectory):

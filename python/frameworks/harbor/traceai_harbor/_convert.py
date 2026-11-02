@@ -79,19 +79,37 @@ def _converter_trajectory(trajectory):
     All other converter inputs retain their original structure and values.
     """
 
-    def compatible(value):
-        if isinstance(value, dict):
-            if value.get("type") == "audio":
-                raise ArtifactError("unsupported_audio_trajectory")
-            if value.get("schema_version") == "ATIF-v1.8":
-                Trajectory.model_validate(value)
-            converted = {key: compatible(item) for key, item in value.items()}
-            if value.get("schema_version") == "ATIF-v1.8":
-                converted["schema_version"] = "ATIF-v1.7"
-            return converted
+    def content_parts(value):
         if isinstance(value, list):
-            return [compatible(item) for item in value]
+            if any(part.get("type") == "audio" for part in value):
+                raise ArtifactError("unsupported_audio_trajectory")
         return value
+
+    def compatible(value):
+        if value.get("schema_version") == "ATIF-v1.8":
+            Trajectory.model_validate(value)
+        converted = value.copy()
+        if value.get("schema_version") == "ATIF-v1.8":
+            converted["schema_version"] = "ATIF-v1.7"
+        converted["steps"] = []
+        for step in value["steps"]:
+            updated_step = step.copy()
+            updated_step["message"] = content_parts(step["message"])
+            if step.get("observation"):
+                observation = step["observation"].copy()
+                observation["results"] = []
+                for result in step["observation"]["results"]:
+                    updated_result = result.copy()
+                    if "content" in result:
+                        updated_result["content"] = content_parts(result["content"])
+                    observation["results"].append(updated_result)
+                updated_step["observation"] = observation
+            converted["steps"].append(updated_step)
+        if value.get("subagent_trajectories") is not None:
+            converted["subagent_trajectories"] = [
+                compatible(child) for child in value["subagent_trajectories"]
+            ]
+        return converted
 
     return compatible(trajectory)
 
