@@ -75,6 +75,28 @@ for (const mode of ['cjs', 'esm']) {
         }));
       }
 
+      if (current) await t.test('subclass fields, private methods and getters retain their receiver', async () => fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+        const OriginalClient = sdk.InferenceClient;
+        const makeSubclass = Parent => class CustomClient extends Parent {
+          label = 'tenant-a';
+          #value = 'private-value';
+          readPrivate() { return this.#value; }
+          get privateGetter() { return this.#value; }
+        };
+        const fetch = async () => textResponse();
+        const ExistingSubclass = makeSubclass(OriginalClient);
+        const existing = new ExistingSubclass('', { fetch });
+        const wrapped = instrumentation.manuallyInstrument(sdk);
+        const WrappedSubclass = makeSubclass(wrapped.InferenceClient);
+        for (const client of [instrumentation.instrumentClient(existing), new WrappedSubclass('', { fetch })]) {
+          assert.equal(client.label, 'tenant-a');
+          assert.equal(client.readPrivate(), 'private-value');
+          assert.equal(client.privateGetter, 'private-value');
+          assert.equal((await client.textGeneration(textInput)).generated_text, 'private-answer-sentinel');
+        }
+        assert.equal(exporter.getFinishedSpans().length, 2);
+      }));
+
       await t.test('non-chat tasks keep their results and span kinds', async () => fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
         const wrapped = instrumentation.manuallyInstrument(sdk);
         const Client = wrapped.InferenceClient || wrapped.HfInference;

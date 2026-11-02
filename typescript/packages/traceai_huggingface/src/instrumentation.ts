@@ -215,19 +215,36 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
 
   /** Wrap an already-created client without changing its immutable task methods. */
   instrumentClient<T extends object>(client: T): T {
+    return this.wrapClient(client);
+  }
+
+  private wrapClient<T extends object>(client: T, subclassBase?: object): T {
     const existing = this.clients.get(client);
     if (existing) return existing as T;
     const instrumentation = this;
     const methods = new Map<PropertyKey, { original: unknown; wrapped: unknown }>();
     // A proxy of client itself cannot replace a nonconfigurable, nonwritable
     // property. Inherit from it instead; instanceof and the SDK receiver survive.
-    const wrapped = new Proxy(Object.create(client), {
+    const target = Object.create(client);
+    const isSubclassMember = (key: PropertyKey): boolean => {
+      if (!subclassBase) return false;
+      for (let proto = Object.getPrototypeOf(client); proto && proto !== subclassBase; proto = Object.getPrototypeOf(proto)) {
+        if (Object.prototype.hasOwnProperty.call(proto, key)) return true;
+      }
+      return false;
+    };
+    const wrapped = new Proxy(target, {
       get(_target, key) {
-        const original = Reflect.get(client, key, client);
+        // A subclass initializes public fields on the shadow target and private
+        // brands on the returned proxy, not on the underlying SDK client.
+        const own = Object.getOwnPropertyDescriptor(target, key);
+        const clientOwn = Object.getOwnPropertyDescriptor(client, key);
+        const receiver = own ? target : isSubclassMember(key) ? wrapped : client;
+        const original = own ? Reflect.get(target, key, target) : Reflect.get(client, key, receiver);
         if (typeof original !== "function" || key === "constructor") return original;
         const cached = methods.get(key);
-        if (cached?.original === original) return cached.wrapped;
-        const bound = original.bind(client);
+        if (cached && cached.original === original) return cached.wrapped;
+        const bound = original.bind(receiver);
         const factory = typeof key === "string"
           ? instrumentation.getWrapperForMethod(key, instrumentation) : null;
         const method = key === "endpoint"
@@ -236,8 +253,10 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
         methods.set(key, { original, wrapped: method });
         return method;
       },
-      set(_target, key, value) {
-        return Reflect.set(client, key, value, client);
+      set(_target, key, value, receiver) {
+        return Object.prototype.hasOwnProperty.call(target, key)
+          ? Reflect.set(target, key, value, receiver)
+          : Reflect.set(client, key, value, client);
       },
     }) as T;
     this.clients.set(client, wrapped);
@@ -250,9 +269,12 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
     const existing = this.constructors.get(original);
     if (existing) return existing as Function;
     const instrumentation = this;
-    const wrapped = new Proxy(original, {
-      construct(target, args, newTarget) {
-        return instrumentation.instrumentClient(Reflect.construct(target, args, newTarget));
+    const wrapped: Function = new Proxy(original, {
+      construct(target, args, newTarget): object {
+        return instrumentation.wrapClient(
+          Reflect.construct(target, args, newTarget),
+          newTarget === wrapped || newTarget === target ? undefined : target.prototype,
+        );
       },
     });
     this.constructors.set(original, wrapped);
