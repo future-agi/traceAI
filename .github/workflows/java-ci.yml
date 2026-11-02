@@ -73,9 +73,9 @@ jobs:
           java-version: '21'
           cache: maven
           cache-dependency-path: 'java/**/pom.xml'
-      - name: Install core and starter
-        run: mvn -B -ntp -f java/pom.xml -pl traceai-spring-boot-starter -am -DskipTests install
-      - name: Test the installed starter with Boot's BOM and native tracing
+      - name: Install core, starter and OpenAI instrumentation
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-spring-boot-starter,traceai-java-openai -am -DskipTests install
+      - name: Test installed JARs with Boot's BOM, OpenAI requests and OTLP export
         run: mvn -B -ntp -f java/compatibility/spring-boot/pom.xml -Dspring-boot.version=${{ matrix.boot }} ${{ matrix.profile }} test
       - name: Upload starter reports
         if: always()

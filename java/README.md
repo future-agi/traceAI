@@ -53,6 +53,20 @@ Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. 
 
 The starter only creates the `FITracer` bean from Spring Boot properties. It does not instrument Spring AI, the OpenAI SDK or any other library, and it does not bring in Spring AI. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
 
+For this Spring Boot + OpenAI setup, also import the OkHttp BOM in your application's `<dependencyManagement>`, **before** other imported BOMs. It aligns the OpenAI SDK's HTTP client with the OTLP exporter's transport, including Okio. Without alignment, Boot 4.1 can select OkHttp 5 with the older SDK's Okio 3.6, causing both model calls and trace export to fail with `NoSuchMethodError`.
+
+```xml
+<dependency>
+    <groupId>com.squareup.okhttp3</groupId>
+    <artifactId>okhttp-bom</artifactId>
+    <version>5.3.2</version>
+    <type>pom</type>
+    <scope>import</scope>
+</dependency>
+```
+
+This alignment is for applications using the OpenAI SDK, not a dependency added by the starter. Keep the entire OkHttp family aligned when updating your application's transport versions.
+
 ### Gradle
 
 ```groovy
@@ -64,8 +78,9 @@ dependencies {
     implementation platform('com.futureagi:traceai-bom:1.0.0')
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
-    // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
+    // For Spring Boot + OpenAI, add both (do not replace OpenAI):
     // implementation 'com.futureagi:traceai-spring-boot-starter'
+    // implementation platform('com.squareup.okhttp3:okhttp-bom:5.3.2')
 }
 ```
 
