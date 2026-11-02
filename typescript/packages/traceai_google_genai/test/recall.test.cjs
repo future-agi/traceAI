@@ -12,7 +12,7 @@ function run(scenario, runner = "recall-cases.cjs") {
   const stdout = execFileSync(
     process.execPath,
     [path.join(__dirname, runner), consumer, scenario],
-    { encoding: "utf8", timeout: 15000, env: { PATH: process.env.PATH } },
+    { encoding: "utf8", timeout: 60000, env: { PATH: process.env.PATH } },
   );
   return JSON.parse(stdout.trim());
 }
@@ -149,7 +149,15 @@ for (const scenario of [
   "credential-errors",
   "credential-copies",
   "privacy-combinations",
-  ...(latest ? ["credential-header"] : []),
+  "privacy-environment",
+  "pii-span-lifecycle",
+  ...(latest
+    ? [
+        "credential-header",
+        "custom-header-credentials",
+        "custom-header-transports",
+      ]
+    : []),
 ]) {
   test(`security regression: ${scenario}`, () => {
     run(scenario, "security-cases.cjs");

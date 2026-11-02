@@ -29,7 +29,11 @@ import {
   TraceConfigOptions,
   REDACTED_VALUE,
 } from "@traceai/fi-core";
-import { telemetryError } from "./telemetryError";
+import {
+  requestCredentials,
+  RequestCredentials,
+  telemetryError,
+} from "./telemetryError";
 
 const MODULE_NAME = "@google/generative-ai";
 const METHODS = [
@@ -70,6 +74,7 @@ interface GenerateContentRequest {
 }
 interface ModelDefaults {
   apiKey?: string;
+  _requestOptions?: { customHeaders?: unknown };
   model?: string;
   generationConfig?: GenerateContentRequest["generationConfig"];
   safetySettings?: GenerateContentRequest["safetySettings"];
@@ -111,8 +116,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   private privacy!: TraceConfig;
   // Base construction may call enable/patch before subclass field initialization.
-  declare private patchedPrototypes?: Set<ModelPrototype>;
-  declare private manualModules?: Set<SDKModule>;
+  private declare patchedPrototypes?: Set<ModelPrototype>;
+  private declare manualModules?: Set<SDKModule>;
   public readonly instrumentationName = "@traceai/google-genai";
 
   constructor({
@@ -129,9 +134,30 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
 
   private refreshTracer() {
     this.privacy = generateTraceConfig(this._traceConfig);
+    // Published fi-core 1.1.0 stops at the first matching key-based rule,
+    // bypassing its PII fallback (notably for image hiding). Compose a separate
+    // PII-only pass after content masking using the public, maintained tracer.
+    // Both wrappers delegate to ONE underlying span; no extra span is created.
+    const tracer = this.privacy.piiRedaction
+      ? new FITracer({
+          tracer: this.tracer,
+          traceConfig: {
+            hideInputs: false,
+            hideOutputs: false,
+            hideInputMessages: false,
+            hideOutputMessages: false,
+            hideInputImages: false,
+            hideInputText: false,
+            hideOutputText: false,
+            hideEmbeddingVectors: false,
+            hideErrorDetails: false,
+            piiRedaction: true,
+          },
+        })
+      : this.tracer;
     this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this.privacy,
+      tracer,
+      traceConfig: { ...this.privacy, piiRedaction: false },
     });
   }
 
@@ -223,11 +249,11 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
           return original.apply(this, args);
         const privacy = instrumentation.privacy;
         let span: Span;
-        let apiKey: unknown;
+        let credentials: RequestCredentials;
         try {
-          // Capture the request's credential, even if the model is changed while
-          // its promise is pending. Never attach it to a span or log it.
-          apiKey = this.apiKey;
+          // Snapshot effective API/header credentials before asynchronous SDK
+          // validation or application mutation. Never attach or log these values.
+          credentials = requestCredentials(this, args[1]);
           span = instrumentation.fiTracer.startSpan(`Google GenAI ${method}`, {
             kind: SpanKind.INTERNAL,
             attributes: {
@@ -255,7 +281,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
         try {
           result = context.with(execContext, () => original.apply(this, args));
         } catch (error) {
-          finishError(span, error, apiKey);
+          finishError(span, error, credentials);
           throw error;
         }
         const promise = Promise.resolve(result).then(
@@ -273,7 +299,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
             return value;
           },
           (error) => {
-            finishError(span, error, apiKey);
+            finishError(span, error, credentials);
             throw error;
           },
         );
@@ -298,9 +324,13 @@ function endSpan(span: Span) {
     /* exporter failures cannot change SDK results */
   }
 }
-function finishError(span: Span, error: unknown, apiKey: unknown) {
+function finishError(
+  span: Span,
+  error: unknown,
+  credentials: RequestCredentials,
+) {
   try {
-    const sanitized = telemetryError(error, apiKey);
+    const sanitized = telemetryError(error, credentials);
     span.recordException(sanitized);
     span.setStatus({
       code: SpanStatusCode.ERROR,

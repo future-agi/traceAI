@@ -12,15 +12,27 @@ const { InMemorySpanExporter, SimpleSpanProcessor } = use(
   "@opentelemetry/sdk-trace-base",
 );
 const exporter = new InMemorySpanExporter();
+const sampledAttributes = [];
 const provider = new NodeTracerProvider({
+  sampler: {
+    shouldSample(_context, _traceId, _name, _kind, attributes) {
+      sampledAttributes.push(attributes);
+      return { decision: 2 };
+    },
+    toString() {
+      return "PrivacyProbeSampler";
+    },
+  },
   spanProcessors: [new SimpleSpanProcessor(exporter)],
 });
 provider.register();
 const key = "synthetic-google-secret-PRIVATE";
-const prompt = "synthetic-prompt-PRIVATE";
-const system = "synthetic-system-PRIVATE";
+const email = "synthetic.person@example.com";
+const phone = "+1 (415) 555-2671";
+const prompt = `synthetic-prompt-PRIVATE ${email} ${phone}`;
+const system = `synthetic-system-PRIVATE ${email} ${phone}`;
 const image = "SYNTHETIC_IMAGE_PRIVATE";
-const output = "synthetic-output-PRIVATE";
+const output = `synthetic-output-PRIVATE ${email} ${phone}`;
 const operations = [
   ["generateContent", prompt],
   ["embedContent", prompt],
@@ -156,7 +168,11 @@ async function run() {
         const original =
           typeof value === "string"
             ? value
-            : { name: value.name, message: value.message, stack: value.stack };
+            : {
+                name: value.name,
+                message: value.message,
+                stack: value.stack,
+              };
         exporter.reset();
         assert.equal(
           await rejected(() => model.generateContent("safe-input")),
@@ -166,7 +182,11 @@ async function run() {
         assert.ok(spans()[0].status.message.includes("safe-diagnostic"));
         if (typeof value !== "string")
           assert.deepEqual(
-            { name: value.name, message: value.message, stack: value.stack },
+            {
+              name: value.name,
+              message: value.message,
+              stack: value.stack,
+            },
             original,
           );
       }
@@ -192,7 +212,193 @@ async function run() {
       thrown,
     );
     assertPrivate([key]);
-  } else if (scenario === "privacy-combinations") {
+  } else if (scenario === "custom-header-credentials") {
+    const failures = [];
+    let fetchCount = 0;
+    global.fetch = async () => {
+      fetchCount++;
+      throw new Error("unexpected fetch");
+    };
+    // The SDK accepts records, Headers and tuple arrays at runtime. Invalid
+    // values must be captured before Headers construction rejects them.
+    for (const header of [
+      "Authorization",
+      "X-Api-Key",
+      "Proxy-Authorization",
+      "x-GoOg-Api-Key",
+      "X-Secret-Key",
+    ]) {
+      for (const placement of ["model", "call", "override"]) {
+        for (const shape of ["record", "tuples"]) {
+          for (const [method, input] of operations) {
+            const secret = "synthetic-custom-header-PRIVATE";
+            const value =
+              (header.toLowerCase().includes("authorization")
+                ? "Bearer "
+                : "") +
+              secret +
+              "\ninvalid";
+            const customHeaders =
+              shape === "record" ? { [header]: value } : [[header, value]];
+            const options = { customHeaders };
+            const defaults =
+              placement === "model"
+                ? options
+                : placement === "override"
+                  ? {
+                      customHeaders: {
+                        Authorization: "safe-replaced-header",
+                      },
+                    }
+                  : {};
+            const model = new google.GoogleGenerativeAI(key).getGenerativeModel(
+              { model: "synthetic-model" },
+              defaults,
+            );
+            const call = () =>
+              model[method](input, placement === "model" ? {} : options);
+            let original;
+            try {
+              await call();
+            } catch (error) {
+              original = error;
+            }
+            exporter.reset();
+            setup({
+              hideInputs: false,
+              hideOutputs: false,
+              hideErrorDetails: false,
+            });
+            const caught = await rejected(call);
+            assert.equal(
+              caught.message,
+              original.message,
+              "application diagnostics unchanged",
+            );
+            assert.ok(caught.message.includes(secret));
+            try {
+              assertPrivate([secret]);
+            } catch {
+              failures.push({ header, placement, shape, method });
+            }
+            inst.disable();
+          }
+        }
+      }
+    }
+    assert.equal(fetchCount, 0, "validation fails before transport");
+    assert.deepEqual(
+      failures,
+      [],
+      "custom-header credentials must not enter telemetry",
+    );
+  } else if (scenario === "custom-header-transports") {
+    const secret = "synthetic-valid-header-PRIVATE/+?=";
+    for (const placement of ["model", "call", "override"]) {
+      for (const shape of ["record", "tuples", "Headers"]) {
+        for (const [method, input] of operations) {
+          const entries = [
+            ["Authorization", `Bearer ${secret}`],
+            ["X-Api-Key", secret + "-other"],
+            ["X-Request-Id", "public-request-id"],
+          ];
+          const customHeaders =
+            shape === "Headers"
+              ? new Headers(entries)
+              : shape === "record"
+                ? Object.fromEntries(entries)
+                : entries;
+          const options = { customHeaders };
+          const defaults =
+            placement === "model"
+              ? options
+              : placement === "override"
+                ? {
+                    customHeaders: { Authorization: "replaced-credential" },
+                  }
+                : {};
+          const model = new google.GoogleGenerativeAI(key).getGenerativeModel(
+            { model: "synthetic-model" },
+            defaults,
+          );
+          global.fetch = async (_url, init) => {
+            assert.equal(init.headers.get("authorization"), `Bearer ${secret}`);
+            assert.equal(init.headers.get("x-api-key"), secret + "-other");
+            assert.equal(init.headers.get("x-request-id"), "public-request-id");
+            throw new Error(
+              `safe-transport-diagnostic ${secret} ${encodeURIComponent(secret)} ${secret}-other`,
+            );
+          };
+          const call = () =>
+            model[method](input, placement === "model" ? {} : options);
+          let original;
+          try {
+            await call();
+          } catch (error) {
+            original = error;
+          }
+          exporter.reset();
+          setup({});
+          const caught = await rejected(call);
+          assert.equal(caught.message, original.message);
+          assertPrivate([
+            secret,
+            encodeURIComponent(secret),
+            secret + "-other",
+          ]);
+          assert.ok(
+            spans()[0].status.message.includes("safe-transport-diagnostic"),
+          );
+          inst.disable();
+        }
+      }
+    }
+  } else if (scenario === "pii-span-lifecycle") {
+    // Composition must also cover mutations through the active span, without
+    // adding a span, changing parent/context identity, or duplicating errors.
+    const { trace } = use("@opentelemetry/api");
+    const model = new google.GoogleGenerativeAI(key).getGenerativeModel({
+      model: "synthetic-model",
+    });
+    for (const hideErrorDetails of [true, false]) {
+      exporter.reset();
+      setup({
+        piiRedaction: true,
+        hideInputImages: true,
+        hideErrorDetails,
+      });
+      global.fetch = async () => {
+        const active = trace.getActiveSpan();
+        assert.ok(active);
+        active.setAttribute(
+          "gen_ai.input.messages",
+          JSON.stringify([
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                { type: "image_url", image_url: image },
+              ],
+            },
+          ]),
+        );
+        active.setAttributes({ "synthetic.contact": email });
+        throw new Error("synthetic-lifecycle-failure");
+      };
+      const caught = await rejected(() => model.generateContent(prompt));
+      assertPrivate([email, phone, image]);
+      assert.equal(spans()[0].attributes["error.type"], caught.name);
+      if (hideErrorDetails) assertPrivate(["synthetic-lifecycle-failure"]);
+      else
+        assert.ok(
+          spans()[0].status.message.includes("synthetic-lifecycle-failure"),
+        );
+      inst.disable();
+    }
+  } else if (
+    scenario === "privacy-combinations" ||
+    scenario === "privacy-environment"
+  ) {
     const flags = [
       "hideInputs",
       "hideInputText",
@@ -202,6 +408,7 @@ async function run() {
       "hideOutputText",
       "hideOutputMessages",
       "hideEmbeddingVectors",
+      "piiRedaction",
     ];
     const input = {
       contents: [
@@ -224,11 +431,23 @@ async function run() {
         flags.map((f, i) => [f, !!(bits & (1 << i))]),
       );
       exporter.reset();
-      setup(config);
+      for (const flag of flags) {
+        const env =
+          "FI_" + flag.replace(/[A-Z]/g, (c) => "_" + c).toUpperCase();
+        // Options override deliberately contradictory environment values.
+        process.env[env] = String(
+          scenario === "privacy-environment" ? config[flag] : !config[flag],
+        );
+      }
+      setup(scenario === "privacy-environment" ? undefined : config);
       global.fetch = async (url, options) => {
         const body = JSON.parse(options.body);
         const payload = String(url).includes(":batchEmbedContents")
-          ? { embeddings: body.requests.map(() => ({ values: [0.123456789] })) }
+          ? {
+              embeddings: body.requests.map(() => ({
+                values: [0.123456789],
+              })),
+            }
           : String(url).includes(":embedContent")
             ? { embedding: { values: [0.123456789] } }
             : response;
@@ -247,20 +466,25 @@ async function run() {
       await model.embedContent(prompt);
       await model.batchEmbedContents(operations[2][1]);
       assert.equal(spans().length, 3);
-      const hidden = [];
+      const hidden = config.piiRedaction ? [email, phone] : [];
       if (config.hideInputs || config.hideInputText || config.hideInputMessages)
-        hidden.push(prompt, system);
+        hidden.push("synthetic-prompt-PRIVATE", "synthetic-system-PRIVATE");
       if (config.hideInputs || config.hideInputImages) hidden.push(image);
       if (
         config.hideOutputs ||
         config.hideOutputText ||
         config.hideOutputMessages
       )
-        hidden.push(output);
+        hidden.push("synthetic-output-PRIVATE");
       if (config.hideOutputs || config.hideEmbeddingVectors)
         hidden.push("0.123456789");
       try {
         assertPrivate(hidden);
+        for (const marker of hidden)
+          assert.ok(
+            !JSON.stringify(sampledAttributes.slice(-3)).includes(marker),
+            "samplers must also see only sanitized input",
+          );
       } catch {
         failures.push(config);
       }
@@ -268,14 +492,20 @@ async function run() {
         !config.hideInputs &&
         !config.hideInputText &&
         !config.hideInputMessages
-      )
+      ) {
+        const serialized = JSON.stringify(spans());
         assert.ok(
-          JSON.stringify(spans()).includes(prompt),
+          serialized.includes("synthetic-prompt-PRIVATE"),
           "unhidden text remains available",
         );
+        if (!config.piiRedaction) {
+          assert.ok(serialized.includes(email));
+          assert.ok(serialized.includes(phone));
+        }
+      }
       inst.disable();
     }
-    assert.deepEqual(failures, [], "all 256 privacy combinations must compose");
+    assert.deepEqual(failures, [], "all 512 privacy combinations must compose");
   } else throw new Error("Unknown scenario");
 }
 run()
