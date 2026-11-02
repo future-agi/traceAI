@@ -5,10 +5,10 @@ Trace BeeAI agents, tools, chat models and workflows in Future AGI while keeping
 ## Install
 
 ```sh
-npm install @traceai/beeai @traceai/fi-core beeai-framework zod@^3.25.76 @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
+npm install --legacy-peer-deps @traceai/beeai @traceai/fi-core beeai-framework@^0.1.0 zod@^3.25.76 @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
 ```
 
-Use `beeai-framework` 0.1.x. Your model adapter may require additional packages and its own credentials. This integration exports traces, not metrics or logs.
+Use `beeai-framework` 0.1.x. The `--legacy-peer-deps` flag avoids conflicting optional LangChain provider peers in BeeAI's dependency tree. It also disables npm's peer-dependency checks, so install your model adapter's required packages explicitly and use its own credentials. This integration exports traces, not metrics or logs.
 
 ## Configure tracing
 
@@ -79,7 +79,8 @@ Open the `beeai-app` project in Future AGI to inspect the workflow trace. The sa
 
 - One span per native BeeAI run, with parent-child relationships for nested runs.
 - Agent, tool, LLM, embedding and workflow span kinds. Workflows use the `CHAIN` kind.
-- Chat model and provider identifiers, and token counts when BeeAI supplies usage.
+- Configured tool names, chat model and provider identifiers, and token counts when BeeAI supplies usage.
+- Structured chat results from `createStructure()`, including usage when returned by BeeAI.
 - One model span for a streamed chat completion; token observers continue to receive events normally.
 - Error status and cancellation without changing the application's return values or exceptions.
 
@@ -89,7 +90,9 @@ Constructing a `Run` without awaiting it does not create a span or execute the o
 
 The setup above hides input, output and error text. Set the corresponding `traceConfig` options to `false` only when you intend to export that content. Environment configuration in `@traceai/fi-core` also applies when options are not set explicitly.
 
-Message/text-hiding options also hide generic agent/workflow payloads, because those payloads can contain copies of model messages. Embedding vectors are not recorded. Configure any other instrumentors separately.
+Message/text-hiding options also hide generic payloads in the corresponding direction, including structured model results. Agent outputs capture the final `result`, not the agent's memory or intermediate iterations.
+
+Embedding model outputs are omitted. Set `hideEmbeddingVectors: true` (or `FI_HIDE_EMBEDDING_VECTORS=true`) to redact fields named `embedding`, `embeddings`, `vector` or `vectors` at any depth in enclosing payloads. Custom payloads may copy sensitive data into other fields or strings; keep `hideInputs` and `hideOutputs` enabled to omit all such content. Configure any other instrumentors separately.
 
 ## Existing applications
 

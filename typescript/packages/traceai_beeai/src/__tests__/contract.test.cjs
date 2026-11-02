@@ -219,6 +219,155 @@ test('a failing tracer cannot change the application result', async () => {
   } finally { instrumentation.setTracerProvider(provider); instrumentation._diag.warn = warn; }
 });
 
+// Regression contracts use real framework results and assert the exported wire,
+// not just the direct attributes that FITracer already knows how to mask.
+for (const flag of ['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT']) {
+  test(`agent memory never leaks a hidden prompt: ${flag}`, async () => {
+    const previous = process.env[flag];
+    process.env[flag] = 'true';
+    try {
+      const agentPath = sdk('beeai-framework/package.json').version === '0.1.2' ? 'bee' : 'react';
+      const exports = await upstream(`beeai-framework/agents/${agentPath}/agent`);
+      const RealAgent = exports.ReActAgent ?? exports.BeeAgent;
+      const { UnconstrainedMemory } = await upstream('beeai-framework/memory/unconstrainedMemory');
+      const model = new OfflineModel();
+      model._create = async () => new ChatModelOutput([new AssistantMessage('Thought: done\nFinal Answer: public-answer')]);
+      model._createStream = async function* () { yield await this._create(); };
+      const result = await new RealAgent({ llm: model, tools: [], memory: new UnconstrainedMemory() })
+        .run({ prompt: 'PRIVATE_AGENT_PROMPT' });
+      assert.ok(result.memory.messages.some(m => m.text.includes('PRIVATE_AGENT_PROMPT')));
+      assert.equal(result.result.text, 'public-answer');
+      // Applications can return an agent result inside a tool/workflow state.
+      await new ProbeAgent(() => nativeRun(['tool', 'nested_result'], async () => ({ nested: result })))
+        .run({ prompt: 'public-input' });
+      await provider.forceFlush();
+      assert.ok(!JSON.stringify(wire).includes('PRIVATE_AGENT_PROMPT'));
+      const output = JSON.parse(spans().find(s => kind(s) === 'AGENT').attributes[SC.OUTPUT_VALUE]);
+      assert.deepEqual(Object.keys(output), ['result']);
+      assert.ok(JSON.stringify(output).includes('public-answer'));
+    } finally {
+      if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+    }
+  });
+}
+
+for (const configSource of ['environment', 'options']) {
+  test(`embedding hiding covers enclosing payloads without mutation: ${configSource}`, async () => {
+    const previous = process.env.FI_HIDE_EMBEDDING_VECTORS;
+    process.env.FI_HIDE_EMBEDDING_VECTORS = configSource === 'environment' ? 'true' : 'false';
+    let privateInstrumentation;
+    if (configSource === 'options') {
+      instrumentation.disable();
+      privateInstrumentation = new BeeAIInstrumentation({ traceConfig: { hideEmbeddingVectors: true } });
+      privateInstrumentation.setTracerProvider(provider);
+      privateInstrumentation.manuallyInstrument(rootOnly ? { BaseAgent } : { RunContext });
+    }
+    try {
+      const { EmbeddingModel } = await upstream('beeai-framework/backend/embedding');
+      class OfflineEmbedding extends EmbeddingModel {
+        emitter = Emitter.root.child({ namespace: ['backend', 'offline', 'embedding'], creator: this });
+        async _create() { return { embeddings: [[0.123456789, 0.987654321]], values: ['public-text'] }; }
+      }
+      const tool = new DynamicTool({
+        name: 'vector_consumer', description: 'Synthetic vector consumer',
+        inputSchema: z.object({ embeddings: z.array(z.array(z.number())) }),
+        handler: async input => ({ nested: { vector: input.embeddings[0] }, label: 'public-tool' }),
+      });
+      const workflow = new Workflow({ schema: z.object({ text: z.string(), embeddings: z.array(z.array(z.number())).optional(), tool: z.any().optional() }) })
+        .addStep('embed', async state => {
+          state.embeddings = (await new OfflineEmbedding().create({ values: [state.text] })).embeddings;
+          state.tool = await tool.run({ embeddings: state.embeddings });
+          return Workflow.END;
+        });
+      const result = await new ProbeAgent(() => workflow.run({ text: 'public-text' })).run({ prompt: 'embed' });
+      assert.deepEqual(result.state.embeddings, [[0.123456789, 0.987654321]]);
+      assert.deepEqual(result.state.tool.nested.vector, [0.123456789, 0.987654321]);
+      await provider.forceFlush();
+      assert.deepEqual(spans().map(kind).sort(), ['AGENT', 'CHAIN', 'EMBEDDING', 'TOOL']);
+      assert.ok(!JSON.stringify(wire).includes('0.123456789'));
+      assert.ok(!JSON.stringify(wire).includes('0.987654321'));
+      for (const span of spans().filter(s => kind(s) !== 'EMBEDDING')) {
+        assert.ok(span.attributes[SC.OUTPUT_VALUE].includes('public-'));
+        assert.ok(span.attributes[SC.OUTPUT_VALUE].includes('__REDACTED__'));
+      }
+    } finally {
+      if (previous === undefined) delete process.env.FI_HIDE_EMBEDDING_VECTORS;
+      else process.env.FI_HIDE_EMBEDDING_VECTORS = previous;
+      if (privateInstrumentation) { privateInstrumentation.disable(); instrumentation.enable(); }
+    }
+  });
+}
+
+test('structured model objects and supplied nested usage are captured', async () => {
+  const model = new OfflineModel();
+  model._create = async () => new ChatModelOutput([new AssistantMessage('{"answer":"structured-answer"}')], { promptTokens: 2, completionTokens: 3, totalTokens: 5 });
+  const result = await new ProbeAgent(() => model.createStructure({
+    messages: [new UserMessage('structured-input')], schema: z.object({ answer: z.string() }),
+  })).run({ prompt: 'structured-input' });
+  assert.deepEqual(result.object, { answer: 'structured-answer' });
+  const span = spans().find(s => kind(s) === 'LLM');
+  assert.deepEqual(JSON.parse(span.attributes[SC.OUTPUT_VALUE]), result.object);
+  assert.equal(span.attributes[SC.OUTPUT_MIME_TYPE], 'application/json');
+  if (result.output) {
+    assert.ok(span.attributes[SC.LLM_OUTPUT_MESSAGES].includes('structured-answer'));
+    assert.equal(span.attributes[SC.LLM_TOKEN_COUNT_PROMPT], 2);
+    assert.equal(span.attributes[SC.LLM_TOKEN_COUNT_COMPLETION], 3);
+    assert.equal(span.attributes[SC.LLM_TOKEN_COUNT_TOTAL], 5);
+  } else {
+    assert.equal(span.attributes[SC.LLM_TOKEN_COUNT_TOTAL], undefined, 'do not invent missing usage');
+  }
+});
+
+for (const flag of ['FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT']) {
+  test(`structured model content respects ${flag}`, async () => {
+    const previous = process.env[flag];
+    process.env[flag] = 'true';
+    try {
+      const model = new OfflineModel();
+      model._create = async () => new ChatModelOutput([new AssistantMessage('{"answer":"PRIVATE_STRUCTURED_ANSWER"}')], { promptTokens: 2, completionTokens: 3, totalTokens: 5 });
+      const result = await new ProbeAgent(() => model.createStructure({
+        messages: [new UserMessage('public-input')], schema: z.object({ answer: z.string() }),
+      })).run({ prompt: 'public-input' });
+      assert.equal(result.object.answer, 'PRIVATE_STRUCTURED_ANSWER');
+      await provider.forceFlush();
+      assert.ok(!JSON.stringify(wire).includes('PRIVATE_STRUCTURED_ANSWER'));
+      if (result.output) assert.equal(spans().find(s => kind(s) === 'LLM').attributes[SC.LLM_TOKEN_COUNT_TOTAL], 5);
+    } finally {
+      if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+    }
+  });
+}
+
+test('nested errors and success serialization are observed once per lifecycle event', async () => {
+  let failures = 0;
+  await assert.rejects(new ProbeAgent(() => nativeRun(['tool', 'offline'], async () => {
+    failures++; throw new Error('single-failure');
+  })).run({ prompt: 'fail' }));
+  assert.equal(failures, 1);
+  assert.equal(spans().length, 2);
+  for (const span of spans()) assert.equal(span.events.filter(e => e.name === 'exception').length, 1);
+  let serializations = 0;
+  await new ProbeAgent(async () => {
+    await nativeRun(['tool', 'offline'], async () => ({ toJSON() { serializations++; return { text: 'public-output' }; } }));
+    return 'done';
+  }).run({ prompt: 'success' });
+  assert.equal(serializations, 1);
+});
+
+test('configured tool names distinguish otherwise identical tool calls', async () => {
+  const names = ['lookup_order', 'cancel_order'];
+  await new ProbeAgent(async () => {
+    for (const name of names) await new DynamicTool({
+      name, description: 'Synthetic order tool', inputSchema: z.object({ id: z.string() }),
+      handler: async () => new StringToolOutput('ok'),
+    }).run({ id: 'synthetic-order' });
+    return 'done';
+  }).run({ prompt: 'tools' });
+  const tools = spans().filter(s => kind(s) === 'TOOL');
+  assert.deepEqual(tools.map(s => s.attributes[SC.TOOL_NAME]), names);
+  assert.deepEqual(tools.map(s => s.name), names.map(name => `${name} Run`));
+});
+
 test('manual registration is idempotent, handles frozen namespaces, and disable/re-enable restores methods', async () => {
   const original = RunContext.enter;
   instrumentation.manuallyInstrument(Object.freeze({ RunContext }));

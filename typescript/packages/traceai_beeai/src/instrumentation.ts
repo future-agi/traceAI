@@ -4,7 +4,7 @@ import {
   InstrumentationNodeModuleFile,
 } from "@opentelemetry/instrumentation";
 import { Context, Span, SpanKind, SpanStatusCode, context, diag, trace } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
+import { FITracer, REDACTED_VALUE, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
 import { SemanticConventions as SC, FISpanKind, MimeType } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
@@ -21,7 +21,7 @@ interface BeeEmitter {
     options: { matchNested: boolean; isBlocking: boolean }): () => void;
 }
 interface BeeContext {
-  instance: { constructor: { name: string }; emitter: BeeEmitter; modelId?: string; providerId?: string };
+  instance: { constructor: { name: string }; emitter: BeeEmitter; name?: string; modelId?: string; providerId?: string };
   emitter: BeeEmitter;
   runId: string;
   groupId: string;
@@ -41,6 +41,7 @@ interface RunSpan {
   span: Span;
   parent: Context;
   kind: FISpanKind;
+  hideEmbeddingVectors: boolean;
 }
 interface Patch { restore(): void }
 
@@ -55,6 +56,7 @@ export class BeeAIInstrumentation extends InstrumentationBase {
   private manualModules = new Set<object>();
   private observed = new WeakSet<BeeContext>();
   private completed = new WeakSet<BeeContext>();
+  private events = new WeakSet<BeeEvent>();
   private spans = new Map<string, RunSpan>();
 
   constructor(config: BeeAIInstrumentationConfig = {}) {
@@ -164,6 +166,10 @@ export class BeeAIInstrumentation extends InstrumentationBase {
   }
 
   private onEvent(data: unknown, event: BeeEvent, parent: Context): void {
+    // BeeAI pipes the same event object to direct and ancestor observers. Keep
+    // discovery at every depth, but serialize success / record errors only once.
+    if (this.events.has(event)) return;
+    this.events.add(event);
     const ctx = event.creator;
     const id = key(ctx);
     let state = this.spans.get(id);
@@ -182,24 +188,26 @@ export class BeeAIInstrumentation extends InstrumentationBase {
         hideInputs: config.hideInputs || config.hideInputMessages || config.hideInputText || config.hideInputImages,
         hideOutputs: config.hideOutputs || config.hideOutputMessages || config.hideOutputText,
       } });
-      const span = tracer.startSpan(`${ctx.instance.constructor.name} Run`, {
+      const toolName = kind === FISpanKind.TOOL && typeof ctx.instance.name === "string"
+        ? ctx.instance.name : undefined;
+      const span = tracer.startSpan(`${toolName || ctx.instance.constructor.name} Run`, {
         kind: SpanKind.INTERNAL,
-        attributes: { [SC.FI_SPAN_KIND]: kind },
+        attributes: { [SC.FI_SPAN_KIND]: kind, ...(toolName ? { [SC.TOOL_NAME]: toolName } : {}) },
       }, spanParent);
-      state = { span, parent: spanParent, kind };
+      state = { span, parent: spanParent, kind, hideEmbeddingVectors: config.hideEmbeddingVectors };
       this.spans.set(id, state);
       // Current BeeAI pipes only a run's own events to its parent. Subscribe to
       // each discovered child as well so root-only registration sees deeper runs.
       this.observe(ctx, spanParent);
       // Serialize only operation input, never options, clients or credentials.
-      setContent(span, "input", ctx.runParams?.[0], kind);
+      setContent(state, "input", ctx.runParams?.[0]);
       if (kind === FISpanKind.LLM) {
         if (typeof ctx.instance.modelId === "string") span.setAttribute(SC.LLM_MODEL_NAME, ctx.instance.modelId);
         if (typeof ctx.instance.providerId === "string") span.setAttribute(SC.LLM_PROVIDER, ctx.instance.providerId);
       }
     } else if (state) {
       if (event.name === "success") {
-        setContent(state.span, "output", data, state.kind);
+        setContent(state, "output", data);
         if (state.kind === FISpanKind.LLM) setUsage(state.span, data);
         state.span.setStatus({ code: SpanStatusCode.OK });
       } else if (event.name === "error") {
@@ -224,19 +232,44 @@ function spanKind(namespace: string[]): FISpanKind {
   return FISpanKind.CHAIN;
 }
 
-function setContent(span: Span, direction: "input" | "output", value: unknown, kind: FISpanKind): void {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function payloadJSON(value: unknown, hideEmbeddingVectors: boolean): string | undefined {
+  return JSON.stringify(value, (field, item: unknown) => {
+    // FITracer cannot mask fields after they have become a generic JSON string.
+    if (hideEmbeddingVectors && /^(embeddings?|vectors?)$/i.test(field)) return REDACTED_VALUE;
+    // Agent results can also be embedded in a workflow/tool's returned state.
+    // Export the answer, not runner memory, intermediate iterations or history.
+    if (isRecord(item) && "result" in item && "memory" in item) return { result: item.result };
+    return item;
+  });
+}
+
+function setContent(state: RunSpan, direction: "input" | "output", value: unknown): void {
+  const { span, kind, hideEmbeddingVectors } = state;
   // No RAW_* copies: all content goes through FITracer's masking policy.
-  // Never serialize embedding vectors into an unmaskable generic output blob.
+  // Never serialize an embedding model's output into a generic output blob.
   if (!span.isRecording() || (kind === FISpanKind.EMBEDDING && direction === "output")) return;
   try {
     if (kind === FISpanKind.LLM) {
-      const messages = (value as { messages?: unknown } | null)?.messages;
+      const structured = direction === "output" && isRecord(value) && "object" in value ? value : undefined;
+      const output = structured ? structured.output : value;
+      const messages = isRecord(output) ? output.messages : undefined;
       if (Array.isArray(messages)) {
-        span.setAttribute(direction === "input" ? SC.LLM_INPUT_MESSAGES : SC.LLM_OUTPUT_MESSAGES, JSON.stringify(messages));
+        const json = payloadJSON(messages, hideEmbeddingVectors);
+        if (json !== undefined) span.setAttribute(
+          direction === "input" ? SC.LLM_INPUT_MESSAGES : SC.LLM_OUTPUT_MESSAGES, json);
       }
-      return;
+      // createStructure returns { object } at the floor and { object, output }
+      // on newer BeeAI. Keep the object even when there are no output messages.
+      if (!structured) return;
+      value = structured.object;
+    } else if (kind === FISpanKind.AGENT && direction === "output" && isRecord(value) && "result" in value) {
+      value = { result: value.result };
     }
-    const json = JSON.stringify(value);
+    const json = payloadJSON(value, hideEmbeddingVectors);
     if (json !== undefined) span.setAttributes(direction === "input"
       ? { [SC.INPUT_VALUE]: json, [SC.INPUT_MIME_TYPE]: MimeType.JSON }
       : { [SC.OUTPUT_VALUE]: json, [SC.OUTPUT_MIME_TYPE]: MimeType.JSON });
@@ -247,7 +280,8 @@ function setContent(span: Span, direction: "input" | "output", value: unknown, k
 }
 
 function setUsage(span: Span, output: unknown): void {
-  const usage = (output as { usage?: Record<string, unknown> } | null)?.usage;
+  const modelOutput = isRecord(output) && "object" in output ? output.output : output;
+  const usage = isRecord(modelOutput) && isRecord(modelOutput.usage) ? modelOutput.usage : undefined;
   for (const [field, attribute] of [
     ["promptTokens", SC.LLM_TOKEN_COUNT_PROMPT],
     ["completionTokens", SC.LLM_TOKEN_COUNT_COMPLETION],
