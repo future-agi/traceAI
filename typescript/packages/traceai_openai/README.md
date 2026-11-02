@@ -222,6 +222,20 @@ const response = await client.chat.completions.create({
 Choose a model available to your gateway account. `gen_ai.provider.name` comes from the configured API hostname, not the model name: `api.anannas.ai` and `anannas.ai` produce `anannas`, including failed and streamed requests. The gateway's downstream routing is not inferred. Unknown proxies and local servers retain the historical `openai` fallback; this does not establish which provider they route to. URL credentials, paths and query strings are not added as provider attributes.
 
 Streaming spans finish when you consume the stream, encounter an iteration error or leave the loop early. Consume or close streams before shutting down the tracer provider. Request and response content is captured by default; use the instrumentation's `traceConfig` input/output and error-detail hiding options for sensitive data.
+
+## Fireworks AI
+
+Point the client at Fireworks' [OpenAI-compatible endpoint](https://docs.fireworks.ai/tools-sdks/openai-compatibility). Requests to `api.fireworks.ai` produce `gen_ai.provider.name=fireworks` for chat completions, completions and embeddings, including streamed and failed requests:
+
+```typescript
+const client = new OpenAI({
+  baseURL: "https://api.fireworks.ai/inference/v1",
+  apiKey: process.env.FIREWORKS_API_KEY,
+});
+```
+
+`@traceai/fireworks` is deprecated and delegates to this instrumentor. Enabling both still produces one span per request.
+
 ## Response helpers
 
 Instrumentation preserves the OpenAI SDK's `APIPromise` helpers. Use

@@ -25,6 +25,8 @@ from opentelemetry.trace import SpanKind, StatusCode
 from fi_instrumentation import register, suppress_tracing
 from fi_instrumentation.aws_lambda import LambdaTracer
 from fi_instrumentation.fi_types import ProjectType
+from fi_instrumentation.otel import SimpleSpanProcessor as FiSimpleSpanProcessor
+from fi_instrumentation.otel import TracerProvider as FiTracerProvider
 
 PARENT = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 TRACE_ID = int("0123456789abcdef0123456789abcdef", 16)
@@ -195,6 +197,123 @@ def test_error_and_baseexception_identity_status_and_flush(setup, error):
     assert root.events == ()
     assert SECRET not in str(root.attributes)
     assert not trace.get_current_span().get_span_context().is_valid
+
+
+HTTP_EVENTS = [
+    {"version": "2.0", "requestContext": {"http": {"method": "GET"}}},
+    {"httpMethod": "GET", "requestContext": {}},
+    {"requestContext": {"elb": {}}, "httpMethod": "GET"},
+]
+
+
+@pytest.fixture(params=["sdk", "fi"])
+def any_provider(request):
+    """The plain SDK provider and the FI provider ``register()`` builds."""
+    exporter = InMemorySpanExporter()
+    if request.param == "fi":
+        provider = FiTracerProvider(verbose=False)
+        provider.add_span_processor(FiSimpleSpanProcessor(span_exporter=exporter))
+    else:
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+    yield request.param, LambdaTracer(provider), exporter
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("event", HTTP_EVENTS)
+@pytest.mark.parametrize("code", [500, 502, 503, 599])
+def test_http_5xx_response_marks_server_span_error(any_provider, event, code):
+    _, tracing, exporter = any_provider
+    result = {"statusCode": code, "headers": {"x-secret": SECRET}, "body": SECRET}
+
+    @tracing.wrap
+    def handler(event, context):
+        return result
+
+    assert handler(event, invocation()) is result
+    (root,) = exporter.get_finished_spans()
+    assert root.kind == SpanKind.SERVER
+    assert root.attributes["faas.trigger"] == "http"
+    assert root.attributes["http.response.status_code"] == code
+    assert root.attributes["error.type"] == str(code)
+    assert root.status.status_code == StatusCode.ERROR
+    assert root.status.description is None
+    assert root.events == ()
+    assert SECRET not in str(root.attributes)
+
+
+@pytest.mark.parametrize("code", [200, 201, 302, 400, 404, 499])
+def test_http_non_5xx_response_records_code_without_error(any_provider, code):
+    kind, tracing, exporter = any_provider
+    handler = tracing.wrap(lambda event, context: {"statusCode": code, "body": SECRET})
+    assert handler(HTTP_EVENTS[0], invocation())["statusCode"] == code
+    (root,) = exporter.get_finished_spans()
+    assert root.attributes["http.response.status_code"] == code
+    assert "error.type" not in root.attributes
+    # OTel leaves 4xx SERVER spans unset; the FI processor turns unset into OK.
+    expected = StatusCode.OK if kind == "fi" else StatusCode.UNSET
+    assert root.status.status_code == expected
+    assert SECRET not in str(root.attributes)
+
+
+class _HostileDict(dict):
+    def get(self, *args):
+        raise AssertionError("dict subclass hooks must not run")
+
+    def __getitem__(self, key):
+        raise AssertionError("dict subclass hooks must not run")
+
+
+@pytest.mark.parametrize(
+    "event,result",
+    [
+        (HTTP_EVENTS[0], {"statusCode": "500"}),
+        (HTTP_EVENTS[0], {"statusCode": True}),
+        (HTTP_EVENTS[0], {"statusCode": 500.0}),
+        (HTTP_EVENTS[0], {"statusCode": 99}),
+        (HTTP_EVENTS[0], {"statusCode": 600}),
+        (HTTP_EVENTS[0], {"body": SECRET}),
+        (HTTP_EVENTS[0], [500]),
+        (HTTP_EVENTS[0], SECRET),
+        (HTTP_EVENTS[0], None),
+        ({}, {"statusCode": 500}),
+        ({"Records": []}, {"statusCode": 503}),
+    ],
+)
+def test_unrecognized_or_non_http_results_leave_status_alone(
+    any_provider, event, result
+):
+    kind, tracing, exporter = any_provider
+    handler = tracing.wrap(lambda event, context: result)
+    assert handler(event, invocation()) is result
+    (root,) = exporter.get_finished_spans()
+    assert "http.response.status_code" not in root.attributes
+    assert "error.type" not in root.attributes
+    expected = StatusCode.OK if kind == "fi" else StatusCode.UNSET
+    assert root.status.status_code == expected
+
+
+def test_dict_subclass_result_is_read_without_its_hooks(any_provider):
+    _, tracing, exporter = any_provider
+    result = _HostileDict(statusCode=500)
+    handler = tracing.wrap(lambda event, context: result)
+    assert handler(HTTP_EVENTS[0], invocation()) is result
+    (root,) = exporter.get_finished_spans()
+    assert root.attributes["http.response.status_code"] == 500
+    assert root.status.status_code == StatusCode.ERROR
+
+
+def test_broken_span_status_does_not_replace_http_result(setup, caplog):
+    tracing, _, _ = setup
+    span = Mock(spec=trace.Span)
+    span.set_attribute.side_effect = RuntimeError(SECRET)
+    tracing._tracer = Mock(start_span=Mock(return_value=span))
+    result = {"statusCode": 500}
+    handler = tracing.wrap(lambda event, context: result)
+    assert handler(HTTP_EVENTS[0], invocation()) is result
+    assert "response status could not be set" in caplog.text
+    assert SECRET not in caplog.text
+    span.end.assert_called_once()
 
 
 def test_wrapping_is_idempotent_and_preserves_metadata(setup):
@@ -572,5 +691,49 @@ def test_real_otlp_wire_privacy_auth_resource_parent_and_flush(
         assert (
             attributes(roots[1].attributes)["error.type"].string_value == "ValueError"
         )
+    finally:
+        provider.shutdown()
+
+
+def test_readme_register_setup_exports_5xx_response_as_error(receiver, monkeypatch):
+    endpoint, packets, _, _ = receiver
+    monkeypatch.setenv("FI_BASE_URL", endpoint)
+    monkeypatch.setenv("FI_API_KEY", "synthetic-api")
+    monkeypatch.setenv("FI_SECRET_KEY", "synthetic-secret")
+    provider = register(
+        project_name="lambda-test",
+        project_type=ProjectType.OBSERVE,
+        batch=True,
+        schedule_delay_millis=60_000,
+        timeout=2,
+        verbose=False,
+    )
+    tracing = LambdaTracer(provider)
+
+    @tracing.wrap
+    def handler(event, context):
+        return {"statusCode": event["code"], "body": SECRET}
+
+    try:
+        for code in (500, 404):
+            event = {"version": "2.0", "code": code, "headers": {"traceparent": PARENT}}
+            assert handler(event, invocation())["statusCode"] == code
+        assert all(SECRET.encode() not in body for *_, body in packets)
+        roots = [
+            span
+            for _, _, request, _ in packets
+            for resource_spans in request.resource_spans
+            for scope in resource_spans.scope_spans
+            for span in scope.spans
+            if span.name == "lambda.handler"
+        ]
+        assert len(roots) == 2
+        failed, not_found = (attributes(span.attributes) for span in roots)
+        assert failed["http.response.status_code"].int_value == 500
+        assert failed["error.type"].string_value == "500"
+        assert roots[0].status.code == 2  # ERROR
+        assert not_found["http.response.status_code"].int_value == 404
+        assert "error.type" not in not_found
+        assert roots[1].status.code == 1  # OK: the FI processor's unset-to-OK
     finally:
         provider.shutdown()

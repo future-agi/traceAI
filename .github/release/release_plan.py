@@ -29,6 +29,8 @@ VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 # INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
 TS_VERSION_RE = re.compile(r'^\s*(?:export\s+)?const\s+(?:VERSION|INSTRUMENTATION_VERSION)\s*=\s*["\']([^"\']+)["\']', re.M)
 MAVEN_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+# A version a pom outside the reactor pins with a release-please marker, e.g. the Spring AI consumer.
+JAVA_MARKED_RE = re.compile(r">([^<>\s]+)</[\w.:-]+>\s*<!--\s*x-release-please-version\s*-->")
 
 
 def pypi_normalize(name: str) -> str:
@@ -65,6 +67,17 @@ def declared_ts_versions(pkg_dir: Path) -> dict[str, str]:
         if "__tests__" in rel.parts or f.name.endswith((".test.ts", ".spec.ts", ".d.ts")):
             continue
         if match := TS_VERSION_RE.search(f.read_text()):
+            out[str(rel)] = match.group(1)
+    return out
+
+
+def declared_java_versions(java: Path) -> dict[str, str]:
+    out = {}
+    for f in sorted(java.rglob("pom.xml")):
+        rel = f.relative_to(java)
+        if "target" in rel.parts:
+            continue
+        if match := JAVA_MARKED_RE.search(f.read_text()):
             out[str(rel)] = match.group(1)
     return out
 
@@ -131,7 +144,8 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
             artifacts.append(child.findtext("m:artifactId", namespaces=MAVEN_NS))
         out.append({"ecosystem": "java", "name": f"{group}:{artifact}", "version": version,
                     "dir": "java", "tag": f"java-v{version}", "core": False,
-                    "group": group, "artifacts": artifacts, "changelog": "java/CHANGELOG.md"})
+                    "group": group, "artifacts": artifacts, "changelog": "java/CHANGELOG.md",
+                    "declared": declared_java_versions(root / "java")})
     manifest_path = root / ".release-please-manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     for f in sorted((root / "go").glob("*/go.mod")):
@@ -164,7 +178,8 @@ def consistency_problems(packages: list[dict]) -> list[str]:
         seen[key] = p["dir"]
         for rel, v in p.get("declared", {}).items():
             if v != p["version"]:
-                symbol, manifest = ("VERSION", "package.json") if p["ecosystem"] == "typescript" else ("__version__", "pyproject.toml")
+                symbol, manifest = {"typescript": ("VERSION", "package.json"), "java": ("the marked traceAI version", "java/pom.xml")}.get(
+                    p["ecosystem"], ("__version__", "pyproject.toml"))
                 problems.append(f"{p['dir']}/{rel}: {symbol} is {v} but {manifest} says {p['version']}")
     return problems
 
@@ -185,7 +200,8 @@ def coverage_problems(root: Path, packages: list[dict]) -> list[str]:
             scoped_rel = str(f.relative_to(root / path))
             if "x-release-please-version" not in f.read_text():
                 problems.append(f"{f.relative_to(root)}: missing release-please version marker")
-            if scoped_rel not in cfg.get(path, {}).get("extra-files", []):
+            extra_files = {e if isinstance(e, str) else e.get("path") for e in cfg.get(path, {}).get("extra-files", [])}
+            if scoped_rel not in extra_files:
                 problems.append(f"{p['dir']}/{rel}: missing release-please extra-file")
     return problems
 
@@ -205,7 +221,7 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
-        return set(d["releases"]) if d else None
+        return {version for version, files in d["releases"].items() if files} if d else None
     if eco == "typescript":
         d = _get_json("https://registry.npmjs.org/" + p["name"].replace("/", "%2F"))
         return set(d.get("versions", {})) if d else None
@@ -235,11 +251,10 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
         parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
         if not on_central(parent):
             return None
-        later = [a for a in modules if not on_central(a)]
-        if later and strict:
+        if not strict:
+            return {p["version"]}
+        if any(not on_central(a) for a in modules):
             return None
-        if later:
-            print(f"{p['group']}:{parent} {p['version']} is published; {', '.join(later)} ship with the next reactor version", file=sys.stderr)
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
