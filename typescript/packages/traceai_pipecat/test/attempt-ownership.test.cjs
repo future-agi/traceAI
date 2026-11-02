@@ -7,7 +7,16 @@ const { PipecatInstrumentation } = require('../dist/src/instrumentation.js');
 const { createClient } = require('./transport.cjs');
 const turn = () => new Promise(setImmediate);
 const connects = exporter => exporter.getFinishedSpans().filter(s => s.attributes['pipecat.operation'] === 'client.connect');
-async function wait(check) { for (let n = 0; n < 30 && !check(); n++) await turn(); assert.ok(check()); }
+async function wait(check) {
+  const deadline = Date.now() + 3000;
+  while (!check() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.ok(check(), 'timed out waiting for connection cleanup');
+}
+test('wait observes cleanup scheduled on a later timer turn', async () => {
+  let completed = false;
+  setTimeout(() => { completed = true; }, 500);
+  await wait(() => completed);
+});
 function setup(t, name, callbacks = {}) {
   const sdk = require(name);
   const exporter = new InMemorySpanExporter();
