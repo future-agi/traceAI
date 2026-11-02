@@ -1,228 +1,257 @@
-"""Instrumentor for Agno Agent Framework.
+"""Configure the maintained OpenInference Agno instrumentor and OTLP export.
 
-This module provides functions to configure Agno's OpenInference-based
-instrumentation to send traces to TraceAI.
+Agno's own tracing setup uses this same instrumentor. This module does not
+install a second set of framework/model wrappers or transform emitted spans.
 """
 
-import os
-from typing import Any, Dict, Optional
+from __future__ import annotations
+
+from threading import RLock
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
-from opentelemetry.trace import TracerProvider
-from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, BatchSpanProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.trace import TracerProvider
+
+if TYPE_CHECKING:
+    from openinference.instrumentation import TraceConfig
+    from openinference.instrumentation.agno import AgnoInstrumentor
 
 
 class AgnoInstrumentorWrapper:
-    """Wrapper around Agno's OpenInference instrumentor.
+    """Process-wide Agno instrumentation. Configure once before running agents."""
 
-    This class provides a convenient way to configure Agno's built-in
-    OpenInference instrumentation to use TraceAI as the backend.
+    _instance: AgnoInstrumentorWrapper | None = None
+    _lock = RLock()
+    _tracer_provider: TracerProvider | None
+    _agno_instrumentor: AgnoInstrumentor | None
+    _owned_provider: SDKTracerProvider | None
+    _configuration: (
+        tuple[
+            TracerProvider | None,
+            str | None,
+            dict[str, str],
+            str | None,
+            TraceConfig | None,
+        ]
+        | None
+    )
 
-    Important: Call instrument() BEFORE creating any Agno agents.
-    """
-
-    _instance: Optional["AgnoInstrumentorWrapper"] = None
-    _is_instrumented: bool = False
-
-    def __new__(cls) -> "AgnoInstrumentorWrapper":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        self._tracer_provider: Optional[TracerProvider] = None
-        self._agno_instrumentor: Any = None
+    def __new__(cls) -> AgnoInstrumentorWrapper:
+        with cls._lock:
+            if cls._instance is None:
+                instance = super().__new__(cls)
+                instance._tracer_provider = None
+                instance._agno_instrumentor = None
+                instance._owned_provider = None
+                instance._configuration = None
+                cls._instance = instance
+            return cls._instance
 
     def instrument(
         self,
-        tracer_provider: Optional[TracerProvider] = None,
-        otlp_endpoint: Optional[str] = None,
-        otlp_headers: Optional[Dict[str, str]] = None,
-    ) -> "AgnoInstrumentorWrapper":
-        """Configure Agno to send traces to TraceAI.
+        tracer_provider: TracerProvider | None = None,
+        otlp_endpoint: str | None = None,
+        otlp_headers: dict[str, str] | None = None,
+        *,
+        project_name: str | None = None,
+        config: TraceConfig | None = None,
+    ) -> AgnoInstrumentorWrapper:
+        """Use an existing provider OR create an OTLP/HTTP protobuf exporter.
 
-        This method sets up OpenTelemetry and the Agno instrumentor.
-        Must be called BEFORE creating any Agno agents.
-
-        Args:
-            tracer_provider: Optional OpenTelemetry tracer provider.
-            otlp_endpoint: OTLP endpoint URL.
-            otlp_headers: Headers for OTLP export (e.g., authentication).
-
-        Returns:
-            Self for method chaining.
+        Explicit providers are passed directly to OpenInference, never installed
+        globally. Endpoint configuration owns a private provider. With no
+        arguments, an already configured global provider is required.
+        ``config`` is OpenInference's TraceConfig, not fi_instrumentation's.
         """
-        if self._is_instrumented:
+        with self._lock:
+            configuration = (
+                tracer_provider,
+                otlp_endpoint,
+                dict(otlp_headers or {}),
+                project_name,
+                config,
+            )
+            if self._agno_instrumentor is not None and not self.is_instrumented:
+                raise RuntimeError(
+                    "Agno instrumentation was removed externally; call uninstrument before configuring again."
+                )
+            if self.is_instrumented:
+                if all(
+                    value is None
+                    for value in (
+                        tracer_provider,
+                        otlp_endpoint,
+                        otlp_headers,
+                        project_name,
+                        config,
+                    )
+                ):
+                    return self
+                if configuration != self._configuration:
+                    raise ValueError(
+                        "Agno is already configured; uninstrument before changing its configuration."
+                    )
+                return self
+            if tracer_provider is not None and any(
+                value is not None
+                for value in (otlp_endpoint, otlp_headers, project_name)
+            ):
+                raise ValueError(
+                    "Configure export/project on tracer_provider OR supply otlp_endpoint, not both."
+                )
+            if otlp_endpoint is None and (
+                otlp_headers is not None or project_name is not None
+            ):
+                raise ValueError("otlp_headers and project_name require otlp_endpoint.")
+
+            try:
+                from openinference.instrumentation.agno import AgnoInstrumentor
+            except ImportError as exc:
+                raise ImportError(
+                    "Install openinference-instrumentation-agno and Agno with: "
+                    "pip install 'traceai-agno[agno]'"
+                ) from exc
+            delegate = AgnoInstrumentor()
+            if delegate.is_instrumented_by_opentelemetry:
+                raise RuntimeError(
+                    "Agno is already instrumented outside traceai-agno. Use only one setup path; "
+                    "do not combine configure_agno_tracing with Agno setup_tracing or AgnoInstrumentor."
+                )
+
+            owned_provider = None
+            provider: TracerProvider
+            if otlp_endpoint is not None:
+                owned_provider = setup_traceai_exporter(
+                    endpoint=otlp_endpoint,
+                    headers=otlp_headers,
+                    project_name=project_name,
+                    set_global=False,
+                )
+                provider = owned_provider
+            else:
+                provider = (
+                    tracer_provider
+                    if tracer_provider is not None
+                    else trace.get_tracer_provider()
+                )
+                if isinstance(
+                    provider, (trace.ProxyTracerProvider, trace.NoOpTracerProvider)
+                ):
+                    raise ValueError(
+                        "Supply a configured tracer_provider or otlp_endpoint before tracing Agno."
+                    )
+            try:
+                delegate.instrument(
+                    tracer_provider=provider,
+                    config=config,
+                    raise_exception_on_conflict=True,
+                )
+                if not delegate.is_instrumented_by_opentelemetry:
+                    raise RuntimeError(
+                        "OpenInference did not activate Agno instrumentation."
+                    )
+            except Exception:
+                if owned_provider is not None:
+                    owned_provider.shutdown()
+                raise
+            self._agno_instrumentor = delegate
+            self._tracer_provider = provider
+            self._owned_provider = owned_provider
+            self._configuration = configuration
             return self
 
-        # Set environment variables for OTLP export
-        if otlp_endpoint:
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = otlp_endpoint
-
-        if otlp_headers:
-            header_str = ",".join(f"{k}={v}" for k, v in otlp_headers.items())
-            os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = header_str
-
-        # Set up tracer provider
-        if tracer_provider:
-            self._tracer_provider = tracer_provider
-            trace.set_tracer_provider(tracer_provider)
-        else:
-            self._tracer_provider = trace.get_tracer_provider()
-
-        # Configure OpenInference Agno instrumentor
-        try:
-            self._setup_agno_instrumentor()
-        except ImportError:
-            # openinference-instrumentation-agno not installed
-            pass
-
-        self._is_instrumented = True
-        return self
-
-    def _setup_agno_instrumentor(self) -> None:
-        """Set up the Agno OpenInference instrumentor."""
-        try:
-            from openinference.instrumentation.agno import AgnoInstrumentor
-
-            self._agno_instrumentor = AgnoInstrumentor()
-            self._agno_instrumentor.instrument()
-        except ImportError:
-            raise ImportError(
-                "openinference-instrumentation-agno is not installed. "
-                "Install it with: pip install openinference-instrumentation-agno"
-            )
-
     def uninstrument(self) -> None:
-        """Remove instrumentation."""
-        if not self._is_instrumented:
-            return
+        """Remove our instrumentation and close only a provider we created.
 
-        if self._agno_instrumentor:
-            try:
+        Call after in-flight runs finish. Caller-supplied providers remain usable
+        and must be flushed/shut down by their owner.
+        """
+        with self._lock:
+            if self._agno_instrumentor is not None and self.is_instrumented:
                 self._agno_instrumentor.uninstrument()
-            except Exception:
-                pass
-
-        self._is_instrumented = False
-        self._tracer_provider = None
+            if self._owned_provider is not None:
+                self._owned_provider.shutdown()
+            self._agno_instrumentor = None
+            self._tracer_provider = None
+            self._owned_provider = None
+            self._configuration = None
 
     @property
     def is_instrumented(self) -> bool:
-        """Check if instrumentation is active."""
-        return self._is_instrumented
+        """Whether the delegated instrumentor is currently active."""
+        return bool(
+            self._agno_instrumentor is not None
+            and self._agno_instrumentor.is_instrumented_by_opentelemetry
+        )
+
+    @property
+    def tracer_provider(self) -> TracerProvider | None:
+        """The configured provider, for force_flush before process exit."""
+        return self._tracer_provider
 
 
 def configure_agno_tracing(
-    tracer_provider: Optional[TracerProvider] = None,
-    otlp_endpoint: Optional[str] = None,
-    otlp_headers: Optional[Dict[str, str]] = None,
-    project_name: Optional[str] = None,
+    tracer_provider: TracerProvider | None = None,
+    otlp_endpoint: str | None = None,
+    otlp_headers: dict[str, str] | None = None,
+    project_name: str | None = None,
+    *,
+    config: TraceConfig | None = None,
 ) -> AgnoInstrumentorWrapper:
-    """Configure Agno Agent Framework to send traces to TraceAI.
+    """Configure Agno using an existing provider or a complete OTLP traces URL.
 
-    This is the main entry point for integrating TraceAI with Agno.
-    Must be called BEFORE creating any Agno agents.
-
-    Example usage:
-
-        from fi_instrumentation import register
-        from fi_instrumentation.fi_types import ProjectType
-        from traceai_agno import configure_agno_tracing
-
-        # Option 1: Use with fi_instrumentation
-        trace_provider = register(
-            project_type=ProjectType.OBSERVE,
-            project_name="agno-agent",
-        )
-        configure_agno_tracing(tracer_provider=trace_provider)
-
-        # Option 2: Configure directly with endpoint
-        configure_agno_tracing(
-            otlp_endpoint="https://api.traceai.com/v1/traces",
-            otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
-            project_name="agno-agent",
-        )
-
-        # IMPORTANT: Now import Agno modules
-        from agno.agent import Agent
-        from agno.models.openai import OpenAIChat
-
-    Args:
-        tracer_provider: Optional OpenTelemetry tracer provider.
-        otlp_endpoint: OTLP endpoint URL for trace export.
-        otlp_headers: Headers for OTLP export (e.g., authentication).
-        project_name: Optional project name for trace attributes.
-
-    Returns:
-        Configured AgnoInstrumentorWrapper instance.
+    For Future AGI direct export, use https://api.futureagi.com/tracer/v1/traces,
+    headers X-Api-Key and X-Secret-Key, and a project_name. Project attributes
+    belong to the resource, not authentication headers. Content controls are
+    supplied through OpenInference's TraceConfig or OPENINFERENCE_* variables.
     """
-    wrapper = AgnoInstrumentorWrapper()
-
-    # Add project name to headers if provided
-    if project_name and otlp_headers is None:
-        otlp_headers = {}
-    if project_name and otlp_headers is not None:
-        otlp_headers["x-project-name"] = project_name
-
-    return wrapper.instrument(
+    return AgnoInstrumentorWrapper().instrument(
         tracer_provider=tracer_provider,
         otlp_endpoint=otlp_endpoint,
         otlp_headers=otlp_headers,
+        project_name=project_name,
+        config=config,
     )
 
 
 def setup_traceai_exporter(
     endpoint: str,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     use_batch_processor: bool = True,
     service_name: str = "agno-agent",
-) -> TracerProvider:
-    """Set up a tracer provider with OTLP exporter for TraceAI.
+    *,
+    project_name: str | None = None,
+    set_global: bool = True,
+) -> SDKTracerProvider:
+    """Create an OTLP/HTTP protobuf provider with Future AGI resource attributes.
 
-    This is a convenience function that creates a complete tracer provider
-    configured to export to TraceAI.
-
-    Args:
-        endpoint: OTLP endpoint URL.
-        headers: Optional headers for authentication.
-        use_batch_processor: Whether to use batch processing (recommended).
-        service_name: Service name for the traces.
-
-    Returns:
-        Configured TracerProvider.
+    ``endpoint`` is the full traces URL. ``project_name`` defaults to service_name.
+    The caller owns this provider and must shut it down. ``set_global=True``
+    preserves the helper's historical behavior; use False for a private provider.
     """
-    try:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    except ImportError:
-        raise ImportError(
-            "opentelemetry-exporter-otlp is not installed. "
-            "Install it with: pip install opentelemetry-exporter-otlp"
-        )
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    # Create resource
-    resource = Resource.create({"service.name": service_name})
-
-    # Create tracer provider
-    provider = SDKTracerProvider(resource=resource)
-
-    # Create exporter
-    exporter = OTLPSpanExporter(
-        endpoint=endpoint,
-        headers=headers or {},
+    if not endpoint:
+        raise ValueError("endpoint must be a complete OTLP traces URL.")
+    resource = Resource.create(
+        {
+            "service.name": service_name,
+            "project_name": project_name or service_name,
+            "project_type": "observe",
+            "semantic_convention": "openinference",
+        }
     )
-
-    # Add span processor
-    if use_batch_processor:
-        processor = BatchSpanProcessor(exporter)
-    else:
-        processor = SimpleSpanProcessor(exporter)
-
+    exporter = OTLPSpanExporter(endpoint=endpoint, headers=dict(headers or {}))
+    provider = SDKTracerProvider(resource=resource)
+    processor = (
+        BatchSpanProcessor(exporter)
+        if use_batch_processor
+        else SimpleSpanProcessor(exporter)
+    )
     provider.add_span_processor(processor)
-
-    # Set as global
-    trace.set_tracer_provider(provider)
-
+    if set_global:
+        trace.set_tracer_provider(provider)
     return provider

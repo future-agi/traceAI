@@ -1,0 +1,72 @@
+name: Watsonx Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-watsonx/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/watsonx-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-watsonx/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/watsonx-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watsonx:
+    name: Watsonx ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: floor
+            compile-sdk: '0.12.0'
+            runtime-sdk: '0.12.0'
+          - name: current
+            compile-sdk: '0.40.0'
+            runtime-sdk: '0.40.0'
+          - name: binary-compatibility
+            compile-sdk: '0.12.0'
+            runtime-sdk: '0.40.0'
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Prepare dependencies without running tests
+        run: |
+          mvn -B -ntp -pl traceai-java-watsonx -am -Dwatsonx-ai.version=${{ matrix.compile-sdk }} -DskipTests install
+          mvn -B -ntp -pl traceai-java-watsonx -am -Dwatsonx-ai.version=${{ matrix.runtime-sdk }} dependency:go-offline
+          mvn -N -B -ntp dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+          mvn -N -B -ntp dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.10.1
+      - name: Test without external network access
+        run: |
+          # Keep the compiled wrapper; rebuild test consumers against the runtime SDK.
+          rm -rf traceai-java-watsonx/target/test-classes
+          sudo env "JAVA_HOME=$JAVA_HOME" "PATH=$PATH" unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+            "$(command -v mvn)" -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" \
+            -pl traceai-java-watsonx -am -Dwatsonx-ai.version=${{ matrix.runtime-sdk }} \
+            -Dmaven.main.skip=true -Dtest=WatsonxTransportTest,WatsonxLifecycleTest \
+            -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watsonx-${{ matrix.name }}
+          path: java/traceai-java-watsonx/target/surefire-reports/
+          if-no-files-found: warn

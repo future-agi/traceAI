@@ -1,24 +1,22 @@
 /**
- * Example: Using Fireworks AI instrumentation with TraceAI
+ * Example: trace Fireworks AI with the shared OpenAI instrumentor.
  *
- * This example demonstrates how to set up and use the @traceai/fireworks
- * instrumentation to trace Fireworks AI API calls.
- *
- * Fireworks AI uses OpenAI-compatible API, so you use the OpenAI SDK with a custom baseURL.
+ * Fireworks serves an OpenAI-compatible API, so the OpenAI SDK with a Fireworks
+ * baseURL is traced by @traceai/openai. Spans for api.fireworks.ai carry
+ * gen_ai.provider.name=fireworks. @traceai/fireworks is deprecated.
  */
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
-import { FireworksInstrumentation } from "@traceai/fireworks";
+import { BasicTracerProvider, SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
+import { OpenAIInstrumentation } from "@traceai/openai";
 import OpenAI from "openai";
 
 async function main() {
   // Step 1: Set up the tracer provider
-  const provider = new NodeTracerProvider();
-  provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
-  provider.register();
+  const provider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],
+  });
 
-  // Step 2: Create and enable the instrumentation
-  const instrumentation = new FireworksInstrumentation({
+  // Step 2: Create the instrumentation
+  const instrumentation = new OpenAIInstrumentation({
     traceConfig: {
       // Optional: Configure tracing options
       // hideInputs: true,  // Hide input content in traces
@@ -26,11 +24,9 @@ async function main() {
     },
   });
   instrumentation.setTracerProvider(provider);
-  instrumentation.enable();
 
-  // Step 3: Import and patch the OpenAI module
-  const openaiModule = await import("openai");
-  instrumentation.manuallyInstrument(openaiModule);
+  // Step 3: Patch the explicitly imported OpenAI SDK
+  instrumentation.manuallyInstrument(OpenAI);
 
   // Step 4: Create the Fireworks AI client (OpenAI SDK with custom baseURL)
   const client = new OpenAI({
@@ -99,7 +95,7 @@ async function main() {
   console.log("First 5 values:", embeddingResponse.data[0]?.embedding.slice(0, 5));
   console.log("\n");
 
-  // Shutdown provider
+  instrumentation.disable();
   await provider.shutdown();
   console.log("Done! Check the console output above for trace spans.");
 }

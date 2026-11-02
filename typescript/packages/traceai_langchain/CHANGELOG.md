@@ -1,3 +1,12 @@
+# Changelog
+
+## [0.1.4](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.3...npm-traceai-langchain-v0.1.4) (2026-11-01)
+
+
+### Bug Fixes
+
+* **npm:** report the real package version in instrumentation metadata ([9fa1ee0](https://github.com/future-agi/traceAI/commit/9fa1ee02e59618c0f68d63c8959954ff00e59839))
+
 ## [0.1.3] - 2026-10-18
 ### Fix
 - A failed run's span status description is now the error message only. It was `run.error`, which LangChain builds as the message plus the full stack trace (including local file paths). The status is built from the error object passed to `handleLLMError` / `handleChainError` / `handleToolError` / `handleRetrieverError`; the stack trace stays only in `exception.stacktrace` on the exception event.

@@ -249,6 +249,7 @@ export interface RunTracerArgs {
   parentContext: Context;
   agent?: AgentLike;
   message?: unknown;
+  operation?: "send" | "summarize";
   sendOptions?: SendOptionsLike;
   startTimeMs?: number;
 }
@@ -292,6 +293,7 @@ export class RunTracer {
     );
     this.runContext = trace.setSpan(args.parentContext, this.span);
     try {
+      if (args.operation === "summarize") this.span.setAttribute("cursor.run.operation", "summarize");
       this.span.setAttributes(contextAttributes);
       this.span.setAttributes(this.startAttributes(args));
     } catch (error) {
@@ -370,6 +372,17 @@ export class RunTracer {
         case "request":
           if (typeof e.request_id === "string" && e.request_id) this.span.setAttribute(C.REQUEST_ID, e.request_id);
           break;
+        case "summary": {
+          // Status belongs to the compaction, not the run: an error here can
+          // fall back to a trimmed transcript while the run itself finishes OK.
+          const attributes: Attributes = {};
+          if (e.status === "running" || e.status === "completed" || e.status === "error") {
+            attributes["cursor.summary.status"] = e.status;
+          }
+          if (typeof e.fallback === "boolean") attributes["cursor.summary.fallback"] = e.fallback;
+          this.span.addEvent("cursor.summary", attributes, toHrTime(nowMs));
+          break;
+        }
         case "task": {
           const attributes: Attributes = {};
           if (typeof e.status === "string") attributes["cursor.task.status"] = e.status;
