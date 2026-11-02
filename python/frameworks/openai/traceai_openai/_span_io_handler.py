@@ -2,8 +2,10 @@ import json
 import logging
 from typing import Any, Optional
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from traceai_openai._with_span import _WithSpan
+from traceai_openai._privacy import response_output
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -88,7 +90,7 @@ def _set_mime_type(span: _WithSpan, key: str, value: Any) -> None:
     span.set_attribute(key, mime)
 
 
-def _json_output_for(output_data: Any) -> Optional[str]:
+def _json_output_for(output_data: Any, config: Optional[TraceConfig] = None) -> Optional[str]:
     """JSON for responses whose output is not a chat message: the Responses API
     object as JSON, and a compact summary for embeddings (never the vectors)."""
     try:
@@ -98,7 +100,7 @@ def _json_output_for(output_data: Any) -> Optional[str]:
         return None
     if isinstance(output_data, Response):
         # Lead with the answer text (the SDK's `output_text`) so previews show it.
-        body = json.loads(output_data.model_dump_json(exclude_none=True))
+        body = response_output(output_data, config)
         output_text = getattr(output_data, "output_text", None)
         if output_text:
             body = {"output_text": output_text, **body}
@@ -116,7 +118,8 @@ def _json_output_for(output_data: Any) -> Optional[str]:
 
 
 def add_io_to_span_attributes(
-    span: _WithSpan, input_data: Any, output_data: Any, is_streaming: bool = False
+    span: _WithSpan, input_data: Any, output_data: Any, is_streaming: bool = False,
+    config: Optional[TraceConfig] = None
 ) -> None:
     """Add input/output data to span attributes.
 
@@ -135,7 +138,7 @@ def add_io_to_span_attributes(
         if output_data is not None and not is_streaming:
             if hasattr(output_data, "parse") and not hasattr(output_data, "model_dump"):
                 output_data = output_data.parse()
-            if (json_output := _json_output_for(output_data)) is not None:
+            if (json_output := _json_output_for(output_data, config)) is not None:
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, json_output)
                 span.set_attribute(
                     SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
