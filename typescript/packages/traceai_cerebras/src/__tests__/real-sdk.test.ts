@@ -334,6 +334,231 @@ describe("real Cerebras SDK resource contract", () => {
     );
   });
 
+  describe.each([
+    "FI_HIDE_INPUTS",
+    "FI_HIDE_INPUT_MESSAGES",
+    "FI_HIDE_INPUT_TEXT",
+    "FI_HIDE_OUTPUTS",
+    "FI_HIDE_OUTPUT_MESSAGES",
+    "FI_HIDE_OUTPUT_TEXT",
+  ])("independent privacy control %s", (flag) => {
+    const previous = process.env[flag];
+    afterEach(() => {
+      if (previous === undefined) delete process.env[flag];
+      else process.env[flag] = previous;
+    });
+    it.each([false, true])(
+      "hides every payload copy with stream=%s",
+      async (streaming) => {
+        process.env[flag] = "true";
+        const input = flag.includes("INPUT");
+        const items = [
+          {
+            ...response,
+            choices: [
+              {
+                index: 0,
+                delta: response.choices[0].message,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ];
+        const c = client(
+          jest.fn(async () =>
+            streaming ? sseResponse(items) : jsonResponse(),
+          ),
+        );
+        const value = await c.client.chat.completions.create({
+          ...request,
+          stream: streaming,
+        });
+        if (streaming) expect(await collect(value)).toEqual(items);
+        else expect(value).toEqual(response);
+        const spans = exporter.getFinishedSpans();
+        expect(spans).toHaveLength(1);
+        const serialized = JSON.stringify({
+          attributes: spans[0].attributes,
+          events: spans[0].events,
+          status: spans[0].status,
+        });
+        expect(serialized).not.toContain(
+          input ? "private-input" : "private-output",
+        );
+        expect(serialized).toContain(
+          input ? "private-output" : "private-input",
+        );
+        expect(spans[0].attributes).toMatchObject({
+          [S.LLM_TOKEN_COUNT_TOTAL]: 10,
+          [S.GEN_AI_RESPONSE_MODEL]: "resolved-model",
+          [S.GEN_AI_RESPONSE_FINISH_REASONS]: '["stop"]',
+        });
+      },
+    );
+  });
+
+  it.each(["readable", "return", "throw"])(
+    "ends a stream cancelled before its first read through %s",
+    async (route) => {
+      const stream = await client(
+        jest.fn(async () => sseResponse()),
+      ).client.chat.completions.create({ ...request, stream: true });
+      if (route === "readable") await stream.toReadableStream().cancel();
+      else {
+        const iterator = stream[Symbol.asyncIterator]();
+        if (route === "return") {
+          await iterator.return();
+          await iterator.return();
+        } else {
+          const error = new Error("caller cancellation");
+          await expect(iterator.throw(error)).rejects.toBe(error);
+        }
+      }
+      await provider.forceFlush();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      stream.controller.abort();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    },
+  );
+
+  it("reconstructs tool calls by choice and tool index without changing chunks", async () => {
+    const items = [
+      {
+        choices: [
+          {
+            index: 1,
+            delta: {
+              role: "assistant",
+              tool_calls: [
+                {
+                  index: 1,
+                  id: "call-b",
+                  type: "function",
+                  function: { name: "weather", arguments: '{"city":' },
+                },
+                {
+                  index: 0,
+                  id: "call-a",
+                  type: "function",
+                  function: { name: "time", arguments: '{"zone":' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-c",
+                  type: "function",
+                  function: { name: "look", arguments: "{" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 1,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { arguments: '"UTC"}' } },
+                { index: 1, function: { arguments: '"Paris"}' } },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "up", arguments: "}" } },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+      { choices: [], usage },
+    ];
+    const stream = await client(
+      jest.fn(async () => sseResponse(items)),
+    ).client.chat.completions.create({ ...request, n: 2, stream: true });
+    expect(await collect(stream)).toEqual(items);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    const messages = [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-c",
+            type: "function",
+            function: { name: "lookup", arguments: "{}" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-a",
+            type: "function",
+            function: { name: "time", arguments: '{"zone":"UTC"}' },
+          },
+          {
+            id: "call-b",
+            type: "function",
+            function: { name: "weather", arguments: '{"city":"Paris"}' },
+          },
+        ],
+      },
+    ];
+    expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)).toEqual(
+      messages,
+    );
+    expect(JSON.parse(attrs[S.OUTPUT_VALUE] as string)).toEqual(messages);
+    expect(attrs[S.OUTPUT_MIME_TYPE]).toBe("application/json");
+    expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual(items);
+  });
+
+  it("retains finish reasons by choice index across terminal and usage-only chunks", async () => {
+    const items = [
+      {
+        choices: [
+          { index: 1, delta: { content: "second" }, finish_reason: "stop" },
+        ],
+      },
+      {
+        choices: [
+          { index: 0, delta: { content: "first" }, finish_reason: "length" },
+        ],
+      },
+      { choices: [], usage },
+    ];
+    const stream = await client(
+      jest.fn(async () => sseResponse(items)),
+    ).client.chat.completions.create({ ...request, n: 2, stream: true });
+    expect(await collect(stream)).toEqual(items);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(
+      JSON.parse(attrs[S.GEN_AI_RESPONSE_FINISH_REASONS] as string),
+    ).toEqual(["length", "stop"]);
+    expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)).toEqual([
+      { role: "assistant", content: "first" },
+      { role: "assistant", content: "second" },
+    ]);
+  });
+
   const textTest = Cerebras.Completions ? it : it.skip;
   textTest(
     "retains streamed text, usage and timing for text completions",

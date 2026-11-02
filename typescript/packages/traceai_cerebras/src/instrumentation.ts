@@ -43,7 +43,16 @@ interface Completion {
   choices?: Array<{
     index: number;
     message?: Record<string, unknown>;
-    delta?: { role?: string; content?: string | null };
+    delta?: {
+      role?: string;
+      content?: string | null;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
     text?: string;
     finish_reason?: string | null;
   }>;
@@ -170,6 +179,17 @@ export class CerebrasInstrumentation extends InstrumentationBase {
           return original.apply(this, args);
         const { messages, prompt: _prompt, ...parameters } = body;
         const config = generateTraceConfig(instrumentation._traceConfig);
+        // Raw payloads duplicate canonical messages. Omit every representation
+        // when a content control is active, before serializing or buffering it.
+        const hideInputPayload =
+          config.hideInputs ||
+          config.hideInputMessages ||
+          config.hideInputText ||
+          config.hideInputImages;
+        const hideOutputPayload =
+          config.hideOutputs ||
+          config.hideOutputMessages ||
+          config.hideOutputText;
         const tracer = new FITracer({
           tracer: instrumentation.tracer,
           traceConfig: config,
@@ -185,14 +205,18 @@ export class CerebrasInstrumentation extends InstrumentationBase {
               [S.LLM_MODEL_NAME]: body.model,
               [S.LLM_PROVIDER]: LLMProvider.CEREBRAS,
               [S.GEN_AI_OPERATION_NAME]: operation,
-              [S.INPUT_VALUE]: json(body),
-              [S.INPUT_MIME_TYPE]: MimeType.JSON,
-              [S.RAW_INPUT]: json(body),
-              // Parameters can contain tool schemas or stop text; hide them with inputs.
-              ...(!config.hideInputs
-                ? { [S.LLM_INVOCATION_PARAMETERS]: json(parameters) }
+              ...(!hideInputPayload
+                ? {
+                    [S.INPUT_VALUE]: json(body),
+                    [S.INPUT_MIME_TYPE]: MimeType.JSON,
+                    [S.RAW_INPUT]: json(body),
+                    // Parameters can contain tool schemas or stop text.
+                    [S.LLM_INVOCATION_PARAMETERS]: json(parameters),
+                    ...(messages
+                      ? { [S.LLM_INPUT_MESSAGES]: json(messages) }
+                      : {}),
+                  }
                 : {}),
-              ...(messages ? { [S.LLM_INPUT_MESSAGES]: json(messages) } : {}),
             },
           },
         );
@@ -229,11 +253,15 @@ export class CerebrasInstrumentation extends InstrumentationBase {
                   span,
                   execContext,
                   finish,
-                  config.hideOutputs,
+                  hideOutputPayload,
                 );
               }
               if (result)
-                span.setAttributes(completionAttributes(result as Completion));
+                span.setAttributes(
+                  hideOutputPayload
+                    ? metadataAttributes(result as Completion)
+                    : completionAttributes(result as Completion),
+                );
               finish();
               return result;
             },
@@ -371,22 +399,61 @@ function observeStream(
   finish: (error?: unknown, complete?: boolean) => void,
   hideOutputs: boolean,
 ): Stream {
-  const contents = new Map<number, string>();
+  const choices = new Map<
+    number,
+    {
+      role: string;
+      content: string;
+      toolCalls: Map<
+        number,
+        {
+          id?: string;
+          type?: string;
+          function: { name: string; arguments: string };
+        }
+      >;
+    }
+  >();
+  const finishReasons = new Map<number, string>();
   const chunks: Completion[] = [];
   let finished = false;
   const end = (error?: unknown, complete = false) => {
     if (finished) return;
     finished = true;
-    const messages = Array.from(contents.values(), (content) => ({
-      role: "assistant",
-      content,
-    }));
-    span.setAttributes({
-      [S.OUTPUT_VALUE]: contents.get(0) ?? "",
-      [S.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-      [S.LLM_OUTPUT_MESSAGES]: json(messages),
-      [S.RAW_OUTPUT]: json(chunks),
-    });
+    if (finishReasons.size) {
+      span.setAttribute(
+        S.GEN_AI_RESPONSE_FINISH_REASONS,
+        json(
+          Array.from(finishReasons)
+            .sort(([a], [b]) => a - b)
+            .map(([, reason]) => reason),
+        )!,
+      );
+    }
+    if (!hideOutputs) {
+      const messages = Array.from(choices)
+        .sort(([a], [b]) => a - b)
+        .map(([, choice]) => ({
+          role: choice.role,
+          content: choice.content,
+          ...(choice.toolCalls.size
+            ? {
+                tool_calls: Array.from(choice.toolCalls)
+                  .sort(([a], [b]) => a - b)
+                  .map(([, call]) => call),
+              }
+            : {}),
+        }));
+      const hasTools = messages.some((message) => message.tool_calls?.length);
+      span.setAttributes({
+        [S.OUTPUT_VALUE]: hasTools
+          ? json(messages)
+          : (choices.get(0)?.content ?? ""),
+        [S.OUTPUT_MIME_TYPE]: hasTools ? MimeType.JSON : MimeType.TEXT,
+        [S.LLM_OUTPUT_MESSAGES]: json(messages),
+        [S.RAW_OUTPUT]: json(chunks),
+      });
+    }
     stream.controller?.signal.removeEventListener("abort", aborted);
     finish(error, complete);
   };
@@ -411,14 +478,32 @@ function observeStream(
         }
         if (!finished && next.value && typeof next.value === "object") {
           span.setAttributes(metadataAttributes(next.value));
-          if (!hideOutputs) {
-            chunks.push(next.value);
-            for (const choice of getChoices(next.value)) {
-              const content = choice.delta?.content ?? choice.text ?? "";
-              contents.set(
-                choice.index,
-                (contents.get(choice.index) ?? "") + content,
-              );
+          if (!hideOutputs) chunks.push(next.value);
+          for (const choice of getChoices(next.value)) {
+            if (choice.finish_reason != null)
+              finishReasons.set(choice.index, choice.finish_reason);
+            if (hideOutputs) continue;
+            let accumulated = choices.get(choice.index);
+            if (!accumulated) {
+              accumulated = {
+                role: "assistant",
+                content: "",
+                toolCalls: new Map(),
+              };
+              choices.set(choice.index, accumulated);
+            }
+            if (choice.delta?.role) accumulated.role = choice.delta.role;
+            accumulated.content += choice.delta?.content ?? choice.text ?? "";
+            for (const delta of choice.delta?.tool_calls ?? []) {
+              let call = accumulated.toolCalls.get(delta.index);
+              if (!call) {
+                call = { function: { name: "", arguments: "" } };
+                accumulated.toolCalls.set(delta.index, call);
+              }
+              if (delta.id) call.id = delta.id;
+              if (delta.type) call.type = delta.type;
+              call.function.name += delta.function?.name ?? "";
+              call.function.arguments += delta.function?.arguments ?? "";
             }
           }
         }
@@ -437,6 +522,51 @@ function observeStream(
     }
   }
 
+  function observeIterator(
+    iterator: AsyncIterator<Completion>,
+  ): AsyncIterableIterator<Completion> {
+    const observed = iterate(iterator);
+    let started = false;
+    return {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next() {
+        started = true;
+        return observed.next();
+      },
+      async return(value) {
+        try {
+          // Returning an unstarted generator never enters its finally block.
+          if (!started) {
+            started = true;
+            await context.with(execContext, () => iterator.return?.(value));
+          }
+          return await observed.return(value);
+        } catch (error) {
+          end(error);
+          throw error;
+        } finally {
+          end();
+        }
+      },
+      async throw(error) {
+        try {
+          if (!started) {
+            started = true;
+            await context.with(execContext, () => iterator.return?.());
+          }
+          return await observed.throw(error);
+        } catch (failure) {
+          end(failure);
+          throw failure;
+        } finally {
+          end();
+        }
+      },
+    };
+  }
+
   // SDK tee() uses iterator(), whereas toReadableStream() uses asyncIterator.
   // Intercept the factory so all routes share one observation without replacing
   // the SDK Stream with an async generator that loses its controller/helpers.
@@ -445,7 +575,7 @@ function observeStream(
   return new Proxy(stream, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, target);
-      if (key === iteratorKey) return () => iterate(value.call(target));
+      if (key === iteratorKey) return () => observeIterator(value.call(target));
       return typeof value === "function" && key !== "constructor"
         ? value.bind(receiver)
         : value;

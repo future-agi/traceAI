@@ -45,7 +45,12 @@ const response = await client.chat.completions.create({
   model,
   messages: [{ role: "user", content: "Explain wafer-scale computing in one sentence." }],
 });
-console.log(response.choices[0]?.message.content);
+if ("choices" in response) {
+  const choice = response.choices?.[0];
+  if (choice && "message" in choice) {
+    console.log(choice.message?.content ?? "");
+  }
+}
 await provider.forceFlush();
 ```
 
@@ -63,7 +68,12 @@ const stream = await client.chat.completions.create({
 });
 
 for await (const chunk of stream) {
-  process.stdout.write(chunk.choices[0]?.delta?.content || "");
+  if ("choices" in chunk) {
+    const choice = chunk.choices?.[0];
+    if (choice && "delta" in choice) {
+      process.stdout.write(choice.delta?.content ?? "");
+    }
+  }
 }
 ```
 
@@ -92,7 +102,9 @@ const instrumentation = new CerebrasInstrumentation({
 });
 ```
 
-These options hide payload content while retaining model, provider, token usage, and timing attributes. `hideInputs` also omits invocation parameters, which can contain tool schemas or stop text. The shared trace configuration also supports `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, and `FI_HIDE_ERROR_DETAILS` environment variables.
+These options hide payload content while retaining model, provider, token usage, finish reasons, and timing attributes. You can also set `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, and `FI_HIDE_ERROR_DETAILS` environment variables.
+
+For this integration, `hideInputMessages`, `hideInputText`, and `hideInputImages` omit all input payload attributes and invocation parameters, which can contain tool schemas or stop text. `hideOutputMessages` and `hideOutputText` omit all output payload attributes and prevent stream content from being buffered for tracing. This also removes duplicate raw payloads rather than leaving content in another attribute. The corresponding `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_INPUT_IMAGES`, `FI_HIDE_OUTPUT_MESSAGES`, and `FI_HIDE_OUTPUT_TEXT` environment variables are supported.
 
 ## Captured attributes
 
