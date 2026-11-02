@@ -3,6 +3,7 @@ import json
 import logging
 from abc import ABC
 from contextlib import contextmanager
+from contextvars import ContextVar
 from inspect import Signature, signature
 from types import ModuleType
 from typing import (
@@ -43,6 +44,58 @@ if TYPE_CHECKING:
     from mistralai import Mistral
 
 __all__ = ("_SyncChatWrapper",)
+
+# Structured parse runs a second validation step after complete returns.
+# Hold only that request's existing span until the outer parse completes.
+_parse_pending = ContextVar("mistral_parse_pending", default=None)
+
+
+def _finish_parse(pending, error=None):
+    for with_span, response, request_parameters, extractor in pending:
+        if error is not None:
+            with_span.record_exception(error)
+        _finish_tracing(
+            with_span=with_span,
+            has_attributes=_ResponseAttributes(response, request_parameters, extractor),
+            status=trace_api.Status(
+                status_code=(
+                    trace_api.StatusCode.ERROR
+                    if error is not None
+                    else trace_api.StatusCode.OK
+                )
+            ),
+        )
+
+
+def _sync_parse(wrapped, instance, args, kwargs):
+    pending = []
+    token = _parse_pending.set(pending)
+    try:
+        result = wrapped(*args, **kwargs)
+    except Exception as error:
+        _finish_parse(pending, error)
+        raise
+    else:
+        _finish_parse(pending)
+        return result
+    finally:
+        _parse_pending.reset(token)
+
+
+async def _async_parse(wrapped, instance, args, kwargs):
+    pending = []
+    token = _parse_pending.set(pending)
+    try:
+        result = await wrapped(*args, **kwargs)
+    except (Exception, asyncio.CancelledError) as error:
+        _finish_parse(pending, error)
+        raise
+    else:
+        _finish_parse(pending)
+        return result
+    finally:
+        _parse_pending.reset(token)
+
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -138,7 +191,12 @@ class _WithMistralAI(ABC):
         bound_arguments = bound_signature.arguments
         request_data: Dict[str, Any] = {}
         for key, value in bound_arguments.items():
-            if key in {"http_headers", "server_url", "retries", "timeout_ms"} or isinstance(value, (Iterator, AsyncIterator)):
+            if key in {
+                "http_headers",
+                "server_url",
+                "retries",
+                "timeout_ms",
+            } or isinstance(value, (Iterator, AsyncIterator)):
                 # Telemetry must not consume a one-shot message/tool iterable.
                 continue
             try:
@@ -184,6 +242,16 @@ class _WithMistralAI(ABC):
                 )
             else:
                 raise TypeError("Response must be an asynchronous iterator")
+        if (pending := _parse_pending.get()) is not None:
+            pending.append(
+                (
+                    with_span,
+                    response,
+                    request_parameters,
+                    self._response_attributes_extractor,
+                )
+            )
+            return response
         _finish_tracing(
             status=trace_api.Status(status_code=trace_api.StatusCode.OK),
             with_span=with_span,

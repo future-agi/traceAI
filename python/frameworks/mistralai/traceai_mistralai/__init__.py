@@ -34,6 +34,7 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
         "_original_sync_stream_agent_method",
         "_original_async_agent_method",
         "_original_async_stream_agent_method",
+        "_original_parse_methods",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -52,8 +53,13 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
         )
 
         sdk_version = Version(distribution_version("mistralai"))
-        if not (Version("1.1.0") <= sdk_version < Version("2") or Version("3.6.0") <= sdk_version < Version("4")):
-            raise ValueError("traceAI-mistralai supports mistralai >=1.1,<2 or >=3.6,<4")
+        if not (
+            Version("1.1.0") <= sdk_version < Version("2")
+            or Version("3.6.0") <= sdk_version < Version("4")
+        ):
+            raise ValueError(
+                "traceAI-mistralai supports mistralai >=1.1,<2 or >=3.6,<4"
+            )
         self._native = None
         if sdk_version >= Version("3.6.0"):
             from traceai_mistralai._native import _NativeInstrumentation
@@ -65,8 +71,13 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             _AsyncChatWrapper,
             _AsyncStreamChatWrapper,
             _SyncChatWrapper,
+            _sync_parse,
+            _async_parse,
         )
-        from traceai_mistralai._embeddings import _AsyncEmbeddingWrapper, _EmbeddingWrapper
+        from traceai_mistralai._embeddings import (
+            _AsyncEmbeddingWrapper,
+            _EmbeddingWrapper,
+        )
 
         try:
             import mistralai
@@ -77,6 +88,11 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
                 "Could not import mistralai. Please install with `pip install mistralai`."
             ) from err
 
+        self._original_parse_methods = ()
+        if hasattr(Chat, "parse") and hasattr(Chat, "parse_async"):
+            self._original_parse_methods = (Chat.parse, Chat.parse_async)
+            wrap_function_wrapper(module="mistralai.chat", name="Chat.parse", wrapper=_sync_parse)
+            wrap_function_wrapper(module="mistralai.chat", name="Chat.parse_async", wrapper=_async_parse)
         self._original_sync_chat_method = Chat.complete
         self._original_sync_stream_chat_method = Chat.stream
         self._original_async_chat_method = Chat.complete_async
@@ -149,12 +165,20 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             config=_EmbeddingTraceConfig(config),
         )
         self._embedding_methods = (Embeddings.create, Embeddings.create_async)
-        wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create", wrapper=_EmbeddingWrapper(
-            "MistralClient.embeddings", embedding_tracer, mistralai
-        ))
-        wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create_async", wrapper=_AsyncEmbeddingWrapper(
-            "MistralAsyncClient.embeddings", embedding_tracer, mistralai
-        ))
+        wrap_function_wrapper(
+            module="mistralai.embeddings",
+            name="Embeddings.create",
+            wrapper=_EmbeddingWrapper(
+                "MistralClient.embeddings", embedding_tracer, mistralai
+            ),
+        )
+        wrap_function_wrapper(
+            module="mistralai.embeddings",
+            name="Embeddings.create_async",
+            wrapper=_AsyncEmbeddingWrapper(
+                "MistralAsyncClient.embeddings", embedding_tracer, mistralai
+            ),
+        )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._native is not None:
@@ -162,10 +186,13 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             self._native = None
             return
         from mistralai.embeddings import Embeddings
+
         Embeddings.create, Embeddings.create_async = self._embedding_methods
         from mistralai.agents import Agents
         from mistralai.chat import Chat
 
+        if self._original_parse_methods:
+            Chat.parse, Chat.parse_async = self._original_parse_methods
         Chat.complete = self._original_sync_chat_method  # type: ignore
         Chat.stream = self._original_sync_stream_chat_method  # type: ignore
         Chat.complete_async = self._original_async_chat_method  # type: ignore

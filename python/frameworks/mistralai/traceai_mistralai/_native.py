@@ -185,7 +185,7 @@ class _NativeInstrumentation:
         from mistralai.client.fim import Fim
 
         for cls, methods in (
-            (Chat, ("complete", "stream")),
+            (Chat, ("complete", "stream", "parse")),
             (Agents, ("complete", "stream")),
             (Embeddings, ("create",)),
             (Fim, ("complete", "stream")),
@@ -211,6 +211,11 @@ class _NativeInstrumentation:
 
     @contextmanager
     def _call_scope(self):
+        # chat.parse calls chat.complete and parses its result afterward. Share
+        # the outer scope so the SDK-owned span stays open through validation.
+        if (existing := self._response_scope.get()) is not None:
+            yield
+            return
         with ExitStack() as scope:
             token = self._response_scope.set(scope)
             try:
@@ -357,9 +362,9 @@ class _NativeInstrumentation:
                             # Reuse the SDK's non-streaming OTel conversion for
                             # text, reasoning and image chunks, not provider keys.
                             message = {
-                                "content": [content]
-                                if isinstance(content, dict)
-                                else content
+                                "content": (
+                                    [content] if isinstance(content, dict) else content
+                                )
                             }
                             parts.extend(
                                 format_output_message({"message": message})["parts"]

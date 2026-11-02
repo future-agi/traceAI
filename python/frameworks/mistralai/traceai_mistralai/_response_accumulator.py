@@ -139,6 +139,18 @@ class _ValuesAccumulator:
             elif isinstance(self_value, _StringAccumulator):
                 if isinstance(value, str):
                     self_value += value
+                elif isinstance(value, list):
+                    # Legacy SDK 1.12 accepts typed text chunks in SSE deltas.
+                    # Export the accumulated answer via the semantic output
+                    # attribute, where TraceConfig applies text privacy.
+                    for chunk in value:
+                        chunk = _to_dict(chunk)
+                        if (
+                            isinstance(chunk, Mapping)
+                            and chunk.get("type") == "text"
+                            and isinstance(chunk.get("text"), str)
+                        ):
+                            self_value += chunk["text"]
             elif isinstance(self_value, _IndexedAccumulator):
                 if isinstance(value, Iterable):
                     for index, v in enumerate(value):

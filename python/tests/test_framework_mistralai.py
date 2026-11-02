@@ -156,7 +156,7 @@ class TestMistralAIInstrumentor:
                     assert isinstance(instrumentor._tracer, FITracer)
                     
                     # Verify all methods were wrapped
-                    assert mock_wrap.call_count == 10  # chat + agents + embeddings
+                    assert mock_wrap.call_count == 12  # chat + parse + agents + embeddings
                     
                     # Verify original methods were stored
                     assert hasattr(instrumentor, '_original_sync_chat_method')
@@ -234,7 +234,7 @@ class TestMistralAIInstrumentor:
                     instrumentor._instrument(tracer_provider=tracer_provider)
                     
                     # Check that all expected calls were made
-                    assert len(mock_wrap.call_args_list) == 10
+                    assert len(mock_wrap.call_args_list) == 12
                     
                     # Check that both chat and agent modules are instrumented
                     modules_called = []
@@ -251,6 +251,7 @@ class TestMistralAIInstrumentor:
                     # Verify method names
                     expected_names = [
                         "Chat.complete", "Chat.stream", "Chat.complete_async", "Chat.stream_async",
+                        "Chat.parse", "Chat.parse_async",
                         "Agents.complete", "Agents.stream", "Agents.complete_async", "Agents.stream_async"
                     ]
                     for expected_name in expected_names:
