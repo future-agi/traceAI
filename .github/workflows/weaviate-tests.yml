@@ -1,0 +1,40 @@
+name: Weaviate offline compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/weaviate/**'
+      - 'python/fi_instrumentation/**'
+      - '.github/workflows/weaviate-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Weaviate ${{ matrix.sdk }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+        sdk: ['4.4.0', '4.7.0', '4.24.1']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package and compatibility dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install ./python/frameworks/weaviate 'fi-instrumentation-otel==1.2.2' 'weaviate-client==${{ matrix.sdk }}' pytest
+      - name: Run tests with loopback networking only
+        run: |
+          sudo unshare --net sh -c 'ip link set lo up; exec "$@"' sh \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -I -m pytest \
+            "$GITHUB_WORKSPACE/python/frameworks/weaviate/tests" -q --import-mode=importlib
