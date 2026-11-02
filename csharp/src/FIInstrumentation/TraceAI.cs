@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using FIInstrumentation.Export;
 using FIInstrumentation.Types;
 using OpenTelemetry;
@@ -14,7 +15,10 @@ namespace FIInstrumentation;
 /// </summary>
 public static class TraceAI
 {
-    private const string Version = "0.1.0";
+    private static readonly string Version = typeof(TraceAI).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+        ?? typeof(TraceAI).Assembly.GetName().Version?.ToString(3)
+        ?? "unknown";
     private const string InstrumentationName = "fi-instrumentation";
 
     private static readonly object s_lock = new();

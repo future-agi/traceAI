@@ -63,7 +63,12 @@ class ContentOptInTest {
         assertTrue(completions.stream().anyMatch(c -> c.attribute("gen_ai.completion").orElse("").contains(marker)));
         Map<String, String> tool = only(spans, TOOL_SPAN).attributes();
         assertEquals("{\"city\":\"" + marker + "\"}", tool.get("gen_ai.tool.call.arguments"));
-        assertEquals("Sunny, 21 C in " + marker, tool.get("gen_ai.tool.call.result"));
+        String expectedResult = "Sunny, 21 C in " + marker;
+        // Quarkus LangChain4j 1.12 JSON-encodes String tool results; 1.14 emits the raw String.
+        if (System.getProperty("quarkus-langchain4j.version").startsWith("1.12.")) {
+            expectedResult = "\"" + expectedResult + "\"";
+        }
+        assertEquals(expectedResult, tool.get("gen_ai.tool.call.result"));
         assertFalse(Exported.everythingReceived().contains(StandIns.PROVIDER_KEY));
     }
 

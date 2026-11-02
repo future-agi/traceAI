@@ -1,6 +1,14 @@
 # @traceai/anthropic
 
-OpenTelemetry instrumentation for Anthropic's Claude API. This package provides automatic tracing and monitoring for your Anthropic applications.
+OpenTelemetry instrumentation for Anthropic SDKs without built-in tracing. The supported peer dependency is `@anthropic-ai/sdk@^0.27.3`.
+
+## SDKs with native OpenTelemetry
+
+Do not add this legacy instrumentor to SDKs with built-in OpenTelemetry, such as `@anthropic-ai/sdk@1.3.0`. Those SDKs already own their request spans, promise helpers and stream lifecycle. `manuallyInstrument()` leaves them unmodified and logs a diagnostic warning. It does not enable native tracing if you have disabled it.
+
+Configure native SDK tracing through the SDK's `openTelemetry` option and your OpenTelemetry tracer provider. The legacy instrumentor's `traceConfig` and `FI_HIDE_*` controls do **not** apply to native SDK spans. Use the SDK's content controls and your export pipeline's privacy policy instead. See [Anthropic's SDK tracing configuration](https://www.npmjs.com/package/@anthropic-ai/sdk/v/1.3.0#opentelemetry).
+
+The setup below is for the legacy SDK peer dependency only.
 
 ## Installation
 
@@ -46,6 +54,10 @@ The `module` setting can be `"commonjs"`, `"esnext"`, or any other module system
 
 ## Quick Start
 
+Native ESM imports are not intercepted by the CommonJS automatic instrumentation hook. After importing the legacy SDK, call `manuallyInstrument(Anthropic)` before creating a client. This also works in CommonJS when automatic instrumentation has already patched the SDK; it does not add a second wrapper.
+
+This example uses top-level `await` for ESM. For CommonJS, use `require()` for the imports and run the awaited setup and request inside an async function.
+
 ```typescript
 // export Future AGI API KEYS
 // export FI_API_KEY=your_api_key
@@ -73,8 +85,9 @@ registerInstrumentations({
   tracerProvider: tracerProvider,
 });
 
-// 3. Dynamically import Anthropic SDK AFTER instrumentation is registered
+// 3. Import and explicitly instrument the legacy SDK (required for native ESM)
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
+anthropicInstrumentation.manuallyInstrument(Anthropic);
 const client = new Anthropic();
 
 // 4. Use Anthropic as normal
@@ -112,7 +125,7 @@ FI_SECRET_KEY=your_secret_key
 - Support for both streaming and non-streaming requests
 - Captures token usage and response metadata
 - Tracks tool usage in conversations
-- No manual instrumentation required
+- One-time SDK setup; no per-request tracing code required
 - Integration with TraceAI's observability platform
 
 ## Peer Dependencies

@@ -93,36 +93,61 @@ async function checkTransport(module) {
   const handlerInstrumentation = new cjs.MCPInstrumentation({
     instrumentationConfig: { enabled: false },
   });
+  let failedParent;
+  const activeTraceId = () =>
+    trace.getSpanContext(context.active())?.traceId ?? "none";
   const handler = createMcpHandler((server) => {
     handlerInstrumentation.instrumentServer(server);
     server.registerTool("echo", { inputSchema: {} }, async () => ({
-      content: [
-        {
-          type: "text",
-          text: trace.getSpanContext(context.active())?.traceId ?? "none",
-        },
-      ],
+      content: [{ type: "text", text: activeTraceId() }],
+    }));
+    server.registerTool("broken", { inputSchema: {} }, async () => {
+      failedParent = activeTraceId();
+      throw new Error("expected-handler-error");
+    });
+    server.registerResource("inventory", "inventory://sample", {}, async (uri) => ({
+      contents: [{ uri: uri.href, text: activeTraceId() }],
+    }));
+    server.registerPrompt("inventory", {}, async () => ({
+      messages: [{ role: "user", content: { type: "text", text: activeTraceId() } }],
     }));
   });
-  const result = await context.with(ROOT_CONTEXT, () =>
-    handler(
-      new Request("http://localhost/mcp", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: { name: "echo", arguments: {}, _meta: { traceparent } },
+  const invoke = async (id, method, params, parent = traceparent) => {
+    const result = await context.with(ROOT_CONTEXT, () =>
+      handler(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method,
+            params: { ...params, _meta: { traceparent: parent } },
+          }),
         }),
-      }),
-    ),
-  );
-  assert.equal(result.status, 200);
-  assert.match(await result.text(), new RegExp(traceId));
+      ),
+    );
+    assert.equal(result.status, 200);
+    return result.text();
+  };
+  const secondTraceId = "33333333333333333333333333333333";
+  const [toolResult, resourceResult, promptResult] = await Promise.all([
+    invoke(2, "tools/call", { name: "echo", arguments: {} }),
+    invoke(3, "resources/read", { uri: "inventory://sample" },
+      `00-${secondTraceId}-4444444444444444-01`),
+    invoke(4, "prompts/get", { name: "inventory" }),
+  ]);
+  assert.match(toolResult, new RegExp(traceId));
+  assert.match(resourceResult, new RegExp(secondTraceId));
+  assert.match(promptResult, new RegExp(traceId));
+  const errorResult = await invoke(5, "tools/call", {
+    name: "broken", arguments: {},
+  });
+  assert.match(errorResult, /expected-handler-error/);
+  assert.equal(failedParent, traceId);
   handlerInstrumentation.disable();
   manager.disable();
   console.log(
