@@ -2,7 +2,7 @@ import os
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from mistralai import Mistral
+from mistralai.client import Mistral
 from traceai_mistralai import MistralAIInstrumentor
 
 trace_provider = register(
