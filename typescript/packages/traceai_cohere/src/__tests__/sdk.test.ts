@@ -508,7 +508,128 @@ it.each(["complete", "start-only", "cancelled", "eof"])("captures v2 content-sta
   expect(spans).toHaveLength(1);
   const text = mode === "complete" ? "initial-final" : "initial-";
   expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe(text);
-  expect(JSON.parse(spans[0].attributes[S.LLM_OUTPUT_MESSAGES] as string)[0].content).toBe(text);
+  expect(JSON.parse(spans[0].attributes[S.LLM_OUTPUT_MESSAGES] as string)[0].content).toEqual([{ type: "text", text }]);
   expect(JSON.parse(spans[0].attributes[S.RAW_OUTPUT] as string).text).toBe(text);
   expect(spans[0].status.code).toBe(mode === "eof" ? SpanStatusCode.ERROR : mode === "cancelled" ? SpanStatusCode.UNSET : SpanStatusCode.OK);
+});
+
+
+// Generated reasoning and partial tool arguments are output, not input echoes.
+const outputModes = ["capture", "hideInputs", "hideOutputs", "hideOutputMessages", "hideOutputText"];
+describe.each(outputModes)("generated content with %s", (mode) => {
+  const hidden = mode.startsWith("hideOutput");
+  async function captureOutput(action: (spans: InMemorySpanExporter) => Promise<void>) {
+    instrumentation.disable();
+    const captured = new InMemorySpanExporter();
+    const wireProvider = new NodeTracerProvider({ spanProcessors: [
+      new SimpleSpanProcessor(captured),
+      new SimpleSpanProcessor(new OTLPTraceExporter({ url: `${url}/v1/traces` })),
+    ] });
+    instrumentation = new CohereInstrumentation({ traceConfig: mode === "capture" ? {} : { [mode]: true } });
+    instrumentation.setTracerProvider(wireProvider);
+    try {
+      await action(captured);
+      await wireProvider.forceFlush();
+      expect(wire).not.toHaveLength(0);
+      expect(JSON.stringify(wire).includes("synthetic-generated-")).toBe(!hidden);
+    } finally {
+      await wireProvider.shutdown();
+    }
+  }
+
+  it.each(["chat", "complete", "cancelled", "eof", "start-only"])("preserves v2 reasoning blocks (%s)", async (ending) => {
+    await captureOutput(async (captured) => {
+      const client = clientFor(sdk8, true);
+      const thinking = "synthetic-generated-reasoning-";
+      const blocks = [
+        { type: "thinking", thinking: thinking + (ending === "start-only" ? "" : "continued") },
+        { type: "text", text: "visible-answer" },
+        { type: "thinking", thinking: "second-thought" },
+      ];
+      if (ending === "chat") {
+        response = { ...v2Response, message: { role: "assistant", content: blocks } };
+        const result = await client.chat({ ...requestV2, thinking: { type: "enabled" } });
+        expect(result.message.content).toEqual(blocks);
+      } else {
+        const events: any[] = [
+          { type: "content-start", index: 0, delta: { message: { content: { type: "thinking", thinking } } } },
+        ];
+        if (ending !== "start-only") events.push(
+          { type: "content-delta", index: 0, delta: { message: { content: { thinking: "continued" } } } },
+          { type: "content-end", index: 0 },
+          { type: "content-start", index: 1, delta: { message: { content: blocks[1] } } },
+          // A delta without a start must also retain its generated content.
+          { type: "content-delta", index: 2, delta: { message: { content: { thinking: "second-thought" } } } },
+        );
+        if (ending === "complete") events.push({ type: "message-end", delta: { finish_reason: "COMPLETE" } });
+        contentType = "text/event-stream";
+        response = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+        const delivered = [];
+        for await (const event of await client.chatStream({ ...requestV2, thinking: { type: "enabled" } })) {
+          delivered.push(event);
+          if (ending === "cancelled" && delivered.length === 2) break;
+        }
+        expect(delivered[0].delta.message.content.thinking).toBe(thinking);
+        expect(delivered).toHaveLength(ending === "cancelled" ? 2 : events.length);
+      }
+      const spans = captured.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      const attrs = spans[0].attributes;
+      expect(spans[0].status.code).toBe(ending === "cancelled" ? SpanStatusCode.UNSET : ["eof", "start-only"].includes(ending) ? SpanStatusCode.ERROR : SpanStatusCode.OK);
+      if (hidden) {
+        expect(attrs[S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
+        expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        expect(JSON.stringify(attrs)).not.toContain(thinking);
+      } else {
+        const expectedBlocks = ["cancelled", "start-only"].includes(ending) ? blocks.slice(0, 1) : blocks;
+        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].content).toEqual(expectedBlocks);
+        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.content).toEqual(expectedBlocks);
+        expect(attrs[S.OUTPUT_VALUE]).toBe(expectedBlocks.length === 1 ? "" : "visible-answer");
+      }
+    });
+  });
+
+  it.each(["cancelled", "eof", "terminal", "generation"])("preserves v1 tool chunks (%s)", async (ending) => {
+    await captureOutput(async (captured) => {
+      const client = clientFor(sdk8);
+      // Interleave calls and leave one argument incomplete: telemetry must not
+      // require JSON parsing, mix call indices, or quote an already-raw string.
+      const events: any[] = [
+        { event_type: "tool-calls-chunk", tool_call_delta: { index: 1, name: "second", parameters: '{"synthetic-generated-second":' } },
+        { event_type: "tool-calls-chunk", tool_call_delta: { index: 0, name: "lookup", parameters: '{"synthetic-generated-key":' } },
+        { event_type: "tool-calls-chunk", tool_call_delta: { index: 0, parameters: '"value"}' } },
+      ];
+      const finalCalls = [{ name: "authoritative", parameters: { "synthetic-generated-final": true } }];
+      if (ending === "terminal") events.push({ event_type: "stream-end", finish_reason: "COMPLETE", response: { text: "", tool_calls: finalCalls } });
+      if (ending === "generation") events.push({ event_type: "tool-calls-generation", tool_calls: finalCalls });
+      contentType = "application/x-ndjson";
+      response = events.map(event => `${JSON.stringify(event)}\n`).join("");
+      const delivered = [];
+      for await (const event of await client.chatStream(request)) {
+        delivered.push(event);
+        if (ending === "cancelled" && delivered.length === 3) break;
+      }
+      expect(delivered[1].toolCallDelta.name).toBe("lookup");
+      expect(delivered[2].toolCallDelta.parameters).toBe('"value"}');
+      expect(delivered).toHaveLength(events.length);
+      const spans = captured.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      const attrs = spans[0].attributes;
+      expect(spans[0].status.code).toBe(ending === "terminal" ? SpanStatusCode.OK : ending === "cancelled" ? SpanStatusCode.UNSET : SpanStatusCode.ERROR);
+      if (hidden) {
+        expect(attrs[S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
+        expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
+      } else {
+        const calls = ["terminal", "generation"].includes(ending) ? finalCalls : [
+          { name: "lookup", parameters: '{"synthetic-generated-key":"value"}' },
+          { name: "second", parameters: '{"synthetic-generated-second":' },
+        ];
+        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).toolCalls).toEqual(calls);
+        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_calls).toEqual(calls.map(call => ({
+          function: { name: call.name, arguments: typeof call.parameters === "string" ? call.parameters : JSON.stringify(call.parameters) },
+        })));
+      }
+    });
+  });
 });

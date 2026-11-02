@@ -6,6 +6,7 @@ type Finish = (response: Data, error?: unknown, cancelled?: boolean) => void;
 /** Aggregate content, not the event log. Consumers still receive original events. */
 class ChatAccumulator {
   private text = "";
+  private content = new Map<number, Data>();
   private tools = new Map<number, Data>();
   private response: Data = {};
   constructor(private captureContent: boolean) {}
@@ -18,10 +19,34 @@ class ChatAccumulator {
     if (this.captureContent) {
       if (type === "text-generation" && typeof event.text === "string") this.text += event.text;
       if (type === "content-start" || type === "content-delta") {
-        const text = object(message.content).text;
-        if (typeof text === "string") this.text += text;
+        const content = object(message.content);
+        const index = typeof event.index === "number" ? event.index : 0;
+        const previous = this.content.get(index) ?? {};
+        const block: Data = { ...previous };
+        // Keep reasoning separate from visible text, preserving block order and
+        // partial content even when a stream ends before its terminal event.
+        for (const key of ["text", "thinking"]) {
+          if (typeof content[key] === "string") {
+            block.type = content.type ?? block.type ?? key;
+            block[key] = String(previous[key] ?? "") + content[key];
+          }
+        }
+        if (block.type) this.content.set(index, block);
+        if (typeof content.text === "string") this.text += content.text;
+      }
+      if (type === "tool-calls-chunk") {
+        const call = object(event.toolCallDelta ?? event.tool_call_delta);
+        const index = typeof call.index === "number" ? call.index : 0;
+        const previous = this.tools.get(index) ?? {};
+        this.tools.set(index, {
+          ...previous,
+          ...(typeof call.name === "string" ? { name: call.name } : {}),
+          // These are JSON fragments, not objects: retain unfinished arguments.
+          parameters: String(previous.parameters ?? "") + String(call.parameters ?? ""),
+        });
       }
       if (type === "tool-calls-generation") {
+        this.tools.clear();
         list(event.toolCalls ?? event.tool_calls).forEach((call, index) => this.tools.set(index, object(call)));
       }
       if (type === "tool-call-start" || type === "tool-call-delta") {
@@ -49,7 +74,11 @@ class ChatAccumulator {
     // V1's terminal response has authoritative text/tool calls; v2 only sends usage.
     return {
       text: this.text,
-      toolCalls: [...this.tools.values()],
+      toolCalls: [...this.tools].sort(([a], [b]) => a - b).map(([, call]) => call),
+      ...(this.content.size ? { message: {
+        role: "assistant",
+        content: [...this.content].sort(([a], [b]) => a - b).map(([, block]) => block),
+      } } : {}),
       ...this.response,
     };
   }

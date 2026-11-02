@@ -107,7 +107,7 @@ function withoutInputEchoes(operation: Operation, response: Data): Data {
       role: message.role,
       content: Array.isArray(message.content) ? message.content.map((part) => {
         const content = object(part);
-        return { type: content.type, text: content.text };
+        return { type: content.type, text: content.text, thinking: content.thinking };
       }) : message.content,
       toolCalls: field(message, "toolCalls", "tool_calls"),
     },
@@ -150,7 +150,7 @@ export function outputAttributes(operation: Operation, response: Data, config: T
     const normalized: Data = { role: "assistant", content: message.content ?? text };
     if (calls) normalized.tool_calls = list(calls).map((item) => {
       const call = object(item);
-      return call.function ? call : { function: { name: call.name, arguments: json(call.parameters) } };
+      return call.function ? call : { function: { name: call.name, arguments: typeof call.parameters === "string" ? call.parameters : json(call.parameters) } };
     });
     attrs[S.OUTPUT_VALUE] = text;
     attrs[S.OUTPUT_MIME_TYPE] = MimeType.TEXT;
