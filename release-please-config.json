@@ -1100,6 +1100,15 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "ruby/traceai-openai": {
+      "release-type": "ruby",
+      "component": "traceai-openai-ruby",
+      "package-name": "traceai-openai",
+      "extra-files": [
+        "traceai-openai.gemspec",
+        "lib/traceai/openai.rb"
+      ]
     }
   }
 }
