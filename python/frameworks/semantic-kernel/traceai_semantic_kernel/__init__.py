@@ -7,6 +7,12 @@ installs a mapping-only span processor. It does not wrap ``Kernel.invoke``,
 ``KernelFunction.invoke`` or any connector method, and it does not depend on
 ``wrapt``.
 
+The OpenAIChatCompletion and AzureChatCompletion connectors use these shared
+diagnostics. AzureAIInferenceChatCompletion does not: its separate Azure SDK
+settings, tracer and content recording are not configured or filtered here.
+Other connectors are covered only where they use Semantic Kernel's shared
+diagnostics; this adapter does not add missing model or retrieval spans.
+
 Experimental upstream surface, Python only. Not the Java package, not .NET
 Semantic Kernel, not Microsoft Agent Framework.
 """
@@ -177,9 +183,14 @@ class SemanticKernelInstrumentor:
                 and ``output.value``. Other TraceConfig fields are not applied.
                 Raises ``TypeError`` for anything that is not a TraceConfig.
 
-        No environment variable is required. Calling this more than once (on
-        any instance) installs one processor; later calls are no-ops until
-        :meth:`uninstrument`.
+        No environment variable is required for the shared diagnostics used by
+        OpenAIChatCompletion and AzureChatCompletion. AzureAIInferenceChatCompletion
+        is not supported: this method does not configure its separate Azure SDK
+        diagnostics or apply privacy controls to its spans. Enabling that
+        connector with environment flags is not a supported workaround.
+
+        Calling this more than once (on any instance) installs one processor;
+        later calls are no-ops until :meth:`uninstrument`.
 
         It does not raise into your startup for a Semantic Kernel module this
         package expects but cannot import (the diagnostics are experimental

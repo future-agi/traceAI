@@ -224,7 +224,10 @@ describe('FI Core - OTEL Module', () => {
     it('should create FITracerProvider with default configuration', () => {
       const provider = new FITracerProvider();
       expect(provider).toBeDefined();
-      expect((provider as any).transport).toBe(Transport.HTTP);
+      const { OTLPTraceExporter } = jest.requireMock<typeof import('@opentelemetry/exporter-trace-otlp-http')>('@opentelemetry/exporter-trace-otlp-http');
+      expect(OTLPTraceExporter).toHaveBeenCalledWith(expect.objectContaining({
+        url: 'https://api.futureagi.com/tracer/v1/traces',
+      }));
     });
 
     it('should create FITracerProvider with custom configuration', () => {
@@ -244,8 +247,10 @@ describe('FI Core - OTEL Module', () => {
       });
 
       expect(provider).toBeDefined();
-      expect((provider as any).transport).toBe(Transport.GRPC);
-      expect((provider as any).verbose).toBe(true);
+      const { Metadata } = jest.requireMock<typeof import('@grpc/grpc-js')>('@grpc/grpc-js');
+      expect(Metadata).toHaveBeenCalled();
+      const { OTLPTraceExporter } = jest.requireMock<typeof import('@opentelemetry/exporter-trace-otlp-http')>('@opentelemetry/exporter-trace-otlp-http');
+      expect(OTLPTraceExporter).not.toHaveBeenCalled();
     });
   });
 

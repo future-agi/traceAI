@@ -4,9 +4,11 @@ OpenTelemetry instrumentation for the Search and Extract methods of the
 [`parallel-web`](https://pypi.org/project/parallel-web/) client
 (Parallel Web Systems).
 
-It traces `search` and `extract` only. The Task API (`task_run`,
-`task_group`), Monitor, FindAll and the rest of `client.beta` are different
-products and produce no spans from this package.
+Automatic instrumentation covers `search` and `extract`. For Task submission
+and result waiting, use the [application-span recipe](#trace-a-task-workflow)
+below. For the OpenAI-compatible Responses API, use the
+[shared OpenAI instrumentor](#trace-the-responses-api). TaskGroup, Monitor,
+FindAll and the rest of `client.beta` are not automatically instrumented.
 
 ## Installation
 
@@ -15,8 +17,7 @@ pip install traceAI-parallel
 ```
 
 It accepts `parallel-web>=1.0.1,<2` and `fi-instrumentation-otel>=1.1.0`.
-The suite runs with `parallel-web` 1.0.1 and 1.3.5 on Python 3.10, 3.11, 3.12
-and 3.13.
+Python 3.10–3.13 is supported.
 
 ## Usage
 
@@ -208,13 +209,103 @@ skips the span.
 - Do not combine this package with another instrumentor that wraps the
   same `parallel-web` methods, or calls will produce duplicate spans.
 
-## Live vendor verification (2026-10-17)
+## Trace a Task workflow
 
-Run against the real Parallel API with `parallel-web` 1.3.5 and
-`traceAI-parallel` 0.1.0 on Python 3.12: `search` and `extract` (sync and
-async) produced `RETRIEVER` and `TOOL` spans with the documented attributes,
-and a call with a bad API key produced an `ERROR` span (`AuthenticationError`,
-HTTP 401) whose stacktrace holds the exception line only. With
-`FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` the queries were absent from
-every stored column. Not run live: `with_raw_response` and
-`with_streaming_response` (package tests only).
+Set `PARALLEL_API_KEY`, `FI_API_KEY` and `FI_SECRET_KEY` in your environment.
+Use an application span around both `task_run.create()` and the blocking
+`task_run.result()` call. This shows the time your application spends submitting
+and waiting, rather than treating submission latency as the completed task's
+duration. You do not need `ParallelInstrumentor` for this recipe.
+
+```python
+from fi_instrumentation import FITracer, register
+from fi_instrumentation.fi_types import ProjectType
+from opentelemetry.trace import Status, StatusCode
+from parallel import Parallel
+from parallel.types import TaskRunResult
+
+def research(client: Parallel, tracer: FITracer, question: str) -> TaskRunResult:
+    with tracer.start_as_current_span(
+        "parallel.task", attributes={"gen_ai.span.kind": "CHAIN", "gen_ai.provider.name": "parallel"},
+        record_exception=False, set_status_on_exception=False,
+    ) as span:
+        try:
+            run = client.task_run.create(input=question, processor="base")
+            span.set_attribute("parallel.run_id", run.run_id)
+            span.set_attribute("parallel.processor", "base")
+            result = client.task_run.result(run.run_id, api_timeout=600, timeout=610)
+        except Exception:
+            span.set_status(Status(StatusCode.ERROR, "Task request failed"))
+            raise
+        span.set_attribute("parallel.task.status", result.run.status)
+        span.set_status(Status(StatusCode.OK) if result.run.status == "completed"
+                        else Status(StatusCode.ERROR, "Task did not complete"))
+        return result
+
+
+provider = register(project_name="parallel-tasks", project_type=ProjectType.OBSERVE)
+tracer = FITracer(provider.get_tracer("parallel-workflow"))
+try:
+    with Parallel() as client:
+        result = research(client, tracer, "What is OpenTelemetry and who maintains it?")
+        print(result.output.content)
+finally:
+    provider.force_flush()
+    provider.shutdown()
+```
+
+Open the `parallel-tasks` project in Future AGI to see the `parallel.task`
+chain span with its run ID, processor and terminal status. Task inputs, outputs
+and raw exception text are not attached. SDK errors are re-raised unchanged;
+only a generic error status is recorded. The `result()` call waits on the
+server for up to 600 seconds, with a 610-second HTTP timeout. A wait timeout
+is not a remote task failure: use the run ID to retrieve its status or resume
+waiting. The span does not expose Parallel's internal research steps.
+
+The complete [sync and async example](examples/task_workflow.py) also handles
+`asyncio.CancelledError`. Cancelling your local wait ends the span as an error
+but does not cancel the remote task. Run it with `--async` to use `AsyncParallel`.
+
+## Trace the Responses API
+
+Install `traceAI-openai` and use Parallel's
+[OpenAI-compatible endpoint](https://docs.parallel.ai/responses-api/responses-quickstart).
+Do not add a separate Parallel SDK patch for this route.
+
+```bash
+pip install traceAI-openai
+```
+
+```python
+import os
+
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from openai import OpenAI
+from traceai_openai import OpenAIInstrumentor
+
+provider = register(project_name="parallel-responses", project_type=ProjectType.OBSERVE)
+OpenAIInstrumentor().instrument(tracer_provider=provider)
+try:
+    with OpenAI(
+        api_key=os.environ["PARALLEL_API_KEY"],
+        base_url="https://api.parallel.ai/v1",
+        timeout=120,
+    ) as client:
+        response = client.responses.create(
+            model="parallel",
+            input="What is OpenTelemetry and who maintains it?",
+            reasoning={"effort": "low"},
+        )
+        print(response.output_text)
+finally:
+    provider.force_flush()
+    provider.shutdown()
+```
+
+This produces one LLM span per Responses call, attributed to `parallel` at
+`api.parallel.ai`. Sync, async and streamed Responses calls use the same
+instrumentor. The model and token usage come from the request or response;
+no Task processor is treated as a model and no Task token usage is invented.
+Use `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` before starting your app
+if Responses prompts and answers should not be exported.
