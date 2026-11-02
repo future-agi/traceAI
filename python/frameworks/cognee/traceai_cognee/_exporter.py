@@ -1,6 +1,7 @@
 """Copy and project native spans at the exporter boundary."""
 import json
 import math
+from fi_instrumentation.instrumentation.config import TraceConfig
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Event
 from opentelemetry.sdk.trace.export import SpanExporter
@@ -14,8 +15,9 @@ _SAFE = frozenset({'gen_ai.operation.name', 'gen_ai.system', 'gen_ai.request.mod
                    'gen_ai.usage.output_tokens', 'gen_ai.usage.total_tokens',
                    'llm.token_count.prompt', 'llm.token_count.completion',
                    'llm.token_count.total', 'cognee.search.type'})
-_CONTENT = ('langfuse.observation.input', 'langfuse.observation.output',
-            'memory.query.text', 'cognee.search.query', 'cognee.db.query')
+_INPUT_CONTENT = ('langfuse.observation.input', 'memory.query.text',
+                  'cognee.search.query', 'cognee.db.query')
+_OUTPUT_CONTENT = ('langfuse.observation.output',)
 _KIND_KEYS = ('fi.span.kind', 'gen_ai.span.kind', 'llm.request.type', 'openinference.span.kind')
 
 def _wire_number(value):
@@ -43,7 +45,7 @@ def _content(value):
         return None
     return redact_structured(value)
 
-def project(span, project_name, capture_content):
+def project(span, project_name, capture_content, trace_config=None):
     attrs = dict(span.attributes or {})
     out = {k: v for k, v in attrs.items() if k in _SAFE and _safe_value(v)}
     for key in _KIND_KEYS:
@@ -54,10 +56,17 @@ def project(span, project_name, capture_content):
         if kind:
             out['fi.span.kind'] = kind
     if capture_content:
-        for key in _CONTENT:
-            value = _content(attrs.get(key))
-            if value is not None:
-                out[key] = value
+        config = trace_config if trace_config is not None else TraceConfig()
+        # Global privacy wins over content opt-in. Filter native fields before
+        # creating aliases so neither representation can disclose hidden data.
+        for keys, hidden in ((_INPUT_CONTENT, config.hide_inputs),
+                             (_OUTPUT_CONTENT, config.hide_outputs)):
+            if hidden:
+                continue
+            for key in keys:
+                value = _content(attrs.get(key))
+                if value is not None:
+                    out[key] = value
         for dest, sources in (('input', ('langfuse.observation.input', 'memory.query.text', 'cognee.search.query')),
                               ('output', ('langfuse.observation.output',))):
             for key in sources:
@@ -85,13 +94,14 @@ class CogneeExporter(SpanExporter):
         self.exporter = exporter
         self.project_name = project_name
         self.capture_content = capture_content
+        self._trace_config = TraceConfig()
 
     def export(self, spans):
         # Fail closed: a malformed span is dropped rather than exporting native data.
         projected = []
         for span in spans:
             try:
-                projected.append(project(span, self.project_name, self.capture_content))
+                projected.append(project(span, self.project_name, self.capture_content, self._trace_config))
             except Exception:
                 continue
         return self.exporter.export(projected)
