@@ -170,6 +170,31 @@ TraceAI.init(TraceConfig.builder()
 
 Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
 
+### Provider ownership and shutdown
+
+`TraceAI.init(config)` and `TraceAI.initFromEnvironment()` create a provider used by `TraceAI.getTracer()` and the TraceAI wrappers. They do **not** register, replace or read global OpenTelemetry. Global tracers do not send spans through this local provider. This lets a Java agent or application SDK coexist without registration errors, including when the application registers its SDK after TraceAI starts.
+
+If your application already owns OpenTelemetry, share its pipeline instead:
+
+```java
+import ai.traceai.TraceAI;
+import ai.traceai.TraceConfig;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+
+// Run after the application SDK or Java agent is initialized.
+TraceAI.init(TraceConfig.builder()
+    .hideInputs(true)
+    .hideOutputs(true)
+    .hideErrorDetails(true)
+    .build(), GlobalOpenTelemetry.get());
+```
+
+You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection or resource settings. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
+
+The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
+
+**Migrating from global registration:** older versions implicitly installed their provider globally. If you relied on that behavior for spans created outside TraceAI, configure an application-owned SDK for all those spans and pass it to the overload above. TraceAI no longer claims ownership of the process-wide SDK.
+
 ### Privacy controls
 
 To suppress input/output content and exception details recorded by `FITracer`, configure all three controls:
