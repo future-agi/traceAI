@@ -40,5 +40,5 @@ jobs:
         run: >-
           mvn -B -ntp -f java/pom.xml -pl traceai-java-vertexai -am
           -Dgoogle-cloud.version=${{ matrix.sdk }}
-          '-Dtest=VertexAIStreamTracingTest,VertexAIOtlpWireTest'
+          '-Dtest=FITracer*Test,TraceConfigEnvironmentTest,TraceAIVersionTest,VertexAI*Test'
           -Dsurefire.failIfNoSpecifiedTests=false clean verify

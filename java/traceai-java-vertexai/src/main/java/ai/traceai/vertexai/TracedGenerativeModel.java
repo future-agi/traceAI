@@ -9,6 +9,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.protobuf.MessageOrBuilder;
 import com.google.protobuf.util.JsonFormat;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -243,8 +244,8 @@ public class TracedGenerativeModel {
 
             // Capture finish reason (enum fields don't have has*() in protobuf)
             if (firstCandidate.getFinishReasonValue() != 0) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                    firstCandidate.getFinishReason().name());
+                span.setAttribute(AttributeKey.stringArrayKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON),
+                    Collections.singletonList(firstCandidate.getFinishReason().name()));
             }
         }
 

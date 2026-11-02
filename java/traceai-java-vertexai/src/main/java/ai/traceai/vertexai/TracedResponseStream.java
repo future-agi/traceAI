@@ -8,6 +8,7 @@ import com.google.cloud.vertexai.generativeai.ResponseStream;
 import com.google.cloud.vertexai.generativeai.ResponseStreamIteratorWithHistory;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -91,8 +92,8 @@ final class TracedResponseStream extends ResponseStream<GenerateContentResponse>
                     text.append(delta, 0, Math.min(delta.length(), LIMIT - text.length()));
                 }
                 if (candidate.getFinishReasonValue() != 0) {
-                    span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                        candidate.getFinishReason().name());
+                    span.setAttribute(AttributeKey.stringArrayKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON),
+                        Collections.singletonList(candidate.getFinishReason().name()));
                 }
             }
             if (response.hasUsageMetadata()) {

@@ -223,8 +223,8 @@ public final class SemanticConventions {
     public static final String GEN_AI_INPUT_IMAGES = "gen_ai.input.images";
 
     // ── Raw Input/Output (FI-specific) ───────────────────────────────
-    public static final String RAW_INPUT = "fi.raw_input";
-    public static final String RAW_OUTPUT = "fi.raw_output";
+    public static final String RAW_INPUT = "raw.input";
+    public static final String RAW_OUTPUT = "raw.output";
 
     // ── Error ────────────────────────────────────────────────────────
     public static final String ERROR_TYPE = "error.type";

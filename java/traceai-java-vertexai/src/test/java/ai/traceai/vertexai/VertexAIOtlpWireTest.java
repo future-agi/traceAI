@@ -3,6 +3,9 @@ package ai.traceai.vertexai;
 import ai.traceai.TraceAI;
 import ai.traceai.TraceConfig;
 import com.google.cloud.vertexai.generativeai.GenerativeModel;
+import com.google.cloud.vertexai.api.Content;
+import com.google.cloud.vertexai.api.Part;
+import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import io.grpc.Status;
 import io.opentelemetry.api.GlobalOpenTelemetry;
@@ -48,6 +51,9 @@ class VertexAIOtlpWireTest {
             service.streamError = Status.INVALID_ARGUMENT.withDescription("private-diagnostic");
             assertThatThrownBy(() -> traced.generateContentStream("hello").stream().count())
                 .isInstanceOf(RuntimeException.class);
+            service.unaryResponse = VertexAIStreamTracingTest.lastChunk("Hello");
+            traced.generateContent(List.of(Content.newBuilder().setRole("user")
+                .addParts(Part.newBuilder().setText("hello")).build()));
             TraceAI.shutdown();
             assertThat(bodies).isNotEmpty();
             assertThat(apiKeys).allSatisfy(value -> assertThat(value).isEqualTo("synthetic-api-key"));
@@ -64,17 +70,35 @@ class VertexAIOtlpWireTest {
                     resource.getScopeSpansList().forEach(scope -> spans.addAll(scope.getSpansList()));
                 });
             }
-            assertThat(spans).hasSize(2);
+            assertThat(spans).hasSize(3);
             assertThat(spans).allSatisfy(span -> {
                 var attrs = span.getAttributesList().stream().collect(Collectors.toMap(a -> a.getKey(), a -> a.getValue()));
                 assertThat(attrs.get("fi.span.kind").getStringValue()).isEqualTo("LLM");
                 assertThat(attrs.get("gen_ai.provider.name").getStringValue()).isEqualTo("google");
                 assertThat(attrs.get("gen_ai.request.model").getStringValue()).isEqualTo("gemini-test");
                 assertThat(attrs.get("output.value").getStringValue()).isEqualTo("Hello");
+                assertThat(attrs).doesNotContainKeys("fi.raw_input", "fi.raw_output");
+                assertThat(attrs.get("raw.output").hasStringValue()).isTrue();
+                var rawOutput = JsonParser.parseString(attrs.get("raw.output").getStringValue());
+                if (span.getName().endsWith("(Stream)")) {
+                    assertThat(rawOutput.isJsonArray()).isTrue();
+                } else {
+                    assertThat(rawOutput.isJsonObject()).isTrue();
+                    assertThat(attrs.get("raw.input").hasStringValue()).isTrue();
+                    var rawInput = JsonParser.parseString(attrs.get("raw.input").getStringValue()).getAsJsonArray();
+                    assertThat(rawInput.get(0).getAsJsonObject().get("role").getAsString()).isEqualTo("user");
+                }
+                assertThat(attrs.get("gen_ai.response.finish_reasons").hasArrayValue()).isTrue();
+                assertThat(attrs.get("gen_ai.response.finish_reasons").getArrayValue().getValuesList())
+                    .singleElement().satisfies(reason -> {
+                        assertThat(reason.hasStringValue()).isTrue();
+                        assertThat(reason.getStringValue()).isEqualTo("STOP");
+                    });
                 assertThat(attrs.get("gen_ai.usage.total_tokens").getIntValue()).isEqualTo(5);
             });
             assertThat(spans.get(0).getStatus().getCodeValue()).isEqualTo(1);
             assertThat(spans.get(1).getStatus().getCodeValue()).isEqualTo(2);
+            assertThat(spans.get(2).getStatus().getCodeValue()).isEqualTo(1);
         } finally {
             TraceAI.shutdown();
             GlobalOpenTelemetry.resetForTest();

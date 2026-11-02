@@ -24,6 +24,8 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Iterator;
 import java.util.List;
@@ -106,7 +108,8 @@ class VertexAIStreamTracingTest {
         assertThat(attr(span, SemanticConventions.INPUT_VALUE)).isEqualTo("Say hello");
         assertThat(attr(span, SemanticConventions.OUTPUT_VALUE)).isEqualTo("Hello");
         assertThat(attr(span, SemanticConventions.LLM_OUTPUT_MESSAGES)).contains("Hello");
-        assertThat(attr(span, SemanticConventions.LLM_RESPONSE_FINISH_REASON)).isEqualTo("STOP");
+        assertThat(span.getAttributes().get(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons")))
+            .containsExactly("STOP");
         assertThat(longAttr(span, SemanticConventions.LLM_TOKEN_COUNT_PROMPT)).isEqualTo(3L);
         assertThat(longAttr(span, SemanticConventions.LLM_TOKEN_COUNT_COMPLETION)).isEqualTo(2L);
         assertThat(longAttr(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL)).isEqualTo(5L);
@@ -293,13 +296,22 @@ class VertexAIStreamTracingTest {
         assertThat(exporter.getFinishedSpanItems().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
     }
 
-    @Test
-    void largeStreamBoundsTelemetryWithoutChangingResponses() throws Exception {
-        service.streamChunks = List.of(chunk("a".repeat(20000)), lastChunk("b".repeat(20000)));
+    @ParameterizedTest
+    @ValueSource(strings = {"a", "\"\\\n\t", "\uD83D\uDE80"})
+    void largeStreamBoundsTelemetryWithoutChangingResponses(String pattern) throws Exception {
+        String text = pattern.repeat(20000 / pattern.length());
+        service.streamChunks = List.of(chunk(text), lastChunk(text));
         assertThat(model().generateContentStream("hello").stream()
             .mapToInt(r -> r.getCandidates(0).getContent().getParts(0).getText().length()).sum()).isEqualTo(40000);
         SpanData span = exporter.getFinishedSpanItems().get(0);
         assertThat(attr(span, SemanticConventions.OUTPUT_VALUE)).hasSize(32000);
+        String messages = attr(span, "gen_ai.output.messages");
+        assertThat(messages.length()).isLessThanOrEqualTo(32000);
+        var message = JsonParser.parseString(messages).getAsJsonArray().get(0).getAsJsonObject();
+        assertThat(message.get("role").getAsString()).isEqualTo("model");
+        String content = message.get("content").getAsString();
+        assertThat(content).isNotEmpty().endsWith("...[truncated]");
+        assertThat(text + text).startsWith(content.substring(0, content.length() - "...[truncated]".length()));
         assertThat(attr(span, SemanticConventions.RAW_OUTPUT).length()).isLessThanOrEqualTo(32000);
         assertThat(JsonParser.parseString(attr(span, SemanticConventions.RAW_OUTPUT)).isJsonArray()).isTrue();
         assertThat(span.getAttributes().get(AttributeKey.booleanKey("fi.stream.raw_output_truncated"))).isTrue();
@@ -330,9 +342,13 @@ class VertexAIStreamTracingTest {
             .addParts(Part.newBuilder().setText("Say hello")).build()));
 
         SpanData span = exporter.getFinishedSpanItems().get(0);
-        var output = JsonParser.parseString(attr(span, SemanticConventions.RAW_OUTPUT)).getAsJsonObject();
+        var output = JsonParser.parseString(attr(span, "raw.output")).getAsJsonObject();
         assertThat(output.getAsJsonArray("candidates")).hasSize(1);
-        var input = JsonParser.parseString(attr(span, SemanticConventions.RAW_INPUT)).getAsJsonArray();
+        assertThat(attr(span, "fi.raw_input")).isNull();
+        assertThat(attr(span, "fi.raw_output")).isNull();
+        assertThat(span.getAttributes().get(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons")))
+            .containsExactly("STOP");
+        var input = JsonParser.parseString(attr(span, "raw.input")).getAsJsonArray();
         assertThat(input.get(0).getAsJsonObject().get("role").getAsString()).isEqualTo("user");
         assertThat(attr(span, SemanticConventions.LLM_REQUEST_MODEL)).isEqualTo("gemini-test");
     }
