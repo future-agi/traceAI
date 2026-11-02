@@ -12,6 +12,7 @@ from typing import (
     Iterable,
     Iterator,
     Mapping,
+    Optional,
     Tuple,
     TypeVar,
 )
@@ -161,8 +162,9 @@ def _get_attributes_from_message_content(
     elif type_ == "image_url":
         if image := content.pop("image_url"):
             yield f"{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
-            yield f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image.get(
-                "url", ""
+            yield (
+                f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}",
+                image.get("url", ""),
             )
 
 
@@ -175,7 +177,9 @@ def _get_attributes_from_image(
 
 
 def _instrument_func_type_completion(
-    span: trace_api.Span, kwargs: Dict[str, Any]
+    span: trace_api.Span,
+    kwargs: Dict[str, Any],
+    config: Optional[TraceConfig] = None,
 ) -> None:
     """
     Currently instruments the functions:
@@ -184,7 +188,6 @@ def _instrument_func_type_completion(
         litellm.completion_with_retries()
         litellm.acompletion_with_retries() (async version of completion_with_retries)
     """
-    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
     _set_span_attribute(
         span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
     )
@@ -193,7 +196,7 @@ def _instrument_func_type_completion(
     )
 
     if messages := kwargs.get("messages"):
-        process_messages = _process_messages(messages)
+        process_messages = _process_messages(messages, config)
         if filtered_messages := process_messages.get("filtered_messages"):
             _set_span_attribute(
                 span, SpanAttributes.INPUT_VALUE, json.dumps(filtered_messages)
@@ -203,9 +206,10 @@ def _instrument_func_type_completion(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
         if any(_has_tool_context(message) for message in messages):
-            # Keep tool IDs, arguments and results connected in the full conversation.
+            # Preserve tool linkage without putting image bytes in input.value,
+            # whose privacy filter cannot inspect nested image content.
             _set_span_attribute(
-                span, SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
+                span, SpanAttributes.INPUT_VALUE, safe_json_dumps(filtered_messages)
             )
         elif eval_input := process_messages.get("eval_input"):
             _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
@@ -227,7 +231,9 @@ def _instrument_func_type_completion(
 
 
 def _instrument_func_type_embedding(
-    span: trace_api.Span, kwargs: Dict[str, Any]
+    span: trace_api.Span,
+    kwargs: Dict[str, Any],
+    config: Optional[TraceConfig] = None,
 ) -> None:
     """
     Currently instruments the functions:
@@ -243,16 +249,31 @@ def _instrument_func_type_embedding(
     _set_span_attribute(
         span, SpanAttributes.EMBEDDING_MODEL_NAME, kwargs.get("model", "unknown_model")
     )
-    _set_span_attribute(
-        span,
-        f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{0}.{EmbeddingAttributes.EMBEDDING_TEXT}",
-        str(kwargs.get("input")),
+    inputs = kwargs.get("input")
+    # A string or a list of token IDs is one input; strings/token lists form a batch.
+    batch = (
+        inputs
+        if isinstance(inputs, list) and (
+            not inputs or not all(isinstance(item, int) for item in inputs)
+        )
+        else [inputs]
     )
-    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(kwargs.get("input")))
+    config = config or TraceConfig()
+    for index, text in enumerate(batch):
+        # Released core 1.2.2 does not yet mask embedding.text. Apply the input
+        # policy before emitting any indexed copy, including for batch requests.
+        _set_span_attribute(
+            span,
+            f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{EmbeddingAttributes.EMBEDDING_TEXT}",
+            config.mask(SpanAttributes.INPUT_VALUE, str(text)),
+        )
+    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(inputs))
 
 
 def _instrument_func_type_image_generation(
-    span: trace_api.Span, kwargs: Dict[str, Any]
+    span: trace_api.Span,
+    kwargs: Dict[str, Any],
+    config: Optional[TraceConfig] = None,
 ) -> None:
     """
     Currently instruments the functions:
@@ -275,19 +296,25 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
     if not isinstance(result, EmbeddingResponse):
         _set_raw_output(span, result)
     if isinstance(result, ModelResponse):
-        if (choices := result.choices) and len(choices) > 0:
-            choice = choices[0]
+        choices = result.choices or []
+        for position, choice in enumerate(choices):
             if isinstance(choice, Choices):
-                if choice.message.content and not _has_tool_context(choice.message):
+                if (
+                    len(choices) == 1
+                    and choice.message.content
+                    and not _has_tool_context(choice.message)
+                ):
                     _set_span_attribute(
                         span, SpanAttributes.OUTPUT_VALUE, choice.message.content
                     )
+                index = choice.index if choice.index is not None else position
                 for key, value in _get_attributes_from_message_param(choice.message):
                     _set_span_attribute(
-                        span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{key}", value
+                        span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
                     )
     elif isinstance(result, EmbeddingResponse):
-        for index, embedding in enumerate(result.data or []):
+        for position, embedding in enumerate(result.data or []):
+            index = embedding.get("index", position)
             _set_span_attribute(
                 span,
                 f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{EmbeddingAttributes.EMBEDDING_VECTOR}",
@@ -342,6 +369,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             config = TraceConfig()
         else:
             assert isinstance(config, TraceConfig)
+        self._config = config
         self._tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
@@ -436,7 +464,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         span = self._tracer.start_span(
             name, attributes=dict(get_attributes_from_context())
         )
-        _observe(annotate, span, request)
+        _observe(annotate, span, request, self._config)
         try:
             with _provider_context(span):
                 result = original(*args, **kwargs)
@@ -459,7 +487,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         span = self._tracer.start_span(
             name, attributes=dict(get_attributes_from_context())
         )
-        _observe(annotate, span, request)
+        _observe(annotate, span, request, self._config)
         try:
             with _provider_context(span):
                 result = await original(*args, **kwargs)
@@ -570,7 +598,7 @@ class _StreamState:
         self.span = span
         self.span_cm = span_cm
         self.processed_chunks = []
-        self.content_string = ""
+        self.content_by_choice = {}
         self.has_tool_context = False
         self._ended = False
         self._closed = False
@@ -584,12 +612,19 @@ class _StreamState:
             return
         self.processed_chunks.append(chunk)
         choices = chunk.get("choices") or []
-        if choices:
-            delta = choices[0].get("delta") or {}
+        for position, choice in enumerate(choices):
+            index = choice.get("index", position)
+            delta = choice.get("delta") or {}
             self.has_tool_context |= _has_tool_context(delta)
+            self.content_by_choice.setdefault(index, "")
             content = delta.get("content")
             if isinstance(content, str):
-                self.content_string += content
+                self.content_by_choice[index] += content
+            _set_span_attribute(
+                self.span,
+                f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}",
+                delta.get("role"),
+            )
         _set_usage(self.span, chunk.get("usage"))
         _set_span_attribute(
             self.span, SpanAttributes.GEN_AI_RESPONSE_MODEL, chunk.get("model")
@@ -600,15 +635,24 @@ class _StreamState:
             return
         self._ended = True
         try:
+            content = next(iter(self.content_by_choice.values()), "")
             _set_span_attribute(
                 self.span,
                 SpanAttributes.OUTPUT_VALUE,
                 (
-                    self.content_string
-                    if self.content_string and not self.has_tool_context
+                    content
+                    if len(self.content_by_choice) == 1
+                    and content
+                    and not self.has_tool_context
                     else safe_json_dumps(self.processed_chunks)
                 ),
             )
+            for index, text in self.content_by_choice.items():
+                _set_span_attribute(
+                    self.span,
+                    f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}",
+                    text,
+                )
             if error is None:
                 self.span.set_status(trace_api.StatusCode.OK)
             else:
@@ -756,57 +800,54 @@ def _set_raw_output(span: trace_api.Span, result: Any) -> None:
         _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result))
 
 
-def _process_messages(messages):
-    try:
-        input_images = []
-        filtered_messages = []
-        eval_input = []
+def _process_messages(messages, config=None):
+    """Keep conversation structure, with images referenced rather than copied."""
+    if not isinstance(messages, list):
+        return {"input_images": None, "filtered_messages": messages, "eval_input": None}
 
-        if isinstance(messages, list):
-            for message in messages:
-                filtered_content = []
-                content = message.get("content", [])
-
-                # Handle string content
-                if isinstance(content, str):
-                    filtered_messages.append(message)
-                    eval_input.append(content)
+    config = config or TraceConfig()
+    input_images = []
+    filtered_messages = []
+    eval_input = []
+    for message_index, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            continue
+        filtered_message = dict(message)
+        content = message.get("content")
+        if isinstance(content, str):
+            eval_input.append(content)
+        elif isinstance(content, list):
+            filtered_content = []
+            for content_index, item in enumerate(content):
+                if not isinstance(item, Mapping):
                     continue
+                if item.get("type") == "image_url":
+                    image = item.get("image_url") or {}
+                    if image_url := image.get("url"):
+                        # The aggregate must use the same privacy/size policy as
+                        # the canonical image.url attribute, not bypass it via JSON.
+                        key = (
+                            f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{message_index}."
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{content_index}."
+                            f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"
+                        )
+                        image_index = len(input_images)
+                        input_images.append(config.mask(key, image_url))
+                        reference = (
+                            "{{" + f"{SpanAttributes.INPUT_IMAGES}.{image_index}" + "}}"
+                        )
+                        filtered_content.append({"type": "text", "text": reference})
+                        eval_input.append(reference)
+                else:
+                    filtered_content.append(dict(item))
+                    if item.get("type") == "text" and (text := item.get("text")):
+                        eval_input.append(str(text))
+            filtered_message["content"] = filtered_content
+        # Preserve content=None assistant tool calls and tool results as well.
+        filtered_messages.append(filtered_message)
 
-                # Handle list content
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict):
-                            if item.get("type") == "image_url":
-                                image_url = item.get("image_url", {}).get("url")
-                                if image_url:
-                                    input_images.append(image_url)
-                                    image_index = len(input_images) - 1
-                                    eval_input.append(
-                                        "{{"
-                                        + f"{SpanAttributes.INPUT_IMAGES}.{image_index}"
-                                        + "}}"
-                                    )
-                            elif item.get("type") == "text":
-                                filtered_content.append(item)
-                                if text := item.get("text"):
-                                    eval_input.append(str(text))
-
-                    # Create new message with filtered content
-                    if filtered_content:
-                        filtered_message = message.copy()
-                        filtered_message["content"] = filtered_content
-                        filtered_messages.append(filtered_message)
-
-        return {
-            "input_images": input_images if input_images else None,
-            "filtered_messages": filtered_messages if filtered_messages else messages,
-            "eval_input": "\n".join(eval_input),
-        }
-    except Exception as e:
-        print(f"Error in _process_messages: {e}")
-        return {
-            "input_images": None,
-            "filtered_messages": messages,
-            "eval_input": None,
-        }
+    return {
+        "input_images": input_images or None,
+        "filtered_messages": filtered_messages,
+        "eval_input": "\n".join(eval_input),
+    }
