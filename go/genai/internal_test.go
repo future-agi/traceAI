@@ -43,22 +43,24 @@ func TestModelFromPath(t *testing.T) {
 	}
 }
 
-func TestGenerateMethodMatchesOnlyGenerateCalls(t *testing.T) {
+func TestTracedMethodMatchesSupportedCalls(t *testing.T) {
 	for path, want := range map[string]bool{
-		"/v1beta/models/m:generateContent":       true,
-		"/v1beta/models/m:streamGenerateContent": true,
-		"/v1beta/models/m:countTokens":           false,
-		"/v1beta/models/m:embedContent":          false,
-		"/v1beta/models/m":                       false,
-		"/v1beta/files":                          false,
+		"/v1beta/models/m:generateContent":        true,
+		"/v1beta/models/m:streamGenerateContent":  true,
+		"/v1beta/models/m:countTokens":            false,
+		"/v1beta/models/m:embedContent":           true,
+		"/v1beta/models/m:batchEmbedContents":     true,
+		"/v1beta/models/m:asyncBatchEmbedContent": false,
+		"/v1beta/models/m":                        false,
+		"/v1beta/files":                           false,
 	} {
 		req, _ := http.NewRequest(http.MethodPost, "http://x"+path+"?alt=sse", nil)
-		if _, ok := generateMethod(req); ok != want {
+		if _, ok := tracedMethod(req); ok != want {
 			t.Errorf("%s: %v", path, ok)
 		}
 	}
 	req, _ := http.NewRequest(http.MethodGet, "http://x/v1beta/models/m:generateContent", nil)
-	if _, ok := generateMethod(req); ok {
+	if _, ok := tracedMethod(req); ok {
 		t.Error("GET must not match")
 	}
 }
