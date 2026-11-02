@@ -1,0 +1,59 @@
+name: Pipecat TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_pipecat/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/pipecat-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  client-contract:
+    name: Pipecat client contract (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.20.8', '22.23.4']
+    defaults:
+      run:
+        shell: bash
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack pnpm --filter @traceai/fi-instrumentation-pipecat... install --frozen-lockfile --ignore-scripts
+      - name: Build and typecheck the customer example
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/fi-instrumentation-pipecat run build
+          pnpm --dir packages/traceai_pipecat exec tsc --noEmit --skipLibCheck --strict --lib es2022,dom --module Node16 --moduleResolution Node16 examples/example.ts
+      - name: Test real clients with loopback-only networking
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh "$(command -v node)" --test packages/traceai_pipecat/test/*.test.cjs
+      - name: Prepare a clean tarball consumer
+        run: |
+          mkdir -p "$RUNNER_TEMP/pipecat-package"
+          pnpm --dir packages/traceai_pipecat pack --pack-destination "$RUNNER_TEMP/pipecat-package"
+          tarballs=("$RUNNER_TEMP/pipecat-package/"*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          node packages/traceai_pipecat/test/prepare-packed.cjs "${tarballs[0]}" "$RUNNER_TEMP/pipecat-consumer"
+          git diff --exit-code -- pnpm-lock.yaml
+      - name: Test installed tarball with loopback-only networking
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh "$(command -v node)" --test "$RUNNER_TEMP/pipecat-consumer/node_modules/@traceai/fi-instrumentation-pipecat/test/"*.test.cjs

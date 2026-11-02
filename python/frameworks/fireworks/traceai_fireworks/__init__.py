@@ -33,6 +33,7 @@ Example usage:
 """
 
 import logging
+import warnings
 from importlib import import_module
 from typing import Any, Collection
 
@@ -71,6 +72,14 @@ class FireworksInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
+        warnings.warn(
+            "FireworksInstrumentor is deprecated. Use traceai_openai.OpenAIInstrumentor "
+            "with base_url='https://api.fireworks.ai/inference/v1' instead. "
+            "When both are enabled, OpenAIInstrumentor owns tracing and its "
+            "tracer_provider and TraceConfig apply.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):

@@ -124,7 +124,7 @@ sys.modules["opentelemetry.sdk.trace"] = mock_sdk_trace
 # Mock OTLP exporter
 sys.modules["opentelemetry.exporter.otlp"] = MagicMock()
 sys.modules["opentelemetry.exporter.otlp.proto.grpc.trace_exporter"] = MagicMock()
-sys.modules["opentelemetry.exporter.otlp.proto.http.trace_exporter"] = MagicMock()
+sys.modules["opentelemetry.exporter.otlp.proto.http.trace_exporter"] = MagicMock(OTLPSpanExporter=MagicMock())
 
 
 # Mock Strands modules

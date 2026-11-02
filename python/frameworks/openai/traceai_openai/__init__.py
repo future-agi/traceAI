@@ -14,6 +14,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+from traceai_openai._client_provider import set_client_provider as set_client_provider
 from traceai_openai._request import _AsyncRequest, _Request
 from traceai_openai.package import _instruments
 from traceai_openai.version import __version__
@@ -29,6 +30,10 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for openai
     """
+
+    # Legacy provider entry points only defer once extraction/privacy parity is
+    # present, not merely because an older shared package happens to be enabled.
+    _supports_deepseek_extensions = True
 
     __slots__ = (
         "_original_request",
