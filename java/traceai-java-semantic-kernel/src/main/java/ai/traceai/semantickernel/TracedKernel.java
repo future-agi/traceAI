@@ -6,12 +6,9 @@ import ai.traceai.SemanticConventions;
 import ai.traceai.TraceAI;
 import com.microsoft.semantickernel.Kernel;
 import com.microsoft.semantickernel.orchestration.FunctionResult;
-import com.microsoft.semantickernel.orchestration.PromptExecutionSettings;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunction;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunctionArguments;
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.context.Scope;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -68,6 +65,10 @@ public class TracedKernel {
     /**
      * Invokes a kernel function with tracing.
      *
+     * <p>The span starts when the returned {@code Mono} is subscribed and ends when that
+     * subscription succeeds, fails or is cancelled. Semantic Kernel's own model-call spans are
+     * recorded under it; its duplicate function span is not.</p>
+     *
      * @param function the kernel function to invoke
      * @param arguments the function arguments
      * @param <T> the result type
@@ -76,37 +77,15 @@ public class TracedKernel {
     public <T> Mono<FunctionResult<T>> invokeAsync(KernelFunction<T> function, KernelFunctionArguments arguments) {
         String functionName = function.getName();
         String pluginName = function.getPluginName();
-        String spanName = buildSpanName(pluginName, functionName);
 
-        Span span = tracer.startSpan(spanName, FISpanKind.AGENT);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute(SEMANTIC_KERNEL_FUNCTION_NAME, functionName);
-
-            if (pluginName != null && !pluginName.isEmpty()) {
-                span.setAttribute(SEMANTIC_KERNEL_PLUGIN_NAME, pluginName);
-            }
-
-            // Capture input arguments
-            captureInputArguments(span, arguments);
-
-            // Execute the function
-            return kernel.invokeAsync(function)
-                .withArguments(arguments)
-                .doOnSuccess(result -> {
-                    // Capture output
-                    captureOutput(span, result);
-                    span.setStatus(StatusCode.OK);
-                })
-                .doOnError(error -> {
-                    tracer.setError(span, error);
-                })
-                .doFinally(signalType -> {
-                    span.end();
-                });
-        }
+        return ReactiveTracing.mono(tracer, buildSpanName(pluginName, functionName), FISpanKind.AGENT, false,
+            invocation -> {
+                Span span = invocation.span();
+                setFunctionAttributes(span, functionName, pluginName);
+                captureInputArguments(span, arguments);
+                return KernelInvocationCompat.invoke(kernel, function, arguments, invocation);
+            },
+            (invocation, result) -> captureOutput(invocation.span(), result));
     }
 
     /**
@@ -117,7 +96,7 @@ public class TracedKernel {
      * @return a Mono containing the function result
      */
     public <T> Mono<FunctionResult<T>> invokeAsync(KernelFunction<T> function) {
-        return invokeAsync(function, KernelFunctionArguments.builder().build());
+        return invokeAsync(function, KernelInvocationCompat.emptyArguments());
     }
 
     /**
@@ -128,34 +107,18 @@ public class TracedKernel {
      * @return a Mono containing the function result
      */
     public Mono<FunctionResult<String>> invokePromptAsync(String prompt, KernelFunctionArguments arguments) {
-        Span span = tracer.startSpan("Semantic Kernel Prompt", FISpanKind.AGENT);
+        return ReactiveTracing.mono(tracer, "Semantic Kernel Prompt", FISpanKind.AGENT, false,
+            invocation -> {
+                Span span = invocation.span();
+                setFunctionAttributes(span, "prompt", null);
+                tracer.setInputValue(span, prompt);
+                captureInputArguments(span, arguments);
 
-        try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute(SEMANTIC_KERNEL_FUNCTION_NAME, "prompt");
-
-            // Capture input
-            tracer.setInputValue(span, prompt);
-            captureInputArguments(span, arguments);
-
-            // Create and execute inline prompt
-            KernelFunction<String> promptFunction = KernelFunction.<String>createFromPrompt(prompt)
-                .build();
-
-            return kernel.invokeAsync(promptFunction)
-                .withArguments(arguments)
-                .doOnSuccess(result -> {
-                    captureOutput(span, result);
-                    span.setStatus(StatusCode.OK);
-                })
-                .doOnError(error -> {
-                    tracer.setError(span, error);
-                })
-                .doFinally(signalType -> {
-                    span.end();
-                });
-        }
+                KernelFunction<String> promptFunction = KernelFunction.<String>createFromPrompt(prompt)
+                    .build();
+                return KernelInvocationCompat.invoke(kernel, promptFunction, arguments, invocation);
+            },
+            (invocation, result) -> captureOutput(invocation.span(), result));
     }
 
     /**
@@ -165,7 +128,7 @@ public class TracedKernel {
      * @return a Mono containing the function result
      */
     public Mono<FunctionResult<String>> invokePromptAsync(String prompt) {
-        return invokePromptAsync(prompt, KernelFunctionArguments.builder().build());
+        return invokePromptAsync(prompt, KernelInvocationCompat.emptyArguments());
     }
 
     /**
@@ -218,6 +181,14 @@ public class TracedKernel {
         tracer.setRawInput(span, arguments);
     }
 
+    private void setFunctionAttributes(Span span, String functionName, String pluginName) {
+        span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
+        span.setAttribute(SEMANTIC_KERNEL_FUNCTION_NAME, functionName);
+        if (pluginName != null && !pluginName.isEmpty()) {
+            span.setAttribute(SEMANTIC_KERNEL_PLUGIN_NAME, pluginName);
+        }
+    }
+
     private <T> void captureOutput(Span span, FunctionResult<T> result) {
         if (result == null) {
             return;
@@ -228,64 +199,8 @@ public class TracedKernel {
             tracer.setOutputValue(span, value.toString());
         }
 
-        // Capture raw output
+        // Token usage belongs to the model-call span below this one. Copying it here would count
+        // the same tokens twice.
         tracer.setRawOutput(span, result);
-
-        // Capture metadata if available
-        if (result.getMetadata() != null) {
-            try {
-                Object usage = result.getMetadata().getUsage();
-                if (usage != null) {
-                    extractTokenUsage(span, usage);
-                }
-            } catch (Exception e) {
-                // Ignore metadata extraction failures
-            }
-        }
-    }
-
-    private void extractTokenUsage(Span span, Object usage) {
-        if (usage == null) {
-            return;
-        }
-
-        try {
-            // Use reflection to extract token counts from usage object
-            Integer promptTokens = extractField(usage, "promptTokens", Integer.class);
-            Integer completionTokens = extractField(usage, "completionTokens", Integer.class);
-
-            if (promptTokens != null && completionTokens != null) {
-                int total = promptTokens + completionTokens;
-                tracer.setTokenCounts(span, promptTokens, completionTokens, total);
-            }
-        } catch (Exception e) {
-            // Ignore token extraction failures
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private <T> T extractField(Object obj, String fieldName, Class<T> type) {
-        if (obj == null) {
-            return null;
-        }
-
-        try {
-            // Try getter method
-            String getterName = "get" + Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
-            try {
-                Object value = obj.getClass().getMethod(getterName).invoke(obj);
-                return type.isInstance(value) ? (T) value : null;
-            } catch (NoSuchMethodException e) {
-                // Try direct method
-                try {
-                    Object value = obj.getClass().getMethod(fieldName).invoke(obj);
-                    return type.isInstance(value) ? (T) value : null;
-                } catch (NoSuchMethodException e2) {
-                    return null;
-                }
-            }
-        } catch (Exception e) {
-            return null;
-        }
     }
 }

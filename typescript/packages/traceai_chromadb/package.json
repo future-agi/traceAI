@@ -16,6 +16,7 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
+    "test:runtime": "node --test test/runtime.cjs",
     "lint": "eslint . --ext .ts",
     "prepare": "pnpm run build"
   },
@@ -39,7 +40,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
-    "chromadb": "^1.0.0"
+    "chromadb": "^1.0.0 || ^2.0.0 || ^3.0.0"
   },
   "devDependencies": {
     "@opentelemetry/sdk-trace-base": "^2.0.1",
