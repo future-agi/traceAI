@@ -961,8 +961,14 @@
       "package-name": "com.futureagi:traceai-java-parent",
       "skip-snapshot": true,
       "extra-files": [
-        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"},
-        {"type": "generic", "path": "traceai-java-weaviate/README.md"}
+        {
+          "type": "generic",
+          "path": "compatibility/spring-ai/pom.xml"
+        },
+        {
+          "type": "generic",
+          "path": "traceai-java-weaviate/README.md"
+        }
       ]
     },
     "go/a2a": {
@@ -1093,6 +1099,14 @@
       "package-name": "github.com/future-agi/traceAI/go/genkit",
       "tag-separator": "/",
       "initial-version": "0.1.0"
+    },
+    "typescript/packages/traceai_huggingface_transformers": {
+      "release-type": "node",
+      "component": "npm-traceai-huggingface-transformers",
+      "package-name": "@traceai/huggingface-transformers",
+      "extra-files": [
+        "src/version.ts"
+      ]
     }
   }
 }
