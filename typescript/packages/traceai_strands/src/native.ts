@@ -1,7 +1,10 @@
-import type { Attributes } from "@opentelemetry/api";
+import { SpanStatusCode, type Attributes } from "@opentelemetry/api";
 import type { ExportResult } from "@opentelemetry/core";
 import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { SemanticConventions as SC } from "@traceai/fi-semantic-conventions";
+
+import { NativePrivacy } from "./nativePrivacy";
+import { CycleOutcomes, finishReasons, outcome } from "./nativeOutcome";
 
 export interface StrandsSpanExporterOptions {
   /** Defaults to OTEL_SERVICE_NAME or the SDK's default, strands-agents. */
@@ -55,7 +58,8 @@ const USAGE = new Set([
 export class StrandsSpanExporter implements SpanExporter {
   private readonly scope: string;
   private readonly captureContent: boolean;
-  private readonly captureErrorDetails: boolean;
+  private readonly privacy: NativePrivacy;
+  private readonly cycles = new CycleOutcomes();
   private readonly modelProvider?: string;
 
   constructor(
@@ -64,15 +68,24 @@ export class StrandsSpanExporter implements SpanExporter {
   ) {
     this.scope = options.instrumentationScope || process.env.OTEL_SERVICE_NAME || "strands-agents";
     this.captureContent = options.captureContent ?? false;
-    this.captureErrorDetails = options.captureErrorDetails ?? false;
+    this.privacy = new NativePrivacy(options.captureErrorDetails ?? false);
     this.modelProvider = options.modelProvider;
   }
 
   export(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): void {
-    this.exporter.export(spans.map((span) => this.adapt(span)), resultCallback);
+    // Seed the entire batch before adapting so reversed batch order is safe too.
+    const completions = new Map<ReadableSpan, string[]>();
+    for (const span of spans) {
+      if (span.instrumentationScope.name !== this.scope) continue;
+      const reasons = finishReasons(span);
+      completions.set(span, reasons);
+      this.cycles.observe(span, outcome(span, reasons));
+    }
+    this.exporter.export(spans.map((span) => this.adapt(span, completions.get(span) ?? [])), resultCallback);
   }
 
   shutdown(): Promise<void> {
+    this.cycles.clear();
     return this.exporter.shutdown();
   }
 
@@ -80,20 +93,26 @@ export class StrandsSpanExporter implements SpanExporter {
     return this.exporter.forceFlush?.() ?? Promise.resolve();
   }
 
-  private adapt(span: ReadableSpan): ReadableSpan {
+  private adapt(span: ReadableSpan, reasons: string[]): ReadableSpan {
     if (span.instrumentationScope.name !== this.scope) return span;
     // Loop-cycle spans have no gen_ai.operation.name, but still carry errors.
     const operation = String(span.attributes["gen_ai.operation.name"] ?? span.name);
-    const attributes: Attributes = {};
+    const code = span.name === "execute_agent_loop_cycle" ? this.cycles.take(span) : outcome(span, reasons);
+    const selected: Attributes = {};
     for (const [key, value] of Object.entries(span.attributes)) {
       // Agent, graph and node usage is aggregated from child model calls. Keep
       // billable counts ONLY on model spans, in both native and FI namespaces.
       if ((key.startsWith("gen_ai.usage.") || key.startsWith("llm.token_count.")) && operation !== "chat") continue;
-      if (!this.captureErrorDetails && key.startsWith("exception.")) continue;
+      if (!this.privacy.captureErrors && key.startsWith("exception.")) continue;
       if (this.captureContent || METADATA.has(key) || (operation === "chat" && USAGE.has(key))) {
-        attributes[key] = value;
+        selected[key] = value;
       }
     }
+    // Metadata-only export never parses or copies the discarded input payloads.
+    const attributes = this.privacy.attributes(selected,
+      (key) => METADATA.has(key) || USAGE.has(key), undefined,
+      span.attributes["gen_ai.tool.status"] === "error", span.attributes["gen_ai.tool.status"] === "success");
+    const events = this.privacy.events(span, this.captureContent);
     attributes[SC.FI_SPAN_KIND] = KINDS[operation] ?? "CHAIN";
     // Strands' provider/system is the SERVICE name, not a model provider. Keep
     // that metadata separate rather than guessing a billable provider.
@@ -108,7 +127,13 @@ export class StrandsSpanExporter implements SpanExporter {
       copy(attributes, SC.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE, attributes["gen_ai.usage.cache_creation.input_tokens"] ?? attributes["gen_ai.usage.cache_write_input_tokens"]);
     }
     if (operation === "execute_tool") copy(attributes, SC.TOOL_NAME, attributes["gen_ai.tool.name"]);
-    if (this.captureContent) mapContent(span, attributes);
+    if (this.captureContent) mapContent(events, attributes);
+    // Keep only the validated completion metadata, not an arbitrary native value.
+    delete attributes["gen_ai.response.finish_reasons"];
+    if (reasons.length) attributes["gen_ai.response.finish_reasons"] = reasons;
+    if (code === SpanStatusCode.UNSET && (operation === "chat" || operation === "invoke_agent" || span.name === "execute_agent_loop_cycle")) {
+      attributes["strands.operation.outcome"] = "unknown";
+    }
 
     // Create an export-only view. Never mutate SDK spans or other exporters'
     // copies. Explicitly preserve prototype-backed fields and spanContext().
@@ -118,10 +143,11 @@ export class StrandsSpanExporter implements SpanExporter {
       startTime: span.startTime, endTime: span.endTime, duration: span.duration,
       ended: span.ended, resource: span.resource, instrumentationScope: span.instrumentationScope,
       attributes,
-      status: this.captureErrorDetails ? { ...span.status } : { code: span.status.code },
-      events: span.events.filter((event) => event.name === "exception"
-        ? this.captureErrorDetails : this.captureContent),
-      links: span.links.map((link) => this.captureContent ? link : { context: link.context }),
+      status: this.privacy.captureErrors && span.status.message
+        ? { code, message: String(this.privacy.attributes({ "error.message": span.status.message }, () => false)["error.message"] ?? "") } : { code },
+      events,
+      links: span.links.map((link) => ({ ...link, attributes: this.captureContent
+        ? this.privacy.attributes(link.attributes ?? {}, () => false) : undefined })),
       droppedAttributesCount: span.droppedAttributesCount,
       droppedEventsCount: span.droppedEventsCount,
       droppedLinksCount: span.droppedLinksCount,
@@ -133,19 +159,19 @@ function copy(attributes: Attributes, key: string, value: Attributes[string]): v
   if (value !== undefined) attributes[key] = value;
 }
 
-function mapContent(span: ReadableSpan, attributes: Attributes): void {
+function mapContent(events: ReadableSpan["events"], attributes: Attributes): void {
   // Canonical attributes are used when enabled upstream. Otherwise lift native
   // events into the FI input/output fields; no semconv environment flags needed.
   let input = attributes["gen_ai.tool.call.arguments"] ?? attributes["gen_ai.input.messages"] ?? attributes["gen_ai.agent.input"];
   let output = attributes["gen_ai.tool.call.result"] ?? attributes["gen_ai.output.messages"];
   const messages: unknown[] = [];
-  for (const event of span.events) {
+  for (const event of events) {
     input ??= event.attributes?.[SC.LLM_INPUT_MESSAGES];
     output ??= event.attributes?.[SC.LLM_OUTPUT_MESSAGES];
     if (attributes[SC.LLM_INPUT_MESSAGES] === undefined) copy(attributes, SC.LLM_INPUT_MESSAGES, event.attributes?.[SC.LLM_INPUT_MESSAGES]);
     if (attributes[SC.LLM_OUTPUT_MESSAGES] === undefined) copy(attributes, SC.LLM_OUTPUT_MESSAGES, event.attributes?.[SC.LLM_OUTPUT_MESSAGES]);
     if (/^gen_ai\.(user|assistant|system|tool|message)\.message$/.test(event.name) || event.name === "gen_ai.message") {
-      messages.push({ role: event.name.split(".")[1], content: event.attributes?.content });
+      if (event.attributes?.content !== undefined) messages.push({ role: event.name.split(".")[1], content: event.attributes.content });
     }
     if (event.name === "gen_ai.choice") output ??= event.attributes?.message;
   }

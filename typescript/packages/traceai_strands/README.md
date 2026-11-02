@@ -82,13 +82,17 @@ try {
 
 In Future AGI, open the **strands-app** Observe project to inspect the agent and its child model spans. Tools and multi-agent orchestrators use the same provider. Token usage is exported only on model spans, not repeated on aggregate agent, node, graph or swarm spans.
 
-For streaming, consume `agent.stream()` normally. The SDK owns span completion, including early iterator return and cancellation. In a server, call `provider.shutdown()` at process shutdown, not after every request.
+For streaming, consume `agent.stream()` normally. The SDK owns span completion. The adapter preserves completion reasons and marks cancellations, failed tool results and output-limit failures as errors. If an iterator returns early or completion telemetry is missing, it reports an unknown outcome (`UNSET`), not success. In a server, call `provider.shutdown()` at process shutdown, not after every request.
 
 ## Control captured data
 
 By default, the native adapter exports only an allowlist of operational attributes. It omits prompts, responses, system instructions, tool arguments/results, custom span attributes, event payloads, link attributes and error details. Status codes, model identifiers, agent/tool names and IDs, timings and model usage remain available.
 
 To include conversation and tool content, set `captureContent: true` in `StrandsSpanExporter` options. This also includes custom span attributes. Error messages and exception events require the separate `captureErrorDetails: true` option. Content can contain sensitive data; enable either option only when appropriate for your application.
+
+Deployment privacy settings still apply when capture is enabled. `FI_HIDE_INPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT` and `FI_HIDE_INPUT_IMAGES` suppress native input payloads; the corresponding output settings suppress output payloads. Because native messages can contain nested tool arguments and alternate copies, these flags suppress the entire affected direction and unclassified custom/link payloads. `FI_HIDE_ERROR_DETAILS=true` always overrides error capture; when unset, content-hiding flags derive it from the shared FI trace configuration. `FI_PII_REDACTION` and `FI_HIDE_EMBEDDING_VECTORS` also apply.
+
+Without error capture, failed tool results are redacted before being mapped into output or conversation history. The latest OpenTelemetry message format omits result status in history, so those ambiguous tool responses are also redacted. Successful tool spans retain their own result when content capture is enabled.
 
 These options apply only to this exporter's Strands scope. They do not sanitize resources, span names, other instrumentation, application logs, or another exporter attached to your provider. Keep sensitive values out of agent/tool names, IDs and resource metadata. Strands' printer is separate from trace export; the example disables it.
 

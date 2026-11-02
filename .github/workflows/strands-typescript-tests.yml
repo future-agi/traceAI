@@ -52,6 +52,9 @@ jobs:
           pnpm --filter @traceai/strands... run build
           pnpm --filter @traceai/strands test --runInBand
           mkdir -p "$RUNNER_TEMP/strands-package"
+          # The native adapter uses the shared privacy API from this revision.
+          pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/strands-package"
+          pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/strands-package"
           pnpm --dir packages/traceai_strands pack --pack-destination "$RUNNER_TEMP/strands-package"
           git diff --exit-code -- pnpm-lock.yaml
       - name: Install real framework with the tarball in a clean project
@@ -83,7 +86,7 @@ jobs:
         run: |
           tests=("$PWD/packages/traceai_strands/test/$SUITE.test.mjs")
           if [ "$SUITE" = native ]; then
-            tests+=("$PWD/packages/traceai_strands/test/wire.test.mjs")
+            tests+=("$PWD/packages/traceai_strands/test/wire.test.mjs" "$PWD/packages/traceai_strands/test/privacy-outcomes.test.mjs")
           fi
           sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
             env STRANDS_TEST_ROOT="$RUNNER_TEMP/strands-consumer" STRANDS_TEST_PACKED=1 \
