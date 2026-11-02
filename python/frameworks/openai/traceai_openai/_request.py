@@ -1,3 +1,4 @@
+import inspect
 import logging
 from abc import ABC
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ from traceai_openai._utils import (
 )
 from traceai_openai._with_span import _WithSpan
 from typing_extensions import TypeAlias
+from wrapt import ObjectProxy
 
 __all__ = (
     "_Request",
@@ -117,7 +119,7 @@ class _WithOpenAI(ABC):
                 chat_completion_type=openai.types.responses.response.Response,
                 response_attributes_extractor=self._response_attributes_extractor,
             )
-        
+
         self._response_accumulator_factories: Mapping[
             type, Callable[[_RequestParameters], _ResponseAccumulator]
         ] = {
@@ -192,6 +194,15 @@ class _WithOpenAI(ABC):
     def _is_streaming(self, response: Any) -> bool:
         return isinstance(response, self._stream_types)
 
+    def _is_raw_stream(self, response: Any) -> bool:
+        return bool(
+            (
+                getattr(response, "_stream", False)
+                or getattr(response, "_is_sse_stream", False)
+            )
+            and callable(getattr(response, "parse", None))
+        )
+
     def _is_async_stream(self, response: Any) -> bool:
         """Check if the response is an asynchronous stream."""
         return hasattr(response, "__aiter__") and callable(response.__aiter__)
@@ -208,6 +219,21 @@ class _WithOpenAI(ABC):
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
         not a stream.
         """
+        # A raw streamed response exposes headers now but yields its parsed stream
+        # later. Keep the raw interface and transfer span ownership to that stream
+        # when the application calls parse(), rather than ending the span here.
+        if self._is_raw_stream(response):
+            return _RawStreamResponse(
+                response=response,
+                finalize=lambda parsed: self._finalize_response(
+                    response=parsed,
+                    with_span=with_span,
+                    cast_to=cast_to,
+                    request_parameters=request_parameters,
+                    instance=instance,
+                ),
+                with_span=with_span,
+            )
         if hasattr(response, "parse") and callable(response.parse):
             try:
                 response.parse()
@@ -304,6 +330,144 @@ class _WithOpenAI(ABC):
             return str(response)
 
 
+class _RawStreamResponse(ObjectProxy):  # type: ignore
+    """Preserve the SDK's raw headers while tracing its lazily parsed stream."""
+
+    __slots__ = ("_self_finalize", "_self_with_span", "_self_parsed")
+
+    def __init__(
+        self, response: Any, finalize: Callable[[Any], Any], with_span: _WithSpan
+    ) -> None:
+        super().__init__(response)
+        self._self_finalize = finalize
+        self._self_with_span = with_span
+        self._self_parsed = None
+
+    def _self_error(self, error: BaseException) -> None:
+        if not self._self_with_span.is_finished:
+            self._self_with_span.record_exception(error)
+            self._self_with_span.finish_tracing(
+                status=trace_api.Status(
+                    status_code=trace_api.StatusCode.ERROR,
+                    description=f"{type(error).__name__}: {error}",
+                )
+            )
+
+    def _self_wrap(self, parsed: Any) -> Any:
+        if self._self_parsed is not None and parsed is self._self_parsed.__wrapped__:
+            return self._self_parsed
+        wrapped = self._self_finalize(parsed)
+        if isinstance(wrapped, (_Stream, _AsyncStream)):
+            self._self_parsed = wrapped
+        return wrapped
+
+    def parse(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            parsed = self.__wrapped__.parse(*args, **kwargs)
+        except BaseException as error:
+            self._self_error(error)
+            raise
+        if inspect.isawaitable(parsed):
+
+            async def await_parsed() -> Any:
+                try:
+                    return self._self_wrap(await parsed)
+                except BaseException as error:
+                    self._self_error(error)
+                    raise
+
+            return await_parsed()
+        try:
+            return self._self_wrap(parsed)
+        except BaseException as error:
+            self._self_error(error)
+            raise
+
+    def close(self) -> Any:
+        # For async raw responses, callers should await the returned close.
+        if isinstance(self._self_parsed, _AsyncStream) or inspect.iscoroutinefunction(
+            getattr(self.__wrapped__, "close", None)
+        ):
+            return self.aclose()
+        try:
+            if self._self_parsed is not None:
+                self._self_parsed.close()
+            close = getattr(self.__wrapped__, "close", None)
+            if close is None:
+                close = self.__wrapped__.http_response.close
+            return close()
+        except BaseException as error:
+            self._self_error(error)
+            raise
+        finally:
+            if not self._self_with_span.is_finished:
+                self._self_with_span.finish_tracing(
+                    status=trace_api.Status(status_code=trace_api.StatusCode.OK)
+                )
+
+    async def aclose(self) -> None:
+        try:
+            if self._self_parsed is not None:
+                closed = self._self_parsed.close()
+                if inspect.isawaitable(closed):
+                    await closed
+            close = getattr(self.__wrapped__, "aclose", None)
+            if close is None:
+                close = getattr(self.__wrapped__.http_response, "aclose", None)
+            if close is None:
+                close = (
+                    getattr(self.__wrapped__, "close", None)
+                    or self.__wrapped__.http_response.close
+                )
+            closed = close()
+            if inspect.isawaitable(closed):
+                await closed
+        except BaseException as error:
+            self._self_error(error)
+            raise
+        finally:
+            if not self._self_with_span.is_finished:
+                self._self_with_span.finish_tracing(
+                    status=trace_api.Status(status_code=trace_api.StatusCode.OK)
+                )
+
+    def __enter__(self) -> "_RawStreamResponse":
+        enter = getattr(self.__wrapped__, "__enter__", None)
+        if enter is not None:
+            enter()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            exit_raw = getattr(self.__wrapped__, "__exit__", None)
+            return exit_raw(exc_type, exc, tb) if exit_raw is not None else None
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            if exc is not None:
+                self._self_error(exc)
+            self.close()
+
+    async def __aenter__(self) -> "_RawStreamResponse":
+        enter = getattr(self.__wrapped__, "__aenter__", None)
+        if enter is not None:
+            await enter()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            exit_raw = getattr(self.__wrapped__, "__aexit__", None)
+            return await exit_raw(exc_type, exc, tb) if exit_raw is not None else None
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            if exc is not None:
+                self._self_error(exc)
+            await self.aclose()
+
+
 class _Request(_WithTracer, _WithOpenAI):
     def __call__(
         self,
@@ -358,7 +522,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     )
 
                 # Add output data to span attributes after getting response
-                if not self._is_streaming(response):
+                if not self._is_streaming(response) and not self._is_raw_stream(response):
                     add_io_to_span_attributes(
                         with_span,
                         None,
@@ -435,9 +599,10 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                         self._raw_embeddings_json(response),
                     )
 
-                add_io_to_span_attributes(
-                    with_span, None, response, is_streaming=self._is_streaming(response)
-                )
+                if not self._is_raw_stream(response):
+                    add_io_to_span_attributes(
+                        with_span, None, response, is_streaming=self._is_streaming(response)
+                    )
             # Cancellation can arrive before a stream/response takes ownership.
             except BaseException as exception:
                 with_span.record_exception(exception)
