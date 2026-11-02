@@ -70,7 +70,7 @@ class _ChatWrapper(_WithTracer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
-        self._response_extractor = _ChatResponseAttributesExtractor()
+        self._response_extractor = _ChatResponseAttributesExtractor(config=self._config)
 
     def __call__(
         self,
@@ -98,7 +98,7 @@ class _ChatWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -129,7 +129,7 @@ class _AsyncChatWrapper(_WithTracer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
-        self._response_extractor = _ChatResponseAttributesExtractor()
+        self._response_extractor = _ChatResponseAttributesExtractor(config=self._config)
 
     async def __call__(
         self,
@@ -156,7 +156,7 @@ class _AsyncChatWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -187,7 +187,7 @@ class _ChatStreamWrapper(_WithTracer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
-        self._response_extractor = _ChatResponseAttributesExtractor()
+        self._response_extractor = _ChatResponseAttributesExtractor(config=self._config)
 
     def __call__(
         self,
@@ -214,7 +214,7 @@ class _ChatStreamWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -226,14 +226,14 @@ class _ChatStreamWrapper(_WithTracer):
             return self._handle_streaming_response(span, response, request_parameters)
 
     def _handle_streaming_response(self, span, response, request_parameters):
-        return _Stream(response, span, request_parameters)
+        return _Stream(response, span, request_parameters, config=self._config)
 
 
 class _AsyncChatStreamWrapper(_ChatStreamWrapper):
     """Async SDK streams return an async iterator directly, not an awaitable."""
 
     def _handle_streaming_response(self, span, response, request_parameters):
-        return _AsyncStream(response, span, request_parameters)
+        return _AsyncStream(response, span, request_parameters, config=self._config)
 
 
 class _EmbedWrapper(_WithTracer):
@@ -269,7 +269,7 @@ class _EmbedWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -327,7 +327,7 @@ class _AsyncEmbedWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -385,7 +385,7 @@ class _RerankWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -443,7 +443,7 @@ class _AsyncRerankWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

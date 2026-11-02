@@ -88,14 +88,18 @@ class _ChatRequestAttributesExtractor:
         if "message" in request_parameters:
             message = request_parameters.get("message", "")
             messages.append({"role": "user", "message": message})
-            yield SpanAttributes.INPUT_VALUE, message
+            if not (self._config.hide_input_messages or self._config.hide_input_text):
+                yield SpanAttributes.INPUT_VALUE, message
 
         if "messages" in request_parameters:
             messages = [
                 self._mask_message_images(message, i)
                 for i, message in enumerate(request_parameters.get("messages") or [])
             ]
-            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
+            # Raw JSON is a second copy of message content. Omit it under
+            # selective content privacy; canonical fields retain safe metadata.
+            if not (self._config.hide_input_messages or self._config.hide_input_text):
+                yield SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
         for i, msg in enumerate(messages):
             yield from _message_attributes(
                 msg, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"

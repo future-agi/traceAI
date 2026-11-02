@@ -1,9 +1,10 @@
 """Pass-through stream lifecycles and v1/v2 event accumulation."""
 
 import logging
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 from weakref import finalize
 
+from fi_instrumentation import TraceConfig
 from opentelemetry import trace
 
 from traceai_cohere._response_attributes_extractor import (
@@ -77,12 +78,17 @@ class _Accumulator:
 
 class _StreamBase:
     def __init__(
-        self, response: Any, span: _WithSpan, request: Mapping[str, Any]
+        self,
+        response: Any,
+        span: _WithSpan,
+        request: Mapping[str, Any],
+        config: Optional[TraceConfig] = None,
     ) -> None:
         self._response = response
         self._span = span
         self._request = request
         self._accumulator = _Accumulator()
+        self._response_extractor = _ChatResponseAttributesExtractor(config=config)
         self._finished = False
         # Match generator cleanup when callers abandon a stream. Explicit
         # close/aclose is still required for deterministic transport cleanup.
@@ -110,7 +116,18 @@ class _StreamBase:
         self._finished = True
         try:
             result = self._accumulator.result()
-            extractor = _ChatResponseAttributesExtractor()
+            # Cohere yields native failure events without raising. Exhaustion
+            # (or close after the terminal event) must not mark those as OK.
+            finish_reason = result.get("finish_reason")
+            failure_reason = finish_reason in ("ERROR", "ERROR_TOXIC", "TIMEOUT")
+            if failure_reason or result.get("error"):
+                status = trace.StatusCode.ERROR
+                self._span._span.set_attribute(
+                    "error.type", finish_reason if failure_reason else "_OTHER"
+                )
+                if result.get("error"):
+                    self._span._span.set_attribute("error.message", result["error"])
+            extractor = self._response_extractor
             _finish_tracing(
                 status=trace.Status(status),
                 with_span=self._span,

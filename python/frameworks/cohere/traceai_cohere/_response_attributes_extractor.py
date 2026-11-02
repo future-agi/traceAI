@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     SpanAttributes,
@@ -16,6 +16,9 @@ logger.addHandler(logging.NullHandler())
 
 class _ChatResponseAttributesExtractor:
     """Extract span attributes from Cohere chat response."""
+
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
 
     def get_attributes(
         self,
@@ -83,7 +86,27 @@ class _ChatResponseAttributesExtractor:
         if "finish_reason" in response:
             yield "cohere.finish_reason", response.get("finish_reason", "")
 
-        # Raw response
+        # Full responses duplicate message content (including history and tool
+        # payloads). Do not export that copy when selective content is hidden.
+        if self._config.hide_output_messages or self._config.hide_output_text:
+            return
+        # v1 echoes the request in chat_history; input privacy also applies to
+        # that response-side copy. Keep the actual reply and usage available.
+        if (
+            self._config.hide_inputs
+            or self._config.hide_input_messages
+            or self._config.hide_input_text
+        ):
+            response = {
+                key: value for key, value in response.items() if key != "chat_history"
+            }
+        # Native message-end errors are data, not raised exceptions. Mask their
+        # telemetry copy before JSON serialization, never the caller's event.
+        if "error" in response:
+            response = dict(response)
+            error = self._config.mask("error.message", response.pop("error"))
+            if error is not None:
+                response["error"] = error
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)
 
 
