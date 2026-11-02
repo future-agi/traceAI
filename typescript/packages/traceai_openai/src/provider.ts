@@ -50,6 +50,9 @@ export function providerForResource(resource: unknown): string {
     if (url.protocol !== "https:" && url.protocol !== "http:") return LLMProvider.OPENAI;
     const host = url.hostname.toLowerCase().replace(/\.+$/, "");
     if (Object.prototype.hasOwnProperty.call(HOSTS, host)) return HOSTS[host];
+    // Dedicated and regional Baseten deployments use one model-* DNS label
+    // (at most 63 characters), not arbitrary subdomains of baseten.co.
+    if (/^model-[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?\.api\.baseten\.co$/.test(host)) return "baseten";
     for (const [suffix, provider] of SUFFIXES) {
       if (host.endsWith(suffix)) return provider;
     }

@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['4.0.0', '5.23.2', '6.0.0', '7.0.0', '7.47.0']
+        sdk: ['4.0.0', '5.23.2', '6.0.0', '7.0.0', '7.47.0', 'latest']
     defaults:
       run:
         shell: bash
@@ -52,6 +52,7 @@ jobs:
             @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             @opentelemetry/exporter-trace-otlp-proto@0.202.0 @opentelemetry/otlp-transformer@0.202.0 \
             typescript@5.8.3 @types/node@22.15.29
+          npm ls --prefix "$RUNNER_TEMP/consumer" openai
       - name: Network-isolated automatic and manual SDK contracts
         env:
           OPENAI_CONSUMER_DIR: ${{ runner.temp }}/consumer

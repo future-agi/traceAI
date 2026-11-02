@@ -124,8 +124,15 @@ describe("provider attribution on the OTLP wire", () => {
   for (const operation of operations) {
     const outcomes: Outcome[] = operation === "embeddings" ? ["success", "error"] : ["success", "error", "stream", "stream-error", "cancel"];
     for (const outcome of outcomes) {
-      it(`${operation} ${outcome} preserves Anannas attribution`, async () => {
-        const result = create(client("https://api.anannas.ai/v1", operation, outcome), operation, outcome);
+      // Synthetic transports test instrumentor coverage, not which APIs each
+      // Baseten deployment serves. Dedicated endpoints depend on the engine.
+      it.each([
+        ["https://api.anannas.ai/v1", "anannas"],
+        ["https://inference.baseten.co/v1", "baseten"],
+        ["https://model-abc123.api.baseten.co/environments/production/sync/v1", "baseten"],
+        ["https://model-abc123-us-east.api.baseten.co/sync/v1", "baseten"],
+      ])(`${operation} ${outcome} preserves attribution for %s`, async (baseURL, expected) => {
+        const result = create(client(baseURL, operation, outcome), operation, outcome);
         if (outcome === "error") await expect(result).rejects.toThrow();
         else if (outcome === "stream-error") {
           await expect((async () => { for await (const _chunk of await result) { /* consume */ } })()).rejects.toThrow();
@@ -140,7 +147,7 @@ describe("provider attribution on the OTLP wire", () => {
         } else {
           expect(await result).toMatchObject(payload(operation));
         }
-        await assertSpan("anannas", outcome === "error" || outcome === "stream-error");
+        await assertSpan(expected, outcome === "error" || outcome === "stream-error");
       });
     }
   }
@@ -167,6 +174,12 @@ describe("provider attribution on the OTLP wire", () => {
   }
 
   it.each([
+    ["https://MODEL-ABC123-US-EAST.API.BASETEN.CO.:8443/sync/v1", "baseten"],
+    ["https://url-user:url-password@model-abc123.api.baseten.co/sync/v1?query-secret=value", "baseten"],
+    ["https://model-abc123.api.baseten.co.evil.test/v1", "openai"],
+    ["https://model-abc123.api.baseten.co@evil.test/v1", "openai"],
+    ["https://evil.test/model-abc123.api.baseten.co/v1", "openai"],
+    ["https://other.api.baseten.co/v1", "openai"],
     ["https://ANANNAS.ai./v1", "anannas"],
     ["https://API.ANANNAS.AI.:8443/v1/", "anannas"],
     ["https://url-user:url-password@api.anannas.ai/v1?query-secret=value", "anannas"],
@@ -182,6 +195,21 @@ describe("provider attribution on the OTLP wire", () => {
   ])("normalizes %s without guessing", async (baseURL, expected) => {
     await create(client(baseURL, "chat", "success"), "chat", "success");
     await assertSpan(expected);
+  });
+
+  it("resolves a mutable Baseten client on every call", async () => {
+    const sdk = client("https://inference.baseten.co/v1", "chat", "success");
+    for (const baseURL of [
+      "https://inference.baseten.co/v1",
+      "https://model-abc123.api.baseten.co/environments/production/sync/v1",
+      "https://model-abc123-us-east.api.baseten.co/sync/v1",
+      "https://api.openai.com/v1",
+    ]) {
+      sdk.baseURL = baseURL;
+      await create(sdk, "chat", "success");
+      await assertSpan(baseURL.includes("baseten.co") ? "baseten" : "openai");
+      spans = [];
+    }
   });
 
   it("resolves per client and per call rather than caching the first host", async () => {
