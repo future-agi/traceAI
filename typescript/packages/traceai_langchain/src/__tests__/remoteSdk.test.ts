@@ -1,6 +1,7 @@
 import { context, propagation, SpanStatusCode, trace } from "@opentelemetry/api";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { wrapLangGraphClient, langGraphTraceRequestHook } from "../remoteSdk";
 
 function setup() {
@@ -12,14 +13,14 @@ function setup() {
 }
 
 describe("remote LangGraph SDK client", () => {
-  afterEach(() => context.disable());
+  afterEach(() => { context.disable(); propagation.disable(); });
   it("traces wait once, preserves receiver, metadata and parent context without recording payloads", async () => {
     const { exporter, provider } = setup();
     const runs = { marker: "receiver", async wait(this: { marker: string }, thread: string, assistant: string, payload: unknown) {
       expect(this.marker).toBe("receiver");
       expect(thread).toBe("thread-1");
       expect(assistant).toBe("assistant-1");
-      expect(payload).toEqual({ input: "private" });
+      expect(payload).toEqual({ input: "private", onRunCreated: expect.any(Function) });
       return { secret: "private" };
     } };
     const original = { runs };
@@ -112,6 +113,52 @@ describe("remote LangGraph SDK client", () => {
       expect(span.attributes["langgraph.cancelled"]).toBe(true);
       expect(JSON.stringify({ attributes: span.attributes, status: span.status, events: span.events })).not.toContain("private abort reason");
     }
+    await provider.shutdown();
+  });
+
+  it("marks normal SDK completion after signal abort as cancelled", async () => {
+    const { exporter, provider } = setup();
+    const client = wrapLangGraphClient({ runs: { async *stream(_thread: string, _assistant: string, payload: { signal: AbortSignal }) {
+      if (!payload.signal.aborted) { yield { event: "values", data: 1 }; }
+    } } }, { tracerProvider: provider });
+    for (const midStream of [false, true]) {
+      const controller = new AbortController();
+      if (!midStream) controller.abort("private reason");
+      const stream = client.runs.stream("thread", "assistant", { signal: controller.signal });
+      if (midStream) { expect((await stream.next()).done).toBe(false); controller.abort("private reason"); }
+      expect((await stream.next()).done).toBe(true);
+      const span = exporter.getFinishedSpans().at(-1)!;
+      expect(span.attributes["langgraph.cancelled"]).toBe(true);
+      expect(span.status.code).not.toBe(SpanStatusCode.ERROR);
+      expect(JSON.stringify(span.attributes)).not.toContain("private reason");
+    }
+    await provider.shutdown();
+  });
+
+  it("composes SDK run-created callbacks for wait and stream without changing caller payload", async () => {
+    const { exporter, provider } = setup();
+    const payload = { input: "private", onRunCreated: jest.fn() };
+    const client = wrapLangGraphClient({ runs: {
+      async wait(_thread: null, _assistant: string, options: typeof payload) { options.onRunCreated({ run_id: "wait-run" }); return "ok"; },
+      async *stream(_thread: null, _assistant: string, options: typeof payload) { options.onRunCreated({ run_id: "stream-run" }); yield 1; },
+    } }, { tracerProvider: provider });
+    expect(await client.runs.wait(null, "assistant", payload)).toBe("ok");
+    for await (const _event of client.runs.stream(null, "assistant", payload)) { /* consume */ }
+    expect(payload.onRunCreated).toHaveBeenCalledTimes(2);
+    expect(exporter.getFinishedSpans().map((span) => span.attributes["langgraph.run.id"])).toEqual(["wait-run", "stream-run"]);
+    expect(JSON.stringify(exporter.getFinishedSpans().map((span) => span.attributes))).not.toContain("private");
+    await provider.shutdown();
+  });
+
+  it("injects traceparent when the documented W3C propagator is configured", async () => {
+    const { provider } = setup();
+    propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+    const span = provider.getTracer("test").startSpan("parent");
+    const hook = langGraphTraceRequestHook();
+    const init = await context.with(trace.setSpan(context.active(), span), () =>
+      hook(new URL("https://example.test/runs"), { headers: {} }));
+    expect(new Headers(init.headers).get("traceparent")).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    span.end();
     await provider.shutdown();
   });
 

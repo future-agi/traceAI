@@ -74,6 +74,31 @@ export function wrapLangGraphClient<C extends { runs: object }>(client: C, optio
     return tracer.startSpan(`LangGraph runs.${operation}`, { kind: SpanKind.CLIENT, attributes }, parent);
   }
 
+  // Current SDK versions report the created run through this documented callback.
+  // Compose rather than replace it, and never attach the input or stream contents.
+  function withRunCallback(args: unknown[], span: Span): unknown[] {
+    const payload = args[2];
+    if (payload !== undefined && (payload === null || typeof payload !== "object" || Array.isArray(payload))) return args;
+    const options = (payload ?? {}) as Record<string, unknown>;
+    const previous = options.onRunCreated;
+    return [args[0], args[1], {
+      ...options,
+      onRunCreated(metadata: unknown) {
+        if (metadata && typeof metadata === "object" &&
+            typeof (metadata as { run_id?: unknown }).run_id === "string") {
+          span.setAttribute("langgraph.run.id", (metadata as { run_id: string }).run_id);
+        }
+        if (typeof previous === "function") Reflect.apply(previous, options, [metadata]);
+      },
+    }, ...args.slice(3)];
+  }
+
+  function signalAborted(args: unknown[]): boolean {
+    const payload = args[2];
+    return !!payload && typeof payload === "object" &&
+      (payload as { signal?: { aborted?: boolean } }).signal?.aborted === true;
+  }
+
   const wrappedRuns = new Proxy(runs, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -82,7 +107,7 @@ export function wrapLangGraphClient<C extends { runs: object }>(client: C, optio
           const span = begin("wait", args);
           const scope = trace.setSpan(context.active(), span);
           try {
-            return Promise.resolve(context.with(scope, () => Reflect.apply(value, target, args)))
+            return Promise.resolve(context.with(scope, () => Reflect.apply(value, target, withRunCallback(args, span))))
               .then((result: unknown) => { span.end(); return result; }, (cause: unknown) => {
                 error(span, cause); span.end(); throw cause;
               });
@@ -103,10 +128,14 @@ export function wrapLangGraphClient<C extends { runs: object }>(client: C, optio
             let completed = false;
             let failed = false;
             try {
-              iterator = Reflect.apply(value, target, args) as AsyncIterator<unknown>;
+              iterator = Reflect.apply(value, target, withRunCallback(args, span)) as AsyncIterator<unknown>;
               while (true) {
                 const next = await context.with(scope, () => iterator!.next());
-                if (next.done) { completed = true; return next.value; }
+                if (next.done) {
+                  completed = true;
+                  if (signalAborted(args)) span.setAttribute("langgraph.cancelled", true);
+                  return next.value;
+                }
                 if (next.value && typeof next.value === "object" &&
                     (next.value as { event?: unknown }).event === "error") {
                   failed = true;

@@ -106,7 +106,7 @@ For a graph served by a remote LangGraph server, wrap the SDK client to trace
 and this package's required LangChain core peer:
 
 ```bash
-npm install @traceai/langchain @traceai/fi-core @langchain/core @langchain/langgraph-sdk
+npm install @traceai/langchain @traceai/fi-core @langchain/core @langchain/langgraph-sdk @opentelemetry/core @opentelemetry/api
 ```
 
 For SDK releases with `ClientConfig.onRequest` (such as 1.12.9), use its
@@ -115,8 +115,11 @@ official hook to send the client span's W3C trace context to the server:
 ```typescript
 import { Client } from "@langchain/langgraph-sdk";
 import { register, ProjectType } from "@traceai/fi-core";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { propagation } from "@opentelemetry/api";
 import { wrapLangGraphClient, langGraphTraceRequestHook } from "@traceai/langchain";
 
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 const provider = register({ projectName: "my-remote-graphs", projectType: ProjectType.OBSERVE });
 const client = wrapLangGraphClient(new Client({
   apiUrl: process.env.LANGGRAPH_API_URL!,
@@ -134,11 +137,9 @@ try {
 ```
 
 Set `FI_API_KEY`, `FI_SECRET_KEY`, `LANGGRAPH_API_URL`, and (if your remote
-server requires one) `LANGGRAPH_API_KEY` in your environment. If your app does
-not already configure an OpenTelemetry W3C trace-context propagator, install
-`@opentelemetry/core` and call
-`propagation.setGlobalPropagator(new W3CTraceContextPropagator())` before the
-request. Older SDK releases without `onRequest` still support client spans,
+server requires one) `LANGGRAPH_API_KEY` in your environment. Configure a W3C
+propagator once at startup, as shown above. Older SDK releases without
+`onRequest` still support client spans,
 but cannot inject headers through the official hook. Instrument the remote
 server separately to see its node, model, and tool spans; sending a trace
 header alone does not cause server spans to appear. Stream spans end after the
