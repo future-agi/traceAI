@@ -17,6 +17,10 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationContext;
+import org.springframework.ai.chat.client.observation.ChatClientObservationContext;
 import org.springframework.ai.chat.observation.ChatModelObservationContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.embedding.EmbeddingRequest;
@@ -30,7 +34,7 @@ class SpringAITracingObservationHandlerTest {
     private static final String SECRET = "synthetic-private-error-31";
 
     static Stream<Observation.Context> aiContexts() {
-        return Stream.of(chat(), EmbeddingModelObservationContext.builder()
+        return Stream.of(chat(), client(), advisor(), EmbeddingModelObservationContext.builder()
             .embeddingRequest(new EmbeddingRequest(List.of("input"), null)).provider("synthetic").build(),
             ToolCallingObservationContext.builder().toolDefinition(ToolDefinition.builder()
                 .name("synthetic-tool").description("Synthetic test tool").inputSchema("{}").build()).build());
@@ -102,6 +106,41 @@ class SpringAITracingObservationHandlerTest {
             assertThat(spans.get(0).getEvents()).isEmpty();
             assertThat(spans.get(1).getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
         }
+    }
+
+    @Test void responseLessClientAndAdvisorKeepUnknownOrErrorButCompletedOperationsSucceed() {
+        try (var fixture = new Fixture(true)) {
+            for (var context : List.of(client(), advisor())) {
+                Observation.start("incomplete", () -> context, fixture.registry).stop();
+            }
+            for (var context : List.of(client(), advisor())) {
+                Observation.start("failed", () -> context, fixture.registry)
+                    .error(new IllegalStateException(SECRET)).stop();
+            }
+            var completedClient = client();
+            var completedAdvisor = advisor();
+            var response = ChatClientResponse.builder().chatResponse(SpanTestSupport.response("answer")).build();
+            completedClient.setResponse(response);
+            completedAdvisor.setChatClientResponse(response);
+            Observation.start("completed-client", () -> completedClient, fixture.registry).stop();
+            Observation.start("completed-advisor", () -> completedAdvisor, fixture.registry).stop();
+            var spans = fixture.exporter.getFinishedSpanItems();
+            assertThat(spans).extracting(span -> span.getStatus().getStatusCode())
+                .containsExactly(StatusCode.UNSET, StatusCode.UNSET, StatusCode.ERROR, StatusCode.ERROR,
+                    StatusCode.OK, StatusCode.OK);
+            assertThat(spans.get(0).getEvents()).isEmpty();
+            assertThat(spans.get(1).getEvents()).isEmpty();
+        }
+    }
+
+    private static ChatClientObservationContext client() {
+        return ChatClientObservationContext.builder()
+            .request(ChatClientRequest.builder().prompt(new Prompt("input")).build()).build();
+    }
+
+    private static AdvisorObservationContext advisor() {
+        return AdvisorObservationContext.builder().advisorName("synthetic-advisor")
+            .chatClientRequest(ChatClientRequest.builder().prompt(new Prompt("input")).build()).build();
     }
 
     private static ChatModelObservationContext chat() {

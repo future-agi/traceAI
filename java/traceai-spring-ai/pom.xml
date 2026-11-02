@@ -61,6 +61,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Optional at runtime: model-only applications do not need ChatClient. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Spring Framework (managed by the Spring Boot BOM) -->
         <dependency>
             <groupId>org.springframework</groupId>

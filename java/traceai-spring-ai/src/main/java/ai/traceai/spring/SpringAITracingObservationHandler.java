@@ -10,9 +10,12 @@ import io.micrometer.tracing.otel.bridge.OtelTracer;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.StatusCode;
+import org.springframework.ai.chat.client.advisor.observation.AdvisorObservationContext;
+import org.springframework.ai.chat.client.observation.ChatClientObservationContext;
 import org.springframework.ai.chat.observation.ChatModelObservationContext;
 import org.springframework.ai.embedding.observation.EmbeddingModelObservationContext;
 import org.springframework.ai.tool.observation.ToolCallingObservationContext;
+import org.springframework.util.ClassUtils;
 
 /**
  * Native Micrometer OpenTelemetry handler with Spring AI error privacy and completion-aware status.
@@ -21,6 +24,10 @@ import org.springframework.ai.tool.observation.ToolCallingObservationContext;
  * the same native spans as the generic handler. Other observation types retain generic behavior.
  */
 public final class SpringAITracingObservationHandler extends DefaultTracingObservationHandler {
+    private static final boolean CHAT_CLIENT_PRESENT = ClassUtils.isPresent(
+        "org.springframework.ai.chat.client.observation.ChatClientObservationContext",
+        SpringAITracingObservationHandler.class.getClassLoader());
+
     private final boolean hideErrorDetails;
 
     /**
@@ -79,8 +86,8 @@ public final class SpringAITracingObservationHandler extends DefaultTracingObser
 
     @Override
     public void endSpan(Observation.Context context, Span span) {
-        if (context instanceof ChatModelObservationContext chat && chat.getResponse() == null) {
-            // Spring AI's stream aggregator supplies the response only on completion. Cancellation
+        if (hasIncompleteResponse(context)) {
+            // Spring AI's model/client/advisor aggregators set responses only on completion. Cancellation
             // (including downstream timeout) stops the observation without onError or a response.
             // Bypass OtelSpan.end's automatic OK, preserving UNSET (unknown) or an existing ERROR.
             // An absent response alone cannot distinguish cancellation from an empty provider reply,
@@ -95,6 +102,24 @@ public final class SpringAITracingObservationHandler extends DefaultTracingObser
     private static boolean isSpringAI(Observation.Context context) {
         return context instanceof ChatModelObservationContext
             || context instanceof EmbeddingModelObservationContext
-            || context instanceof ToolCallingObservationContext;
+            || context instanceof ToolCallingObservationContext
+            || (CHAT_CLIENT_PRESENT && ChatClientObservations.supports(context));
+    }
+
+    private static boolean hasIncompleteResponse(Observation.Context context) {
+        return (context instanceof ChatModelObservationContext chat && chat.getResponse() == null)
+            || (CHAT_CLIENT_PRESENT && ChatClientObservations.hasIncompleteResponse(context));
+    }
+
+    // Keep client API linkage lazy: spring-ai-client-chat is not required by model-only applications.
+    private static final class ChatClientObservations {
+        private static boolean supports(Observation.Context context) {
+            return context instanceof ChatClientObservationContext || context instanceof AdvisorObservationContext;
+        }
+
+        private static boolean hasIncompleteResponse(Observation.Context context) {
+            return (context instanceof ChatClientObservationContext client && client.getResponse() == null)
+                || (context instanceof AdvisorObservationContext advisor && advisor.getChatClientResponse() == null);
+        }
     }
 }
