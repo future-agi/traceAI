@@ -154,6 +154,41 @@ test('standalone model and workflow runs are traced without an agent', { skip: r
   assert.deepEqual(spans().map(kind).sort(), ['CHAIN', 'LLM']);
 });
 
+for (const name of ['normal', 'chat', 'llm', 'embedding', 'tool', 'agent']) {
+  test(`workflow name does not change its CHAIN kind or content: ${name}`, async () => {
+    const workflow = new Workflow({ name, schema: z.object({ text: z.string() }) })
+      .addStep('end', state => { state.text = 'public-output'; return Workflow.END; });
+    const result = await new ProbeAgent(() => workflow.run({ text: 'public-input' }))
+      .run({ prompt: 'public-input' });
+    assert.equal(result.state.text, 'public-output');
+    const workflowSpan = spans().find(s => s.name === 'Workflow Run');
+    assert.equal(kind(workflowSpan), 'CHAIN');
+    assert.deepEqual(JSON.parse(workflowSpan.attributes[SC.INPUT_VALUE]), { text: 'public-input' });
+    assert.equal(JSON.parse(workflowSpan.attributes[SC.OUTPUT_VALUE]).state.text, 'public-output');
+    await provider.forceFlush();
+    const exported = wire.flatMap(r => r.resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+    assert.equal(exported.length, 2);
+    const attributes = Object.fromEntries(exported.find(s => s.name === 'Workflow Run')
+      .attributes.map(a => [a.key, a.value.stringValue]));
+    assert.equal(attributes[SC.FI_SPAN_KIND], 'CHAIN');
+    assert.deepEqual(JSON.parse(attributes[SC.INPUT_VALUE]), { text: 'public-input' });
+    assert.equal(JSON.parse(attributes[SC.OUTPUT_VALUE]).state.text, 'public-output');
+  });
+}
+
+test('model kinds use the category position, not a provider name', async () => {
+  const cases = [
+    [['backend', 'tool', 'chat'], 'LLM'],
+    [['backend', 'agent', 'embedding'], 'EMBEDDING'],
+    // BeeAI's LangChain embedding adapter uses this inverted prefix.
+    [['langchain', 'backend', 'embedding'], 'EMBEDDING'],
+  ];
+  for (const [namespace, expected] of cases) {
+    await new ProbeAgent(() => nativeRun(namespace, async () => ({}))).run({ prompt: 'public-input' });
+    assert.equal(kind(spans().at(-2)), expected);
+  }
+});
+
 test('concurrent roots never cross-parent and unused Runs create no spans', async () => {
   new ProbeAgent().run({ prompt: 'never-started' });
   await Promise.all([1, 2, 3].map(() => new ProbeAgent(async () => {
@@ -247,6 +282,53 @@ for (const flag of ['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_T
       assert.ok(JSON.stringify(output).includes('public-answer'));
     } finally {
       if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+    }
+  });
+}
+
+for (const flag of [undefined, 'FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT']) {
+  test(`RePlanAgent exports only its public message directly and inside workflow/tool results: ${flag ?? 'default'}`, async () => {
+    const previous = flag && process.env[flag];
+    if (flag) process.env[flag] = 'true';
+    try {
+      const { RePlanAgent } = await upstream('beeai-framework/agents/experimental/replan/agent');
+      const { UnconstrainedMemory } = await upstream('beeai-framework/memory/unconstrainedMemory');
+      const model = new OfflineModel();
+      model._create = async () => new ChatModelOutput([new AssistantMessage(JSON.stringify({
+        information: {}, lookback: 'public', plan: [], nextStep: { type: 'message', message: 'public-answer' },
+      }))]);
+      const result = await new RePlanAgent({ llm: model, tools: [], memory: new UnconstrainedMemory() })
+        .run({ prompt: 'PRIVATE_REPLAN_PROMPT' });
+      assert.equal(result.message.text, 'public-answer');
+      const messages = [...result.intermediateMemory.messages];
+      assert.ok(messages.some(m => m.text.includes('PRIVATE_REPLAN_PROMPT')));
+      const workflow = new Workflow({ schema: z.object({ nested: z.any().optional() }) })
+        .addStep('return', async state => {
+          state.nested = await new DynamicTool({
+            name: 'agent_result', description: 'Return a synthetic agent result', inputSchema: z.object({}),
+            handler: async () => ({ results: [result] }),
+          }).run({});
+          return Workflow.END;
+        });
+      const returned = await new ProbeAgent(() => workflow.run({})).run({ prompt: 'public-input' });
+      assert.equal(returned.state.nested.results[0], result);
+      assert.deepEqual(result.intermediateMemory.messages, messages, 'tracing must not mutate application memory');
+      await provider.forceFlush();
+      if (flag) assert.ok(!JSON.stringify(wire).includes('PRIVATE_REPLAN_PROMPT'));
+      const outputs = [
+        JSON.parse(spans().find(s => s.name === 'RePlanAgent Run').attributes[SC.OUTPUT_VALUE]),
+        JSON.parse(spans().find(s => kind(s) === 'CHAIN').attributes[SC.OUTPUT_VALUE]).state.nested.results[0],
+        JSON.parse(spans().find(s => kind(s) === 'TOOL').attributes[SC.OUTPUT_VALUE]).results[0],
+      ];
+      for (const output of outputs) {
+        assert.deepEqual(Object.keys(output), ['message']);
+        assert.ok(JSON.stringify(output).includes('public-answer'));
+        assert.ok(!JSON.stringify(output).includes('PRIVATE_REPLAN_PROMPT'));
+      }
+    } finally {
+      if (flag) {
+        if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+      }
     }
   });
 }

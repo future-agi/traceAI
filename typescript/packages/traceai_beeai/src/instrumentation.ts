@@ -225,10 +225,14 @@ export class BeeAIInstrumentation extends InstrumentationBase {
 function key(ctx: BeeContext): string { return `${ctx.groupId}:${ctx.runId}`; }
 
 function spanKind(namespace: string[]): FISpanKind {
-  if (namespace.includes("tool")) return FISpanKind.TOOL;
-  if (namespace.includes("agent")) return FISpanKind.AGENT;
-  if (namespace.includes("llm") || namespace.includes("chat")) return FISpanKind.LLM;
-  if (namespace.includes("embedding")) return FISpanKind.EMBEDDING;
+  // Names after the framework category are application/provider names, not kinds.
+  // Models use backend/<provider>/<kind>; LangChain embeddings invert the prefix.
+  const category = namespace[0] === "backend" || (namespace[0] === "langchain" && namespace[1] === "backend")
+    ? namespace[2] : namespace[0];
+  if (category === "tool") return FISpanKind.TOOL;
+  if (category === "agent") return FISpanKind.AGENT;
+  if (category === "llm" || category === "chat") return FISpanKind.LLM;
+  if (category === "embedding") return FISpanKind.EMBEDDING;
   return FISpanKind.CHAIN;
 }
 
@@ -242,7 +246,11 @@ function payloadJSON(value: unknown, hideEmbeddingVectors: boolean): string | un
     if (hideEmbeddingVectors && /^(embeddings?|vectors?)$/i.test(field)) return REDACTED_VALUE;
     // Agent results can also be embedded in a workflow/tool's returned state.
     // Export the answer, not runner memory, intermediate iterations or history.
-    if (isRecord(item) && "result" in item && "memory" in item) return { result: item.result };
+    if (isRecord(item)) {
+      if ("result" in item && "memory" in item) return { result: item.result };
+      // RePlanAgent uses message/intermediateMemory instead of result/memory.
+      if ("message" in item && "intermediateMemory" in item) return { message: item.message };
+    }
     return item;
   });
 }
