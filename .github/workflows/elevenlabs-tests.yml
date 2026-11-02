@@ -1,0 +1,62 @@
+name: ElevenLabs TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_elevenlabs/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - '.github/workflows/elevenlabs-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  elevenlabs:
+    name: ElevenLabs packed contract (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.19.0', '22', '24', '26']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: corepack enable
+      - name: Frozen filtered install
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/elevenlabs...'
+      - name: Build, lint and floor/current type contract
+        working-directory: typescript
+        run: |
+          pnpm --filter '@traceai/elevenlabs...' --workspace-concurrency=1 run build
+          pnpm --filter '@traceai/elevenlabs' run lint
+          pnpm --filter '@traceai/elevenlabs' run typecheck:contract
+      - name: Pack and install in a clean consumer with published dependencies
+        working-directory: typescript
+        run: |
+          pnpm --filter '@traceai/elevenlabs' pack --pack-destination "$RUNNER_TEMP/package"
+          TARBALL="$(find "$RUNNER_TEMP/package" -maxdepth 1 -name '*.tgz' -print -quit)"
+          node packages/traceai_elevenlabs/scripts/packed.cjs prepare "$RUNNER_TEMP/consumer" "$TARBALL"
+      - name: Real SDK floor/current, OTLP and ESM/CommonJS customer snippet (loopback only)
+        run: |
+          NODE="$(command -v node)"
+          SCRIPT="$GITHUB_WORKSPACE/typescript/packages/traceai_elevenlabs/scripts/packed.cjs"
+          sudo env PATH="$PATH" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" "$NODE" "$SCRIPT" test "$RUNNER_TEMP/consumer"
+      - name: Release wiring
+        if: matrix.node == '22'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-please-test" --ignore-scripts --no-audit --no-fund release-please@17.6.0
+          python3 .github/release/release_plan.py --check
+          python3 .github/release/bootstrap_audit.py --check
+          sudo env PATH="$PATH" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" python3 -m unittest discover -s .github/release -p 'test_*.py'
+          sudo env PATH="$PATH" NODE_PATH="$RUNNER_TEMP/release-please-test/node_modules" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" node .github/release/test_release_strategies.cjs
