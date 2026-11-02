@@ -86,33 +86,37 @@ func parseEmbeddingRequest(body []byte, tc TraceConfig, batch bool) parsedReques
 // embeddingResponseAttributes records only counts, never vector values. A
 // dimension is reported only when all returned vectors have the same size.
 // Gemini Developer API does not return token usage for these endpoints.
-func embeddingResponseAttributes(body []byte) []attribute.KeyValue {
+func embeddingResponseAttributes(body []byte) ([]attribute.KeyValue, error) {
+	// The SDK accepts an empty HTTP body as an empty response object.
+	if len(body) == 0 {
+		return nil, nil
+	}
 	type embedding struct {
-		Values []float64 `json:"values"`
+		Values []float32 `json:"values"`
 	}
 	var r struct {
 		Embedding  *embedding  `json:"embedding"`
 		Embeddings []embedding `json:"embeddings"`
 	}
-	if json.Unmarshal(body, &r) != nil {
-		return nil
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, err
 	}
 	embeddings := r.Embeddings
 	if r.Embedding != nil {
 		embeddings = []embedding{*r.Embedding}
 	}
 	if len(embeddings) == 0 {
-		return nil
+		return nil, nil
 	}
 	attrs := []attribute.KeyValue{attribute.Int(EmbeddingCount, len(embeddings))}
 	dim := len(embeddings[0].Values)
 	for _, e := range embeddings[1:] {
 		if len(e.Values) != dim {
-			return attrs
+			return attrs, nil
 		}
 	}
 	if dim > 0 {
 		attrs = append(attrs, attribute.Int(GenAIEmbeddingDimensionCount, dim))
 	}
-	return attrs
+	return attrs, nil
 }

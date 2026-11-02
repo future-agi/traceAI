@@ -110,17 +110,28 @@ switches, with the same names and defaults as Python, turn it off:
 
 | Variable | Effect |
 |---|---|
-| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) and the API error message are dropped |
-| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) and the API error message are dropped |
+| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) are dropped |
+| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) are dropped |
 | `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | drop `gen_ai.input.messages.*` / `gen_ai.output.messages.*` only |
 | `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | redact the message text, keep roles and function calls |
 | `FI_HIDE_INPUT_IMAGES` | drop image parts |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | drop `gen_ai.request.parameters` |
+| `FI_HIDE_ERROR_DETAILS` | drop API error messages from attributes and status descriptions; keep ERROR status and error classification |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | redact `data:` images longer than this (default 32000) |
 
-A value counts only when it is `true` (any case). `WithTraceConfig(traceaigenai.TraceConfig{...})`
+A hide switch is enabled by `true` (any case). `WithTraceConfig(traceaigenai.TraceConfig{...})`
 sets them in code instead. `TraceConfig.SetAttributes` applies the same rules to spans your own
 code starts.
+
+When `FI_HIDE_ERROR_DETAILS` is unset or invalid, error details are hidden if any input/output,
+message or text hide switch is enabled. Explicit `true` or `false` overrides that default.
+Setting it to `false` can expose content quoted in API errors even when content capture is hidden.
+In code, leave `TraceConfig.HideErrorDetails` nil to derive it from the content switches, or use
+`genai.Ptr(true)` / `genai.Ptr(false)` for an explicit override.
+
+Rewrapping a traced client with `WrapClient` preserves its settings and still creates one span
+per HTTP attempt. Supplied options replace the corresponding settings on the new client;
+`WithTraceConfig` replaces the whole privacy configuration. The original client is unchanged.
 
 In every mode: the Gemini API key (`x-goog-api-key`), every other request header and the request
 URL are never copied, and the key is scrubbed from any API error text; transport errors are
@@ -153,8 +164,10 @@ generated (inline) images are never copied; the transport adds no resource attri
 - A stream is one span: it ends when the body is read to the end, on a read error, or when the SDK
   closes the body (your `range` loop finished or broke).
 - HTTP 4xx/5xx: status ERROR, `http.response.status_code`, `error.type` (the Google status such as
-  `NOT_FOUND`), and the API error message unless content is hidden. An error block inside a stream
+  `NOT_FOUND`), and the API error message when error details are allowed. An error block inside a stream
   ends the span with ERROR.
+- Invalid embedding JSON or vector values: status ERROR and `error.type=decode`, without
+  recording the response body or decoder error text. The SDK still receives the original response.
 - Cancellation: a context cancelled before the response completes ends the span with ERROR and
   `error.type=canceled`.
 - Other requests (countTokens, files, caches, asynchronous batches, models, interactions, live)
