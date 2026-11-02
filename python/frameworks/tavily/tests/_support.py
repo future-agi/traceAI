@@ -1,9 +1,8 @@
 """In-memory tracing helpers for the real-SDK tests.
 
-Spans go to a plain SDK ``TracerProvider`` with an in-memory exporter, never
-through ``fi_instrumentation.register()``: register()'s processor turns UNSET
-into OK before export, so only an in-memory provider shows the wrapper's own
-status.
+These helpers use a plain SDK ``TracerProvider`` to inspect wrapper behavior.
+``test_registered_streams`` separately covers ``fi_instrumentation.register()``
+and its status normalization through a loopback OTLP receiver.
 """
 
 from __future__ import annotations

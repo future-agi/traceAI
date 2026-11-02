@@ -1,0 +1,66 @@
+name: Redis TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_redis/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/redis-typescript-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_redis/**'
+      - '.github/workflows/redis-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  redis:
+    name: Redis ${{ matrix.redis }} offline lifecycle and OTLP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        redis: ['4.0.0', '4.7.1', '5.12.1', '6.3.1']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install workspace and upstream fixture
+        working-directory: typescript
+        env:
+          REDIS_VERSION: ${{ matrix.redis }}
+        run: |
+          pnpm --filter @traceai/redis... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/redis-fixture" --ignore-scripts "redis@$REDIS_VERSION"
+          echo "REDIS_TEST_ROOT=$RUNNER_TEMP/redis-fixture" >> "$GITHUB_ENV"
+      - name: Build package and dependencies
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/redis run build
+      - name: Unit and contract tests with only loopback networking
+        working-directory: typescript/packages/traceai_redis
+        run: |
+          NODE="$(command -v node)"
+          sudo --preserve-env=REDIS_TEST_ROOT unshare --net bash -c 'ip link set lo up; exec "$@"' bash \
+            "$NODE" node_modules/jest/bin/jest.js --runInBand
+          sudo --preserve-env=REDIS_TEST_ROOT unshare --net bash -c 'ip link set lo up; exec "$@"' bash \
+            "$NODE" --test test/lifecycle.test.cjs
+      - name: Check package contents and unchanged lockfile
+        working-directory: typescript/packages/traceai_redis
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP/packed"
+          git diff --exit-code -- ../../pnpm-lock.yaml

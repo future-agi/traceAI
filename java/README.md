@@ -8,7 +8,7 @@ Release coordinates use **`com.futureagi`**. Artifact names are unchanged, and *
 
 > These coordinates are prepared for the first Central release; this PR does not publish them. Until that release is available, use the [commit-pinned JitPack alternative](#jitpack-for-unreleased-commits) or [build locally](#build-and-test). Do not assume the old `ai.traceai` Maven coordinates are on Central.
 
-The version below is `1.0.0`, the version in [`pom.xml`](pom.xml). All SDK modules inherit that version. The BOM aligns all 24 SDK modules.
+The version below is `1.0.0`, the version in [`pom.xml`](pom.xml). All SDK modules inherit that version. The BOM aligns all SDK modules.
 
 ### Maven
 
@@ -255,7 +255,8 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | ChromaDB | `traceai-java-chromadb` |
 | Retrieval | MongoDB Atlas | `traceai-java-mongodb` |
 | Retrieval | Redis | `traceai-java-redis` |
-| Retrieval | Azure AI Search | `traceai-java-azure-search` |
+| Retrieval | Azure AI Search (synchronous SDK 11.6.2–11.8.1) | `traceai-java-azure-search` |
+| Retrieval | Azure AI Search (synchronous SDK 12.0.3) | `traceai-java-azure-search-v12` |
 | Retrieval | PostgreSQL pgvector | `traceai-java-pgvector` |
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
 | Framework | LangChain4j | `traceai-langchain4j` |
@@ -266,6 +267,19 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
+
+### Azure AI Search paging
+
+Use [Azure's native OpenTelemetry tracing](https://learn.microsoft.com/azure/developer/java/sdk/tracing) for SDK and HTTP spans. Add `TracedSearchClient` when you need Future AGI retrieval attributes such as index name, search mode, vector dimensions, result count, and top score. Choose the artifact that matches your application's `azure-search-documents` major version. Add the Azure SDK dependency explicitly; it is provided-scope in traceAI. Neither adapter wraps `SearchAsyncClient`.
+
+| Azure SDK | traceAI artifact | Wrapper import |
+| --- | --- | --- |
+| 11.6.2–11.8.1 | `traceai-java-azure-search` | `ai.traceai.azure.search.TracedSearchClient` |
+| 12.0.3 | `traceai-java-azure-search-v12` | `ai.traceai.azure.search.v12.TracedSearchClient` |
+
+The SDK 12 adapter is a separate module because Azure changed its public paging types. Do not combine the two adapters on one classpath. The 12.x adapter provides text, vector, filtered-vector, and hybrid retrieval; use `unwrap()` for Azure document operations. Existing 11.x constructors and document-operation methods remain unchanged. Use the SDK 12 artifact only after a release containing it is available, or build it locally with the reactor below.
+
+Search methods return lazy `SearchPagedIterable` results. Consume the results to execute the search. Each requested page has a completed `RETRIEVER` span under the context active when you called the search method. `azure_search.result_scope=page` identifies page-level `db.vector.results.count` and `azure_search.top_score`; these are not totals for the query. The captured FI session, user, metadata, and tags belong to the caller, even if another thread or user consumes the results. With SDK 11, reading metadata or iterating again reuses the first page and its trace. SDK 12 does not cache pages: iterating again requests them again, and count/coverage metadata is read from each `SearchPagedResponse`. Both adapters retain the underlying SDK's continuation tokens and replay behavior. Stopping early does not fetch remaining pages or leave an unfinished retrieval span. Query text and filters respect `hideInputs`, and error details respect `hideErrorDetails`.
 
 ## Build and test
 

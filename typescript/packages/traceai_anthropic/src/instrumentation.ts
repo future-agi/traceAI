@@ -48,6 +48,193 @@ function getExecContext(span: Span) {
   return execContext;
 }
 
+/**
+ * The SDK classes a module object can expose. `require("@anthropic-ai/sdk")` is a callable
+ * wrapper whose own `prototype` is a plain object, so also look at `.Anthropic` and `.default`.
+ */
+function sdkCandidates(moduleExports: any): any[] {
+  return [moduleExports, moduleExports?.Anthropic, moduleExports?.default].filter(
+    (candidate) => typeof candidate === "function",
+  );
+}
+
+function hasNativeOpenTelemetry(moduleExports: any): boolean {
+  // `in` never calls the client getter, which may read private fields.
+  return sdkCandidates(moduleExports).some(
+    (candidate) => !!candidate.prototype && "openTelemetry" in candidate.prototype,
+  );
+}
+
+function getMessagesPrototype(moduleExports: any): any {
+  if (moduleExports?.Messages?.prototype) return moduleExports.Messages.prototype;
+  for (const candidate of sdkCandidates(moduleExports)) {
+    if (candidate.Messages?.prototype) return candidate.Messages.prototype;
+  }
+  return undefined;
+}
+
+/** The SDK's `APIPromise`: a Promise with `withResponse()`, `asResponse()` and lazy parsing. */
+interface APIPromiseLike {
+  _thenUnwrap(transform: (data: unknown) => unknown): APIPromiseLike;
+  responsePromise?: Promise<unknown>;
+  parse?: () => Promise<unknown>;
+  asResponse?: () => Promise<unknown>;
+  then: Promise<unknown>["then"];
+}
+
+function isAPIPromise(value: unknown): value is APIPromiseLike {
+  return (
+    !!value &&
+    typeof (value as APIPromiseLike)._thenUnwrap === "function" &&
+    typeof (value as APIPromiseLike).then === "function"
+  );
+}
+
+/**
+ * Returns an SDK APIPromise that records the call when the application reads it. The SDK
+ * parses the body only when the application asks for it, so this does not read it early.
+ */
+function instrumentAPIPromise(
+  apiPromise: APIPromiseLike,
+  onResult: (data: unknown) => unknown,
+  onError: (error: unknown) => void,
+  onRawResponse: () => void,
+): APIPromiseLike {
+  // Request and API errors reject here, whichever helper the application uses. Chain the
+  // observer into the promise the SDK reads, and rethrow, instead of attaching a side
+  // handler: a side handler would mark the rejection handled, so an application that
+  // drops a failing call would no longer get Node's unhandled rejection.
+  // _thenUnwrap() reads responsePromise, so replace it first.
+  if (apiPromise.responsePromise) {
+    apiPromise.responsePromise = apiPromise.responsePromise.then(
+      (value) => value,
+      (error) => {
+        onError(error);
+        throw error;
+      },
+    );
+  }
+
+  const instrumented = apiPromise._thenUnwrap(onResult);
+  let parseRequested = false;
+  const originalParse = instrumented.parse;
+  if (typeof originalParse === "function") {
+    instrumented.parse = function (this: APIPromiseLike) {
+      parseRequested = true;
+      const parsed = originalParse.call(this);
+      parsed.then(undefined, onError);
+      return parsed;
+    };
+  }
+  const originalAsResponse = instrumented.asResponse;
+  if (typeof originalAsResponse === "function" && typeof originalParse === "function") {
+    instrumented.asResponse = function (this: APIPromiseLike) {
+      const response = originalAsResponse.call(this);
+      // withResponse() parses first; asResponse() alone leaves the body unread.
+      // Return the chained promise so a dropped failure still reaches the application.
+      // The responsePromise chain above already records errors.
+      if (parseRequested) return response;
+      return response.then((raw) => {
+        if (!parseRequested) onRawResponse();
+        return raw;
+      });
+    };
+  }
+  return instrumented;
+}
+
+async function processInstrumentationStream(
+  span: Span,
+  receivedStream: Stream<Anthropic.MessageStreamEvent>,
+  streamForInstrumentation: AsyncIterable<MessageStreamEvent>,
+) {
+  try {
+    const chunks: MessageStreamEvent[] = [];
+    let sawMessageStop = false;
+    for await (const chunk of streamForInstrumentation) {
+      chunks.push(chunk);
+      if (chunk.type === "message_stop") sawMessageStop = true;
+    }
+    // The SDK ends an aborted stream quietly (no error), whether the application called
+    // stream.controller.abort() or the request signal fired. tee() shares the controller.
+    const canceled = !sawMessageStop && receivedStream.controller?.signal?.aborted === true;
+    const { reconstructedMessage } = aggregateAnthropicStreamEvents(chunks);
+
+    // Build output message as JSON blob
+    const outputMessage: Record<string, unknown> = { role: reconstructedMessage.role };
+    let concatenatedStreamText = "";
+    const toolCalls: Record<string, unknown>[] = [];
+
+    reconstructedMessage.content.forEach(block => {
+        if (block.type === 'text') {
+            concatenatedStreamText += (block as Anthropic.TextBlock).text;
+        } else if (block.type === 'tool_use') {
+            const toolUseBlock = block as Anthropic.ToolUseBlock;
+            toolCalls.push({
+              function: { name: toolUseBlock.name, arguments: safelyJSONStringify(toolUseBlock.input) ?? "{}" },
+            });
+        }
+    });
+
+    if (concatenatedStreamText) {
+      outputMessage.content = concatenatedStreamText;
+    }
+    if (toolCalls.length > 0) {
+      outputMessage.tool_calls = toolCalls;
+    }
+
+    const streamSpanAttributes: Attributes = {
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
+    };
+
+    if (concatenatedStreamText) {
+        streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = concatenatedStreamText;
+        streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.TEXT;
+    } else {
+        streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(reconstructedMessage) ?? "";
+        streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
+    }
+
+    if (reconstructedMessage.model) {
+        streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = reconstructedMessage.model;
+    }
+    if (reconstructedMessage.id) {
+        streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_ID] = reconstructedMessage.id;
+    }
+    if (reconstructedMessage.stop_reason) {
+        streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = JSON.stringify([reconstructedMessage.stop_reason]);
+    }
+
+    if (reconstructedMessage.usage) {
+        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = reconstructedMessage.usage.input_tokens;
+        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = reconstructedMessage.usage.output_tokens;
+        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = reconstructedMessage.usage.input_tokens + reconstructedMessage.usage.output_tokens;
+    }
+
+    span.setAttributes({
+        ...streamSpanAttributes,
+        [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(reconstructedMessage) ?? "",
+    });
+    // A cancellation is not a failure and not a completed call: leave the status unset,
+    // as the SDK's native tracing does. The attributes hold what arrived before it.
+    // A stream that ends before message_stop without a cancellation was cut short: the
+    // application sees a normal end, so only the span records the failure.
+    if (canceled) {
+      // Leave the status unset.
+    } else if (!sawMessageStop) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "The stream ended before message_stop." });
+    } else {
+      span.setStatus({ code: SpanStatusCode.OK });
+    }
+  } catch (streamProcessingError: unknown) {
+    diag.error("Error processing Anthropic stream for attributes", streamProcessingError);
+    span.recordException(streamProcessingError as Error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: (streamProcessingError as Error).message || "Error processing stream" });
+  } finally {
+    span.end();
+  }
+}
+
 export class AnthropicInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
@@ -83,6 +270,20 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   }
 
   private patch(moduleExports: typeof Anthropic, moduleVersion?: string) {
+    // Native SDK tracing owns the APIPromise, stream lifecycle and privacy options.
+    // Do not wrap it, even when the client explicitly disables native telemetry.
+    // Check the public capability, not just the automatic loader's version gate:
+    // manuallyInstrument() bypasses that gate, and subclasses inherit this getter.
+    if (hasNativeOpenTelemetry(moduleExports)) {
+      diag.warn(
+        "@traceai/anthropic: this SDK has native OpenTelemetry support; " +
+        "leaving it unpatched. Configure the SDK's openTelemetry option and " +
+        "tracer provider directly. traceConfig on this legacy instrumentor " +
+        "does not apply to native SDK spans.",
+      );
+      return moduleExports;
+    }
+
     if ((moduleExports as any).fiPatched || _isFIPatched) {
       return moduleExports;
     }
@@ -93,7 +294,7 @@ export class AnthropicInstrumentation extends InstrumentationBase{
         instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
     }
 
-    const messagesPrototype = moduleExports.Messages?.prototype;
+    const messagesPrototype = getMessagesPrototype(moduleExports);
     if (!messagesPrototype) {
       diag.error("Anthropic.Messages.prototype not found, cannot patch messages.create.");
       return moduleExports;
@@ -104,7 +305,9 @@ export class AnthropicInstrumentation extends InstrumentationBase{
       messagesPrototype,
       "create",
       (originalCreate: Anthropic.Messages['create']) => {
-        return async function patchedMessagesCreate(this: Anthropic.Messages, ...args: Parameters<Anthropic.Messages['create']>) {
+        // Not async: the SDK returns an APIPromise whose withResponse(), asResponse()
+        // and lazy body parsing callers (including messages.stream()) depend on.
+        return function patchedMessagesCreate(this: Anthropic.Messages, ...args: Parameters<Anthropic.Messages['create']>) {
           const params = args[0] as Anthropic.MessageCreateParams;
           const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = params;
 
@@ -124,116 +327,86 @@ export class AnthropicInstrumentation extends InstrumentationBase{
 
           const execContext = getExecContext(span);
 
-          try {
-            const result = await context.with(execContext, () => {
-              return originalCreate.apply(this, args);
-            });
+          let ended = false;
+          const endWithError = (error: any) => {
+            if (ended) return;
+            ended = true;
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error?.message });
+            span.end();
+          };
 
+          const handleResult = (result: unknown) => {
+            if (ended) return result;
             if (params.stream === true) {
-              const receivedStream = result as Stream<Anthropic.MessageStreamEvent>; 
+              const receivedStream = result as Stream<Anthropic.MessageStreamEvent>;
               const [streamForInstrumentation, streamForUser] = receivedStream.tee();
+              ended = true;
+              processInstrumentationStream(span, receivedStream, streamForInstrumentation);
+              return streamForUser;
+            }
+            ended = true;
+            const messageResponse = result as Anthropic.Message;
+            // The call succeeded. Recording its output must not change what the application
+            // receives (the SDK resolves an empty body, such as HTTP 204, as null) and must
+            // not leave the span open. The SDK's native tracing also only logs this.
+            try {
+              if (messageResponse !== null && typeof messageResponse === "object") {
+                span.setAttributes({
+                  ...getAnthropicOutputMessagesAttributes(messageResponse),
+                  ...getAnthropicUsageAttributes(messageResponse),
+                  [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
+                  [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
+                    ? JSON.stringify([messageResponse.stop_reason]) : "[]",
+                  [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
+                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",
+                });
+              }
+            } catch (attributeError: unknown) {
+              diag.error("Error recording the Anthropic response on its span", attributeError);
+            }
+            span.setStatus({ code: SpanStatusCode.OK });
+            span.end();
+            return result;
+          };
 
-              const processInstrumentationStream = async () => {
-                try {
-                  const chunks: MessageStreamEvent[] = [];
-                  for await (const chunk of streamForInstrumentation) {
-                    chunks.push(chunk); 
-                  }
-                  const { reconstructedMessage } = aggregateAnthropicStreamEvents(chunks);
-                  
-                  // Build output message as JSON blob
-                  const outputMessage: Record<string, unknown> = { role: reconstructedMessage.role };
-                  let concatenatedStreamText = "";
-                  const toolCalls: Record<string, unknown>[] = [];
+          let result: unknown;
+          try {
+            result = context.with(execContext, () => originalCreate.apply(this, args));
+          } catch (error: any) {
+            endWithError(error);
+            throw error;
+          }
 
-                  reconstructedMessage.content.forEach(block => {
-                      if (block.type === 'text') {
-                          concatenatedStreamText += (block as Anthropic.TextBlock).text;
-                      } else if (block.type === 'tool_use') {
-                          const toolUseBlock = block as Anthropic.ToolUseBlock;
-                          toolCalls.push({
-                            function: { name: toolUseBlock.name, arguments: safelyJSONStringify(toolUseBlock.input) ?? "{}" },
-                          });
-                      }
-                  });
-
-                  if (concatenatedStreamText) {
-                    outputMessage.content = concatenatedStreamText;
-                  }
-                  if (toolCalls.length > 0) {
-                    outputMessage.tool_calls = toolCalls;
-                  }
-
-                  const streamSpanAttributes: Attributes = {
-                    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
-                  };
-
-                  if (concatenatedStreamText) {
-                      streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = concatenatedStreamText;
-                      streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.TEXT;
-                  } else {
-                      streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(reconstructedMessage) ?? "";
-                      streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
-                  }
-
-                  if (reconstructedMessage.model) {
-                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = reconstructedMessage.model;
-                  }
-                  if (reconstructedMessage.id) {
-                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_ID] = reconstructedMessage.id;
-                  }
-                  if (reconstructedMessage.stop_reason) {
-                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = JSON.stringify([reconstructedMessage.stop_reason]);
-                  }
-
-                  if (reconstructedMessage.usage) {
-                      streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = reconstructedMessage.usage.input_tokens;
-                      streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = reconstructedMessage.usage.output_tokens;
-                      streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = reconstructedMessage.usage.input_tokens + reconstructedMessage.usage.output_tokens;
-                  }
-
-                  span.setAttributes({
-                      ...streamSpanAttributes,
-                      [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(reconstructedMessage) ?? "",
-                  });
-                  span.setStatus({ code: SpanStatusCode.OK });
-                } catch (streamProcessingError: unknown) {
-                  diag.error("Error processing Anthropic stream for attributes", streamProcessingError);
-                  span.recordException(streamProcessingError as Error);
-                  span.setStatus({ code: SpanStatusCode.ERROR, message: (streamProcessingError as Error).message || "Error processing stream" });
-                } finally {
-                  span.end();
-                }
-              };
-              
-              processInstrumentationStream(); 
-
-              return streamForUser; 
-            } else {
-              const messageResponse = result as Anthropic.Message;
-              span.setAttributes({
-                ...getAnthropicOutputMessagesAttributes(messageResponse),
-                ...getAnthropicUsageAttributes(messageResponse),
-                [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
-                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
-                [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
-                [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
-                  ? JSON.stringify([messageResponse.stop_reason]) : "[]",
-                [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
-                [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",
-              });
+          if (isAPIPromise(result)) {
+            return instrumentAPIPromise(result, handleResult, endWithError, () => {
+              // Only the raw response was read: there is no parsed output to record.
+              if (ended) return;
+              ended = true;
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
-              return messageResponse;
-            }
-          } catch (error: any) {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error; 
+            });
           }
-        } as any; // Added 'as any' to reconcile Promise vs APIPromise type mismatch for the wrapper
+
+          // Not an SDK APIPromise (unknown SDK build or a test double): plain promise.
+          return Promise.resolve(result).then(
+            (value) => {
+              try {
+                return handleResult(value);
+              } catch (error: any) {
+                endWithError(error);
+                throw error;
+              }
+            },
+            (error: any) => {
+              endWithError(error);
+              throw error;
+            },
+          );
+        } as any; // The wrapper returns the SDK's own APIPromise type at runtime
       }
     );
 
@@ -247,7 +420,7 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   }
 
   private unpatch(moduleExports: typeof Anthropic & { fiPatched?: boolean }) {
-    const messagesPrototype = moduleExports.Messages?.prototype;
+    const messagesPrototype = getMessagesPrototype(moduleExports);
     if (messagesPrototype) {
       this._unwrap(messagesPrototype, "create");
     } else {

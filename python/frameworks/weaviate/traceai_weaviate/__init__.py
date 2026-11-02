@@ -1,88 +1,111 @@
-"""
-TraceAI Weaviate Instrumentation
+"""OpenTelemetry instrumentation for Weaviate collection queries and writes."""
 
-Provides OpenTelemetry instrumentation for Weaviate vector database operations (v4 API).
-"""
-
-import logging
+from importlib import import_module
 from typing import Any, Collection
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from wrapt import wrap_function_wrapper
+from wrapt import FunctionWrapper
 
-from traceai_weaviate.version import __version__
+from traceai_weaviate._wrappers import OperationWrapper
 from traceai_weaviate.package import _instruments
-from traceai_weaviate._wrappers import (
-    NearVectorWrapper,
-    NearTextWrapper,
-    HybridWrapper,
-    Bm25Wrapper,
-    FetchObjectsWrapper,
-    InsertWrapper,
-    InsertManyWrapper,
-    DeleteByIdWrapper,
-    DeleteManyWrapper,
-)
+from traceai_weaviate.version import __version__
 
-logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+_QUERY_CLASSES = {
+    "near_vector": "_NearVectorQuery",
+    "near_text": "_NearTextQuery",
+    "hybrid": "_HybridQuery",
+    "bm25": "_BM25Query",
+    "fetch_objects": "_FetchObjectsQuery",
+}
+_DATA_METHODS = ("insert", "insert_many", "delete_by_id", "delete_many")
+_MISSING = object()
+
+
+def _module(name):
+    try:
+        return import_module(name)
+    except ModuleNotFoundError as exc:
+        # Only an absent SDK target is optional, not a missing dependency.
+        if exc.name and (name == exc.name or name.startswith(exc.name + ".")):
+            return None
+        raise
+
+
+def _targets():
+    """Resolve the pre-async, syncify, and executor-based v4 SDK layouts."""
+    targets = []
+    for method, class_name in _QUERY_CLASSES.items():
+        base = f"weaviate.collections.queries.{method}.query"
+        sync_module = _module(base + ".sync") or import_module(base)
+        targets.append((getattr(sync_module, class_name), method, False))
+        async_module = _module(base + ".async_") or sync_module
+        async_class = getattr(async_module, class_name + "Async", None)
+        if async_class is not None:
+            targets.append((async_class, method, True))
+    data = "weaviate.collections.data"
+    sync_module = _module(data + ".sync") or import_module(data)
+    async_module = _module(data + ".async_") or _module(data + ".data")
+    for method in _DATA_METHODS:
+        targets.append((sync_module._DataCollection, method, False))
+        if async_module is not None:
+            targets.append((async_module._DataCollectionAsync, method, True))
+    return targets
 
 
 class WeaviateInstrumentor(BaseInstrumentor):
-    """OpenTelemetry instrumentor for Weaviate vector database (v4 API)."""
+    """Instrument supported sync/async v4 collection methods.
 
-    __slots__ = (
-        "_originals",
-    )
+    ``config`` accepts a TraceConfig. ``capture_content=True`` opts in to query
+    text and returned document properties; vectors and filters are never captured.
+    """
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
-
-        self._originals = {}
-
+        config = kwargs.get("config")
+        if config is None:
+            config = TraceConfig()
+        if not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        capture_content = kwargs.get("capture_content", False)
+        if not isinstance(capture_content, bool):
+            raise TypeError("capture_content must be a bool")
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, kwargs.get("tracer_provider")),
+            config=config,
+        )
+        # Resolve everything before changing SDK methods, and roll back a partial
+        # installation. Save local descriptors so inherited methods stay inherited.
+        targets = _targets()
+        self._originals = []
         try:
-            # Weaviate v4 query methods (sync versions)
-            from weaviate.collections.queries.near_vector.query.sync import _NearVectorQuery
-            from weaviate.collections.queries.near_text.query.sync import _NearTextQuery
-            from weaviate.collections.queries.hybrid.query.sync import _HybridQuery
-            from weaviate.collections.queries.bm25.query.sync import _BM25Query
-            from weaviate.collections.queries.fetch_objects.query.sync import _FetchObjectsQuery
-            from weaviate.collections.data.sync import _DataCollection
-
-            self._originals["near_vector"] = _NearVectorQuery.near_vector
-            self._originals["near_text"] = _NearTextQuery.near_text
-            self._originals["hybrid"] = _HybridQuery.hybrid
-            self._originals["bm25"] = _BM25Query.bm25
-            self._originals["fetch_objects"] = _FetchObjectsQuery.fetch_objects
-            self._originals["insert"] = _DataCollection.insert
-            self._originals["insert_many"] = _DataCollection.insert_many
-            self._originals["delete_by_id"] = _DataCollection.delete_by_id
-            self._originals["delete_many"] = _DataCollection.delete_many
-
-            wrap_function_wrapper("weaviate.collections.queries.near_vector.query.sync", "_NearVectorQuery.near_vector", NearVectorWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.queries.near_text.query.sync", "_NearTextQuery.near_text", NearTextWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.queries.hybrid.query.sync", "_HybridQuery.hybrid", HybridWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.queries.bm25.query.sync", "_BM25Query.bm25", Bm25Wrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.queries.fetch_objects.query.sync", "_FetchObjectsQuery.fetch_objects", FetchObjectsWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.data.sync", "_DataCollection.insert", InsertWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.data.sync", "_DataCollection.insert_many", InsertManyWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.data.sync", "_DataCollection.delete_by_id", DeleteByIdWrapper(tracer))
-            wrap_function_wrapper("weaviate.collections.data.sync", "_DataCollection.delete_many", DeleteManyWrapper(tracer))
-
-            logger.debug("Weaviate instrumentation enabled")
-        except ImportError as e:
-            logger.warning(f"Could not instrument Weaviate: {e}")
+            for cls, method, is_async in targets:
+                original = cls.__dict__.get(method, _MISSING)
+                wrapper = OperationWrapper(
+                    tracer, method, config=config, capture_content=capture_content
+                )
+                replacement = FunctionWrapper(
+                    getattr(cls, method), wrapper.async_call if is_async else wrapper
+                )
+                setattr(cls, method, replacement)
+                self._originals.append((cls, method, original, replacement))
+        except Exception:
+            self._uninstrument()
+            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        # Restore originals
-        pass
+        for cls, method, original, replacement in reversed(self._originals):
+            # Do not overwrite instrumentation installed by someone else later.
+            if cls.__dict__.get(method) is not replacement:
+                continue
+            if original is _MISSING:
+                delattr(cls, method)
+            else:
+                setattr(cls, method, original)
+        self._originals.clear()
 
 
 __all__ = ["WeaviateInstrumentor", "__version__"]

@@ -1,6 +1,7 @@
 """Wrapper classes for vLLM instrumentation."""
 
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Tuple
@@ -13,6 +14,18 @@ from opentelemetry.util.types import AttributeValue
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def _shared_instrumentor_enabled() -> bool:
+    """Defer to the shared request-level instrumentor while it is enabled.
+
+    Inspect live state, not installation order. Do not import the optional
+    package: legacy users can keep OpenAI 1.0, below the shared package's floor.
+    This mirrors the Fireworks compatibility route.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
 class _WithTracer(ABC):
@@ -72,7 +85,6 @@ def _get_input_attributes(
     """Extract input attributes from request parameters."""
     attributes: Dict[str, AttributeValue] = {
         SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.LLM.value,
-        SpanAttributes.GEN_AI_PROVIDER_NAME: "vllm",
         SpanAttributes.GEN_AI_PROVIDER_NAME: "vllm",
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
@@ -214,7 +226,7 @@ class _CompletionsWrapper(_WithTracer):
         kwargs: Dict[str, Any],
     ) -> Any:
         # Check if this is a vLLM client
-        if not self._is_vllm_client(instance):
+        if _shared_instrumentor_enabled() or not self._is_vllm_client(instance):
             return wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -285,7 +297,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         kwargs: Dict[str, Any],
     ) -> Any:
         # Check if this is a vLLM client
-        if not self._is_vllm_client(instance):
+        if _shared_instrumentor_enabled() or not self._is_vllm_client(instance):
             return await wrapped(*args, **kwargs)
 
         # Extract parameters
