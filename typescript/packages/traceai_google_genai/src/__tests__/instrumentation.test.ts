@@ -26,6 +26,7 @@ jest.mock("@traceai/fi-core", () => ({
       return fn(mockSpan);
     }),
   })),
+  REDACTED_VALUE: jest.requireActual<typeof import("@traceai/fi-core")>("@traceai/fi-core").REDACTED_VALUE,
   safelyJSONStringify: jest.fn((obj: any) => JSON.stringify(obj)),
   generateTraceConfig: jest.requireActual<typeof import("@traceai/fi-core")>("@traceai/fi-core").generateTraceConfig,
 }));

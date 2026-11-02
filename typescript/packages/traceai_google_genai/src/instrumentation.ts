@@ -27,7 +27,9 @@ import {
   generateTraceConfig,
   TraceConfig,
   TraceConfigOptions,
+  REDACTED_VALUE,
 } from "@traceai/fi-core";
+import { telemetryError } from "./telemetryError";
 
 const MODULE_NAME = "@google/generative-ai";
 const METHODS = [
@@ -67,6 +69,7 @@ interface GenerateContentRequest {
   cachedContent?: string;
 }
 interface ModelDefaults {
+  apiKey?: string;
   model?: string;
   generationConfig?: GenerateContentRequest["generationConfig"];
   safetySettings?: GenerateContentRequest["safetySettings"];
@@ -220,7 +223,11 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
           return original.apply(this, args);
         const privacy = instrumentation.privacy;
         let span: Span;
+        let apiKey: unknown;
         try {
+          // Capture the request's credential, even if the model is changed while
+          // its promise is pending. Never attach it to a span or log it.
+          apiKey = this.apiKey;
           span = instrumentation.fiTracer.startSpan(`Google GenAI ${method}`, {
             kind: SpanKind.INTERNAL,
             attributes: {
@@ -248,7 +255,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
         try {
           result = context.with(execContext, () => original.apply(this, args));
         } catch (error) {
-          finishError(span, error);
+          finishError(span, error, apiKey);
           throw error;
         }
         const promise = Promise.resolve(result).then(
@@ -266,7 +273,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
             return value;
           },
           (error) => {
-            finishError(span, error);
+            finishError(span, error, apiKey);
             throw error;
           },
         );
@@ -291,12 +298,13 @@ function endSpan(span: Span) {
     /* exporter failures cannot change SDK results */
   }
 }
-function finishError(span: Span, error: unknown) {
+function finishError(span: Span, error: unknown, apiKey: unknown) {
   try {
-    span.recordException(error instanceof Error ? error : String(error));
+    const sanitized = telemetryError(error, apiKey);
+    span.recordException(sanitized);
     span.setStatus({
       code: SpanStatusCode.ERROR,
-      message: error instanceof Error ? error.message : String(error),
+      message: sanitized.message,
     });
   } catch {
     diag.debug("Google GenAI error telemetry unavailable");
@@ -389,6 +397,13 @@ function inputAttributes(
         role: content.role || "user",
         ...(text ? { content: text } : {}),
       });
+    }
+    // Published fi-core 1.1.0 applies only its first matching masking rule.
+    // Redact text here so hideInputImages cannot short-circuit hideInputText.
+    if (config.hideInputText) {
+      for (const message of messages) {
+        if (message.content !== undefined) message.content = REDACTED_VALUE;
+      }
     }
     const functions = request.tools?.flatMap(
       (tool) => tool.functionDeclarations || [],

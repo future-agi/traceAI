@@ -8,10 +8,10 @@ const consumer = process.env.GENAI_TEST_CONSUMER;
 const consumerRequire = createRequire(path.join(consumer, "package.json"));
 const latest =
   consumerRequire("@google/generative-ai/package.json").version !== "0.1.0";
-function run(scenario) {
+function run(scenario, runner = "recall-cases.cjs") {
   const stdout = execFileSync(
     process.execPath,
-    [path.join(__dirname, "recall-cases.cjs"), consumer, scenario],
+    [path.join(__dirname, runner), consumer, scenario],
     { encoding: "utf8", timeout: 15000, env: { PATH: process.env.PATH } },
   );
   return JSON.parse(stdout.trim());
@@ -144,3 +144,14 @@ test("automatic and manual installation coexist without duplicate spans", () => 
 test("packed ESM adapter reversibly patches immutable SDK namespaces", () => {
   run("esm-lifecycle");
 });
+
+for (const scenario of [
+  "credential-errors",
+  "credential-copies",
+  "privacy-combinations",
+  ...(latest ? ["credential-header"] : []),
+]) {
+  test(`security regression: ${scenario}`, () => {
+    run(scenario, "security-cases.cjs");
+  });
+}
