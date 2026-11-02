@@ -46,6 +46,7 @@ interface Completion {
     delta?: {
       role?: string;
       content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -404,6 +405,7 @@ function observeStream(
     {
       role: string;
       content: string;
+      reasoning?: string;
       toolCalls: Map<
         number,
         {
@@ -436,6 +438,9 @@ function observeStream(
         .map(([, choice]) => ({
           role: choice.role,
           content: choice.content,
+          ...(choice.reasoning !== undefined
+            ? { reasoning: choice.reasoning }
+            : {}),
           ...(choice.toolCalls.size
             ? {
                 tool_calls: Array.from(choice.toolCalls)
@@ -494,6 +499,9 @@ function observeStream(
             }
             if (choice.delta?.role) accumulated.role = choice.delta.role;
             accumulated.content += choice.delta?.content ?? choice.text ?? "";
+            if (typeof choice.delta?.reasoning === "string")
+              accumulated.reasoning =
+                (accumulated.reasoning ?? "") + choice.delta.reasoning;
             for (const delta of choice.delta?.tool_calls ?? []) {
               let call = accumulated.toolCalls.get(delta.index);
               if (!call) {

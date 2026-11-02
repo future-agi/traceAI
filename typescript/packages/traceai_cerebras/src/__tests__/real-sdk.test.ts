@@ -531,6 +531,142 @@ describe("real Cerebras SDK resource contract", () => {
     expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual(items);
   });
 
+  describe("parsed reasoning", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "first answer",
+        reasoning: "first thought",
+      },
+      {
+        role: "assistant",
+        content: "second answer",
+        reasoning: "second thought",
+      },
+    ];
+    const items = [
+      {
+        choices: [
+          { index: 1, delta: { role: "assistant", reasoning: "second " } },
+          { index: 0, delta: { role: "assistant", reasoning: "first " } },
+        ],
+      },
+      {
+        choices: [
+          { index: 0, delta: { reasoning: "thought", content: "first " } },
+          { index: 1, delta: { reasoning: "thought" } },
+        ],
+      },
+      {
+        choices: [
+          {
+            index: 1,
+            delta: { content: "second answer" },
+            finish_reason: "stop",
+          },
+          { index: 0, delta: { content: "answer" }, finish_reason: "stop" },
+        ],
+      },
+      { choices: [], usage },
+    ];
+    const reasoningRequest = { ...request, n: 2, reasoning_format: "parsed" };
+
+    it("assembles reasoning per choice like non-streaming responses without changing chunks", async () => {
+      const body = {
+        ...response,
+        choices: messages.map((message, index) => ({
+          index,
+          message,
+          finish_reason: "stop",
+        })),
+      };
+      expect(
+        await client(jest.fn(async () => jsonResponse(body)))
+          .client.chat.completions.create(reasoningRequest),
+      ).toEqual(body);
+      const stream = await client(
+        jest.fn(async () => sseResponse(items)),
+      ).client.chat.completions.create({ ...reasoningRequest, stream: true });
+      expect(await collect(stream)).toEqual(items);
+      const spans = exporter.getFinishedSpans();
+      expect(spans).toHaveLength(2);
+      for (const span of spans) {
+        expect(
+          JSON.parse(span.attributes[S.LLM_OUTPUT_MESSAGES] as string),
+        ).toEqual(messages);
+      }
+      expect(spans[1].attributes[S.OUTPUT_VALUE]).toBe("first answer");
+      expect(JSON.parse(spans[1].attributes[S.RAW_OUTPUT] as string)).toEqual(
+        items,
+      );
+      expect(spans[1].attributes[S.LLM_TOKEN_COUNT_TOTAL]).toBe(10);
+    });
+
+    it.each([
+      "FI_HIDE_OUTPUTS",
+      "FI_HIDE_OUTPUT_MESSAGES",
+      "FI_HIDE_OUTPUT_TEXT",
+    ])("keeps reasoning out of every trace payload under %s", async (flag) => {
+      const previous = process.env[flag];
+      process.env[flag] = "true";
+      try {
+        const stream = await client(
+          jest.fn(async () => sseResponse(items)),
+        ).client.chat.completions.create({ ...reasoningRequest, stream: true });
+        expect(await collect(stream)).toEqual(items);
+        const spans = exporter.getFinishedSpans();
+        expect(spans).toHaveLength(1);
+        const serialized = JSON.stringify({
+          attributes: spans[0].attributes,
+          events: spans[0].events,
+          status: spans[0].status,
+        });
+        for (const fragment of ["first ", "second ", "thought", "answer"])
+          expect(serialized).not.toContain(fragment);
+        expect(spans[0].attributes[S.LLM_TOKEN_COUNT_TOTAL]).toBe(10);
+        expect(spans[0].attributes[S.GEN_AI_RESPONSE_FINISH_REASONS]).toBe(
+          '["stop","stop"]',
+        );
+      } finally {
+        if (previous === undefined) delete process.env[flag];
+        else process.env[flag] = previous;
+      }
+    });
+
+    it.each([undefined, null, ""])(
+      "preserves empty reasoning without inventing a field for %s",
+      async (reasoning) => {
+        const emptyItems = [
+          {
+            choices: [
+              {
+                index: 0,
+                delta: { content: "answer", reasoning },
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ];
+        const stream = await client(
+          jest.fn(async () => sseResponse(emptyItems)),
+        ).client.chat.completions.create({ ...reasoningRequest, stream: true });
+        await collect(stream);
+        expect(exporter.getFinishedSpans()).toHaveLength(1);
+        expect(
+          JSON.parse(
+            exporter.getFinishedSpans()[0].attributes[S.LLM_OUTPUT_MESSAGES] as string,
+          ),
+        ).toEqual([
+          {
+            role: "assistant",
+            content: "answer",
+            ...(reasoning === "" ? { reasoning: "" } : {}),
+          },
+        ]);
+      },
+    );
+  });
+
   it("retains finish reasons by choice index across terminal and usage-only chunks", async () => {
     const items = [
       {
