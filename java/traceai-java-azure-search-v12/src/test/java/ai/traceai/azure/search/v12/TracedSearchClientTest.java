@@ -17,9 +17,12 @@ import com.azure.search.documents.SearchClientBuilder;
 import com.azure.search.documents.models.SearchResult;
 import com.azure.search.documents.models.SearchPagedIterable;
 import com.azure.search.documents.models.SearchPagedResponse;
+import io.opentelemetry.api.baggage.Baggage;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.ContextKey;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
 import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
@@ -63,6 +66,7 @@ class TracedSearchClientTest {
         {"value":[{"@search.score":1.0,"id":"two"}]}
         """;
 
+    private final List<Context> requestContexts = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final AtomicInteger requests = new AtomicInteger();
     private final List<String> requestBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final InMemorySpanExporter exporter = InMemorySpanExporter.create();
@@ -80,6 +84,7 @@ class TracedSearchClientTest {
         .credential(new AzureKeyCredential("offline-placeholder"))
         .retryOptions(new RetryOptions(new FixedDelayOptions(0, Duration.ofMillis(1))))
         .httpClient(request -> {
+            requestContexts.add(Context.current());
             requests.incrementAndGet();
             if (nextFailure != null) {
                 return Mono.error(nextFailure);
@@ -182,6 +187,72 @@ class TracedSearchClientTest {
             }
             assertThat(span.getAttributes().asMap().toString()).doesNotContain("consumer");
         });
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,false", "false,false,true", "false,true,false", "false,true,true",
+        "true,false,false", "true,false,true", "true,true,false", "true,true,true"
+    })
+    void deferredPagesKeepEntireCallerContext(boolean populated, boolean threaded, boolean fail) {
+        ContextKey<String> tenantKey = ContextKey.named("test-tenant");
+        ContextKey<String> consumerOnlyKey = ContextKey.named("test-consumer-only");
+        Span caller = telemetry.getTracer("app").spanBuilder("caller").startSpan();
+        Context callerContext = Context.root().with(caller);
+        if (populated) {
+            callerContext = Baggage.builder().put("tenant", "caller-tenant").build()
+                .storeInContext(callerContext.with(tenantKey, "caller-value"));
+        }
+        SearchPagedIterable results;
+        try (Scope ignored = callerContext.makeCurrent()) {
+            results = search("text");
+        } finally {
+            caller.end();
+        }
+        assertThat(requests).hasValue(0);
+
+        Runnable consume = () -> {
+            Context before = Context.current();
+            Span consumer = telemetry.getTracer("app").spanBuilder("consumer").startSpan();
+            Context consumerContext = Baggage.builder().put("tenant", "consumer-tenant")
+                .put("consumer-only", "private-consumer-baggage").build()
+                .storeInContext(Context.root().with(consumer).with(tenantKey, "consumer-value")
+                    .with(consumerOnlyKey, "private-consumer-value"));
+            try (Scope ignored = consumerContext.makeCurrent()) {
+                var iterator = results.iterator();
+                assertThat(iterator.next().getScore()).isEqualTo(2.0);
+                assertThat(Context.current()).isSameAs(consumerContext);
+                if (fail) {
+                    nextFailure = new IllegalStateException("synthetic failure");
+                    assertThatThrownBy(iterator::hasNext).isSameAs(nextFailure);
+                } else {
+                    assertThat(iterator.next().getScore()).isEqualTo(1.0);
+                    assertThat(iterator.hasNext()).isFalse();
+                }
+                assertThat(Context.current()).isSameAs(consumerContext);
+            } finally {
+                consumer.end();
+            }
+            assertThat(Context.current()).isSameAs(before);
+        };
+        if (threaded) CompletableFuture.runAsync(consume).join(); else consume.run();
+
+        assertThat(requests).hasValue(2);
+        List<SpanData> pages = retrievals();
+        assertThat(pages).hasSize(2).allSatisfy(span -> {
+            assertThat(span.getParentSpanId()).isEqualTo(caller.getSpanContext().getSpanId());
+            assertThat(span.getTraceId()).isEqualTo(caller.getSpanContext().getTraceId());
+        });
+        assertThat(pages.get(1).getStatus().getStatusCode()).isEqualTo(fail ? StatusCode.ERROR : StatusCode.OK);
+        Baggage expectedBaggage = Baggage.fromContext(callerContext);
+        assertThat(requestContexts).hasSize(2);
+        for (int i = 0; i < requestContexts.size(); i++) {
+            Context observed = requestContexts.get(i);
+            assertThat(Baggage.fromContext(observed).asMap()).isEqualTo(expectedBaggage.asMap());
+            assertThat(observed.get(tenantKey)).isEqualTo(populated ? "caller-value" : null);
+            assertThat(observed.get(consumerOnlyKey)).isNull();
+            assertThat(Span.fromContext(observed).getSpanContext().getSpanId()).isEqualTo(pages.get(i).getSpanId());
+        }
     }
 
     @Test

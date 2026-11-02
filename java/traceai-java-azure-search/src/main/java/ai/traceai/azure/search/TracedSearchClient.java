@@ -348,7 +348,8 @@ public class TracedSearchClient {
         Map<String, String> callerAttributes = Map.copyOf(ContextAttributes.getAttributesFromContext());
         Function<String, SearchPagedResponse> fetch = token -> {
             Span span = tracer.startSpan(name, FISpanKind.RETRIEVER, parent, callerAttributes);
-            try (Scope scope = span.makeCurrent()) {
+            // Restore caller baggage and context values, not the deferred consumer's context.
+            try (Scope scope = parent.with(span).makeCurrent()) {
                 setCommonAttributes(span, topK, dimensions, mode);
                 span.setAttribute("azure_search.result_scope", "page");
                 if (!"vector".equals(mode)) {
