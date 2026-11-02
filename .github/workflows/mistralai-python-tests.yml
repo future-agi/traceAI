@@ -29,7 +29,7 @@ jobs:
           - {python: '3.10', sdk: '1.1.0'}
           - {python: '3.12', sdk: '1.12.4'}
           - {python: '3.10', sdk: '3.6.0'}
-          - {python: '3.13', sdk: '3.6.0'}
+          - {python: '3.13', sdk: '3.7.0'}
     env:
       FI_BASE_URL: http://127.0.0.1:9
       FI_GRPC_URL: http://127.0.0.1:9
