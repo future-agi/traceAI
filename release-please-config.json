@@ -961,8 +961,14 @@
       "package-name": "com.futureagi:traceai-java-parent",
       "skip-snapshot": true,
       "extra-files": [
-        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"},
-        {"type": "generic", "path": "traceai-java-weaviate/README.md"}
+        {
+          "type": "generic",
+          "path": "compatibility/spring-ai/pom.xml"
+        },
+        {
+          "type": "generic",
+          "path": "traceai-java-weaviate/README.md"
+        }
       ]
     },
     "go/a2a": {
@@ -1092,6 +1098,14 @@
       "component": "traceai-harbor",
       "package-name": "traceai-harbor",
       "extra-files": ["traceai_harbor/version.py"]
+    },
+    "typescript/packages/traceai_huggingface_transformers": {
+      "release-type": "node",
+      "component": "npm-traceai-huggingface-transformers",
+      "package-name": "@traceai/huggingface-transformers",
+      "extra-files": [
+        "src/version.ts"
+      ]
     }
   }
 }
