@@ -187,21 +187,28 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
         return original.apply(instance, args);
       });
 
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-        [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(result),
-      });
       // The JS bridge exposes ValidationOutcome.validationPassed, not valid.
       // A missing/undecodable outcome must not be reported as a success.
       const validationPassed = getValidationPassed(result);
+      // The outcome envelope also contains the original input (rawLlmOutput)
+      // and rejected candidates/diagnostics (reask, error). Those are not
+      // validated output and must not bypass input privacy via output fields.
+      // Project rather than mutate the application's ValidationOutcome.
+      const output = safeJsonStringify({
+        validatedOutput: result?.validatedOutput,
+        validationPassed,
+      });
+      span.setAttributes({
+        [SemanticConventions.OUTPUT_VALUE]: output,
+        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
+        [SemanticConventions.RAW_OUTPUT]: output,
+      });
       if (validationPassed !== undefined) {
         span.setAttribute("guardrails.validation_passed", validationPassed);
       }
 
-      if (result?.reask) {
-        span.setAttribute("guardrails.reask_count", result.reask_count || 1);
-      }
+      // A pending ReAsk does not mean a retry ran. ValidationOutcome exposes
+      // no completed retry count; omit it rather than infer one from reask.
 
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
