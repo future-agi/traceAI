@@ -189,10 +189,22 @@ final class NativeTelemetry {
                 // A retry can resubscribe before SK unwinds the failed attempt's thread-local
                 // scope. Its subscriber still carries the calling function's context, including
                 // when that caller is another TOOL rather than the invocation's root AGENT.
-                Context caller = ReactorOtelContext.read(view, invocation.context());
+                Context caller = ReactorOtelContext.read(view, currentCaller());
                 return ReactiveTracing.monoWithin(caller, () -> delegate.invokeAsync(
                     routeKernel(kernel, invocation), arguments, variableType, route(invocationContext, invocation)));
             });
+        }
+
+        private Context currentCaller() {
+            // block() starts a new subscriber without Reactor context. Preserve its live calling
+            // TOOL, but never revive a native attempt whose scope SK has not yet unwound.
+            Context current = Context.current();
+            Span span = Span.fromContext(current);
+            if (span.getSpanContext().getTraceId().equals(invocation.traceId())
+                    && !(span instanceof InvocationSpan && ((InvocationSpan) span).ended.get())) {
+                return current;
+            }
+            return invocation.context();
         }
     }
 

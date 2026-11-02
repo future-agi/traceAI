@@ -27,6 +27,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,6 +122,89 @@ class NativeRetryTest {
         assertThat(exporter.getFinishedSpanItems()).hasSize(2)
             .allSatisfy(s -> assertThat(s.getParentSpanId()).isEqualTo(caller.getSpanContext().getSpanId()));
         caller.end();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"blocking", "blockingSync", "blockingRetry", "blockingSyncRetry",
+        "reactive", "retryDelayed", "repeat"})
+    void nestedCallsKeepTheirImmediateCallerWithoutGlobalSdk(String mode) {
+        GlobalOpenTelemetry.resetForTest();
+        Kernel kernel = Kernel.builder()
+            .withPlugin(KernelPluginFactory.createFromObject(new BlockingNested(mode), "blocking")).build();
+        var result = new TracedKernel(kernel, tracer())
+            .invokeAsync(kernel.<String>getFunction("blocking", "outer")).block();
+        assertThat(result.getResult()).isEqualTo("done");
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        boolean retried = mode.endsWith("Retry") || mode.equals("retryDelayed");
+        int leaves = retried || mode.equals("repeat") ? 2 : 1;
+        assertThat(spans).hasSize(2 + leaves);
+        SpanData agent = spans.stream().filter(s -> "AGENT".equals(s.getAttributes().get(KIND)))
+            .findFirst().orElseThrow();
+        String middleName = mode.startsWith("blockingSync") ? "middleSync" : "middle";
+        SpanData middle = spans.stream()
+            .filter(s -> s.getName().equals("function_invocation blocking-" + middleName))
+            .findFirst().orElseThrow();
+        assertThat(middle.getParentSpanId()).isEqualTo(agent.getSpanId());
+        List<SpanData> attempts = spans.stream()
+            .filter(s -> s.getName().equals("function_invocation blocking-leaf")).toList();
+        assertThat(attempts).hasSize(leaves).allSatisfy(s -> {
+            assertThat(s.getParentSpanId()).isEqualTo(middle.getSpanId());
+            assertThat(s.getTraceId()).isEqualTo(agent.getTraceId());
+            assertThat(s.getAttributes().get(KIND)).isEqualTo("TOOL");
+            assertThat(s.getStartEpochNanos()).isGreaterThanOrEqualTo(middle.getStartEpochNanos());
+            assertThat(s.getEndEpochNanos()).isLessThanOrEqualTo(middle.getEndEpochNanos());
+        });
+        if (retried) {
+            assertThat(attempts).extracting(s -> s.getStatus().getStatusCode())
+                .containsExactly(StatusCode.ERROR, StatusCode.OK);
+        }
+        assertThat(spans.toString()).doesNotContain("synthetic-blocking-error");
+        assertThat(Span.current().getSpanContext().isValid()).isFalse();
+    }
+
+    public static class BlockingNested {
+        private final String mode;
+        private final AtomicInteger calls = new AtomicInteger();
+
+        BlockingNested(String mode) {
+            this.mode = mode;
+        }
+
+        @DefineKernelFunction(name = "outer", returnType = "java.lang.String")
+        public Mono<String> outer(Kernel kernel) {
+            return kernel.<String>invokeAsync("blocking",
+                mode.startsWith("blockingSync") ? "middleSync" : "middle").map(r -> r.getResult());
+        }
+
+        @DefineKernelFunction(name = "middleSync", returnType = "java.lang.String")
+        public String middleSync(Kernel kernel) {
+            return kernel.<String>invokeAsync("blocking", "leaf")
+                .retry(mode.endsWith("Retry") ? 1 : 0).block().getResult();
+        }
+
+        @DefineKernelFunction(name = "middle", returnType = "java.lang.String")
+        public Mono<String> middle(Kernel kernel) {
+            var call = kernel.<String>invokeAsync("blocking", "leaf");
+            if (mode.startsWith("blocking")) {
+                return Mono.just(call.retry(mode.endsWith("Retry") ? 1 : 0).block().getResult());
+            }
+            if (mode.equals("retryDelayed")) {
+                return call.retryWhen(Retry.fixedDelay(1, Duration.ofMillis(5))).map(r -> r.getResult());
+            }
+            if (mode.equals("repeat")) {
+                return call.repeat(1).last().map(r -> r.getResult());
+            }
+            return call.map(r -> r.getResult());
+        }
+
+        @DefineKernelFunction(name = "leaf", returnType = "java.lang.String")
+        public String leaf() {
+            if ((mode.endsWith("Retry") || mode.equals("retryDelayed")) && calls.incrementAndGet() == 1) {
+                throw new IllegalStateException("synthetic-blocking-error");
+            }
+            return "done";
+        }
     }
 
     private Kernel kernel(boolean asyncFailure) {
