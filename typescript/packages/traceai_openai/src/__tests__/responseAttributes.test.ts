@@ -249,7 +249,9 @@ describe('Response Attributes Functions', () => {
     it('should handle missing input field', () => {
       const body = {};
 
-      expect(() => getResponsesInputMessagesAttributes(body as any)).toThrow();
+      expect(getResponsesInputMessagesAttributes(body as any)).toEqual({
+        [SemanticConventions.LLM_INPUT_MESSAGES]: "[]",
+      });
     });
   });
 

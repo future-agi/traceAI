@@ -109,14 +109,18 @@ const maskingRules: MaskingRule[] = [
     action: () => undefined,
   },
   {
+    // Raw/value payloads are opaque duplicates. Do not attempt provider-specific
+    // JSON parsing here: granular hiding must also cover every copied payload.
     condition: ({ config, key }) =>
-      config.hideInputs && key === SemanticConventions.INPUT_VALUE,
+      (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
+      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
-    // The raw request body (e.g. the full OpenAI request, messages included), like input.value
     condition: ({ config, key }) =>
-      config.hideInputs && key === SemanticConventions.RAW_INPUT,
+      (config.hideInputs || config.hideInputText) &&
+      key.startsWith(`${SemanticConventions.EMBEDDING_EMBEDDINGS}.`) &&
+      key.endsWith(`.${SemanticConventions.EMBEDDING_TEXT}`),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -132,13 +136,8 @@ const maskingRules: MaskingRule[] = [
   },
   {
     condition: ({ config, key }) =>
-      config.hideOutputs && key === SemanticConventions.OUTPUT_VALUE,
-    action: () => REDACTED_VALUE as AttributeValue,
-  },
-  {
-    // The raw response body, like output.value
-    condition: ({ config, key }) =>
-      config.hideOutputs && key === SemanticConventions.RAW_OUTPUT,
+      (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {

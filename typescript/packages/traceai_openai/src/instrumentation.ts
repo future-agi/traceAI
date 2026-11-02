@@ -299,6 +299,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             } else {
               result = observeStream(result, span, (chunks) =>
                 consumeChatCompletionStreamChunks(chunks, span),
+                args[1]?.signal,
               );
             }
             return result;
@@ -383,12 +384,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             } else {
               result = observeStream(result, span, (chunks) => {
                 span.setAttributes({
+                  ...getStreamMetadataAttributes(chunks),
                   [SemanticConventions.OUTPUT_VALUE]: chunks.map((chunk) => chunk.choices[0]?.text ?? "").join(""),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(chunks) ?? "",
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
-              });
+              }, args[1]?.signal);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -485,7 +487,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             ...args: Parameters<ResponsesCreateType>
           ) {
             const body = args[0];
-            const { input: _messages, ...invocationParameters } = body;
+            const { input: _messages, instructions: _instructions, ...invocationParameters } = body;
             const span = instrumentation.fiTracer.startSpan(
               `OpenAI Responses`,
               {
@@ -535,17 +537,27 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   if (endSpan) span.end();
                   return;
                 }
+                const output = {
+                  id: result.id, object: result.object, status: result.status,
+                  model: result.model, output: result.output, usage: result.usage,
+                };
                 span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
+                  [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(output),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_MODEL_NAME]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                   ...getResponsesOutputMessagesAttributes(result),
                   ...getResponsesUsageAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(output) ?? "",
                 });
-                span.setStatus({ code: SpanStatusCode.OK });
+                if (["failed", "incomplete", "cancelled"].includes(result.status ?? "") || result.error) {
+                  const message = result.error?.message ?? `Response ${result.status}`;
+                  span.recordException(new Error(message));
+                  span.setStatus({ code: SpanStatusCode.ERROR, message });
+                } else {
+                  span.setStatus({ code: SpanStatusCode.OK });
+                }
                 if (endSpan) span.end();
               };
               if (isResponseCreateResponse(result)) {
@@ -557,7 +569,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   async (chunks) => {
                     recordSpan(await consumeResponseStreamEvents(chunks), false);
                   },
-                  (event) => event.type === "response.completed",
+                  args[1]?.signal,
+                  (event) => event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete",
                 );
               }
 
@@ -615,6 +628,7 @@ function observeStream<T>(
   stream: Stream<T>,
   span: Span,
   onComplete: (chunks: T[]) => void | Promise<void>,
+  requestSignal?: AbortSignal | null,
   retainChunk: (chunk: T) => boolean = () => true,
 ): Stream<T> {
   // Modern SDK helpers (notably tee) call the iterator factory directly.
@@ -624,21 +638,67 @@ function observeStream<T>(
   const originalIterator = hasIteratorFactory
     ? sdkStream.iterator!.bind(stream)
     : stream[Symbol.asyncIterator].bind(stream);
+  const signals = [stream.controller?.signal, requestSignal].filter(
+    (signal): signal is AbortSignal => signal != null,
+  );
+  let ended = false;
+  let awaitingNext = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    for (const signal of signals) signal.removeEventListener("abort", onAbort);
+    span.end();
+  };
+  const onAbort = () => {
+    if (ended) return;
+    // The SDK swallows AbortError and does not forward the request's reason to
+    // its own controller. Inspect the original signal before treating EOF as OK.
+    const deadline = signals.find(signal => signal.aborted && signal.reason?.name === "TimeoutError");
+    if (deadline) {
+      span.recordException(deadline.reason);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: deadline.reason.message });
+    }
+    // An SDK parser/transport error can abort its controller in finally before
+    // next() rejects. Let that rejection reach our catch before ending the span.
+    if (!deadline && awaitingNext) return;
+    // Other aborts include the SDK's automatic cancellation on a consumer's
+    // early return. End them as UNSET, not successful generations or failures.
+    finish();
+  };
+  for (const signal of signals) signal.addEventListener("abort", onAbort, { once: true });
+  if (signals.some(signal => signal.aborted)) onAbort();
   const observedIterator = async function* () {
     const chunks: T[] = [];
     try {
-      for await (const chunk of { [Symbol.asyncIterator]: originalIterator }) {
-        if (retainChunk(chunk)) chunks.push(chunk);
+      const source = {
+        [Symbol.asyncIterator]: () => {
+          const iterator = originalIterator();
+          return {
+            next: async () => {
+              awaitingNext = true;
+              try { return await iterator.next(); }
+              finally { awaitingNext = false; }
+            },
+            return: iterator.return?.bind(iterator),
+            throw: iterator.throw?.bind(iterator),
+          };
+        },
+      };
+      for await (const chunk of source) {
+        if (!ended && retainChunk(chunk)) chunks.push(chunk);
         yield chunk;
       }
-      await onComplete(chunks);
+      if (signals.some(signal => signal.aborted)) onAbort();
+      if (!ended) await onComplete(chunks);
     } catch (error) {
-      const exception = error instanceof Error ? error : new Error(String(error));
-      span.recordException(exception);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: exception.message });
+      if (!ended) {
+        const exception = error instanceof Error ? error : new Error(String(error));
+        span.recordException(exception);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: exception.message });
+      }
       throw error;
     } finally {
-      span.end();
+      finish();
     }
   };
   if (hasIteratorFactory) sdkStream.iterator = observedIterator;
@@ -729,6 +789,24 @@ function getLLMToolsJSONSchema(
   };
 }
 
+// Structural shape keeps the build compatible with SDK 4 while accepting the
+// discriminated custom-tool union introduced in later SDKs. Unknown variants
+// retain identity only; tracing must not make a valid SDK request throw.
+function serializeToolCall(tc: {
+  id: string;
+  type: string;
+  function?: { name: string; arguments: string };
+  custom?: { name: string; input: string };
+}): Record<string, unknown> {
+  const result: Record<string, unknown> = { id: tc.id, type: tc.type };
+  if (tc.type === "function" && tc.function) {
+    result.function = { name: tc.function.name, arguments: tc.function.arguments };
+  } else if (tc.type === "custom" && tc.custom) {
+    result.custom = { name: tc.custom.name, input: tc.custom.input };
+  }
+  return result;
+}
+
 /**
  * Serializes a ChatCompletionMessageParam into a plain object for JSON blob format.
  */
@@ -754,11 +832,7 @@ function serializeChatCompletionInputMessage(
   switch (role) {
     case "assistant":
       if (message.tool_calls) {
-        obj.tool_calls = message.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: tc.type,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        }));
+        obj.tool_calls = message.tool_calls.map(serializeToolCall);
       }
       break;
     case "function":
@@ -809,7 +883,7 @@ function getCompletionInputValueAndMimeType(
  * Get usage attributes
  */
 function getUsageAttributes(
-  completion: ChatCompletion | Completion,
+  completion: Pick<ChatCompletionChunk, "usage">,
 ): Attributes {
   if (completion.usage) {
     const usageAttributes: Attributes = {
@@ -831,6 +905,27 @@ function getUsageAttributes(
     return usageAttributes;
   }
   return {};
+}
+
+/** Usage-only final chunks have no choices. Collect metadata independently of deltas. */
+function getStreamMetadataAttributes(chunks: (ChatCompletionChunk | Completion)[]): Attributes {
+  const attributes: Attributes = {};
+  const finishReasons = new Map<number, string>();
+  for (const chunk of chunks) {
+    if (chunk.model) {
+      attributes[SemanticConventions.LLM_MODEL_NAME] = chunk.model;
+      attributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = chunk.model;
+    }
+    if (chunk.id) attributes[SemanticConventions.GEN_AI_RESPONSE_ID] = chunk.id;
+    if (chunk.usage) Object.assign(attributes, getUsageAttributes(chunk));
+    for (const choice of chunk.choices) {
+      if (choice.finish_reason) finishReasons.set(choice.index, choice.finish_reason);
+    }
+  }
+  if (finishReasons.size) {
+    attributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = JSON.stringify([...finishReasons.values()]);
+  }
+  return attributes;
 }
 
 /**
@@ -860,11 +955,7 @@ function serializeChatCompletionOutputMessage(
     obj.content = message.content;
   }
   if (message.tool_calls) {
-    obj.tool_calls = message.tool_calls.map((tc) => ({
-      id: tc.id,
-      type: tc.type,
-      function: { name: tc.function.name, arguments: tc.function.arguments },
-    }));
+    obj.tool_calls = message.tool_calls.map(serializeToolCall);
   }
   if (message.function_call) {
     obj.function_call = {
@@ -1008,12 +1099,14 @@ async function consumeChatCompletionStreamChunks(
   }
 
   const attributes: Attributes = {
+    ...getStreamMetadataAttributes(allChunks),
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
     [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
   span.setAttributes(attributes);
+  span.setStatus({ code: SpanStatusCode.OK });
   // --- ADD LOG ---
   // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
 }

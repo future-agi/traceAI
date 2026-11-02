@@ -93,7 +93,7 @@ export function getResponsesInputMessagesAttributes(
   }
   if (typeof body.input === "string") {
     items.push({ content: body.input, role: "user" });
-  } else {
+  } else if (Array.isArray(body.input)) {
     items.push(...body.input);
   }
   const messages = items.map((item) => serializeResponseItemMessage(item));
@@ -136,7 +136,9 @@ export async function consumeResponseStreamEvents(
 
   for await (const event of stream) {
     switch (event.type) {
-      case "response.completed": {
+      case "response.completed":
+      case "response.failed":
+      case "response.incomplete": {
         response = event.response;
         break;
       }
