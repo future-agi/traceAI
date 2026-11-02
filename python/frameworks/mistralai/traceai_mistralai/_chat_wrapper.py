@@ -1,8 +1,9 @@
+import asyncio
 import json
 import logging
-import warnings
 from abc import ABC
 from contextlib import contextmanager
+from contextvars import ContextVar
 from inspect import Signature, signature
 from types import ModuleType
 from typing import (
@@ -18,11 +19,10 @@ from typing import (
 
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
     FiSpanKindValues,
     SpanAttributes,
 )
-from mistralai.utils.eventstreaming import EventStream, EventStreamAsync
+from collections.abc import AsyncIterator
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -37,8 +37,6 @@ from traceai_mistralai._response_attributes_extractor import (
 from traceai_mistralai._stream import _AsyncStream, _Stream
 from traceai_mistralai._utils import (
     _finish_tracing,
-    _process_input_messages,
-    _raw_input,
 )
 from traceai_mistralai._with_span import _WithSpan
 
@@ -46,6 +44,58 @@ if TYPE_CHECKING:
     from mistralai import Mistral
 
 __all__ = ("_SyncChatWrapper",)
+
+# Structured parse runs a second validation step after complete returns.
+# Hold only that request's existing span until the outer parse completes.
+_parse_pending = ContextVar("mistral_parse_pending", default=None)
+
+
+def _finish_parse(pending, error=None):
+    for with_span, response, request_parameters, extractor in pending:
+        if error is not None:
+            with_span.record_exception(error)
+        _finish_tracing(
+            with_span=with_span,
+            has_attributes=_ResponseAttributes(response, request_parameters, extractor),
+            status=trace_api.Status(
+                status_code=(
+                    trace_api.StatusCode.ERROR
+                    if error is not None
+                    else trace_api.StatusCode.OK
+                )
+            ),
+        )
+
+
+def _sync_parse(wrapped, instance, args, kwargs):
+    pending = []
+    token = _parse_pending.set(pending)
+    try:
+        result = wrapped(*args, **kwargs)
+    except Exception as error:
+        _finish_parse(pending, error)
+        raise
+    else:
+        _finish_parse(pending)
+        return result
+    finally:
+        _parse_pending.reset(token)
+
+
+async def _async_parse(wrapped, instance, args, kwargs):
+    pending = []
+    token = _parse_pending.set(pending)
+    try:
+        result = await wrapped(*args, **kwargs)
+    except (Exception, asyncio.CancelledError) as error:
+        _finish_parse(pending, error)
+        raise
+    else:
+        _finish_parse(pending)
+        return result
+    finally:
+        _parse_pending.reset(token)
+
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -107,15 +157,8 @@ class _WithMistralAI(ABC):
         request_parameters: Dict[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind()
-        try:
-            yield from _process_input_messages(request_parameters.get("messages", []))
-            yield from _raw_input(request_parameters)
-            # yield from _as_input_attributes(_io_value_and_type(request_parameters))
-        except Exception:
-            logger.exception(
-                f"Failed to get input attributes from request parameters of "
-                f"type {type(request_parameters)}"
-            )
+        # Messages already have policy-aware semantic attributes. Raw payload
+        # copies bypass selective text/message/image and parameter privacy.
 
     def _get_extra_attributes_from_request(
         self,
@@ -148,6 +191,14 @@ class _WithMistralAI(ABC):
         bound_arguments = bound_signature.arguments
         request_data: Dict[str, Any] = {}
         for key, value in bound_arguments.items():
+            if key in {
+                "http_headers",
+                "server_url",
+                "retries",
+                "timeout_ms",
+            } or isinstance(value, (Iterator, AsyncIterator)):
+                # Telemetry must not consume a one-shot message/tool iterable.
+                continue
             try:
                 if value is not None:
                     try:
@@ -177,14 +228,8 @@ class _WithMistralAI(ABC):
                 chat_completion_type=CompletionEvent,
             )
 
-            if isinstance(response, EventStreamAsync):
+            if isinstance(response, AsyncIterator):
                 return _AsyncStream(
-                    stream=response,
-                    with_span=with_span,
-                    response_accumulator=response_accumulator,
-                )
-            elif isinstance(response, EventStream):
-                return _Stream(
                     stream=response,
                     with_span=with_span,
                     response_accumulator=response_accumulator,
@@ -197,6 +242,16 @@ class _WithMistralAI(ABC):
                 )
             else:
                 raise TypeError("Response must be an asynchronous iterator")
+        if (pending := _parse_pending.get()) is not None:
+            pending.append(
+                (
+                    with_span,
+                    response,
+                    request_parameters,
+                    self._response_attributes_extractor,
+                )
+            )
+            return response
         _finish_tracing(
             status=trace_api.Status(status_code=trace_api.StatusCode.OK),
             with_span=with_span,
@@ -295,7 +350,7 @@ class _AsyncChatWrapper(_WithTracer, _WithMistralAI):
         ) as with_span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except (Exception, asyncio.CancelledError) as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -350,7 +405,7 @@ class _AsyncStreamChatWrapper(_WithTracer, _WithMistralAI):
         ) as with_span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except (Exception, asyncio.CancelledError) as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -390,26 +445,9 @@ class _ResponseAttributes:
         self._response_attributes_extractor = response_attributes_extractor
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        if hasattr(self._response, "model_dump_json") and callable(
-            self._response.model_dump_json
-        ):
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    value = self._response.model_dump_json(exclude_unset=True)
-                assert isinstance(value, str)
-                output_value = (
-                    json.loads(value)
-                    .get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
-
-                yield SpanAttributes.OUTPUT_VALUE, value
-                yield SpanAttributes.OUTPUT_VALUE, output_value
-                yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
-            except Exception:
-                logger.exception("Failed to get model dump json")
+        # Export output only through the semantic message attributes below.
+        # Generic output.value is not covered by selective message privacy.
+        yield from ()
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         yield from self._response_attributes_extractor.get_attributes_from_response(
