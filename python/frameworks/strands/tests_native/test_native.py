@@ -10,7 +10,7 @@ import pytest
 SCENARIO = Path(__file__).with_name("scenario.py")
 
 
-def run(*options, conventions="", environment=None):
+def run(*options, conventions="", environment=None, scenario=SCENARIO):
     env = {
         key: value
         for key, value in os.environ.items()
@@ -21,7 +21,7 @@ def run(*options, conventions="", environment=None):
         env["OTEL_SEMCONV_STABILITY_OPT_IN"] = conventions
     env.update(environment or {})
     result = subprocess.run(
-        [sys.executable, "-I", str(SCENARIO), *options],
+        [sys.executable, "-I", str(scenario), *options],
         env=env,
         check=False,
         capture_output=True,
@@ -188,3 +188,29 @@ def test_projection_preserves_other_instrumentation_and_exporter_lifecycle():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS boundary and lifecycle" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "conventions",
+    [
+        "",
+        "gen_ai_latest_experimental",
+        "gen_ai_latest_experimental,gen_ai_span_attributes_only",
+    ],
+)
+@pytest.mark.parametrize(
+    "check,stop_reason",
+    [
+        ("finish", "max_tokens"),
+        ("finish", "end_turn"),
+        ("system", "end_turn"),
+        ("provider", "end_turn"),
+    ],
+)
+def test_native_metadata_projection(check, stop_reason, conventions):
+    run(
+        check,
+        stop_reason,
+        conventions=conventions,
+        scenario=SCENARIO.with_name("metadata_scenario.py"),
+    )

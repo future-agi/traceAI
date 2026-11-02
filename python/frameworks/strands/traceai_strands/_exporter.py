@@ -111,6 +111,48 @@ def _messages(span, direction, *, require_json=False):
     return messages or _decode(legacy, require_json=require_json)
 
 
+def _finish_reasons(span):
+    """Keep non-content completion metadata even when messages are hidden."""
+    reasons = (span.attributes or {}).get("gen_ai.response.finish_reasons")
+    if not isinstance(reasons, (list, tuple)):
+        reasons = [
+            (event.attributes or {}).get("finish_reason")
+            for event in span.events
+            if event.name == "gen_ai.choice"
+        ]
+        if not reasons:
+            # Newer native conventions embed the reason in each output message,
+            # either on the details event or directly on the span.
+            messages = _messages(span, "output", require_json=True)
+            reasons = (
+                [
+                    message.get("finish_reason")
+                    for message in messages
+                    if isinstance(message, dict)
+                ]
+                if isinstance(messages, list)
+                else []
+            )
+    return [
+        reason
+        for reason in reasons
+        if isinstance(reason, str) and 0 < len(reason) <= _MAX_CONTENT
+    ]
+
+
+def _system_instructions(span):
+    key = "gen_ai.system_instructions"
+    source = span.attributes or {}
+    if key in source:
+        return source[key]
+    for event in span.events:
+        if event.name == "gen_ai.client.inference.operation.details":
+            values = event.attributes or {}
+            if key in values:
+                return values[key]
+    return None
+
+
 def _redact_tool_results(value):
     """Remove failed or unverifiable tool responses from decoded message history.
 
@@ -199,11 +241,13 @@ def _project(span, config, capture_content):
     attrs["gen_ai.span.kind"] = kind
     if kind == "TOOL" and tool_status is not None:
         attrs["gen_ai.tool.status"] = tool_status
-    # The native system tag identifies the framework, not the model provider.
-    # Preserve an explicit gen_ai.provider.name; never guess a provider from a
-    # model name (the same model can be hosted by many different providers).
-    if attrs.get("gen_ai.system") == "strands-agents":
-        del attrs["gen_ai.system"]
+    # Both native convention versions use the framework as a provider placeholder.
+    # Preserve explicit providers; never guess a provider from a model name.
+    for key in ("gen_ai.system", "gen_ai.provider.name"):
+        if attrs.get(key) == "strands-agents":
+            del attrs[key]
+    if reasons := _finish_reasons(span):
+        attrs["gen_ai.response.finish_reasons"] = reasons
     # Agent, cycle and multi-agent spans contain aggregates of model usage.
     # Only model spans carry billable usage; no trace-wide state or subtraction.
     if kind == "LLM":
@@ -253,7 +297,11 @@ def _project(span, config, capture_content):
                 )
             )
             for key in keys:
-                value = source.get(key)
+                value = (
+                    _system_instructions(span)
+                    if key == "gen_ai.system_instructions"
+                    else source.get(key)
+                )
                 if isinstance(value, str) and len(value) <= _MAX_CONTENT:
                     attrs[key] = value
 
