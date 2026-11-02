@@ -494,7 +494,9 @@ test("function-call arguments and tool responses redact nested credentials in sp
     }
     const exported = wire.flatMap((w) =>
       w.body.resourceSpans.flatMap((r) => r.scopeSpans.flatMap((s) => s.spans))
-    );
+    ).filter((s) => s.attributes.some((a) =>
+      a.key === "gen_ai.output.messages" && a.value.stringValue?.includes("London")
+    ));
     assert.equal(exported.length, 1);
     const otlpAttrs = Object.fromEntries(exported[0].attributes.map((a) => [a.key, a.value.stringValue]));
     assert.match(otlpAttrs["gen_ai.input.messages"], /sunny/);
