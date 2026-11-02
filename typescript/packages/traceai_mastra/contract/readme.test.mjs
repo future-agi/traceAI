@@ -25,6 +25,8 @@ function attributes(values) {
 
 test("README setup compiles and exports native Mastra traces to the configured FI project", { timeout: 30_000 }, async (t) => {
   const source = await readFile(readme, "utf8");
+  assert.match(source, /An explicit `projectName` takes precedence over `FI_PROJECT_NAME`/);
+  assert.match(source, /\| `projectName` \| `FI_PROJECT_NAME` or `serviceName` \|/);
   const snippets = [...source.matchAll(/```typescript\n([\s\S]*?)```/g)].map((match) => match[1]);
   assert.equal(snippets.length, 2, "Keep setup and awaited shutdown executable");
   const temp = await mkdtemp(join(install, "readme-contract-"));

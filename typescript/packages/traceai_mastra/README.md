@@ -47,7 +47,7 @@ export const mastra = new Mastra({
 
 Run your registered agents or workflows as usual. In Future AGI, open **Observe** and select the `customer-support` project to inspect the trace and its child spans.
 
-The exporter sends OTLP/HTTP protobuf **traces only** to `https://api.futureagi.com/tracer/v1/traces`, using `x-api-key` and `x-secret-key` headers. It sets the `project_name` and `project_type` resource attributes for project routing. If you omit `projectName`, `createFIObservability` uses `serviceName`.
+The exporter sends OTLP/HTTP protobuf **traces only** to `https://api.futureagi.com/tracer/v1/traces`, using `x-api-key` and `x-secret-key` headers. It sets the `project_name` and `project_type` resource attributes for project routing. An explicit `projectName` takes precedence over `FI_PROJECT_NAME`. If neither is set, `createFIObservability` uses `serviceName`.
 
 Available input and output are included in traces, which can contain prompts, responses, and tool arguments or results. Use Mastra's native `tracingOptions.hideInput` and `hideOutput` for runs that should not capture input/output. Those options do not redact every metadata field, attribute, or error; configure Mastra's [SensitiveDataFilter](https://mastra.ai/reference/observability/tracing/processors/sensitive-data-filter) for field-based redaction.
 
@@ -67,8 +67,8 @@ For a long-running application, call this from your application shutdown lifecyc
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `serviceName` | `"mastra-app"` | OpenTelemetry service name and default project name. |
-| `projectName` | `serviceName` | Future AGI project to receive traces. |
+| `serviceName` | `"mastra-app"` | OpenTelemetry service name and project fallback when neither `projectName` nor `FI_PROJECT_NAME` is set. |
+| `projectName` | `FI_PROJECT_NAME` or `serviceName` | Future AGI project to receive traces; an explicit option overrides the environment. |
 | `projectType` | `"observe"` | Project type: `"observe"` or `"experiment"`. |
 | `apiKey`, `secretKey` | `FI_API_KEY`, `FI_SECRET_KEY` | Future AGI authentication. |
 | `baseUrl` | `FI_BASE_URL` or `https://api.futureagi.com` | Collector base URL; `/tracer/v1/traces` is appended. |
