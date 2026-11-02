@@ -92,7 +92,7 @@ function content(value: unknown, limit: number): string | undefined {
     for (const key in item) {
       if (++keys > 64 || budget <= 0 || nodes <= 0) break;
       if (
-        /(?:^_meta$|authorization|cookie|credential|password|passphrase|secret|token|key|cert|signature|^headers$|^data$|^blob$|^uri$|^url$|^stack$)/i.test(
+        /(?:^_meta$|auth|bearer|cookie|credential|password|passphrase|secret|token|key|cert|signature|^headers$|^data$|^blob$|^uri$|^url$|^stack$)/i.test(
           key,
         )
       )

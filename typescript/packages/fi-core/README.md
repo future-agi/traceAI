@@ -71,7 +71,7 @@ const tracerProvider = register({
 
 ### Async spans and shutdown
 
-`register()` installs the global tracer provider and a Node.js async context manager when you do not already have one. Parent spans, session context and tracing suppression then survive `await`. An existing application context manager is reused.
+`register()` installs the global tracer provider, a Node.js async context manager and W3C trace-context propagation when they are not already configured. Parent spans, session context and tracing suppression then survive `await`; incoming `traceparent` headers can be extracted. Existing application context managers and propagators are preserved.
 
 ```typescript
 import { register, ProjectType } from '@traceai/fi-core';

@@ -10,7 +10,7 @@ Install the package alongside the MCP SDK your application uses:
 npm install @traceai/mcp
 ```
 
-Use `@modelcontextprotocol/sdk` 1.x (1.10.2 or later), or `@modelcontextprotocol/server` 2.4.x. The SDK peers are optional so split-package applications do not have to install the legacy SDK. Initialize your OpenTelemetry provider, async context manager and W3C trace-context propagator in **both** processes before handling requests. For Future AGI, use [`register()` from `@traceai/fi-core`](https://docs.futureagi.com/docs/integrations/traceai/mcp).
+Use `@modelcontextprotocol/sdk` 1.x (1.10.2 or later), or `@modelcontextprotocol/server` 2.4.x. The SDK peers are optional so split-package applications do not have to install the legacy SDK. Initialize your OpenTelemetry provider, async context manager and W3C trace-context propagator in **both** processes before handling requests. For Future AGI, use [`register()` from `@traceai/fi-core`](https://docs.futureagi.com/docs/integrations/traceai/mcp) only after installing a release that configures all three; version 1.1.0 does not. With 1.1.0, configure the context manager and W3C propagator separately, or use a standard OpenTelemetry Node provider.
 
 ## Instrument a server
 

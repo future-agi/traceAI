@@ -255,10 +255,11 @@ it("redacts nested credential-name variants in opted-in input and output", async
       safe: "allowed input",
       nested: {
         privateKey: "PRIVATE_INPUT_KEY",
+        auth: "PRIVATE_INPUT_AUTH",
         accessKeyId: "PRIVATE_INPUT_ID",
         awsSecretAccessKey: "PRIVATE_INPUT_AWS",
         certificate: "PRIVATE_INPUT_CERT",
-        items: [{ clientSecret: "PRIVATE_INPUT_CLIENT", safe: "allowed item" }],
+        items: [{ clientSecret: "PRIVATE_INPUT_CLIENT", bearer: "PRIVATE_INPUT_BEARER", safe: "allowed item" }],
       },
     }),
     () => {},
@@ -269,7 +270,7 @@ it("redacts nested credential-name variants in opted-in input and output", async
       structuredContent: {
         private_key: "PRIVATE_OUTPUT_KEY",
         access_key_id: "PRIVATE_OUTPUT_ID",
-        nested: [{ signingKey: "PRIVATE_OUTPUT_SIGN", safe: "allowed nested" }],
+        nested: [{ signingKey: "PRIVATE_OUTPUT_SIGN", auth: "PRIVATE_OUTPUT_AUTH", bearer: "PRIVATE_OUTPUT_BEARER", safe: "allowed nested" }],
       },
     }),
     () => undefined,
@@ -282,9 +283,9 @@ it("redacts nested credential-name variants in opted-in input and output", async
 });
 
 it("keeps content off by default for nested credential fields", async () => {
-  operations.receive(request(1, { privateKey: "PRIVATE_INPUT_KEY" }), () => {});
+  operations.receive(request(1, { privateKey: "PRIVATE_INPUT_KEY", nested: { auth: "PRIVATE_INPUT_AUTH" } }), () => {});
   operations.send(
-    response(1, { structuredContent: { accessKeyId: "PRIVATE_OUTPUT_ID" } }),
+    response(1, { structuredContent: { accessKeyId: "PRIVATE_OUTPUT_ID", nested: [{ bearer: "PRIVATE_OUTPUT_BEARER" }] } }),
     () => undefined,
   );
   await tick();
