@@ -1,5 +1,6 @@
 import json
 import unittest
+from importlib.metadata import version
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -93,4 +94,5 @@ class TestAdapter(unittest.TestCase):
         self.assertTrue(handle.force_flush())
         handle.shutdown()
 
-    def test_version(self): self.assertEqual(__version__, '0.1.0')
+    def test_version(self):
+        self.assertEqual(__version__, version('traceai-cognee'))

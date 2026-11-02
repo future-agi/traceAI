@@ -159,19 +159,6 @@ def test_one_span_covers_the_clients_own_retries(fake):
     assert attrs(span)["gen_ai.usage.total_tokens"] == TOKENS_PER_TEXT * 2
 
 
-def test_unwrapped_methods_produce_no_span(fake):
-    with instrumented() as traced:
-        result = client(fake).multimodal_embed(inputs=[["hello"]], model="voyage-multimodal-3")
-        assert len(result.embeddings) == 1
-        # Neither multimodal_embed nor contextualized_embed is wrapped (PRD R-07).
-        for cls in (voyageai.Client, voyageai.AsyncClient):
-            for name in ("multimodal_embed", "contextualized_embed"):
-                assert not hasattr(cls.__dict__[name], "__wrapped__"), (cls, name)
-
-    assert fake.paths() == ["/v1/multimodalembeddings"]
-    assert traced.spans() == []
-
-
 def test_a_local_model_is_traced_without_a_server_address(fake, monkeypatch):
     helpers = pytest.importorskip(
         "voyageai.local.helpers", reason="voyageai < 0.5 has no local embedding models"

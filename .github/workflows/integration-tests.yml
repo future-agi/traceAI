@@ -190,6 +190,9 @@ jobs:
           java-version: '21.0.8'
       - name: Install checksum-pinned Maven 3.9.9
         run: bash .github/integration-ci/install_maven.sh
+      - name: Install the Quarkus native tracing adapter
+        if: matrix.package.name == 'quarkus-langchain4j'
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-quarkus-langchain4j -am -DskipTests install
       - name: Build packaged application and run OTLP integration tests
         working-directory: ${{ matrix.package.dir }}
         run: |
