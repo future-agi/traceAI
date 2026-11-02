@@ -166,11 +166,17 @@ a span.
 A stream is one span. Every streamed event is a span event named `a2a.event` (with
 `gen_ai.a2a.event.type`, and the task state or artifact type when the event has one), and the span
 ends at the agent's reply message or when the task reaches a terminal state (`completed`,
-`failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream. `auth-required` does not close
-an active stream: later events and its final result remain on the same span. With the completion
-wrappers, clean EOF also ends a stream, including a persisted `auth-required` snapshot with no
+`failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream.
+With `WrapClient` and `WrapHandler`, `auth-required` keeps an active stream's span open for later
+events and its final result. Clean EOF also ends the span, including a persisted snapshot with no
 active executor. The latest snapshot/status message is included in `output.value`, including an
 authorization prompt at EOF; a later status replaces it.
+
+Existing clients using only `WithCallInterceptors(NewInterceptor(...))` retain their previous
+behavior: an `auth-required` task or status event ends the client span successfully. This keeps
+persisted authorization snapshots complete without requiring a client migration, but misses later
+events if the same stream continues. Use `WrapClient` to capture those events and to observe clean
+EOF and early iterator abandonment.
 
 ## Attributes
 

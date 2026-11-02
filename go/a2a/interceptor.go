@@ -68,7 +68,9 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
 // Use [WrapClient] around the created client for clean-EOF and early-abandonment
-// completion; the SDK's interceptor hooks alone do not observe iterator close.
+// completion and to keep recording after auth-required. Without it, auth-required
+// ends the client span as in earlier releases; the SDK's interceptor hooks alone
+// do not observe iterator close.
 type Interceptor struct {
 	tracer trace.Tracer
 	tc     TraceConfig
@@ -183,6 +185,10 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 		}
 	}
 
+	// Keep the interceptor-only client's historical auth-required completion.
+	// Only a call claimed by WrapClient can wait for actual iterator completion;
+	// an inherited wrapper slot may belong to a different (outer) call.
+	st.authRequiredEndsStream = !attachCompletion(ctx, clientCompletionKey, st)
 	if st.streaming {
 		// A stream ends without a callback when the caller stops reading
 		// early; the span then ends when the caller's context is done.
@@ -193,7 +199,6 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 		st.stopWatch = context.AfterFunc(ctx, func() { st.endWithContextError(spanCtx) })
 		st.mu.Unlock()
 	}
-	attachCompletion(ctx, clientCompletionKey, st)
 	return context.WithValue(ctx, stateKey{}, st), nil, nil
 }
 
@@ -242,6 +247,9 @@ type callState struct {
 	streaming bool
 	ended     bool
 	stopWatch func() bool
+
+	// Legacy client-only fallback; servers and wrapped clients leave this false.
+	authRequiredEndsStream bool
 
 	sessionSet bool
 	taskID     string
@@ -397,7 +405,7 @@ func (s *callState) applyEvent(payload any) bool {
 			if v.Status.State != a2a.TaskStateUnspecified {
 				ev = append(ev, attribute.String(A2ATaskState, string(v.Status.State)))
 			}
-			done = endsStream(v.Status.State)
+			done = s.endsStream(v.Status.State)
 		}
 	case *a2a.Message:
 		ev = append(ev, attribute.String(A2AEventType, "message"))
@@ -415,7 +423,7 @@ func (s *callState) applyEvent(payload any) bool {
 			if v.Status.Message != nil {
 				s.final = partsText(v.Status.Message.Parts)
 			}
-			done = endsStream(v.Status.State)
+			done = s.endsStream(v.Status.State)
 		}
 	case *a2a.TaskArtifactUpdateEvent:
 		ev = append(ev, attribute.String(A2AEventType, "artifact-update"))
@@ -433,11 +441,12 @@ func (s *callState) applyEvent(payload any) bool {
 	return done
 }
 
-// endsStream reports whether a2a-go closes a stream at this state: the
-// terminal states and input-required. Auth-required can be followed by more
-// events in the same stream in the supported SDK versions.
-func endsStream(state a2a.TaskState) bool {
-	return state.Terminal() || state == a2a.TaskStateInputRequired
+// endsStream reports a terminal/interrupted state, plus the historical
+// auth-required boundary for interceptor-only clients. Wrapped clients and
+// servers can receive more events after auth-required in the supported SDK.
+func (s *callState) endsStream(state a2a.TaskState) bool {
+	return state.Terminal() || state == a2a.TaskStateInputRequired ||
+		(s.authRequiredEndsStream && state == a2a.TaskStateAuthRequired)
 }
 
 func (s *callState) output() {

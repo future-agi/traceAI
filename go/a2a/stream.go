@@ -76,14 +76,18 @@ type streamCompletion struct {
 	state  *callState
 }
 
-func attachCompletion(ctx context.Context, key completionKey, st *callState) {
+// attachCompletion reports whether this call claimed its wrapper's completion
+// slot. An inherited slot already owned by another call is not a completion hook.
+func attachCompletion(ctx context.Context, key completionKey, st *callState) bool {
 	if completion, _ := ctx.Value(key).(*streamCompletion); completion != nil {
 		completion.mu.Lock()
 		defer completion.mu.Unlock()
 		if completion.state == nil && completion.method == st.method {
 			completion.state = st
+			return true
 		}
 	}
+	return false
 }
 
 func (c *streamCompletion) end(err error) {
