@@ -303,3 +303,102 @@ it.each(["content", "hidden", "vectors"])("exports correct shape and %s privacy 
     await wireProvider.shutdown();
   }
 });
+
+
+it.each([[false, false], [false, true], [true, false], [true, true]])(
+  "marks premature EOF as incomplete (v2=%s, empty=%s) without changing SDK iteration",
+  async (v2, empty) => {
+    const client = clientFor(sdk8, v2);
+    const events = streamResponse(v2);
+    response = empty ? "" : (v2 ? `data: ${JSON.stringify(events[0])}\n\n` : `${JSON.stringify(events[0])}\n`);
+    const delivered = [];
+    for await (const event of await client.chatStream(v2 ? requestV2 : request)) delivered.push(event);
+    expect(delivered).toHaveLength(empty ? 0 : 1);
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("Cohere stream ended without a terminal event");
+    expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe(empty ? "" : "hel");
+    expect(spans[0].attributes[S.LLM_TOKEN_COUNT_PROMPT]).toBeUndefined();
+  },
+);
+
+const privacyClients = [
+  ["7.0.0 v1", sdk7, false], ["8.3.0 v1", sdk8, false], ["8.3.0 v2", sdk8, true],
+] as const;
+describe.each(privacyClients)("%s response privacy", (_label, sdk, v2) => {
+  it.each(["hideInputs", "hideInputMessages", "hideInputText", "hideInputImages"])(
+    "removes response-side input echoes with %s but retains generated output on the OTLP wire",
+    async (flag) => {
+      instrumentation.disable();
+      const exporter = new InMemorySpanExporter();
+      const wireProvider = new NodeTracerProvider({ spanProcessors: [
+        new SimpleSpanProcessor(exporter),
+        new SimpleSpanProcessor(new OTLPTraceExporter({ url: `${url}/v1/traces` })),
+      ] });
+      instrumentation = new CohereInstrumentation({ traceConfig: { [flag]: true } });
+      instrumentation.setTracerProvider(wireProvider);
+      try {
+        const client = clientFor(sdk, v2);
+        response = v2 ? { ...v2Response, message: { role: "assistant", content: [{ type: "text", text: "generated-answer" }],
+          citations: [{ start: 0, end: 6, text: "generated-answer", sources: [{ type: "document", id: "doc", document: { text: "private-input-marker" } }] }] } }
+          : { ...v1Response, text: "generated-answer", chat_history: [
+            { role: "USER", message: "private-input-marker" },
+            { role: "CHATBOT", message: "private-input-marker-previous-answer" },
+            { role: "CHATBOT", message: "generated-answer" },
+          ] };
+        const result = await client.chat(v2 ? { ...requestV2, messages: [{ role: "user", content: "private-input-marker" }] } : { ...request, message: "private-input-marker" });
+        expect(v2 ? result.message.content[0].text : result.text).toBe("generated-answer");
+        // Sanitizing telemetry must not alter the SDK's response object.
+        expect(JSON.stringify(result)).toContain("private-input-marker");
+        response = { id: "embedding", response_type: "embeddings_floats", texts: ["private-input-marker"], embeddings: v2 ? { float: [[0.123456789]] } : [[0.123456789]] };
+        await client.embed({ texts: ["private-input-marker"], model: "embed-test", inputType: "search_document", ...(v2 ? { embeddingTypes: ["float"] } : {}) });
+        response = { id: "rerank", results: [{ index: 0, relevance_score: 0.9, document: { text: "private-input-marker" } }] };
+        await client.rerank({ model: "rerank-test", query: "private-input-marker", documents: v2 ? ["private-input-marker"] : [{ text: "private-input-marker" }] });
+        await wireProvider.forceFlush();
+        const spans = exporter.getFinishedSpans();
+        expect(spans).toHaveLength(3);
+        expect(JSON.stringify(spans.map(span => span.attributes))).not.toContain("private-input-marker");
+        expect(JSON.stringify(wire)).not.toContain("private-input-marker");
+        expect(JSON.stringify(wire)).toContain("generated-answer");
+        expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe("generated-answer");
+        expect(spans[0].attributes[S.LLM_TOKEN_COUNT_PROMPT]).toBe(5);
+        expect(spans[1].attributes[`${S.EMBEDDING_EMBEDDINGS}.0.${S.EMBEDDING_VECTOR}`]).toEqual([0.123456789]);
+        expect(spans[2].attributes["cohere.rerank.results.0.relevance_score"]).toBe(0.9);
+      } finally {
+        await wireProvider.shutdown();
+      }
+    },
+  );
+
+  it.each(["hideOutputs", "hideOutputMessages", "hideOutputText"])("keeps inputs visible when only %s is set", async (flag) => {
+    instrumentation.disable();
+    instrumentation = new CohereInstrumentation({ traceConfig: { [flag]: true } });
+    instrumentation.setTracerProvider(provider);
+    const client = clientFor(sdk, v2);
+    response = v2 ? v2Response : v1Response;
+    await client.chat(v2 ? requestV2 : request);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(attrs[S.INPUT_VALUE]).toContain("question");
+    expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+    expect(attrs[S.OUTPUT_VALUE]).toBeUndefined();
+    expect(attrs[S.LLM_TOKEN_COUNT_PROMPT]).toBe(5);
+  });
+});
+
+it("hides v1 terminal stream response echoes without losing generated text", async () => {
+  instrumentation.disable();
+  instrumentation = new CohereInstrumentation({ traceConfig: { hideInputs: true } });
+  instrumentation.setTracerProvider(provider);
+  const client = clientFor(sdk8);
+  contentType = "application/x-ndjson";
+  response = JSON.stringify({ event_type: "stream-end", finish_reason: "COMPLETE", response: {
+    ...v1Response, chat_history: [{ role: "USER", message: "private-input-marker" }],
+  } }) + "\n";
+  for await (const _event of await client.chatStream({ ...request, message: "private-input-marker" })) { /* consume */ }
+  const spans = exporter.getFinishedSpans();
+  expect(spans).toHaveLength(1);
+  expect(JSON.stringify(spans[0].attributes)).not.toContain("private-input-marker");
+  expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe("hello");
+  expect(spans[0].status.code).toBe(SpanStatusCode.OK);
+});

@@ -72,8 +72,37 @@ export function inputAttributes(operation: Operation, request: Data, config: Tra
   return attrs;
 }
 
+/** Keep generated fields only when inputs are hidden. Responses can echo full
+ * chat history, embedding texts, reranked documents and citation sources.
+ * Project rather than mutate the SDK response or filter history by role: even
+ * earlier assistant messages are input to the current generation.
+ */
+function withoutInputEchoes(operation: Operation, response: Data): Data {
+  if (operation === "embed") return { embeddings: response.embeddings };
+  if (operation === "rerank") return {
+    results: list(response.results).map((item) => {
+      const result = object(item);
+      return { index: result.index, relevanceScore: field(result, "relevanceScore", "relevance_score") };
+    }),
+  };
+  const message = object(response.message);
+  return {
+    text: response.text,
+    toolCalls: field(response, "toolCalls", "tool_calls"),
+    message: {
+      role: message.role,
+      content: Array.isArray(message.content) ? message.content.map((part) => {
+        const content = object(part);
+        return { type: content.type, text: content.text };
+      }) : message.content,
+      toolCalls: field(message, "toolCalls", "tool_calls"),
+    },
+  };
+}
+
 export function outputAttributes(operation: Operation, response: Data, config: TraceConfig): Attributes {
   const attrs: Attributes = usageAttributes(response);
+  if (hideInput(config)) response = withoutInputEchoes(operation, response);
   if (operation === "embed") {
     // raw.output would otherwise bypass hideEmbeddingVectors.
     if (!hideOutput(config) && !config.hideEmbeddingVectors) {

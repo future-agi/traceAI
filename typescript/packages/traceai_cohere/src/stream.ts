@@ -94,7 +94,11 @@ export function wrapStream<T extends object>(stream: T, execContext: Context, ca
                 end(reason === "ERROR" || reason === "ERROR_TOXIC" ? new Error("Cohere stream failed") : undefined);
               }
             }
-            if (result.done || method === "return") end(undefined, method === "return");
+            if (!ended && (result.done || method === "return")) {
+              // Terminal events finish the span above. A clean transport EOF
+              // without one is still an incomplete generation, not success.
+              end(method === "return" ? undefined : new Error("Cohere stream ended without a terminal event"), method === "return");
+            }
             return result;
           } catch (error) {
             end(error ?? new Error("Cohere stream failed"));
