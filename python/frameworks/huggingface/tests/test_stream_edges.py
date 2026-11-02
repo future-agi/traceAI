@@ -269,3 +269,25 @@ def test_documented_client_lifetime_for_early_stream_close():
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
     assert "client.close()" in readme
     assert "await client.close()" in readme
+
+
+@pytest.mark.parametrize("include_tokens", [False, True])
+def test_full_text_stream_drops_private_prefill(telemetry, include_tokens):
+    from fi_instrumentation import FITracer
+    from types import SimpleNamespace
+    from traceai_huggingface._wrappers import _TextGenerationWrapper
+
+    provider, exporter = telemetry
+    tracer = FITracer(provider.get_tracer("privacy"), config=TraceConfig(hide_inputs=True))
+    chunks = ([{"token": {"text": " answer", "special": False}}] if include_tokens else [])
+    chunks.append({"generated_text": "synthetic-secret-prompt answer",
+                   "details": {"prefill": [{"text": "synthetic-secret-prompt"}], "generated_tokens": 1}})
+    list(_TextGenerationWrapper(tracer=tracer)(
+        lambda **kw: iter(chunks), SimpleNamespace(model="offline"), (),
+        {"prompt": "synthetic-secret-prompt", "stream": True, "return_full_text": True},
+    ))
+    spans = exporter.get_finished_spans()
+    assert b"synthetic-secret-prompt" not in encode_spans(spans).SerializeToString()
+    assert json.loads(spans[0].attributes["output.value"])["generated_text"] == (
+        " answer" if include_tokens else ""
+    )

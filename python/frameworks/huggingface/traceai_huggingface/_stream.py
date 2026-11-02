@@ -161,7 +161,11 @@ class _StreamState:
                 and self.config.hide_inputs
                 and self.request.get("return_full_text")
             )
-            response = self.accumulator.response(tokens_only=tokens_only)
+            response = (
+                self.accumulator.response()
+                if isinstance(self.accumulator, _ChatAccumulator)
+                else self.accumulator.response(tokens_only=tokens_only)
+            )
             if tokens_only:
                 # Prefill tokens are input-origin text, too.
                 response["details"].pop("prefill", None)
