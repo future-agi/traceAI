@@ -1,1 +1,1 @@
-_instruments = ("chromadb >= 0.4.0",)
+_instruments = ("chromadb >= 0.5.1",)

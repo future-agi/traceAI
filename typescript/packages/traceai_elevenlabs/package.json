@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && node scripts/esm.cjs",
+    "build": "tsc -p tsconfig.json && node scripts/esm.cjs",
     "test": "node --test test/*.test.cjs",
     "lint": "eslint src",
     "typecheck:contract": "tsc -p test/tsconfig.json",
