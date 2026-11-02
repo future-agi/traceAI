@@ -293,7 +293,7 @@ def test_application_clients_keep_their_option_and_parent_context(providers, ins
         with fi.get_tracer("application").start_as_current_span("parent") as parent:
             traced.messages.create(**PARAMS)
             original.messages.create(**PARAMS)
-        # The per-call copy never changes the application's clients.
+        # Turning the SDK's span off never changes the application's clients.
         assert traced.open_telemetry == options_before
         assert traced.open_telemetry["traces"]["enabled"] is True
         assert original.open_telemetry["traces"]["enabled"] is False
@@ -362,24 +362,36 @@ def test_unreadable_client_options_keep_the_instrumentor(providers, instrument, 
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_client_copy_failure_keeps_the_instrumentor_and_warns_once(
+def test_sdk_without_the_span_hook_keeps_the_instrumentor_and_warns_once(
     providers, instrument, monkeypatch, caplog, asynchronous
 ):
+    # An SDK that traces natively but starts its spans some other way: the call is
+    # left as it is, so the instrumentor's span is kept and the SDK's may be a second.
+    from traceai_anthropic import _native
+
+    monkeypatch.setattr(_native, "_SPAN_START_NAME", "synthetic_missing_hook")
     fi, fi_exporter, _, _ = providers
     instrument(tracer_provider=fi)
-
-    def broken(self, **kwargs):
-        raise RuntimeError("synthetic")
-
-    client_class = anthropic.AsyncAnthropic if asynchronous else anthropic.Anthropic
-    monkeypatch.setattr(client_class, "with_options", broken)
     with caplog.at_level(logging.WARNING, logger="traceai_anthropic"):
         call("create", asynchronous, open_telemetry={"tracer_provider": fi})
         call("create", asynchronous, open_telemetry={"tracer_provider": fi})
-    # The instrumentor's span is never lost; the SDK's span may then be a second one.
     assert scopes(fi_exporter).count(FI_SCOPE) == 2
+    assert scopes(fi_exporter).count(NATIVE_SCOPE) == 2
     warnings = [r for r in caplog.records if "recorded twice" in r.getMessage()]
     assert len(warnings) == 1
+
+
+def test_uninstrument_restores_the_sdk_span_start(providers, instrument):
+    import anthropic._base_client as base_client
+    import anthropic._tracing as tracing
+
+    fi, fi_exporter, _, _ = providers
+    instrumentor = instrument(tracer_provider=fi)
+    assert base_client.start_api_call_span is not tracing.start_api_call_span
+    instrumentor.uninstrument()
+    assert base_client.start_api_call_span is tracing.start_api_call_span
+    call("create", False, open_telemetry={"tracer_provider": fi})
+    assert scopes(fi_exporter) == [NATIVE_SCOPE]
 
 
 CONTEXT = dict(session_id="sess-1", user_id="user-1", metadata={"team": "synthetic"}, tags=["t1"])
@@ -468,7 +480,7 @@ def sent_requests(asynchronous, instrumented, instrument, provider):
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_the_client_copy_sends_the_same_request(providers, instrument, asynchronous):
+def test_the_instrumented_call_sends_the_same_request(providers, instrument, asynchronous):
     fi, fi_exporter, _, _ = providers
     untraced = sent_requests(asynchronous, False, instrument, fi)
     traced = sent_requests(asynchronous, True, instrument, fi)
@@ -476,3 +488,131 @@ def test_the_client_copy_sends_the_same_request(providers, instrument, asynchron
     assert all(headers.get("x-custom") == "kept" for _, _, headers, _ in traced)
     assert traced[0][2].get("x-extra") == "kept"
     assert any("sk-ant-synthetic" in value for value in traced[0][2].values())
+
+
+class _GoogleCredentials:
+    token = None
+    expired = False
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_vertex_client_loads_google_credentials_once(
+    providers, global_provider, instrument, monkeypatch, asynchronous
+):
+    # AnthropicVertex loads and refreshes Google credentials lazily, into the client
+    # that sends the request. Turning the SDK's span off must not send the call through
+    # another client, or every call would load and refresh them again.
+    from anthropic.lib.vertex import _client as vertex
+
+    loads, refreshes = [], []
+
+    def load_auth(project_id=None):
+        loads.append(project_id)
+        return _GoogleCredentials(), "synthetic-project"
+
+    def refresh_auth(credentials):
+        refreshes.append(credentials)
+        credentials.token = "synthetic-token"
+
+    monkeypatch.setattr(vertex, "load_auth", load_auth)
+    monkeypatch.setattr(vertex, "refresh_auth", refresh_auth)
+    fi, fi_exporter, _, _ = providers
+    global_provider(fi)
+    instrument(tracer_provider=fi)
+    seen = []
+
+    def capture(request):
+        seen.append(request.headers["authorization"])
+        return respond(request)
+
+    options = dict(region="us-east5", project_id="synthetic-project", max_retries=0)
+    if asynchronous:
+
+        async def run():
+            transport = httpx.MockTransport(capture)
+            client = anthropic.AsyncAnthropicVertex(**options, http_client=httpx.AsyncClient(transport=transport))
+            for _ in range(3):
+                await client.messages.create(**PARAMS)
+            return client
+
+        client = asyncio.run(run())
+    else:
+        client = anthropic.AnthropicVertex(**options, http_client=httpx.Client(transport=httpx.MockTransport(capture)))
+        for _ in range(3):
+            client.messages.create(**PARAMS)
+    assert (len(loads), len(refreshes)) == (1, 1)
+    assert client.credentials is not None
+    assert seen == ["Bearer synthetic-token"] * 3
+    assert scopes(fi_exporter) == [FI_SCOPE] * 3
+
+
+WRAPPED_METHODS = {
+    ("create", False): ("Messages", "create"),
+    ("create", True): ("AsyncMessages", "create"),
+    ("raw_stream", False): ("Messages", "create"),
+    ("raw_stream", True): ("AsyncMessages", "create"),
+    ("count_tokens", False): ("Messages", "count_tokens"),
+}
+
+
+@pytest.mark.parametrize("operation,asynchronous", OPERATIONS)
+@pytest.mark.parametrize("shared", [True, False])
+def test_wrapt_patch_installed_before_the_instrumentor_still_runs(
+    providers, global_provider, monkeypatch, instrument, operation, asynchronous, shared
+):
+    # Other instrumentations, APM agents and guardrails wrap Messages.create with wrapt
+    # too. One installed before this instrumentor must run for every call.
+    import wrapt
+    from anthropic.resources import messages as messages_module
+
+    class_name, method = WRAPPED_METHODS[(operation, asynchronous)]
+    owner = getattr(messages_module, class_name)
+    seen = []
+
+    def other(wrapped, instance, args, kwargs):
+        seen.append(type(instance).__name__)
+        return wrapped(*args, **kwargs)
+
+    monkeypatch.setattr(owner, method, wrapt.FunctionWrapper(vars(owner)[method], other))
+    fi, fi_exporter, _, _ = providers
+    if shared:
+        global_provider(fi)
+    instrument(tracer_provider=fi)
+    call(operation, asynchronous)
+    assert seen == [class_name]
+    assert scopes(fi_exporter) == [FI_SCOPE]
+
+
+def test_call_made_inside_an_owned_call_keeps_its_own_native_span(
+    providers, global_provider, monkeypatch, instrument
+):
+    # A wrapper that runs inside the instrumented call and makes its own call on a
+    # client whose SDK spans go to another provider: that call keeps its native span.
+    import wrapt
+    from anthropic.resources.messages import Messages
+
+    fi, fi_exporter, other_provider, other_exporter = providers
+
+    def list_models(request):
+        return httpx.Response(200, json={"data": [], "has_more": False, "first_id": None, "last_id": None})
+
+    inner = anthropic.Anthropic(
+        api_key="synthetic",
+        base_url="http://localhost",
+        max_retries=0,
+        open_telemetry={"tracer_provider": other_provider},
+        http_client=httpx.Client(transport=httpx.MockTransport(list_models)),
+    )
+
+    def guard(wrapped, instance, args, kwargs):
+        if instance._client is not inner:
+            inner.models.list()
+        return wrapped(*args, **kwargs)
+
+    monkeypatch.setattr(Messages, "create", wrapt.FunctionWrapper(vars(Messages)["create"], guard))
+    global_provider(fi)
+    instrument(tracer_provider=fi)
+    call("create", False)
+    inner.close()
+    assert scopes(fi_exporter) == [FI_SCOPE]
+    assert scopes(other_exporter) == [NATIVE_SCOPE]

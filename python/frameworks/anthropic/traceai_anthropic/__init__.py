@@ -34,6 +34,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         "_original_messages_count_tokens",
         "_original_async_messages_create",
         "_original_protect",
+        "_native_tracing",
         "_instruments",
         "_tracer",
     )
@@ -62,6 +63,8 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         # the instrumentor keeps its Messages spans and turns the SDK's off per call;
         # see _native.py.
         native_tracing = _NativeTracing(kwargs.get("tracer_provider"))
+        native_tracing.install()
+        self._native_tracing = native_tracing
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -161,3 +164,8 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
         if self._original_protect is not None:
             Protect.protect = self._original_protect
+
+        native_tracing = getattr(self, "_native_tracing", None)
+        if native_tracing is not None:
+            native_tracing.uninstall()
+            self._native_tracing = None

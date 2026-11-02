@@ -5,19 +5,27 @@ span would go to the tracer provider this instrumentor exports to, the call woul
 recorded twice. The instrumentor's span is the one that carries what Future AGI reads:
 the context of `using_session` / `using_attributes` (session, user, metadata, tags,
 prompt template), the span kind, input and output values, and the `TraceConfig` /
-`FI_HIDE_*` controls. So the instrumentor keeps its span and runs that one call on a
-copy of the client whose native tracing is off (`with_options(open_telemetry=False)`,
-the SDK's public per-request option). The application's client is never changed.
+`FI_HIDE_*` controls. So the instrumentor keeps its span and the SDK skips its own for
+that one call.
+
+The call itself is not changed: the original method runs on the application's client,
+through any other wrappers on it, so client state such as lazily loaded cloud
+credentials stays on that client. While it runs, the SDK's span start
+(`start_api_call_span`, which may return `None` for "no span") returns `None` for this
+client's tracer only; other clients' calls inside it keep their spans.
 
 When the SDK's span goes elsewhere (another provider, or nowhere), both are left as
 they are, so each provider gets the call once.
 """
 
+import importlib
 import logging
 from collections.abc import Mapping
+from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
 from opentelemetry import trace as trace_api
+from wrapt import FunctionWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +36,39 @@ _NOTICE = (
     "per-call step, create the client with open_telemetry=False."
 )
 
-_COPY_FAILED = (
-    "Could not turn off Anthropic SDK native tracing for a Messages call, so the call "
-    "may be recorded twice in the same tracer provider. Create the client with "
-    "open_telemetry=False to keep only traceAI spans."
+_NO_HOOK = (
+    "Could not turn off Anthropic SDK native tracing for Messages calls with this "
+    "anthropic version, so they may be recorded twice in the same tracer provider. "
+    "Create the client with open_telemetry=False to keep only traceAI spans."
 )
+
+# Where the SDK starts the span of each API call (anthropic>=1.14), sync and async.
+_SPAN_START_MODULE = "anthropic._base_client"
+_SPAN_START_NAME = "start_api_call_span"
+
+# The client whose SDK span the running Messages call turns off, if any.
+_owned_client: ContextVar[Any] = ContextVar("traceai_anthropic_owned_client", default=None)
+
+
+def _skip_owned_span(wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any) -> Any:
+    """`start_api_call_span`, returning `None` (no span) for the owned client's calls."""
+    client = _owned_client.get()
+    if client is not None:
+        try:
+            tracer = args[0] if args else kwargs.get("tracer")
+            if tracer is not None and tracer is client._tracer:
+                return None
+        except Exception:
+            logger.debug("Could not match the Anthropic SDK span to the traced call", exc_info=True)
+    return wrapped(*args, **kwargs)
+
+
+def _span_start_module() -> Optional[Any]:
+    try:
+        module = importlib.import_module(_SPAN_START_MODULE)
+    except Exception:
+        return None
+    return module if callable(vars(module).get(_SPAN_START_NAME)) else None
 
 
 class _NativeTracing:
@@ -44,8 +80,28 @@ class _NativeTracing:
         if isinstance(tracer_provider, trace_api.ProxyTracerProvider):
             tracer_provider = None
         self._tracer_provider = tracer_provider
+        self._hook: Optional[FunctionWrapper] = None
+        self._original: Any = None
         self._notified = False
-        self._copy_failure_notified = False
+        self._no_hook_notified = False
+
+    def install(self) -> None:
+        """Hooks the SDK's span start. SDKs without one (before 1.14) are left alone."""
+        module = _span_start_module()
+        if module is None or self._hook is not None:
+            return
+        self._original = vars(module)[_SPAN_START_NAME]
+        self._hook = FunctionWrapper(self._original, _skip_owned_span)
+        setattr(module, _SPAN_START_NAME, self._hook)
+
+    def uninstall(self) -> None:
+        if self._hook is None:
+            return
+        module = _span_start_module()
+        if module is not None and vars(module).get(_SPAN_START_NAME) is self._hook:
+            setattr(module, _SPAN_START_NAME, self._original)
+        self._hook = None
+        self._original = None
 
     def shares_provider(self, resource: Any) -> bool:
         """Whether the SDK traces this call of `resource` (a Messages resource) into our provider.
@@ -73,32 +129,47 @@ class _NativeTracing:
             logger.debug("Could not read the Anthropic client's OpenTelemetry option", exc_info=True)
             return False
 
-    def without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
-        """The original method to call for this call, with the SDK's own span off when it would duplicate ours.
-
-        `wrapped` is the original method bound to `instance`. When the SDK's span would
-        reach our provider, the same method is bound to a resource of a client copy
-        with native tracing disabled. If that copy can't be made, `wrapped` is returned
-        unchanged: a second span is better than a call without the instrumentor's span.
-        """
+    def _client_to_own(self, instance: Any) -> Any:
+        """The client whose SDK span this call turns off, or `None` to leave the call as it is."""
         if not self.shares_provider(instance):
-            return wrapped
-        try:
-            function = getattr(wrapped, "__func__", None)
-            if function is None or getattr(wrapped, "__self__", None) is not instance:
-                raise TypeError("the original method is not bound to the resource")
-            client = instance._client.with_options(open_telemetry=False)
-            options = client.open_telemetry
-            if not isinstance(options, Mapping) or options["traces"]["enabled"]:
-                raise ValueError("the client copy still has native tracing")
-            resource = type(instance)(client)
-        except Exception:
-            logger.debug("Could not disable Anthropic SDK native tracing for one call", exc_info=True)
-            if not self._copy_failure_notified:
-                self._copy_failure_notified = True
-                logger.warning(_COPY_FAILED)
-            return wrapped
+            return None
+        if self._hook is None:
+            # A second span is better than a call without the instrumentor's span.
+            if not self._no_hook_notified:
+                self._no_hook_notified = True
+                logger.warning(_NO_HOOK)
+            return None
         if not self._notified:
             self._notified = True
             logger.info(_NOTICE)
-        return function.__get__(resource, type(resource))
+        return instance._client
+
+    def without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """`wrapped` (the original method bound to `instance`), with the SDK's span off when it would duplicate ours."""
+        client = self._client_to_own(instance)
+        if client is None:
+            return wrapped
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            token = _owned_client.set(client)
+            try:
+                return wrapped(*args, **kwargs)
+            finally:
+                _owned_client.reset(token)
+
+        return call
+
+    def without_native_span_async(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """`without_native_span` for coroutine methods: the SDK starts its span while awaited."""
+        client = self._client_to_own(instance)
+        if client is None:
+            return wrapped
+
+        async def call(*args: Any, **kwargs: Any) -> Any:
+            token = _owned_client.set(client)
+            try:
+                return await wrapped(*args, **kwargs)
+            finally:
+                _owned_client.reset(token)
+
+        return call

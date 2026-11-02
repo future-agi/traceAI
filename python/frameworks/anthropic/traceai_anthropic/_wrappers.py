@@ -67,6 +67,12 @@ class _WithTracer(ABC):
             return wrapped
         return self._native_tracing.without_native_span(wrapped, instance)
 
+    def _without_native_span_async(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """`_without_native_span` for coroutine methods."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span_async(wrapped, instance)
+
     @contextmanager
     def _start_as_current_span(
         self, span_name: str, attributes: Optional[Mapping[str, Any]] = None
@@ -352,7 +358,7 @@ class _AsyncMessagesWrapper(_WithTracer):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
-        wrapped = self._without_native_span(wrapped, instance)
+        wrapped = self._without_native_span_async(wrapped, instance)
 
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
