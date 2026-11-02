@@ -1,438 +1,224 @@
-import { FireworksInstrumentation, isPatched } from "../instrumentation";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SemanticConventions, FISpanKind, MimeType, LLMSystem, LLMProvider } from "@traceai/fi-semantic-conventions";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  ReadableSpan,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { OpenAIInstrumentation } from "@traceai/openai";
+import { FireworksInstrumentation, isPatched } from "..";
 
-describe("FireworksInstrumentation", () => {
-  let instrumentation: FireworksInstrumentation;
-  let memoryExporter: InMemorySpanExporter;
-  let provider: NodeTracerProvider;
+// Use the real SDK; matrix jobs may provide a separately installed version.
+const sdk = require(process.env.OPENAI_TEST_MODULE || "openai");
+const OpenAI = sdk.OpenAI;
+
+const FIREWORKS = "https://api.fireworks.ai/inference/v1";
+const OPENAI = "https://api.openai.com/v1";
+const SECRET = "SYNTHETIC-PRIVATE-CONTENT";
+type Operation = "chat" | "completions" | "embeddings";
+type Outcome = "success" | "error" | "stream";
+
+function payload(operation: Operation) {
+  if (operation === "embeddings") {
+    return { object: "list", model: "returned-model", data: [{ index: 0, object: "embedding", embedding: [0.1] }], usage: { prompt_tokens: 2, total_tokens: 2 } };
+  }
+  return {
+    id: "synthetic-id",
+    created: 1,
+    model: "returned-model",
+    object: operation === "chat" ? "chat.completion" : "text_completion",
+    choices: [{ index: 0, message: { role: "assistant", content: SECRET }, text: SECRET, finish_reason: "stop" }],
+    usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+  };
+}
+
+function chunk(operation: Operation) {
+  return {
+    id: "synthetic-id",
+    created: 1,
+    model: "returned-model",
+    object: operation === "chat" ? "chat.completion.chunk" : "text_completion",
+    choices: [{ index: 0, delta: { role: "assistant", content: SECRET }, text: SECRET, finish_reason: "stop" }],
+  };
+}
+
+// The configured host stays real, so provider attribution is exercised, but the
+// transport never leaves the process.
+function client(baseURL: string, outcome: Outcome, operation: Operation) {
+  return new OpenAI({
+    apiKey: "synthetic-unused-key",
+    baseURL,
+    maxRetries: 0,
+    fetch: async () => {
+      if (outcome === "error") {
+        return new Response(JSON.stringify({ error: { message: "synthetic failure", type: "invalid_request_error" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (outcome === "stream") {
+        return new Response(`data: ${JSON.stringify(chunk(operation))}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response(JSON.stringify(payload(operation)), { headers: { "content-type": "application/json" } });
+    },
+  });
+}
+
+async function call(baseURL: string, operation: Operation, outcome: Outcome) {
+  const c = client(baseURL, outcome, operation);
+  const stream = outcome === "stream" ? { stream: true } : {};
+  const request =
+    operation === "chat"
+      ? c.chat.completions.create({ model: "accounts/fireworks/models/synthetic", messages: [{ role: "user", content: SECRET }], ...stream })
+      : operation === "completions"
+        ? c.completions.create({ model: "accounts/fireworks/models/synthetic", prompt: SECRET, ...stream })
+        : c.embeddings.create({ model: "nomic-ai/synthetic", input: "synthetic embedding", encoding_format: "float" });
+  if (outcome === "error") {
+    await expect(request).rejects.toThrow();
+    return;
+  }
+  const result = await request;
+  if (outcome === "stream") {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of result) {
+      // Consume the stream so its span ends.
+    }
+  }
+}
+
+const attr = (span: ReadableSpan, key: string) => span.attributes[key];
+
+describe("FireworksInstrumentation (deprecated shared-route delegate)", () => {
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  let instrumentations: { disable(): void }[] = [];
+  let emitWarning: jest.SpyInstance;
+
+  beforeAll(() => {
+    // The documented setup registers the provider before constructing instrumentation.
+    trace.setGlobalTracerProvider(provider);
+  });
 
   beforeEach(() => {
-    memoryExporter = new InMemorySpanExporter();
-    provider = new NodeTracerProvider({
-      spanProcessors: [new SimpleSpanProcessor(memoryExporter)],
-    });
-    provider.register();
-
-    instrumentation = new FireworksInstrumentation();
-    instrumentation.setTracerProvider(provider);
-    instrumentation.enable();
+    exporter.reset();
+    emitWarning = jest.spyOn(process, "emitWarning").mockImplementation(() => undefined);
   });
 
-  afterEach(async () => {
-    memoryExporter.reset();
+  afterEach(() => {
+    for (const instrumentation of instrumentations.reverse()) instrumentation.disable();
+    instrumentations = [];
+    emitWarning.mockRestore();
+  });
+
+  afterAll(async () => {
     await provider.shutdown();
+    trace.disable();
   });
 
-  describe("constructor", () => {
-    it("should create instrumentation with default config", () => {
-      const inst = new FireworksInstrumentation();
-      expect(inst.instrumentationName).toBe("@traceai/fireworks");
-    });
+  function fireworks(traceConfig?: ConstructorParameters<typeof FireworksInstrumentation>[0]) {
+    const instrumentation = new FireworksInstrumentation(traceConfig);
+    instrumentation.setTracerProvider(provider);
+    instrumentation.manuallyInstrument(sdk);
+    instrumentations.push(instrumentation);
+    return instrumentation;
+  }
 
-    it("should create instrumentation with custom config", () => {
-      const inst = new FireworksInstrumentation({
-        instrumentationConfig: { enabled: true },
-        traceConfig: { hideInputs: true },
-      });
-      expect(inst.instrumentationName).toBe("@traceai/fireworks");
-    });
+  function shared() {
+    const instrumentation = new OpenAIInstrumentation();
+    instrumentation.setTracerProvider(provider);
+    instrumentation.manuallyInstrument(sdk);
+    instrumentations.push(instrumentation);
+    return instrumentation;
+  }
+
+  const cases: [Operation, Outcome][] = [
+    ["chat", "success"],
+    ["chat", "stream"],
+    ["chat", "error"],
+    ["completions", "success"],
+    ["completions", "stream"],
+    ["completions", "error"],
+    ["embeddings", "success"],
+    ["embeddings", "error"],
+  ];
+
+  it.each(cases)("exports one Fireworks-attributed span for %s %s", async (operation, outcome) => {
+    fireworks();
+    await call(FIREWORKS, operation, outcome);
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(attr(spans[0], "gen_ai.provider.name")).toBe("fireworks");
+    if (outcome === "error") expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+    else expect(spans[0].status.code).not.toBe(SpanStatusCode.ERROR);
+    expect(isPatched()).toBe(true);
   });
 
-  describe("isPatched", () => {
-    it("should return a boolean", () => {
-      expect(typeof isPatched()).toBe("boolean");
-    });
+  it("attributes each client in a mixed process by its own host", async () => {
+    fireworks();
+    await call(FIREWORKS, "chat", "success");
+    await call(OPENAI, "chat", "success");
+    expect(exporter.getFinishedSpans().map((span) => attr(span, "gen_ai.provider.name"))).toEqual(["fireworks", "openai"]);
   });
 
-  describe("isFireworksRequest", () => {
-    it("should identify Fireworks API requests", () => {
-      const isFireworksRequest = (instrumentation as unknown as { isFireworksRequest: (client: unknown) => boolean }).isFireworksRequest;
-
-      expect(isFireworksRequest.call(instrumentation, { baseURL: "https://api.fireworks.ai/inference/v1" })).toBe(true);
-      expect(isFireworksRequest.call(instrumentation, { baseURL: "https://fireworks.example.com/v1" })).toBe(true);
-      expect(isFireworksRequest.call(instrumentation, { baseURL: "https://api.openai.com/v1" })).toBe(false);
-    });
+  it("produces exactly one span when the shared instrumentor is also enabled", async () => {
+    fireworks();
+    shared();
+    await call(FIREWORKS, "chat", "stream");
+    await call(FIREWORKS, "embeddings", "success");
+    expect(exporter.getFinishedSpans().map((span) => attr(span, "gen_ai.provider.name"))).toEqual(["fireworks", "fireworks"]);
   });
 
-  describe("chat.completions.create wrapper", () => {
-    let mockOriginal: jest.Mock;
-    let patchedFn: (body: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
-
-    beforeEach(() => {
-      mockOriginal = jest.fn().mockResolvedValue({
-        id: "chatcmpl-123",
-        object: "chat.completion",
-        created: 1677652288,
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: "assistant",
-              content: "Hello! How can I help you today?",
-            },
-            finish_reason: "stop",
-          },
-        ],
-        usage: {
-          prompt_tokens: 10,
-          completion_tokens: 12,
-          total_tokens: 22,
-        },
-      });
-
-      const wrapperFactory = (instrumentation as unknown as {
-        createChatCompletionWrapper: (inst: FireworksInstrumentation) => (original: jest.Mock) => typeof patchedFn;
-      }).createChatCompletionWrapper(instrumentation);
-      patchedFn = wrapperFactory(mockOriginal).bind({ baseURL: "https://api.fireworks.ai/inference/v1" });
-    });
-
-    it("should create a span for chat completions", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [
-          { role: "user", content: "Hello!" },
-        ],
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(1);
-      expect(spans[0].name).toBe("Fireworks Chat Completions");
-    });
-
-    it("should set correct attributes for chat completion", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: "Hello!" },
-        ],
-        temperature: 0.7,
-        max_tokens: 100,
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-      expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("accounts/fireworks/models/llama-v3p1-8b-instruct");
-      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.FIREWORKS);
-      expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
-    });
-
-    it("should capture input messages", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: "Hello!" },
-        ],
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      const inputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
-      expect(inputMessages[0].role).toBe("system");
-      expect(inputMessages[0].content).toBe("You are a helpful assistant.");
-    });
-
-    it("should capture token usage", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [
-          { role: "user", content: "Hello!" },
-        ],
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBe(10);
-      expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBe(12);
-      expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL]).toBe(22);
-    });
-
-    it("should handle errors gracefully", async () => {
-      const error = new Error("API Error");
-      mockOriginal.mockRejectedValueOnce(error);
-
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [
-          { role: "user", content: "Hello!" },
-        ],
-      };
-
-      await expect(patchedFn(body)).rejects.toThrow("API Error");
-
-      const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(1);
-      expect(spans[0].status.code).toBe(2);
-    });
+  it("keeps tracing when the instrumentor that did not patch is disabled", async () => {
+    fireworks();
+    const second = shared();
+    second.disable();
+    await call(FIREWORKS, "chat", "success");
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
   });
 
-  describe("completions.create wrapper", () => {
-    let mockOriginal: jest.Mock;
-    let patchedFn: (body: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
-
-    beforeEach(() => {
-      mockOriginal = jest.fn().mockResolvedValue({
-        id: "cmpl-123",
-        object: "text_completion",
-        created: 1677652288,
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        choices: [
-          {
-            text: " jumped over the lazy dog.",
-            index: 0,
-            finish_reason: "stop",
-          },
-        ],
-        usage: {
-          prompt_tokens: 5,
-          completion_tokens: 8,
-          total_tokens: 13,
-        },
-      });
-
-      const wrapperFactory = (instrumentation as unknown as {
-        createCompletionWrapper: (inst: FireworksInstrumentation) => (original: jest.Mock) => typeof patchedFn;
-      }).createCompletionWrapper(instrumentation);
-      patchedFn = wrapperFactory(mockOriginal).bind({ baseURL: "https://api.fireworks.ai/inference/v1" });
-    });
-
-    it("should create a span for completions", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        prompt: "The quick brown fox",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(1);
-      expect(spans[0].name).toBe("Fireworks Completions");
-    });
-
-    it("should capture output text", async () => {
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        prompt: "The quick brown fox",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[SemanticConventions.OUTPUT_VALUE]).toBe(" jumped over the lazy dog.");
-      expect(span.attributes[SemanticConventions.OUTPUT_MIME_TYPE]).toBe(MimeType.TEXT);
-    });
+  it("stops tracing after disable", async () => {
+    const instrumentation = fireworks();
+    instrumentation.disable();
+    expect(isPatched()).toBe(false);
+    await call(FIREWORKS, "chat", "success");
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
   });
 
-  describe("embeddings.create wrapper", () => {
-    let mockOriginal: jest.Mock;
-    let patchedFn: (body: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
-
-    beforeEach(() => {
-      mockOriginal = jest.fn().mockResolvedValue({
-        object: "list",
-        data: [
-          {
-            object: "embedding",
-            embedding: [0.1, 0.2, 0.3, 0.4, 0.5],
-            index: 0,
-          },
-        ],
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        usage: {
-          prompt_tokens: 8,
-          total_tokens: 8,
-        },
-      });
-
-      const wrapperFactory = (instrumentation as unknown as {
-        createEmbeddingWrapper: (inst: FireworksInstrumentation) => (original: jest.Mock) => typeof patchedFn;
-      }).createEmbeddingWrapper(instrumentation);
-      patchedFn = wrapperFactory(mockOriginal).bind({ baseURL: "https://api.fireworks.ai/inference/v1" });
-    });
-
-    it("should create a span for embeddings", async () => {
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: "Hello world",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(1);
-      expect(spans[0].name).toBe("Fireworks Embeddings");
-    });
-
-    it("should set correct attributes for embeddings", async () => {
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: "Hello world",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.EMBEDDING);
-      expect(span.attributes[SemanticConventions.EMBEDDING_MODEL_NAME]).toBe("nomic-ai/nomic-embed-text-v1.5");
-      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.FIREWORKS);
-    });
-
-    it("should capture input text", async () => {
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: "Hello world",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]).toBe("Hello world");
-    });
-
-    it("should capture embedding vector", async () => {
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: "Hello world",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      const vectorAttr = span.attributes[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_VECTOR}`];
-      expect(vectorAttr).toBeDefined();
-      expect(JSON.parse(vectorAttr as string)).toEqual([0.1, 0.2, 0.3, 0.4, 0.5]);
-    });
-
-    it("should handle batch embeddings", async () => {
-      mockOriginal.mockResolvedValueOnce({
-        object: "list",
-        data: [
-          { object: "embedding", embedding: [0.1, 0.2], index: 0 },
-          { object: "embedding", embedding: [0.3, 0.4], index: 1 },
-        ],
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        usage: { prompt_tokens: 10, total_tokens: 10 },
-      });
-
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: ["Hello", "World"],
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]).toBe("Hello");
-      expect(span.attributes[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.1.${SemanticConventions.EMBEDDING_TEXT}`]).toBe("World");
-    });
-
-    it("should capture token usage", async () => {
-      const body = {
-        model: "nomic-ai/nomic-embed-text-v1.5",
-        input: "Hello world",
-      };
-
-      await patchedFn(body);
-
-      const spans = memoryExporter.getFinishedSpans();
-      const span = spans[0];
-
-      expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBe(8);
-      expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL]).toBe(8);
-    });
+  it("honors privacy options when the provider was registered first", async () => {
+    fireworks({ traceConfig: { hideInputs: true, hideOutputs: true, hideErrorDetails: true } });
+    await call(FIREWORKS, "chat", "success");
+    await call(FIREWORKS, "chat", "error");
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(2);
+    expect(JSON.stringify(spans.map((span) => [span.attributes, span.events, span.status]))).not.toMatch(
+      /SYNTHETIC-PRIVATE-CONTENT|synthetic failure|synthetic-unused-key/,
+    );
   });
 
-  describe("streaming response handling", () => {
-    let mockOriginal: jest.Mock;
-    let patchedFn: (body: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+  it("does not export the configured endpoint URL or credentials", async () => {
+    fireworks();
+    await call("https://url-user:url-password@api.fireworks.ai/inference/v1?query-secret=value", "chat", "success");
+    const spans = exporter.getFinishedSpans();
+    expect(attr(spans[0], "gen_ai.provider.name")).toBe("fireworks");
+    expect(JSON.stringify(spans.map((span) => span.attributes))).not.toMatch(/url-user|url-password|query-secret|synthetic-unused-key/);
+  });
 
-    beforeEach(() => {
-      const wrapperFactory = (instrumentation as unknown as {
-        createChatCompletionWrapper: (inst: FireworksInstrumentation) => (original: jest.Mock) => typeof patchedFn;
-      }).createChatCompletionWrapper(instrumentation);
+  it("does not treat look-alike hosts as Fireworks", async () => {
+    fireworks();
+    await call("https://api.fireworks.ai.evil.test/inference/v1", "chat", "success");
+    await call("https://fireworks.example/inference/v1", "chat", "success");
+    expect(exporter.getFinishedSpans().map((span) => attr(span, "gen_ai.provider.name"))).toEqual(["openai", "openai"]);
+  });
 
-      mockOriginal = jest.fn();
-      patchedFn = wrapperFactory(mockOriginal).bind({ baseURL: "https://api.fireworks.ai/inference/v1" });
+  it("emits one deprecation warning per process", () => {
+    jest.isolateModules(() => {
+      const { FireworksInstrumentation: Fresh } = require("..");
+      instrumentations.push(new Fresh(), new Fresh());
     });
-
-    it("should handle streaming responses", async () => {
-      const chunks = [
-        {
-          id: "chatcmpl-123",
-          object: "chat.completion.chunk",
-          created: 1677652288,
-          model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-          choices: [{ index: 0, delta: { content: "Hello" }, finish_reason: null }],
-        },
-        {
-          id: "chatcmpl-123",
-          object: "chat.completion.chunk",
-          created: 1677652288,
-          model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-          choices: [{ index: 0, delta: { content: " world" }, finish_reason: null }],
-        },
-        {
-          id: "chatcmpl-123",
-          object: "chat.completion.chunk",
-          created: 1677652288,
-          model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-          choices: [{ index: 0, delta: { content: "!" }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
-        },
-      ];
-
-      async function* mockStream() {
-        for (const chunk of chunks) {
-          yield chunk;
-        }
-      }
-
-      mockOriginal.mockResolvedValueOnce(mockStream());
-
-      const body = {
-        model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-        messages: [{ role: "user", content: "Hello!" }],
-        stream: true,
-      };
-
-      const result = await patchedFn(body);
-      const collectedChunks: unknown[] = [];
-
-      for await (const chunk of result as AsyncIterable<unknown>) {
-        collectedChunks.push(chunk);
-      }
-
-      expect(collectedChunks.length).toBe(3);
-
-      const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(1);
-      expect(spans[0].attributes[SemanticConventions.OUTPUT_VALUE]).toBe("Hello world!");
-    });
+    const deprecations = emitWarning.mock.calls.filter(([, options]) => options?.type === "DeprecationWarning");
+    expect(deprecations).toHaveLength(1);
+    expect(String(deprecations[0][0])).toContain("@traceai/openai");
   });
 });

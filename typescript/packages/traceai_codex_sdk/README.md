@@ -2,14 +2,14 @@
 
 OpenTelemetry tracing for the [OpenAI Codex SDK](https://www.npmjs.com/package/@openai/codex-sdk) (`@openai/codex-sdk`), exported to Future AGI through `@traceai/fi-core`. Every `Thread.run()` and `Thread.runStreamed()` becomes one trace: a `codex.turn` span with one child span per thread item (shell commands, file changes, MCP tool calls, web searches, reasoning, agent messages, to-do lists, errors).
 
-Alpha. Tested against `@openai/codex-sdk` 0.162.1 driving the real `codex` 0.162.1 binary, and against the real SDK driving a stand-in binary (`contract/`).
+Alpha. Tested against `@openai/codex-sdk` 0.166.0 (latest stable on 2026-10-31) and the supported floor 0.44.0, driving the real SDK with a stand-in binary and checking OTLP exports on a loopback receiver (`contract/`). The earlier 0.162.1 test also drove the real `codex` binary; this update does not claim a new live-service test.
 
 This is not Codex application session tracing (the `codex` TUI or IDE extension exporting through `[otel]` in `config.toml`), and not the OpenAI API instrumentation (`@traceai/openai`). The SDK runs the `codex` binary in a subprocess, so model requests made inside it are not visible to `@traceai/openai`.
 
 | Item | Value |
 |---|---|
-| Tested pin | `@openai/codex-sdk` 0.162.1 (Apache-2.0) with its bundled `@openai/codex` 0.162.1 |
-| Peer range | `>=0.44.0 <1`. The `Thread` shape this package patches was checked on 0.44.0, 0.80.0, 0.100.0, 0.140.0 and 0.162.1 (`src/__tests__/sdkShape.test.ts` checks the installed one). The token handling below was verified on 0.162.1 only |
+| Tested pin | `@openai/codex-sdk` 0.166.0 (Apache-2.0) with its bundled `@openai/codex` 0.166.0 |
+| Peer range | `>=0.44.0 <1`. The `Thread` shape this package patches was checked on 0.44.0, 0.80.0, 0.100.0, 0.140.0, 0.162.1 and 0.166.0 (`src/__tests__/sdkShape.test.ts` checks the installed one). The real-SDK loopback OTLP contract runs on 0.44.0 and 0.166.0. The cumulative token behavior below was verified with a real binary on 0.162.1 only |
 | Node | `>=18`, same as the SDK |
 
 ## Install
@@ -161,5 +161,7 @@ code N`, `Failed to parse item`, or the error class) rather than the raw message
 
 ```bash
 pnpm --filter @traceai/codex-sdk test            # jest: span model, privacy, usage, patching, SDK shape
-pnpm --filter @traceai/codex-sdk test:contract   # build, then the real SDK against contract/fake-codex.mjs
+pnpm --filter @traceai/codex-sdk test:contract   # build, real SDK + stand-in binary, OTLP/HTTP loopback check
+# For the supported floor, install @openai/codex-sdk@0.44.0 in a separate directory,
+# then set CODEX_SDK_ENTRY to that install's dist/index.js and run contract/otlp_wire.mjs.
 ```

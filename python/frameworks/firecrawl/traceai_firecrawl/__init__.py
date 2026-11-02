@@ -34,11 +34,30 @@ _OPERATIONS = {
     "start_crawl": "firecrawl.start_crawl",
     "get_crawl_status": "firecrawl.get_crawl_status",
     "cancel_crawl": "firecrawl.cancel_crawl",
+    "extract": "firecrawl.extract",
+    "start_extract": "firecrawl.start_extract",
+    "get_extract_status": "firecrawl.get_extract_status",
+    "batch_scrape": "firecrawl.batch_scrape",
+    "start_batch_scrape": "firecrawl.start_batch_scrape",
+    # Only exposed by AsyncFirecrawlClient; _wrap skips absent methods.
+    "wait_batch_scrape": "firecrawl.wait_batch_scrape",
+    "get_batch_scrape_status": "firecrawl.get_batch_scrape_status",
+    "get_batch_scrape_status_page": "firecrawl.get_batch_scrape_status_page",
+    "get_batch_scrape_errors": "firecrawl.get_batch_scrape_errors",
+    "cancel_batch_scrape": "firecrawl.cancel_batch_scrape",
+    "agent": "firecrawl.agent",
+    "start_agent": "firecrawl.start_agent",
+    "get_agent_status": "firecrawl.get_agent_status",
+    "cancel_agent": "firecrawl.cancel_agent",
+    "browser": "firecrawl.browser",
+    "browser_execute": "firecrawl.browser_execute",
+    "delete_browser": "firecrawl.delete_browser",
+    "list_browsers": "firecrawl.list_browsers",
 }
 
 
 class FirecrawlInstrumentor(BaseInstrumentor):
-    """Instrument the Firecrawl v2 client's scrape, search, map, and crawl APIs."""
+    """Instrument Firecrawl v2 scraping, extraction, agent and browser operations."""
 
     __slots__ = ("_original_methods",)
 
