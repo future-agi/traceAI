@@ -11,7 +11,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from opentelemetry import context as context_api, trace
 from opentelemetry.context import Context, _SUPPRESS_INSTRUMENTATION_KEY
@@ -34,6 +34,17 @@ def _is_http(event: Any) -> bool:
             and "elb" in event["requestContext"]
         )
     )
+
+
+def _response_status(result: Any) -> Optional[int]:
+    # Only the integer status code of an HTTP proxy response is read; the body,
+    # headers and cookies stay unrecorded. ``dict.get`` avoids subclass hooks.
+    if not isinstance(result, dict):
+        return None
+    code = dict.get(result, "statusCode")
+    if isinstance(code, bool) or not isinstance(code, int) or not 100 <= code <= 599:
+        return None
+    return code
 
 
 def _parent(event: Any) -> Context:
@@ -128,13 +139,14 @@ class LambdaTracer:
             if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
                 return handler(event, context)
             span = trace.INVALID_SPAN
+            http = _is_http(event)
             token = context_api.attach(_parent(event))
             try:
                 try:
                     attributes = {
                         "fi.span.kind": "CHAIN",
                         "faas.coldstart": cold,
-                        "faas.trigger": "http" if _is_http(event) else "other",
+                        "faas.trigger": "http" if http else "other",
                     }
                     request_id = getattr(context, "aws_request_id", None)
                     if isinstance(request_id, str):
@@ -152,7 +164,7 @@ class LambdaTracer:
                     span, record_exception=False, set_status_on_exception=False
                 ):
                     try:
-                        return handler(event, context)
+                        result = handler(event, context)
                     except BaseException as error:
                         # No exception event, stack, message, body, URL or headers.
                         try:
@@ -163,6 +175,21 @@ class LambdaTracer:
                                 "Lambda invocation error status could not be set"
                             )
                         raise
+                    if http:
+                        # Frameworks such as Mangum turn route errors into 5xx
+                        # responses; an HTTP server span must then be an error.
+                        try:
+                            code = _response_status(result)
+                            if code is not None:
+                                span.set_attribute("http.response.status_code", code)
+                                if code >= 500:
+                                    span.set_attribute("error.type", str(code))
+                                    span.set_status(Status(StatusCode.ERROR))
+                        except Exception:
+                            logger.warning(
+                                "Lambda invocation response status could not be set"
+                            )
+                    return result
             finally:
                 try:
                     span.end()
