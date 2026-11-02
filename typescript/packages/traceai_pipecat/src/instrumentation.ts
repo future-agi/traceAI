@@ -4,6 +4,7 @@ import {
 } from "@opentelemetry/instrumentation";
 import { context, createContextKey, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { PipecatEventSource } from "./client";
 import { VERSION } from "./version";
 
 export interface PipecatInstrumentationConfig {
@@ -22,9 +23,18 @@ const METHODS = {
   sendClientRequest: "client.request",
   sendText: "client.send_text",
 } as const;
-type ConnectionScope = { instance: object; active: boolean };
+type ConnectionScope = {
+  instance: object;
+  active: boolean;
+  invoking: boolean;
+  startingBot: boolean;
+  handshaking: boolean;
+  delegatedParams?: { value: unknown };
+};
 type FinishSpan = (code: SpanStatusCode) => void;
-const CONNECTION_SCOPES = createContextKey("traceai.pipecat.connection-scopes");
+type DisconnectScope = { instance: object; active: boolean; pending: Set<FinishSpan> };
+const CONNECTION_SCOPE = createContextKey("traceai.pipecat.connection-scope");
+const DISCONNECT_SCOPE = createContextKey("traceai.pipecat.disconnect-scope");
 const owners = new WeakMap<object, PipecatInstrumentation>();
 let patchedCount = 0;
 
@@ -34,7 +44,8 @@ export class PipecatInstrumentation extends InstrumentationBase {
   private traceConfig?: TraceConfigOptions;
   private patches?: Map<ClientPrototype, string[]>;
   private manualModules?: Set<unknown>;
-  private pendingConnections = new WeakMap<object, Set<FinishSpan>>();
+  // Iterable so unpatch/disable can finish spans and remove only our listeners.
+  private pendingConnections = new Map<object, Set<FinishSpan>>();
 
   constructor(config: PipecatInstrumentationConfig = {}) {
     super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
@@ -97,6 +108,16 @@ export class PipecatInstrumentation extends InstrumentationBase {
         });
         methods.push(method);
       }
+      // Follow the SDK's endpoint delegation, without reading connection arguments.
+      // These helpers add no spans of their own.
+      for (const method of ["startBotAndConnect", "startBot"] as const) {
+        if (typeof prototype[method] !== "function") continue;
+        const instrumentation = this;
+        this._wrap(prototype, method, (original: ClientMethod) => function (this: unknown, ...args: unknown[]) {
+          return instrumentation.followDelegation(original, this, args, method);
+        });
+        methods.push(method);
+      }
       if (methods.length) {
         (this.patches ??= new Map()).set(prototype, methods);
         owners.set(prototype, this);
@@ -116,21 +137,84 @@ export class PipecatInstrumentation extends InstrumentationBase {
     this.patches?.delete(prototype);
     owners.delete(prototype);
     patchedCount--;
+    for (const [client, pending] of this.pendingConnections ?? []) {
+      if (Object.prototype.isPrototypeOf.call(prototype, client)) {
+        for (const finish of pending) finish(SpanStatusCode.ERROR);
+      }
+    }
+  }
+
+  private followDelegation(original: ClientMethod, instance: unknown, args: unknown[], method: "startBotAndConnect" | "startBot"): unknown {
+    const scope = context.active().getValue(CONNECTION_SCOPE) as ConnectionScope | undefined;
+    if (!scope?.active || !scope.invoking || scope.instance !== instance) return original.apply(instance, args);
+    if (method === "startBotAndConnect") {
+      scope.handshaking = false;
+      scope.startingBot = true;
+      try { return original.apply(instance, args); }
+      finally { scope.startingBot = false; }
+    }
+    if (!scope.startingBot) return original.apply(instance, args);
+    // startBot invokes application lifecycle callbacks. Their asynchronous work
+    // must not inherit the internal delegation slot; the SDK's awaiting caller does.
+    const result = context.with(context.active().deleteValue(CONNECTION_SCOPE), () => original.apply(instance, args));
+    if (result instanceof Promise) {
+      return result.then(value => {
+        // Arm only after startBot's callbacks return, and match the returned object
+        // by identity. A callback's independent connect must not consume this slot.
+        if (scope.active) scope.delegatedParams = { value };
+        return value;
+      });
+    }
+    return result;
+  }
+
+  private observeConnection(scope: ConnectionScope, finish: FinishSpan): () => void {
+    const events = scope.instance as Partial<PipecatEventSource>;
+    if (typeof events.on !== "function" || typeof events.off !== "function") return () => {};
+    // While an endpoint is starting a bot, a callback can make a separate
+    // connection. Its bot-ready event is not this endpoint call's handshake.
+    const ready = () => { if (scope.handshaking) finish(SpanStatusCode.OK); };
+    // Bot-ready resolves the SDK promise before invoking application callbacks.
+    // Let that synchronous dispatch complete if a callback disconnects immediately.
+    const disconnected = () => {
+      const disconnect = context.active().getValue(DISCONNECT_SCOPE) as DisconnectScope | undefined;
+      // Constructor callbacks run before the public event. A retry they create
+      // can already be listening, but does not belong to the old disconnect.
+      if (disconnect?.active && disconnect.instance === scope.instance && !disconnect.pending.has(finish)) return;
+      queueMicrotask(() => finish(SpanStatusCode.ERROR));
+    };
+    const detach = () => {
+      for (const [event, listener] of [["botReady", ready], ["disconnected", disconnected]] as const) {
+        try { events.off!(event, listener); }
+        catch { diag.warn("Pipecat client lifecycle telemetry cleanup failed"); }
+      }
+    };
+    try {
+      events.on("botReady", ready);
+      events.on("disconnected", disconnected);
+    } catch {
+      detach();
+      diag.warn("Pipecat client lifecycle telemetry failed");
+    }
+    return detach;
   }
 
   private traceOperation(original: ClientMethod, instance: unknown, args: unknown[], operation: string): unknown {
     const client = instance !== null && (typeof instance === "object" || typeof instance === "function") ? instance : undefined;
     const parentContext = context.active();
-    const scopes = (parentContext.getValue(CONNECTION_SCOPES) as ConnectionScope[] | undefined) ?? [];
-    // connect(endpoint) asynchronously delegates to connect(params) on the same client.
-    // Do not suppress another client or a separate call outside this async scope.
-    if (operation === "client.connect" && scopes.some(scope => scope.active && scope.instance === client)) {
-      return original.apply(instance, args);
+    const inherited = parentContext.getValue(CONNECTION_SCOPE) as ConnectionScope | undefined;
+    if (operation === "client.connect" && inherited?.active && inherited.instance === client &&
+        inherited.delegatedParams && inherited.delegatedParams.value === args[0]) {
+      // Exactly one SDK-delegated connect(params), never all same-client calls
+      // in an inherited asynchronous context (which also includes user retries).
+      delete inherited.delegatedParams;
+      inherited.handshaking = true;
+      return context.with(parentContext.deleteValue(CONNECTION_SCOPE), () => original.apply(instance, args));
     }
-    if (operation === "client.disconnect" && client) {
-      // Both supported SDKs can leave the bot-ready promise pending after disconnect.
-      for (const finish of this.pendingConnections.get(client) ?? []) finish(SpanStatusCode.ERROR);
-    }
+    const disconnect: DisconnectScope | undefined = operation === "client.disconnect" && client
+      ? { instance: client, active: true, pending: new Set(this.pendingConnections.get(client)) } : undefined;
+    // Snapshot attempts now; a disconnected callback may start a new connection.
+    for (const finish of disconnect?.pending ?? []) queueMicrotask(() => finish(SpanStatusCode.ERROR));
     let span: Span;
     try {
       span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
@@ -145,11 +229,14 @@ export class PipecatInstrumentation extends InstrumentationBase {
       diag.warn("Pipecat client operation telemetry failed");
       return original.apply(instance, args);
     }
-    const scope = operation === "client.connect" && client ? { instance: client, active: true } : undefined;
+    const scope: ConnectionScope | undefined = operation === "client.connect" && client
+      ? { instance: client, active: true, invoking: true, startingBot: false, handshaking: true } : undefined;
+    let detach = () => {};
     let finished = false;
     const finish: FinishSpan = (code) => {
       if (finished) return;
       finished = true;
+      detach();
       if (scope) {
         const pending = this.pendingConnections.get(scope.instance);
         pending?.delete(finish);
@@ -164,19 +251,34 @@ export class PipecatInstrumentation extends InstrumentationBase {
       }
     };
     let operationContext = trace.setSpan(parentContext, span);
+    if (disconnect) operationContext = operationContext.setValue(DISCONNECT_SCOPE, disconnect);
     if (scope) {
+      // A retry's transport has its own lifecycle, not the enclosing disconnect's.
+      operationContext = operationContext.deleteValue(DISCONNECT_SCOPE);
       const pending = this.pendingConnections.get(scope.instance) ?? new Set<FinishSpan>();
       pending.add(finish);
       this.pendingConnections.set(scope.instance, pending);
-      operationContext = operationContext.setValue(CONNECTION_SCOPES, [...scopes, scope]);
+      detach = this.observeConnection(scope, finish);
+      operationContext = operationContext.setValue(CONNECTION_SCOPE, scope);
     }
     const settle = (code: SpanStatusCode) => {
-      // Cancellation ends the span, but recursion stays suppressed until the SDK settles.
-      if (scope) scope.active = false;
+      if (disconnect) {
+        disconnect.active = false;
+        disconnect.pending.clear();
+      }
+      // A cancelled endpoint call may still delegate later. Keep its one-use
+      // delegation slot until SDK settlement, without retaining event listeners.
+      if (scope) {
+        scope.active = false;
+        delete scope.delegatedParams;
+      }
       finish(code);
     };
     try {
-      const result = context.with(operationContext, () => original.apply(instance, args));
+      const result = context.with(operationContext, () => {
+        try { return original.apply(instance, args); }
+        finally { if (scope) scope.invoking = false; }
+      });
       if (result instanceof Promise) {
         return result.then(
           (value) => { settle(SpanStatusCode.OK); return value; },
