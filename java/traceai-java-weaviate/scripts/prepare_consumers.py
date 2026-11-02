@@ -28,6 +28,7 @@ def main():
             (main_src / "WeaviateExample.java").write_text(example + "\n")
             shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateV6Fixture.java", test)
             shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateAsyncLifecycleTest.java", test)
+            shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateCancellationTest.java", test)
             shutil.copy(module / "src/consumer-test/WeaviateReadmeConsumerTest.java", test)
         else:
             shutil.copy(module / "src/consumer-test/WeaviateLegacyConsumerTest.java", test)
