@@ -201,6 +201,8 @@ for (const mode of ['cjs', 'esm']) {
         await client.textGeneration(textInput, { fetch });
         assert.equal(exporter.getFinishedSpans().length, 1);
         instrumentation.enable();
+        const { isPatched } = mode === 'cjs' ? require('../dist/cjs') : await import('../dist/esm/index.js');
+        assert.equal(isPatched(), true, 'live client wrapper remains patched after re-enable');
         await client.textGeneration(textInput, { fetch });
         assert.equal(exporter.getFinishedSpans().length, 2);
         const rewrapped = instrumentation.manuallyInstrument(wrapped);
@@ -382,4 +384,76 @@ test('FI_HIDE_INPUTS environment setting masks stop sequences', async () => {
     if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
     else process.env.FI_HIDE_INPUTS = previous;
   }
+});
+
+for (const sdkName of ['@huggingface/inference-floor', '@huggingface/inference-current']) {
+  test(`${sdkName}: signed endpoint URL is never captured`, async () => {
+    const { HuggingFaceInstrumentation } = require('../dist/cjs');
+    await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+      const sdk = instrumentation.manuallyInstrument(require(sdkName));
+      const Client = sdk.InferenceClient || sdk.HfInference;
+      const signed = `${endpointUrl}/?api_key=synthetic-url-token`;
+      const fetch = async () => json(sdkName.endsWith('-floor') ? [{ generated_text: 'ok' }] : { choices: [{ text: 'ok' }] });
+      global.fetch = fetch;
+      const client = new Client('', { fetch });
+      await client.textGeneration({ ...textInput, endpointUrl: signed });
+      const attrs = exporter.getFinishedSpans()[0].attributes;
+      assert.ok(!JSON.stringify(attrs).includes('synthetic-url-token'));
+      assert.ok(!JSON.stringify(attrs).includes('endpointUrl'));
+    });
+  });
+}
+
+test('chat choices retain every indexed message and interleaved streamed answer', async () => {
+  const { HuggingFaceInstrumentation } = require('../dist/cjs');
+  await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+    const sdk = instrumentation.manuallyInstrument(require('@huggingface/inference-current'));
+    const output = { ...chatOutput, choices: [
+      { index: 0, message: { role: 'assistant', content: 'one A' }, finish_reason: 'stop' },
+      { index: 1, message: { role: 'assistant', content: 'two B' }, finish_reason: 'stop' },
+    ] };
+    const chunks = [
+      { choices: [{ index: 1, delta: { role: 'assistant', content: 'two ' } }, { index: 0, delta: { role: 'assistant', content: 'one ' } }] },
+      { choices: [{ index: 0, delta: { content: 'A' } }, { index: 1, delta: { content: 'B' } }] },
+    ];
+    let streaming = false;
+    const client = new sdk.InferenceClient('', { fetch: async () => streaming ? sse(chunks) : json(output) });
+    assert.deepEqual(await client.chatCompletion(chatInput), output);
+    streaming = true;
+    const received = [];
+    for await (const chunk of client.chatCompletionStream(chatInput)) received.push(chunk);
+    assert.deepEqual(received, chunks);
+    for (const span of exporter.getFinishedSpans()) {
+      const messages = JSON.parse(span.attributes[S.LLM_OUTPUT_MESSAGES]);
+      assert.deepEqual(messages.map(m => [m.index, m.content]), [[0, 'one A'], [1, 'two B']]);
+    }
+    assert.ok(exporter.getFinishedSpans()[1].attributes[S.OUTPUT_VALUE].includes('two B'));
+  });
+});
+
+test('failed stream cancellation records the original error before span end', async () => {
+  const { HuggingFaceInstrumentation } = require('../dist/cjs');
+  await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+    const failure = new Error('synthetic cancellation failure');
+    const client = instrumentation.instrumentClient({ textGenerationStream: async function* () {
+      try { yield textChunks[0]; } finally { throw failure; }
+    } });
+    await assert.rejects(async () => { for await (const _chunk of client.textGenerationStream(textInput)) break; }, error => error === failure);
+    assert.equal(exporter.getFinishedSpans().length, 1);
+    assert.equal(exporter.getFinishedSpans()[0].status.code, 2);
+    assert.ok(exporter.getFinishedSpans()[0].events.some(event => event.name === 'exception'));
+  });
+});
+
+test('existing wrapped client remains patched after disable and enable', async () => {
+  const { HuggingFaceInstrumentation, isPatched } = require('../dist/cjs');
+  await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+    const client = instrumentation.instrumentClient({ textGeneration: async () => ({ generated_text: 'ok' }) });
+    instrumentation.disable();
+    assert.equal(isPatched(), false);
+    instrumentation.enable();
+    assert.equal(isPatched(), true);
+    await client.textGeneration(textInput);
+    assert.equal(exporter.getFinishedSpans().length, 1);
+  });
 });

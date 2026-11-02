@@ -145,6 +145,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   private resolvedTraceConfig!: TraceConfig;
   private readonly clients = new WeakMap<object, object>();
+  private hasWrappedClients = false;
   private readonly constructors = new WeakMap<object, object>();
   private readonly moduleSources = new WeakMap<Record<string, unknown>, Record<string, unknown>>();
   private readonly modules = new Map<Record<string, unknown>, {
@@ -173,7 +174,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
   public override enable(): void {
     super.enable();
     this.refreshTracer();
-    if (this.modules?.size) patchedInstrumentations.add(this);
+    if (this.modules?.size || this.hasWrappedClients) patchedInstrumentations.add(this);
   }
 
   public override setTracerProvider(provider: TracerProvider): void {
@@ -274,6 +275,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
     }) as T;
     this.clients.set(client, wrapped);
     this.clients.set(wrapped, wrapped);
+    this.hasWrappedClients = true;
     if (this.isEnabled()) patchedInstrumentations.add(this);
     return wrapped;
   }
@@ -543,6 +545,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
         let iterator: AsyncIterator<any> | undefined;
         let complete = false;
         let content = "";
+        const chatMessages = new Map<number, { index: number; role: string; content: string }>();
         try {
           const stream = await context.with(active, () => original.apply(receiver, args));
           iterator = stream[Symbol.asyncIterator]();
@@ -551,7 +554,13 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
             if (item.done) { complete = true; break; }
             const chunk = item.value;
             if (chat) {
-              content += chunk.choices?.[0]?.delta?.content ?? "";
+              for (const choice of chunk.choices ?? []) {
+                const index = choice.index ?? 0;
+                const message = chatMessages.get(index) ?? { index, role: "assistant", content: "" };
+                if (choice.delta?.role) message.role = choice.delta.role;
+                message.content += choice.delta?.content ?? "";
+                chatMessages.set(index, message);
+              }
               span.setAttributes(getUsageAttributes(chunk));
               if (chunk.model) span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_MODEL, chunk.model);
               if (chunk.id) span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_ID, chunk.id);
@@ -570,11 +579,18 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
             if (!complete && iterator?.return) {
               await context.with(active, () => iterator!.return!());
             }
+          } catch (error) {
+            span.recordException(error as Error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+            throw error;
           } finally {
+            const messages = [...chatMessages.values()].sort((a, b) => a.index - b.index);
             span.setAttributes({
-              [SemanticConventions.OUTPUT_VALUE]: content,
-              [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-              ...(chat ? { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content }]) ?? "[]" } : {}),
+              [SemanticConventions.OUTPUT_VALUE]: chat
+                ? messages.length > 1 ? JSON.stringify(messages) : messages[0]?.content ?? ""
+                : content,
+              [SemanticConventions.OUTPUT_MIME_TYPE]: chat && messages.length > 1 ? MimeType.JSON : MimeType.TEXT,
+              ...(chat ? { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" } : {}),
             });
             span.end();
           }
@@ -872,7 +888,7 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
 
 /** Do not export credentials accepted by the SDK's standalone task functions. */
 function safeInput(input: object): object {
-  const { accessToken: _token, apiKey: _key, headers: _headers, ...rest } = input as Record<string, unknown>;
+  const { accessToken: _token, apiKey: _key, headers: _headers, endpointUrl: _endpointUrl, ...rest } = input as Record<string, unknown>;
   return rest;
 }
 
@@ -894,17 +910,12 @@ function getChatInputMessagesAttributes(request: HFChatCompletionInput): Attribu
  * Gets output message attributes from chat response (JSON blob)
  */
 function getChatOutputMessagesAttributes(response: HFChatCompletionOutput): Attributes {
-  const choice = response.choices[0];
-  if (!choice) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: choice.message.role };
-  if (choice.message.content) {
-    msg.content = choice.message.content;
-  }
-
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
+  const messages = response.choices.map(choice => {
+    const msg: Record<string, unknown> = { index: choice.index, role: choice.message.role };
+    if (choice.message.content) msg.content = choice.message.content;
+    return msg;
+  });
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" };
 }
 
 /**
