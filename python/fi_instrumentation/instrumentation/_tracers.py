@@ -203,7 +203,21 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             record_exception=record_exception,
             set_status_on_exception=set_status_on_exception,
         ) as current_span:
-            yield cast(FiSpan, current_span)
+            try:
+                yield cast(FiSpan, current_span)
+            except BaseException as error:
+                # OTel use_span handles Exception, but deliberately excludes
+                # cancellation, KeyboardInterrupt and other local aborts. Record
+                # those before use_span ends the span; leave ordinary errors to
+                # OTel so they are not recorded twice. FiSpan applies privacy.
+                if not isinstance(error, Exception) and span.is_recording():
+                    if record_exception:
+                        span.record_exception(error, escaped=True)
+                    if set_status_on_exception:
+                        span.set_status(Status(
+                            StatusCode.ERROR, f"{type(error).__name__}: {error}"
+                        ))
+                raise
 
     def start_span(
         self,

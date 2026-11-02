@@ -16,6 +16,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_openai._client_provider import set_client_provider as set_client_provider
 from traceai_openai._request import _AsyncRequest, _Request
+from traceai_openai._request_context import capture_response_credentials
 from traceai_openai.package import _instruments
 from traceai_openai.version import __version__
 from wrapt import wrap_function_wrapper
@@ -34,6 +35,8 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
     __slots__ = (
         "_original_request",
         "_original_async_request",
+        "_original_process_response",
+        "_original_async_process_response",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -63,6 +66,14 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
             name="AsyncOpenAI.request",
             wrapper=_AsyncRequest(tracer=tracer, openai=openai, config=config),
         )
+        self._original_process_response = openai.OpenAI._process_response
+        self._original_async_process_response = openai.AsyncOpenAI._process_response
+        for client in ("OpenAI", "AsyncOpenAI"):
+            wrap_function_wrapper(
+                module=_MODULE,
+                name=f"{client}._process_response",
+                wrapper=capture_response_credentials,
+            )
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -77,3 +88,5 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
         openai = import_module(_MODULE)
         openai.OpenAI.request = self._original_request
         openai.AsyncOpenAI.request = self._original_async_request
+        openai.OpenAI._process_response = self._original_process_response
+        openai.AsyncOpenAI._process_response = self._original_async_process_response

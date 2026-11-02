@@ -31,7 +31,7 @@ def test_sync_stream_context_finishes_once(make_tracer, mode):
     span, attrs = only_span(exporter)
     assert attrs["gen_ai.request.model"] == REQUEST_MODEL
     assert attrs["gen_ai.provider.name"] == "baseten"
-    assert span.status.status_code == (StatusCode.ERROR if mode == "error" else StatusCode.OK)
+    assert span.status.status_code == (StatusCode.OK if mode == "full" else StatusCode.ERROR)
     if mode == "full":
         assert attrs["output.value"] == "Tokyo"
     if mode == "early":
@@ -66,7 +66,7 @@ def test_async_stream_context_finishes_once(make_tracer, mode):
     span, attrs = only_span(exporter)
     assert attrs["gen_ai.request.model"] == REQUEST_MODEL
     assert attrs["gen_ai.provider.name"] == "baseten"
-    assert span.status.status_code == (StatusCode.ERROR if mode == "error" else StatusCode.OK)
+    assert span.status.status_code == (StatusCode.OK if mode == "full" else StatusCode.ERROR)
     if mode == "full":
         assert attrs["output.value"] == "Tokyo"
     if mode == "early":

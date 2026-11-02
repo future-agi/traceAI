@@ -205,3 +205,34 @@ def test_example_cli_with_loopback_sdk_and_real_exporter(mode):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("stage", ["create", "wait"])
+@pytest.mark.parametrize("error_cls", [KeyboardInterrupt, SystemExit])
+def test_task_interrupt_is_error_with_registered_processor(stage, error_cls):
+    from fi_instrumentation import register
+    from fi_instrumentation.fi_types import ProjectType
+
+    exporter = InMemorySpanExporter()
+    provider = register(project_name="task-interrupt", project_type=ProjectType.OBSERVE,
+                        span_exporter=exporter, batch=False, verbose=False)
+    abort = error_cls("synthetic local abort " + KEY)
+
+    def handler(request):
+        if stage == "create" or request.method == "GET":
+            raise abort
+        return httpx.Response(200, json=run_body("queued"))
+
+    try:
+        with Parallel(api_key=KEY, max_retries=0, http_client=httpx.Client(
+            transport=httpx.MockTransport(handler), trust_env=False,
+        )) as client:
+            with pytest.raises(error_cls) as caught:
+                example.research(client, FITracer(provider.get_tracer("task-interrupt")), QUESTION)
+        assert caught.value is abort
+        span, = exporter.get_finished_spans()
+        assert span.status.status_code is StatusCode.ERROR
+        assert KEY not in span.to_json()
+        assert span.events == ()
+    finally:
+        provider.shutdown()
