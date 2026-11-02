@@ -44,7 +44,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -136,11 +135,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("resolve agent card: %w", err)
 	}
-	client, err := a2aclient.NewFromCard(ctx, card,
+	sdkClient, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 	if err != nil {
 		return err
 	}
+	client := traceaia2a.WrapClient(sdkClient)
 	defer func() { _ = client.Destroy() }()
 
 	sessionCtx := traceaia2a.ContextWithSessionID(ctx, *session)
@@ -174,7 +174,7 @@ func run() error {
 }
 
 // send makes one A2A call, streamed or not, and prints what came back.
-func send(ctx context.Context, client *a2aclient.Client, req *a2a.SendMessageRequest) error {
+func send(ctx context.Context, client *traceaia2a.Client, req *a2a.SendMessageRequest) error {
 	if *stream {
 		for ev, err := range client.SendStreamingMessage(ctx, req) {
 			if err != nil {
@@ -208,11 +208,9 @@ func printEvent(ev a2a.Event) {
 // startDemoAgent serves a small A2A agent on 127.0.0.1 with a2a-go's own
 // server package and returns the URL its agent card is served from.
 //
-// The agent stands in for a remote agent. traceaia2a does not instrument
-// a2asrv: the agent's spans below come from its own code, which reads the
-// traceparent the interceptor sent so they join the caller's trace. A remote
-// agent that does the same (or uses any OpenTelemetry HTTP middleware) shows up
-// in the same trace; one that does not still leaves the client span.
+// The maintained server interceptor extracts the incoming context and traces
+// the protocol call. The executor receives that context directly, so any model
+// spans it starts are children of the A2A server span; no tracing glue is needed.
 func startDemoAgent(tp *sdktrace.TracerProvider) (string, func(), error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -231,7 +229,9 @@ func startDemoAgent(tp *sdktrace.TracerProvider) (string, func(), error) {
 	}
 	agent := &demoAgent{tracer: tp.Tracer("demo-remote-agent"), tc: traceaia2a.TraceConfigFromEnv()}
 	mux := http.NewServeMux()
-	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(agent)))
+	handler := traceaia2a.WrapHandler(a2asrv.NewHandler(agent, a2asrv.WithCallInterceptors(
+		traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp)))))
+	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(handler))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
@@ -258,39 +258,22 @@ func (d *demoAgent) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) ite
 				question += p.Text()
 			}
 		}
-		// Continue the caller's trace from the traceparent it sent.
-		carrier := propagation.MapCarrier{}
-		if v, ok := ec.ServiceParams.Get("traceparent"); ok && len(v) > 0 {
-			carrier.Set("traceparent", v[0])
-		}
-		ctx = propagation.TraceContext{}.Extract(ctx, carrier)
-		ctx, span := d.tracer.Start(ctx, "trip-helper", trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(
-				attribute.String(traceaia2a.GenAISpanKind, traceaia2a.SpanKindAgent),
-				attribute.String("gen_ai.agent.name", "trip-helper"),
-				attribute.String(traceaia2a.A2ATaskID, string(ec.TaskID)),
-			))
-		defer span.End()
-		d.tc.SetAttributes(span, attribute.String(traceaia2a.InputValue, question))
 
 		if !yield(a2a.NewSubmittedTask(ec, ec.Message), nil) ||
 			!yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateWorking, nil), nil) {
 			return
 		}
 		if fail, _ := ec.Metadata["demo.fail"].(bool); fail {
-			span.SetStatus(codes.Error, "demo failure")
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, a2a.NewMessageForTask(a2a.MessageRoleAgent, ec,
 				a2a.NewTextPart("could not plan: "+question))), nil)
 			return
 		}
 		answer, err := d.answer(ctx, question)
 		if err != nil {
-			span.SetStatus(codes.Error, "model call failed")
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, a2a.NewMessageForTask(a2a.MessageRoleAgent, ec,
 				a2a.NewTextPart("model call failed"))), nil)
 			return
 		}
-		d.tc.SetAttributes(span, attribute.String(traceaia2a.OutputValue, answer))
 		_ = yield(a2a.NewArtifactEvent(ec, a2a.NewTextPart(answer)), nil) &&
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateCompleted, a2a.NewMessageForTask(a2a.MessageRoleAgent, ec,
 				a2a.NewTextPart("done"))), nil)
