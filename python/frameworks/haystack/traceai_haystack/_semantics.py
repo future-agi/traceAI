@@ -16,8 +16,7 @@ from typing import (
     get_type_hints,
 )
 
-import opentelemetry.context as context_api
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -28,194 +27,11 @@ from fi_instrumentation.fi_types import (
     SpanAttributes,
     ToolCallAttributes,
 )
-from opentelemetry import trace as trace_api
-from typing_extensions import TypeGuard, assert_never
+from typing_extensions import TypeGuard
 
 if TYPE_CHECKING:
-    from haystack import Document, Pipeline
+    from haystack import Document
     from haystack.core.component import Component
-
-
-class _PipelineRunComponentWrapper:
-    """
-    Components in Haystack are defined as a duck-typed protocol with a `run`
-    method invoked by `haystack.Pipeline._run_component`. We dynamically wrap
-    the component `run` method if it is not already wrapped from within
-    `haystack.Pipeline._run_component`.
-    """
-
-    def __init__(
-        self,
-        tracer: trace_api.Tracer,
-        wrap_component_run_method: Callable[[type[Any], Callable[..., Any]], None],
-    ) -> None:
-        self._tracer = tracer
-        self._wrap_component_run_method = wrap_component_run_method
-
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        arguments = _get_bound_arguments(wrapped, *args, **kwargs).arguments
-        if (component := arguments.get("component")) is not None and (
-            component_instance := component.get("instance")
-        ) is not None:
-            component_cls = component_instance.__class__
-            self._wrap_component_run_method(component_cls, component_instance.run)
-        return wrapped(*args, **kwargs)
-
-
-class _ComponentRunWrapper:
-    def __init__(self, tracer: trace_api.Tracer) -> None:
-        self._tracer = tracer
-
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return wrapped(*args, **kwargs)
-
-        component = instance
-        component_class_name = _get_component_class_name(component)
-        bound_arguments = _get_bound_arguments(wrapped, *args, **kwargs)
-        arguments = bound_arguments.arguments
-
-        with self._tracer.start_as_current_span(
-            name=_get_component_span_name(component_class_name)
-        ) as span:
-            span.set_attributes(
-                {
-                    **dict(get_attributes_from_context()),
-                    **dict(_get_input_attributes(arguments)),
-                }
-            )
-            if (
-                component_type := _get_component_type(component)
-            ) is ComponentType.GENERATOR:
-                span.set_attributes(
-                    {
-                        **dict(_get_span_kind_attributes(LLM)),
-                        **dict(_get_llm_input_message_attributes(arguments)),
-                    }
-                )
-            elif component_type is ComponentType.EMBEDDER:
-                span.set_attributes(
-                    {
-                        **dict(_get_span_kind_attributes(EMBEDDING)),
-                        **dict(_get_embedding_model_attributes(component)),
-                    }
-                )
-            elif component_type is ComponentType.RANKER:
-                span.set_attributes(
-                    {
-                        **dict(_get_span_kind_attributes(RERANKER)),
-                        **dict(_get_reranker_model_attributes(component)),
-                        **dict(_get_reranker_request_attributes(arguments)),
-                    }
-                )
-            elif component_type is ComponentType.RETRIEVER:
-                span.set_attributes(dict(_get_span_kind_attributes(RETRIEVER)))
-            elif component_type is ComponentType.PROMPT_BUILDER:
-                span.set_attributes(
-                    {
-                        **dict(_get_span_kind_attributes(LLM)),
-                        **dict(
-                            _get_llm_prompt_template_attributes_from_prompt_builder(
-                                component, bound_arguments
-                            )
-                        ),
-                    }
-                )
-            elif component_type is ComponentType.UNKNOWN:
-                span.set_attributes(dict(_get_span_kind_attributes(CHAIN)))
-            else:
-                assert_never(component_type)
-
-            try:
-                response = wrapped(*args, **kwargs)
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                raise
-            span.set_attributes(
-                dict(_get_component_output_attributes(response, component_type))
-            )
-            span.set_status(trace_api.StatusCode.OK)
-            if component_type is ComponentType.GENERATOR:
-                span.set_attributes(
-                    {
-                        **dict(_get_llm_model_attributes(response)),
-                        **dict(_get_llm_output_message_attributes(response)),
-                        **dict(_get_llm_token_count_attributes(response)),
-                    }
-                )
-            elif component_type is ComponentType.EMBEDDER:
-                span.set_attributes(
-                    dict(_get_embedding_attributes(arguments, response))
-                )
-            elif component_type is ComponentType.RANKER:
-                span.set_attributes(dict(_get_reranker_response_attributes(response)))
-            elif component_type is ComponentType.RETRIEVER:
-                span.set_attributes(dict(_get_retriever_response_attributes(response)))
-            elif component_type is ComponentType.PROMPT_BUILDER:
-                pass
-            elif component_type is ComponentType.UNKNOWN:
-                pass
-            else:
-                assert_never(component_type)
-
-        return response
-
-
-class _PipelineWrapper:
-    """
-    Wrapper for the pipeline processing
-    Captures all calls to the pipeline
-    """
-
-    def __init__(self, tracer: trace_api.Tracer) -> None:
-        self._tracer = tracer
-
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return wrapped(*args, **kwargs)
-
-        arguments = _get_bound_arguments(wrapped, *args, **kwargs).arguments
-
-        span_name = "Pipeline.run"
-        with self._tracer.start_as_current_span(
-            span_name,
-            attributes={
-                **dict(get_attributes_from_context()),
-                **dict(_get_span_kind_attributes(CHAIN)),
-                **dict(_get_input_attributes(arguments)),
-            },
-        ) as span:
-            try:
-                response = wrapped(*args, **kwargs)
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                raise
-            span.set_attributes(dict(_get_output_attributes(response)))
-            span.set_status(trace_api.StatusCode.OK)
-
-        return response
 
 
 class ComponentType(Enum):
@@ -225,19 +41,6 @@ class ComponentType(Enum):
     RETRIEVER = auto()
     PROMPT_BUILDER = auto()
     UNKNOWN = auto()
-
-
-def _get_component_by_name(
-    pipeline: "Pipeline", component_name: str
-) -> Optional["Component"]:
-    """
-    Gets the component invoked by `haystack.Pipeline._run_component` (if one exists).
-    """
-    if (node := pipeline.graph.nodes.get(component_name)) is None or (
-        component := node.get("instance")
-    ) is None:
-        return None
-    return component
 
 
 def _get_component_class_name(component: "Component") -> str:
@@ -291,7 +94,7 @@ def _get_component_run_method(component: "Component") -> Optional[Callable[..., 
 
 
 def _get_run_method_output_types(
-    run_method: Callable[..., Any]
+    run_method: Callable[..., Any],
 ) -> Optional[Dict[str, type]]:
     """
     Haystack components are decorated with an `output_type` decorator that is
@@ -308,7 +111,7 @@ def _get_run_method_output_types(
 
 
 def _get_run_method_input_types(
-    run_method: Callable[..., Any]
+    run_method: Callable[..., Any],
 ) -> Optional[Dict[str, type]]:
     """
     Gets input types of parameters to the `run` method.
@@ -326,7 +129,7 @@ def _has_generator_output_type(run_method: Callable[..., Any]) -> bool:
         replies := output_types.get("replies")
     ) is None:
         return False
-    return replies == List[ChatMessage] or replies == List[str]
+    return replies in (List[ChatMessage], List[str], list[ChatMessage], list[str])
 
 
 def _has_ranker_io_types(run_method: Callable[..., Any]) -> bool:
@@ -339,8 +142,14 @@ def _has_ranker_io_types(run_method: Callable[..., Any]) -> bool:
         output_types := _get_run_method_output_types(run_method)
     ) is None:
         return False
-    has_documents_parameter = input_types.get("documents") == List[Document]
-    outputs_list_of_documents = output_types.get("documents") == List[Document]
+    has_documents_parameter = input_types.get("documents") in (
+        List[Document],
+        list[Document],
+    )
+    outputs_list_of_documents = output_types.get("documents") in (
+        List[Document],
+        list[Document],
+    )
     return has_documents_parameter and outputs_list_of_documents
 
 
@@ -358,7 +167,10 @@ def _has_retriever_io_types(run_method: Callable[..., Any]) -> bool:
     ) is None:
         return False
     has_documents_parameter = "documents" in input_types
-    outputs_list_of_documents = output_types.get("documents") == List[Document]
+    outputs_list_of_documents = output_types.get("documents") in (
+        List[Document],
+        list[Document],
+    )
     return not has_documents_parameter and outputs_list_of_documents
 
 
@@ -404,7 +216,7 @@ def _get_output_attributes(response: Mapping[str, Any]) -> Iterator[Tuple[str, A
 
 
 def _get_llm_input_message_attributes(
-    arguments: Mapping[str, Any]
+    arguments: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts input messages.
@@ -416,9 +228,15 @@ def _get_llm_input_message_attributes(
     ):
         for message_index, message in enumerate(messages):
             if (content := message.text) is not None:
-                yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_CONTENT}", content
+                yield (
+                    f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_CONTENT}",
+                    content,
+                )
             if (role := message.role) is not None:
-                yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_ROLE}", role
+                yield (
+                    f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_ROLE}",
+                    role.value,
+                )
             if (name := message.name) is not None:
                 yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_NAME}", name
     elif isinstance(prompt := arguments.get("prompt"), str):
@@ -427,7 +245,7 @@ def _get_llm_input_message_attributes(
 
 
 def _get_llm_output_message_attributes(
-    response: Mapping[str, Any]
+    response: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts output messages.
@@ -438,13 +256,7 @@ def _get_llm_output_message_attributes(
         return
     for reply_index, reply in enumerate(replies):
         if isinstance(reply, ChatMessage):
-            if (
-                (reply_meta := getattr(reply, "meta", None)) is None
-                or not isinstance(reply_meta, dict)
-                or (finish_reason := reply_meta.get("finish_reason")) is None
-            ):
-                continue
-            if finish_reason == "tool_calls":
+            if reply.tool_calls:
                 tool_calls = reply.tool_calls
                 for tool_call_index, tool_call in enumerate(tool_calls):
                     if (tool_call_arguments := tool_call.arguments) is not None:
@@ -458,11 +270,17 @@ def _get_llm_output_message_attributes(
                             tool_name,
                         )
             else:
-                yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_CONTENT}", reply.text
-            yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_ROLE}", reply.role.value
+                yield (
+                    f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_CONTENT}",
+                    reply.text,
+                )
+            yield (
+                f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_ROLE}",
+                reply.role.value,
+            )
         elif isinstance(reply, str):
-            yield f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}", reply
-            yield f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}", ASSISTANT
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_CONTENT}", reply
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_ROLE}", ASSISTANT
 
 
 def _get_llm_model_attributes(response: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
@@ -487,7 +305,7 @@ def _get_llm_model_attributes(response: Mapping[str, Any]) -> Iterator[Tuple[str
 
 
 def _get_llm_token_count_attributes(
-    response: Mapping[str, Any]
+    response: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts token counts from response.
@@ -576,7 +394,7 @@ def _get_reranker_model_attributes(component: "Component") -> Iterator[Tuple[str
 
 
 def _get_reranker_request_attributes(
-    arguments: Mapping[str, Any]
+    arguments: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts re-ranker attributes from arguments.
@@ -588,13 +406,16 @@ def _get_reranker_request_attributes(
     if _is_list_of_documents(documents := arguments.get("documents")):
         for doc_index, doc in enumerate(documents):
             if (id := doc.id) is not None:
-                yield f"{RERANKER_INPUT_DOCUMENTS}.{doc_index}." f"{DOCUMENT_ID}", id
+                yield f"{RERANKER_INPUT_DOCUMENTS}.{doc_index}.{DOCUMENT_ID}", id
             if (content := doc.content) is not None:
-                yield f"{RERANKER_INPUT_DOCUMENTS}.{doc_index}." f"{DOCUMENT_CONTENT}", content
+                yield (
+                    f"{RERANKER_INPUT_DOCUMENTS}.{doc_index}.{DOCUMENT_CONTENT}",
+                    content,
+                )
 
 
 def _get_reranker_response_attributes(
-    response: Mapping[str, Any]
+    response: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts re-ranker attributes from response.
@@ -602,15 +423,18 @@ def _get_reranker_response_attributes(
     if _is_list_of_documents(documents := response.get("documents")):
         for doc_index, doc in enumerate(documents):
             if (id := doc.id) is not None:
-                yield f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}." f"{DOCUMENT_ID}", id
+                yield f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}.{DOCUMENT_ID}", id
             if (content := doc.content) is not None:
-                yield f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}." f"{DOCUMENT_CONTENT}", content
+                yield (
+                    f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}.{DOCUMENT_CONTENT}",
+                    content,
+                )
             if (score := doc.score) is not None:
-                yield f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}." f"{DOCUMENT_SCORE}", score
+                yield f"{RERANKER_OUTPUT_DOCUMENTS}.{doc_index}.{DOCUMENT_SCORE}", score
 
 
 def _get_retriever_response_attributes(
-    response: Mapping[str, Any]
+    response: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     """
     Extracts retriever-related attributes from the response.
@@ -625,14 +449,14 @@ def _get_retriever_response_attributes(
         return
     for doc_index, doc in enumerate(documents):
         if (content := doc.content) is not None:
-            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}." f"{DOCUMENT_CONTENT}", content
+            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}.{DOCUMENT_CONTENT}", content
         if (id := doc.id) is not None:
-            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}." f"{DOCUMENT_ID}", id
+            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}.{DOCUMENT_ID}", id
         if (score := doc.score) is not None:
-            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}." f"{DOCUMENT_SCORE}", score
+            yield f"{RETRIEVAL_DOCUMENTS}.{doc_index}.{DOCUMENT_SCORE}", score
         if (metadata := doc.meta) is not None:
             yield (
-                f"{RETRIEVAL_DOCUMENTS}.{doc_index}." f"{DOCUMENT_METADATA}",
+                f"{RETRIEVAL_DOCUMENTS}.{doc_index}.{DOCUMENT_METADATA}",
                 safe_json_dumps(metadata),
             )
 
@@ -695,8 +519,16 @@ def _mask_embedding_vectors(key: str, value: Any) -> Tuple[str, Any]:
     """
     Masks embeddings.
     """
+    from haystack import Document
+
     if isinstance(key, str) and "embedding" in key and _is_vector(value):
         return key, f"<{len(value)}-dimensional vector>"
+    if isinstance(value, Document):
+        value = value.to_dict()
+    if isinstance(value, Mapping):
+        value = dict(_mask_embedding_vectors(k, v) for k, v in value.items())
+    elif isinstance(value, (list, tuple)):
+        value = [_mask_embedding_vectors("", item)[1] for item in value]
     return key, value
 
 

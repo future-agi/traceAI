@@ -702,6 +702,14 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_google_genai_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-google-genai-sdk",
+      "package-name": "@traceai/google-genai-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
     "typescript/packages/traceai_groq": {
       "release-type": "node",
       "component": "npm-traceai-groq",
@@ -953,8 +961,14 @@
       "package-name": "com.futureagi:traceai-java-parent",
       "skip-snapshot": true,
       "extra-files": [
-        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"},
-        {"type": "generic", "path": "traceai-java-weaviate/README.md"}
+        {
+          "type": "generic",
+          "path": "compatibility/spring-ai/pom.xml"
+        },
+        {
+          "type": "generic",
+          "path": "traceai-java-weaviate/README.md"
+        }
       ]
     },
     "go/a2a": {
@@ -1077,6 +1091,14 @@
           "type": "generic",
           "path": "client.go"
         }
+      ]
+    },
+    "typescript/packages/traceai_huggingface_transformers": {
+      "release-type": "node",
+      "component": "npm-traceai-huggingface-transformers",
+      "package-name": "@traceai/huggingface-transformers",
+      "extra-files": [
+        "src/version.ts"
       ]
     }
   }
