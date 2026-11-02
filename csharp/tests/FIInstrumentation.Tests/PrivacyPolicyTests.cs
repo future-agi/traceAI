@@ -11,7 +11,7 @@ using Xunit;
 
 namespace FIInstrumentation.Tests;
 
-public class PrivacyPolicyTests
+public partial class PrivacyPolicyTests
 {
     private const string Secret = "synthetic-sensitive-canary";
 

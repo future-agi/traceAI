@@ -56,12 +56,22 @@ var tracer = TraceAI.Register(options => options.TraceConfig = config);
 
 These flags also default from `FI_HIDE_INPUTS` and `FI_HIDE_OUTPUTS`. Hidden values
 are replaced with `__REDACTED__` before object serialization. Masking applies to
-`FISpan` convenience methods and every `SetAttribute` overload.
+`FISpan` convenience methods, every `SetAttribute` overload, and context attributes
+applied by the tracer. Input hiding covers semantic input content such as tool
+arguments, system instructions, retrieval queries and prompt-template variables;
+output hiding covers tool results and retrieved documents. Flattened descendants
+of these fields are covered too. Model names, token counts, tool IDs and
+prompt-template names remain available. Content fields that can contain either
+direction, such as audio transcripts and aggregate tool calls, are hidden when
+either direction is private.
 
-Use `FI_HIDE_INPUT_MESSAGES` or `FI_HIDE_OUTPUT_MESSAGES` to hide only message
-attributes. `FI_HIDE_INPUT_TEXT` and `FI_HIDE_OUTPUT_TEXT` also redact the whole
-corresponding message attribute, because messages are stored as a single JSON
-value. This removes message metadata along with text.
+Use `FI_HIDE_INPUT_MESSAGES` or `FI_HIDE_OUTPUT_MESSAGES` to hide message attributes
+and their flattened descendants. `FI_HIDE_INPUT_TEXT` and `FI_HIDE_OUTPUT_TEXT`
+hide message text; `FI_HIDE_INPUT_IMAGES` hides input images and screenshots.
+When a message or content block is stored as one JSON value, text or image hiding
+redacts that whole value, including its metadata. For flattened attributes, these
+narrower flags preserve sibling metadata and other content types.
+`FI_HIDE_EMBEDDING_VECTORS` hides embedding vectors, including indexed values.
 
 Error messages and stack traces can contain the same sensitive content. By
 default, enabling any of these input/output hiding flags also omits error details:
@@ -72,7 +82,8 @@ without hiding inputs or outputs. An explicit `false` keeps error details even
 when content hiding is enabled; use that override only if those details are safe
 to export. Builder methods override their environment defaults.
 
-These controls apply to the `FISpan` API. Writing directly to its underlying
+These controls apply to the `FISpan` API and context attributes added by `FITracer`.
+Writing directly to its underlying
 `Activity`, or using another instrumentation library, bypasses this masking.
 
 ## Suppress tracing for sensitive work

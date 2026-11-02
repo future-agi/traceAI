@@ -208,9 +208,9 @@ public class FITracer
 
     // ── Internal helpers ────────────────────────────────────────
 
-    private static void ApplyContextAttributes(Activity activity)
+    private void ApplyContextAttributes(Activity activity)
     {
-        foreach (var (key, value) in ContextAttributes.GetAttributesFromContext())
+        foreach (var (key, value) in ContextAttributes.GetAttributesFromContext(_config))
         {
             activity.SetTag(key, value);
         }
