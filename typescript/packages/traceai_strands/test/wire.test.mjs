@@ -134,30 +134,39 @@ test('README runs unchanged from a clean packed install with loopback model and 
   try {
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
     const snippets = [...readme.matchAll(/```javascript\n([\s\S]*?)```/g)].map((m) => m[1]);
-    assert.equal(snippets.length, 2);
+    assert.equal(snippets.length, 3);
     await writeFile(join(dir, 'tracing.mjs'), snippets[0]);
     await writeFile(join(dir, 'app.mjs'), snippets[1]);
+    await writeFile(join(dir, 'graph.mjs'), snippets[2]);
     await promisify(execFile)(process.execPath, [require.resolve('typescript/bin/tsc'),
       '--noEmit', '--allowJs', '--checkJs', '--module', 'nodenext', '--target', 'es2022', '--skipLibCheck',
-      join(dir, 'tracing.mjs'), join(dir, 'app.mjs')]);
-    const child = spawn(process.execPath, [join(dir, 'app.mjs')], { env: {
-      PATH: process.env.PATH,
-      FI_API_KEY: 'synthetic-api', FI_SECRET_KEY: 'synthetic-secret',
-      OPENAI_API_KEY: 'synthetic-model-key', OPENAI_BASE_URL: `${url}/v1`,
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `${url}/tracer/v1/traces`,
-    }, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.stdout.resume();
-    const timer = setTimeout(() => child.kill(), 20000);
-    const [code] = await once(child, 'exit'); clearTimeout(timer);
-    assert.equal(code, 0, stderr);
-    assertHeaders(requests);
-    const list = flatten(requests);
-    assert.ok(list.some((s) => attributes(s.attributes)['fi.span.kind'] === 'AGENT'));
-    assert.ok(list.some((s) => attributes(s.attributes)['fi.span.kind'] === 'LLM'));
-    assert.equal(list.reduce((sum, s) => sum + (attributes(s.attributes)['gen_ai.usage.total_tokens'] ?? 0), 0), 5);
-    assert.ok(!JSON.stringify(requests).includes('An API connects applications.'));
+      join(dir, 'tracing.mjs'), join(dir, 'app.mjs'), join(dir, 'graph.mjs')]);
+    for (const app of ['app.mjs', 'graph.mjs']) {
+      requests.length = 0;
+      const child = spawn(process.execPath, [join(dir, app)], { env: {
+        PATH: process.env.PATH,
+        FI_API_KEY: 'synthetic-api', FI_SECRET_KEY: 'synthetic-secret',
+        OPENAI_API_KEY: 'synthetic-model-key', OPENAI_BASE_URL: `${url}/v1`,
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `${url}/tracer/v1/traces`,
+      }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.stdout.resume();
+      const timer = setTimeout(() => child.kill(), 20000);
+      const [code] = await once(child, 'exit'); clearTimeout(timer);
+      assert.equal(code, 0, stderr);
+      assertHeaders(requests);
+      const list = flatten(requests);
+      assert.ok(list.some((s) => attributes(s.attributes)['fi.span.kind'] === 'AGENT'));
+      assert.ok(list.some((s) => attributes(s.attributes)['fi.span.kind'] === 'LLM'));
+      if (app === 'graph.mjs') {
+        const roots = list.filter(s => attributes(s.attributes)['gen_ai.operation.name'] === 'invoke_graph');
+        assert.equal(roots.length, 1);
+        assert.equal(roots[0].status.code, 1);
+      }
+      assert.equal(list.reduce((sum, s) => sum + (attributes(s.attributes)['gen_ai.usage.total_tokens'] ?? 0), 0), 5);
+      assert.ok(!JSON.stringify(requests).includes('An API connects applications.'));
+    }
   } finally {
     server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
