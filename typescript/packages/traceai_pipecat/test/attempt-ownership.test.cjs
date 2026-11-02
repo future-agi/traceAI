@@ -246,3 +246,34 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     await client.disconnect();
   });
 }
+
+for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
+  test(`${name}: overlapping media initialization does not retain the abandoned connection`, async t => {
+    const { client, transport, exporter, provider, instrumentation } = setup(t, name);
+    // The latest SDK initializes only enabled devices. Both real SDK versions
+    // permit concurrent connect() calls while media initialization is pending.
+    client._options.enableMic = true;
+    const originalDisconnected = transport.callbacks.onDisconnected;
+    const init = transport.initDevices.bind(transport);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    transport.initDevices = async () => { await gate; return init(); };
+    let firstSettled = false;
+    let secondSettled = false;
+    client.connect().then(() => { firstSettled = true; }, () => { firstSettled = true; });
+    client.connect().then(() => { secondSettled = true; }, () => { secondSettled = true; });
+    release();
+    await wait(() => secondSettled);
+    assert.equal(firstSettled, false, 'the earlier SDK promise is abandoned');
+    await client.disconnect();
+    await wait(() => connects(exporter).length === 2);
+    await provider.forceFlush();
+    assert.deepEqual(connects(exporter).map(s => s.status.code).sort(),
+      [SpanStatusCode.ERROR, SpanStatusCode.OK].sort());
+    assert.equal(instrumentation.pendingConnections.has(client), false);
+    assert.equal(transport.callbacks.onDisconnected, originalDisconnected);
+    await client.connect();
+    await client.disconnect();
+    assert.equal(connects(exporter).length, 3, 'a later cycle must not retain the abandoned attempt');
+  });
+}

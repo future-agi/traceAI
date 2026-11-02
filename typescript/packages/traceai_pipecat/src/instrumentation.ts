@@ -191,8 +191,9 @@ export class PipecatInstrumentation extends InstrumentationBase {
         const wrapped: ClientMethod = function (this: unknown, ...args: unknown[]) {
           if (name === "onBotReady") {
             // Do not end spans as OK on a broadcast. The operation's own promise
-            // decides success/failure. Only protect already-ready handshakes from
-            // cancellation while that promise propagates through SDK delegation.
+            // decides success/failure. Protect handshakes briefly while their
+            // resolved promise propagates through SDK delegation; a concurrent
+            // handshake may have been replaced and remain unresolved forever.
             for (const scope of pending.attempts.values()) {
               if (scope.handshaking) scope.ready = true;
             }
@@ -213,7 +214,15 @@ export class PipecatInstrumentation extends InstrumentationBase {
 
   private static cancelConnections(attempts: Map<FinishSpan, ConnectionScope>): void {
     for (const [finish, scope] of attempts) {
-      if (!scope.ready) finish(SpanStatusCode.ERROR);
+      if (scope.ready) {
+        // bot-ready resolves the SDK promise before invoking application
+        // callbacks, but instrumentation's .then may run after a callback
+        // disconnects. Give it one turn to settle, then finish any overlapping
+        // attempt whose resolver the SDK replaced. finish is idempotent.
+        setTimeout(() => finish(SpanStatusCode.ERROR), 0);
+      } else {
+        finish(SpanStatusCode.ERROR);
+      }
     }
   }
 
