@@ -46,12 +46,27 @@ jobs:
           pnpm run build:deps
           pnpm --filter @traceai/openai run build
           pnpm --dir packages/traceai_openai pack --out "$RUNNER_TEMP/openai.tgz"
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
           npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/openai.tgz" "openai@${{ matrix.sdk }}" \
-            @traceai/fi-core@1.1.0 @traceai/fi-semantic-conventions@1.0.0 \
-            @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0 \
+            "$RUNNER_TEMP/core.tgz" @traceai/fi-semantic-conventions@1.0.0 \
+            @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/context-async-hooks@2.0.1 \
+            @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             @opentelemetry/exporter-trace-otlp-proto@0.202.0 @opentelemetry/otlp-transformer@0.202.0 \
             typescript@5.8.3 @types/node@22.15.29
+      - name: Install a non-hoisted package consumer
+        run: |
+          mkdir -p "$RUNNER_TEMP/strict-consumer"
+          cat > "$RUNNER_TEMP/strict-consumer/package.json" <<JSON
+          {"private":true,"dependencies":{"@traceai/openai":"file:$RUNNER_TEMP/openai.tgz","openai":"${{ matrix.sdk }}"},"pnpm":{"overrides":{"@traceai/fi-core":"file:$RUNNER_TEMP/core.tgz"}}}
+          JSON
+          pnpm --dir "$RUNNER_TEMP/strict-consumer" install --ignore-scripts \
+            --config.hoist=false --config.shamefully-hoist=false
+      - name: Network-isolated non-hoisted imports
+        run: |
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" OPENAI_STRICT_CONSUMER_DIR="$RUNNER_TEMP/strict-consumer" \
+            node --test packages/traceai_openai/test/strictImports.cjs
       - name: Network-isolated automatic and manual SDK contracts
         env:
           OPENAI_CONSUMER_DIR: ${{ runner.temp }}/consumer
@@ -66,6 +81,26 @@ jobs:
               done
             done
           done
+      - name: Network-isolated recall regressions
+        env:
+          OPENAI_CONSUMER_DIR: ${{ runner.temp }}/consumer
+        run: |
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" OPENAI_CONSUMER_DIR="$OPENAI_CONSUMER_DIR" \
+            node --test packages/traceai_openai/test/recallRegressions.cjs \
+              packages/traceai_openai/test/privacyContext.cjs \
+              packages/traceai_openai/test/reviewRegressions.cjs \
+              packages/traceai_openai/test/reviewRoundTwo.cjs \
+              packages/traceai_openai/test/reviewRoundThree.cjs \
+              packages/traceai_openai/test/choiceIndexes.cjs
+      - name: Typecheck current SDK request contracts
+        if: matrix.sdk == '7.47.0'
+        env:
+          OPENAI_CONSUMER_DIR: ${{ runner.temp }}/consumer
+        run: |
+          cp packages/traceai_openai/test/currentSdkShapes.mts "$OPENAI_CONSUMER_DIR/"
+          "$OPENAI_CONSUMER_DIR/node_modules/.bin/tsc" --noEmit --module nodenext --target es2022 \
+            "$OPENAI_CONSUMER_DIR/currentSdkShapes.mts"
       - name: Network-isolated promise and provider regressions
         env:
           OPENAI_SDK_PATH: ${{ runner.temp }}/consumer/node_modules/openai
@@ -97,3 +132,9 @@ jobs:
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             env PATH="$PATH" node packages/traceai_openai/node_modules/jest/bin/jest.js \
             --config packages/traceai_openai/jest.config.js --runInBand
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" node packages/fi-core/node_modules/jest/bin/jest.js \
+            --config packages/fi-core/jest.config.js --runInBand
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" FI_CORE_FIXTURE="${{ runner.temp }}/consumer" \
+            node --test packages/fi-core/test/genai-privacy.test.cjs
