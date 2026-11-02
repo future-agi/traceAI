@@ -3,7 +3,7 @@
 The package is TypeScript. Each test starts the shared loopback Receiver
 (python/tests/harness), runs `node contract/run_fixture.mjs`, and reads what the
 real @traceai/fi-core OTLP/HTTP exporter posted to `{origin}/tracer/v1/traces`.
-The fixture runs real genkit 1.42.0 flows on Genkit's own `mockModel`
+The fixture runs real Genkit flows on Genkit's own `mockModel`
 (genkit/testing): no model vendor, no GCP, no network beyond 127.0.0.1.
 
 A second loopback server stands in for Genkit's telemetry server (the Dev UI
@@ -32,6 +32,7 @@ import tarfile
 import threading
 import time
 import urllib.request
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -151,7 +152,7 @@ def _is_promoted(key: str) -> bool:
     return key in PROMOTED_EXACT or key.startswith(PROMOTED_PREFIXES)
 
 
-def _assert_collector_contract(requests: List[Dict[str, Any]]) -> None:
+def _assert_collector_contract(requests: List[Dict[str, Any]], project: str = PROJECT) -> None:
     assert requests, "exporter sent nothing"
     for request in requests:
         assert request["path"] == "/tracer/v1/traces"
@@ -161,7 +162,7 @@ def _assert_collector_contract(requests: List[Dict[str, Any]]) -> None:
         assert "authorization" not in headers
         assert request["resource_attributes"]
         for resource in request["resource_attributes"]:
-            assert resource["project_name"] == PROJECT
+            assert resource["project_name"] == project
             assert resource["project_type"] == "observe"
 
 
@@ -386,11 +387,79 @@ def test_content_is_exported_by_default_like_every_traceai_instrumentor(tool_run
     _assert_no_local_identity(spans)
 
 
+def _assert_parallel_exports(
+    genkit_spans: List[Dict[str, Any]], fi_spans: List[Dict[str, Any]], native_spans: List[Dict[str, Any]]
+) -> None:
+    """Preserve native OTel IDs exactly; Dev UI must retain the same execution tree.
+
+    Since Genkit 1.43, the Dev UI uses DirectTelemetryInstrumentation, which
+    generates its own trace/span IDs independently of OTelInstrumentation.
+    Comparing those IDs would reject a correct mapper. Comparing only names
+    could miss dropped, duplicated, or reparented spans, so also check the tree.
+    """
+    assert len(genkit_spans) == len(fi_spans) == len(native_spans) == 7
+    native_by_id = {s["spanId"]: s for s in native_spans}
+    assert len(native_by_id) == 7
+    assert {s["spanId"] for s in fi_spans} == set(native_by_id)
+    for span in fi_spans:
+        original = native_by_id[span["spanId"]]
+        assert span["traceId"] == original["traceId"]
+        assert span.get("parentSpanId", "") == original.get("parentSpanId", "")
+        assert span["name"] == original["name"]
+        assert _attrs(span).get("fi.span.kind")
+
+    def paths(spans: List[Dict[str, Any]], name_key: str) -> Counter:
+        by_id = {s["spanId"]: s for s in spans}
+        assert len(by_id) == len(spans), "duplicate span exports"
+        assert len({s["traceId"] for s in spans}) == 1
+        assert sum(not s.get("parentSpanId") for s in spans) == 1
+        result: Counter = Counter()
+        for span in spans:
+            path, seen = [], set()
+            while True:
+                assert span["spanId"] not in seen, "cyclic parenting"
+                seen.add(span["spanId"])
+                path.append(span[name_key])
+                parent = span.get("parentSpanId")
+                if not parent:
+                    break
+                assert parent in by_id, "orphaned span"
+                span = by_id[parent]
+            result[tuple(reversed(path))] += 1
+        return result
+
+    assert paths(genkit_spans, "displayName") == paths(fi_spans, "name") == paths(native_spans, "name")
+
+
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "reparented", "renamed", "changed-native-id", "changed-native-trace"])
+def test_parallel_export_contract_rejects_regressions(tool_run: Dict[str, Any], defect: str) -> None:
+    """The version-independent comparison must not hide real export regressions."""
+    dev_ui = json.loads(json.dumps(tool_run["genkit_spans"]))
+    fi = json.loads(json.dumps(tool_run["spans"]))
+    native = tool_run["output"]["nativeSpans"]
+    if defect == "missing":
+        dev_ui.pop()
+    elif defect == "duplicate":
+        dev_ui[0] = dev_ui[1]
+    elif defect == "reparented":
+        tool = next(s for s in dev_ui if s["displayName"] == "lookup")
+        root = next(s for s in dev_ui if s["displayName"] == "qaFlow")
+        tool["parentSpanId"] = root["spanId"]
+    elif defect == "renamed":
+        dev_ui[0]["displayName"] = "wrong-name"
+    elif defect == "changed-native-id":
+        fi[0]["spanId"] = "0" * 16
+    else:
+        fi[0]["traceId"] = "0" * 32
+    with pytest.raises(AssertionError):
+        _assert_parallel_exports(dev_ui, fi, native)
+
+
 def test_genkit_own_trace_export_keeps_working_and_sees_unmodified_spans(tool_run: Dict[str, Any]) -> None:
-    """AC-01 (prod mode): Genkit's TraceServerExporter still receives every span, content intact."""
+    """AC-01 (prod mode): Genkit's Dev UI still receives the full tree, content intact."""
     genkit_spans = tool_run["genkit_spans"]
     fi_spans = tool_run["spans"]
-    assert {s["spanId"] for s in genkit_spans} == {s["spanId"] for s in fi_spans}
+    _assert_parallel_exports(genkit_spans, fi_spans, tool_run["output"]["nativeSpans"])
     flow = [s for s in genkit_spans if s["displayName"] == "qaFlow"][0]
     assert "SECRET_PROMPT_MARKER" in flow["attributes"]["genkit:input"]
     assert "fi.span.kind" not in flow["attributes"]  # our mapping went to a copy, not Genkit's span
@@ -682,10 +751,8 @@ def test_dev_runtime_reflection_server_and_telemetry_server_still_work(built_pac
 
     genkit_spans = stand_in.spans()
     assert {s["traceId"] for s in genkit_spans} >= {trace_id}
-    genkit_ids = {s["spanId"] for s in genkit_spans if s["traceId"] == trace_id}
-    fi_ids = {s["spanId"] for s in fi_spans if s["traceId"] == trace_id}
-    assert len(genkit_ids) == 7 and genkit_ids == fi_ids
-    assert all(_attrs(s).get("fi.span.kind") for s in fi_spans if s["traceId"] == trace_id)
+    assert all(s["traceId"] == trace_id for s in genkit_spans)
+    _assert_parallel_exports(genkit_spans, fi_spans, _last_json_line(stdout)["nativeSpans"])
     _assert_no_local_identity(fi_spans)
 
 
@@ -715,7 +782,10 @@ def test_inventory_types_are_all_mapped(built_package: Path) -> None:
 
 def test_genkit_is_apache_2_peer_dependency(built_package: Path) -> None:
     manifest = json.loads((GENKIT_DIR / "package.json").read_text())
-    assert manifest["version"] == "1.42.0"
+    version = tuple(int(part) for part in manifest["version"].split("."))
+    assert (1, 42, 0) <= version < (2, 0, 0), "installed Genkit must satisfy the declared peer range"
+    if os.environ.get("GENKIT_VERSION"):
+        assert manifest["version"] == os.environ["GENKIT_VERSION"]
     assert manifest["license"] == "Apache-2.0"
     assert "Apache License" in (GENKIT_DIR / "LICENSE").read_text()[:200]
     ours = json.loads((PKG_DIR / "package.json").read_text())
@@ -801,3 +871,29 @@ def test_esm_and_cjs_entry_points_import(built_package: Path, tmp_path: Path, no
     _check(cjs, f"{node} require")
     _check(esm, f"{node} import")
     assert b"cjs ok" in cjs.stdout and b"esm ok" in esm.stdout
+
+
+def test_readme_setup_exports_flow_and_child(built_package: Path, tmp_path: Path) -> None:
+    """Run the documented setup verbatim, with only synthetic auth and a loopback endpoint."""
+    readme = (PKG_DIR / "README.md").read_text()
+    code = readme.split("```typescript\n", 1)[1].split("```", 1)[0]
+    scope = tmp_path / "node_modules" / "@traceai"
+    scope.mkdir(parents=True)
+    (scope / "genkit").symlink_to(PKG_DIR, target_is_directory=True)
+    (scope / "fi-core").symlink_to(PKG_DIR / "node_modules" / "@traceai" / "fi-core", target_is_directory=True)
+    (tmp_path / "node_modules" / "genkit").symlink_to(GENKIT_DIR, target_is_directory=True)
+    script = tmp_path / "readme.mjs"
+    script.write_text(code)
+    with Receiver() as receiver:
+        result = run([NODE, str(script)], env=_fixture_env(receiver.origin, "readme"), stdin=None, timeout=90)
+        _check(result, "README setup")
+        assert b"Hello, Ada!" in result.stdout
+        requests, spans = receiver.requests(), receiver.spans()
+    _assert_collector_contract(requests, project="my-genkit-app")
+    assert sorted(s["name"] for s in spans) == ["greet", "welcome"]
+    assert len({s["spanId"] for s in spans}) == 2
+    assert len({s["traceId"] for s in spans}) == 1
+    flow, step = _one(spans, "welcome"), _one(spans, "greet")
+    assert not flow.get("parentSpanId")
+    assert step["parentSpanId"] == flow["spanId"]
+    assert all(_attrs(s)["fi.span.kind"] == "CHAIN" for s in spans)

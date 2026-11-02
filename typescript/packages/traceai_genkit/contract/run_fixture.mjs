@@ -1,7 +1,7 @@
 /**
  * Contract fixture for the shared Python harness (python/tests/harness).
  *
- * Runs real genkit 1.42.0 flows with Genkit's own `mockModel` (genkit/testing)
+ * Runs real Genkit flows with Genkit's own `mockModel` (genkit/testing)
  * and a tool, with the BUILT @traceai/genkit package (imported by package name,
  * so the package.json "exports" map is exercised) and the real @traceai/fi-core
  * OTLP/HTTP exporter. No model vendor is called: the model is a local mock.
@@ -18,6 +18,7 @@
  *
  * Prints one JSON line on stdout: {"journey", "result"|"error", "traceIds", ...}.
  */
+import assert from 'node:assert/strict';
 import { context } from '@opentelemetry/api';
 import { register, ProjectType, setSession } from '@traceai/fi-core';
 import { FIGenkitSpanProcessor, flushOnSignals } from '@traceai/genkit';
@@ -38,9 +39,23 @@ const tracerProvider = register({
   setGlobalTracerProvider: process.env.FI_GLOBAL_PROVIDER === '1',
 });
 
-// 2. Genkit telemetry with our processor appended after Genkit's own telemetry-server processor.
+// Observe the native OTel spans before mapping. Genkit 1.43+ sends separate,
+// independently identified direct-instrumentation spans to its Dev UI.
+const native = [];
+function snapshot(span) {
+  return JSON.stringify({
+    name: span.name, ...span.spanContext(),
+    parentSpanId: span.parentSpanContext?.spanId ?? span.parentSpanId,
+    attributes: span.attributes, status: span.status, events: span.events,
+  });
+}
+const capture = {
+  onStart() {},
+  onEnd(span) { native.push({ span, before: snapshot(span) }); },
+  async forceFlush() {}, async shutdown() {},
+};
 const processor = new FIGenkitSpanProcessor({ tracerProvider });
-await enableTelemetry({ spanProcessors: [processor] });
+await enableTelemetry({ spanProcessors: [capture, processor] });
 
 const ai = genkit({});
 
@@ -126,7 +141,11 @@ function withSession(fn) {
 }
 
 function print(payload) {
-  process.stdout.write(JSON.stringify({ journey, ...payload }) + '\n');
+  for (const { span, before } of native) {
+    assert.equal(snapshot(span), before, 'mapper must not mutate a native OTel span');
+  }
+  const nativeSpans = native.map(({ before }) => JSON.parse(before));
+  process.stdout.write(JSON.stringify({ journey, ...payload, nativeSpans }) + '\n');
 }
 
 async function flushAndExit(payload) {
