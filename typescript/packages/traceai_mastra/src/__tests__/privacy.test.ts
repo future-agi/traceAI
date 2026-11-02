@@ -148,6 +148,22 @@ describe("Mastra serialized credential boundaries", () => {
     if (message.includes("Retry after")) expect(result.status.message).toContain("Retry after 2 seconds");
   });
 
+  it.each([
+    'Tool failed: {"sessionToken":"PRIVATE_SESSION","auth_token":"PRIVATE_AUTH","message":"retry"}',
+    'Tool failed: {"error":{"sessionToken":"PRIVATE_SESSION","auth_token":"PRIVATE_AUTH"},"message":"retry"}',
+    'Tool failed: Authorization: AWS4-HMAC-SHA256 Credential=PRIVATE_SESSION/20261102/region/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=PRIVATE_AUTH',
+    'Tool failed: Authorization: Digest username="PRIVATE_SESSION", realm="service", nonce="PRIVATE_AUTH", response="PRIVATE_RESPONSE"',
+  ])("scrubs embedded tool diagnostics and complete authorization headers: %s", message => {
+    const span = converted({ "mastra.tool_call.error_message": message });
+    span.status.message = message;
+    span.events[0].attributes = { "exception.message": message, "exception.stacktrace": message };
+    const original = JSON.stringify(span);
+    const result = sanitizeSpan(span, generateTraceConfig());
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_(?:SESSION|AUTH|RESPONSE)/);
+    expect(result.status.code).toBe(2);
+    expect(JSON.stringify(span)).toBe(original);
+  });
+
   it("retains ordinary quoted diagnostics and bounds nested serialization", () => {
     const safe = 'Request failed: {"message":"not authorized", "count":2}';
     const result = sanitizeSpan(converted({ "input.value": safe }), generateTraceConfig());

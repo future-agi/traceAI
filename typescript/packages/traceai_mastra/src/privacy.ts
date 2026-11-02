@@ -32,11 +32,55 @@ function isCredentialKey(key: string): boolean {
 
 // Also match quoted fields inside non-JSON error text. Consume the complete
 // quoted value or Basic/Bearer scheme + payload, not just its first word.
-const CREDENTIAL_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization|api[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?key[_-]?id|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|password|secret|token)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer|Basic)\s+[^\s,;}"']+|[^\s,;}"']+)/gi;
+const CREDENTIAL_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization|api[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?key[_-]?id|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|auth[_-]?token|password|secret|token)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:Bearer|Basic)\s+[^\s,;}"']+|[^\s,;}"']+)/gi;
 // A Cookie header is a list, not one scalar token. In unstructured diagnostics
 // conservatively consume the complete header line, including every semicolon.
 const COOKIE_ASSIGNMENT = /\b((?:set[_-]?)?cookie)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n"']+)/gi;
+// Signed Authorization schemes carry multiple comma/space-separated fields.
+// A scalar-token matcher would leave AWS Credential/Signature and Digest nonce
+// on the wire. Keep a quoted JSON value bounded, or consume the entire line.
+const AUTHORIZATION_ASSIGNMENT = /\b((?:proxy[_-]?)?authorization)(["']?)\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]+)/gi;
 const JSON_STRING = /"(?:\\.|[^"\\])*"/g;
+
+/** Scrub JSON objects embedded after a diagnostic prefix, including nested fields. */
+function scrubEmbeddedJson(text: string, depth: number): string {
+  let result = "";
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{" && text[i] !== "[") continue;
+    const opening = i;
+    const stack: string[] = [];
+    let quoted = false;
+    let escaped = false;
+    let end = i;
+    for (; end < text.length; end++) {
+      const char = text[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === "{" || char === "[") stack.push(char);
+      else if (char === "}" || char === "]") {
+        const expected = char === "}" ? "{" : "[";
+        if (stack.pop() !== expected) break;
+        if (stack.length === 0) { end++; break; }
+      }
+    }
+    if (stack.length !== 0 || end > text.length) continue;
+    const candidate = text.slice(opening, end);
+    try {
+      const parsed = JSON.parse(candidate);
+      const scrubbed = JSON.stringify(redactCredentials(parsed, depth + 1));
+      result += text.slice(start, opening) + (scrubbed === JSON.stringify(parsed) ? candidate : scrubbed);
+      start = end;
+      i = end - 1;
+    } catch {
+      // This brace-delimited diagnostic was not JSON.
+    }
+  }
+  return result + text.slice(start);
+}
 
 /** Mask structured credentials even on older SDKs without a default data filter. */
 function redactCredentials(value: unknown, depth = 0): unknown {
@@ -69,8 +113,9 @@ function redactCredentials(value: unknown, depth = 0): unknown {
       return literal;
     }
   });
-  return decoded
+  return scrubEmbeddedJson(decoded, depth)
     .replace(COOKIE_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`)
+    .replace(AUTHORIZATION_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`)
     .replace(CREDENTIAL_ASSIGNMENT, `$1$2: "${REDACTED_VALUE}"`);
 }
 

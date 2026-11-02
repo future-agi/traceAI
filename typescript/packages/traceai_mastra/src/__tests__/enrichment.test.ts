@@ -23,6 +23,7 @@ describe("enrichSpan — gen_ai.span.kind mapping", () => {
     [SpanType.MODEL_GENERATION, "CHAIN"],
     ["model_inference", "LLM"],
     [SpanType.MODEL_STEP, "CHAIN"],
+    ["processor_run", "CHAIN"],
     [SpanType.TOOL_CALL, "TOOL"],
     [SpanType.MCP_TOOL_CALL, "TOOL"],
     ["client_tool_call", "TOOL"],

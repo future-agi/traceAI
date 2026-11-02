@@ -192,6 +192,30 @@ test('generation produces one LLM observation per real model request', async () 
   assert.equal(Number(llm[0].attrs['gen_ai.usage.input_tokens']), 11);
   assert.equal(Number(llm[0].attrs['gen_ai.usage.output_tokens']), 5);
 });
+test('real agent tool execution classifies processor_run as CHAIN', async () => {
+  const { Mastra } = req('@mastra/core');
+  const { Agent } = req('@mastra/core/agent');
+  const { createTool } = req('@mastra/core/tools');
+  const { z } = req('zod');
+  setup();
+  let calls = 0;
+  const model = { specificationVersion: 'v2', provider: 'synthetic', modelId: 'synthetic', supportedUrls: {},
+    doGenerate: async () => ++calls === 1
+      ? { content: [{ type: 'tool-call', toolCallId: 'tool-1', toolName: 'lookup', input: '{}' }],
+        finishReason: 'tool-calls', usage: { inputTokens: 2, outputTokens: 1 }, warnings: [] }
+      : { content: [{ type: 'text', text: 'done' }], finishReason: 'stop',
+        usage: { inputTokens: 2, outputTokens: 1 }, warnings: [] } };
+  const lookup = createTool({ id: 'lookup', description: 'Look up synthetic data',
+    inputSchema: z.object({}), execute: async () => ({ ok: true }) });
+  const agent = new Agent({ id: 'processor-agent', name: 'Processor agent', instructions: 'Use tool', model, tools: { lookup } });
+  const mastra = new Mastra({ agents: { agent }, observability: obs });
+  await mastra.getAgent('agent').generate('Run lookup', { maxSteps: 3 });
+  await flush();
+  const processors = spans.filter(span => span.attrs['mastra.span.type'] === 'processor_run');
+  if (supportsOutcomes) assert.ok(processors.length > 0, 'current runtime must emit processor_run');
+  for (const span of processors) assert.equal(span.attrs['gen_ai.span.kind'], 'CHAIN');
+});
+
 test('shutdown waits for delayed conversion and rejects new events', async () => {
   const instance = setup();
   const exporter = instance.getExporters()[0];
@@ -376,6 +400,9 @@ for (const message of [
   'Request failed; Set-Cookie: sid=PRIVATE_COOKIE; HttpOnly; Secure',
   'Request failed; encoded config: ' + JSON.stringify(JSON.stringify({ headers: { Authorization: 'Bearer PRIVATE_ESCAPED_AUTH' }, keep: 'safe' })),
   'Request failed; encoded config: ' + JSON.stringify(JSON.stringify(JSON.stringify({ credentials: { secretAccessKey: 'PRIVATE_ENCODED_SECRET' } }))),
+  'Request failed; config: ' + JSON.stringify({ sessionToken: 'PRIVATE_SESSION', auth_token: 'PRIVATE_AUTH' }),
+  'Request failed; Authorization: AWS4-HMAC-SHA256 Credential=PRIVATE_ACCESS/20261102/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=PRIVATE_SIGNATURE',
+  'Request failed; Authorization: Digest username="synthetic", realm="test", nonce="PRIVATE_NONCE", response="PRIVATE_DIGEST"',
 ]) test(`serialized credentials are scrubbed in status and exception events: ${message}`, async () => {
   setup().startSpan({ type: SpanType.TOOL_CALL, name: 'serialized-error' }).error({ error: new Error(message), endSpan: true });
   await flush();

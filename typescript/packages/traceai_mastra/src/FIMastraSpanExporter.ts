@@ -51,6 +51,7 @@ const SPAN_KIND_BY_TYPE: Readonly<Partial<Record<string, FISpanKind>>> = {
   agent_run: FISpanKind.AGENT,
   model_inference: FISpanKind.LLM,
   model_step: FISpanKind.CHAIN,
+  processor_run: FISpanKind.CHAIN,
   tool_call: FISpanKind.TOOL,
   mcp_tool_call: FISpanKind.TOOL,
   client_tool_call: FISpanKind.TOOL,
