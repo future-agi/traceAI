@@ -1386,7 +1386,7 @@ importers:
         specifier: ^1.34.0
         version: 1.34.0
       '@traceai/fi-core':
-        specifier: workspace:^
+        specifier: workspace:^1.1.1
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
