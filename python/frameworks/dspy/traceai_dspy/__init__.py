@@ -2,7 +2,7 @@ import json
 from abc import ABC
 from copy import copy, deepcopy
 from enum import Enum
-from inspect import signature
+from inspect import getattr_static, signature
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -92,16 +92,41 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             self._patch(dspy.Adapter, "__call__", _AdapterCallWrapper)
         else:
             from traceai_dspy._callback import _DSPyCallback
+            from traceai_dspy._context import (
+                _SubclassGuard,
+                callback_classes,
+                callback_roots,
+            )
 
+            # Callbacks remain the sole span producers. Lexical guards restore
+            # OTel context after DSPy's FIFO teardown of all user callbacks.
+            for cls in callback_classes():
+                self._patch_callback_class(cls)
+            for cls in callback_roots():
+                method = "__init_subclass__"
+                original = getattr_static(cls, method)
+                handler = _SubclassGuard(original, self._patch_callback_class)
+                patched = classmethod(handler)
+                self._wrappers.append(handler)
+                self._patches.append(
+                    (cls, method, original, patched, method in cls.__dict__)
+                )
+                setattr(cls, method, patched)
             self._callback = _DSPyCallback(self._tracer)
             # Configure from the settings-owning thread, just like dspy.configure.
             # Do not replace or mutate the application's callback list.
             dspy.configure(callbacks=[*dspy.settings.callbacks, self._callback])
 
         # DSPy does not emit callbacks for these two components. Only these
-        # supplemental patches remain on callback-capable releases.
+        # supplemental patches produce spans on callback-capable releases.
         self._patch(getattr(dspy, "ColBERTv2", None), "__call__", _RetrieverModelCallWrapper)
         self._patch(getattr(dspy, "Embedder", None), "__call__", _EmbedderCallWrapper)
+
+    def _patch_callback_class(self, cls: type) -> None:
+        from traceai_dspy._context import callback_methods
+
+        for method, wrapper in callback_methods(cls):
+            self._patch(cls, method, wrapper)
 
     def _patch(self, cls: Any, method: str, wrapper: Any) -> None:
         if cls is None or not hasattr(cls, method):
