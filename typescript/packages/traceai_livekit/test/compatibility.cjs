@@ -44,6 +44,7 @@ test('real SDK methods export one span each through loopback OTLP', { timeout: 3
     assert.ok(definition.supportedVersions.some(range => semver.satisfies(version, range)), `${definition.name}@${version} must match its loader filter`);
   }
   const sources = [];
+  let rtc;
   t.after(async () => {
     instrumentation.disable();
     for (const source of sources) if (source.close) await source.close();
@@ -51,6 +52,7 @@ test('real SDK methods export one span each through loopback OTLP', { timeout: 3
     context.disable();
     manager.disable();
     await new Promise(resolve => receiver.close(resolve));
+    await rtc?.dispose?.();
   });
 
   // CommonJS SDK loading exercises the actual automatic loader hook.
@@ -65,7 +67,7 @@ test('real SDK methods export one span each through loopback OTLP', { timeout: 3
   parent.end();
 
   // rtc-node is ESM. Instrument the real (non-extensible) namespace, not a copied mock.
-  const rtc = await import(pathToFileURL(sdkRequire.resolve('@livekit/rtc-node')).href);
+  rtc = await import(pathToFileURL(sdkRequire.resolve('@livekit/rtc-node')).href);
   assert.equal(Object.isExtensible(rtc), false);
   instrumentation.manuallyInstrument(rtc);
   const rtcRoom = new rtc.Room();
@@ -104,8 +106,14 @@ test('real SDK methods export one span each through loopback OTLP', { timeout: 3
   await provider.forceFlush();
   assert.equal(batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans))).length, spans.length);
   instrumentation.enable();
-  await new client.Room().disconnect();
+  await room.disconnect();
   await provider.forceFlush();
   assert.equal(batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans))).length, spans.length + 1,
+    'the same client Room must resume tracing after re-enable');
+  instrumentation.manuallyInstrument(client);
+  await room.disconnect();
+  await new client.Room().disconnect();
+  await provider.forceFlush();
+  assert.equal(batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans))).length, spans.length + 3,
     'an already-loaded CommonJS constructor must work after re-enable');
 });

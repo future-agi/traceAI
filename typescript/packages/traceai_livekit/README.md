@@ -44,7 +44,11 @@ async function main() {
       await room.disconnect();
     } finally {
       instrumentation.disable();
-      await provider.shutdown();
+      try {
+        await rtc.dispose?.();
+      } finally {
+        await provider.shutdown();
+      }
     }
   }
 }
@@ -53,6 +57,8 @@ main().catch(error => {
   process.exitCode = 1;
 });
 ```
+
+Use a current RTC SDK release for standalone scripts. Older releases without `dispose()` can keep the process running after disconnection. In a long-running application, dispose the shared RTC runtime only when all rooms and media work have finished.
 
 Open the `livekit-app` project in Future AGI to inspect `room.connect` and `room.disconnect` spans. A connect span ends when the connect call settles, not when the call's room eventually disconnects. Failed operations have error status. Audio and video capture spans contain frame metadata, not media bytes.
 
@@ -69,7 +75,7 @@ const client = instrumentation.manuallyInstrument(await import("livekit-client")
 const room = new client.Room();
 ```
 
-`livekit-client` implements room methods on each instance. If you already have a room, use `instrumentation.instrumentRoom(room)` instead. Repeated registration does not add duplicate spans. After disabling instrumentation, create a new manual registration if you enable it again.
+`livekit-client` implements room methods on each instance. If you already have a room, use `instrumentation.instrumentRoom(room)` instead. Repeated registration does not add duplicate spans. Existing instrumented rooms resume tracing when you call `enable()` after `disable()`. Manually registered SDK modules should also be registered again to restore their participant and media hooks.
 
 ## Control sensitive data
 

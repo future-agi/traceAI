@@ -33,6 +33,9 @@ export class LiveKitInstrumentation extends InstrumentationBase {
   // Do not retain disconnected Room instances through their bound methods.
   private readonly collected = new FinalizationRegistry<Patch>(patch => this.removePatch(patch));
   private readonly clientModules = new WeakMap<object, any>();
+  private readonly knownRooms = new WeakSet<object>();
+  private readonly rooms = new Set<WeakRef<object>>();
+  private readonly collectedRooms = new FinalizationRegistry<WeakRef<object>>(room => this.rooms.delete(room));
 
   constructor(config: LiveKitInstrumentationConfig = {}) {
     // InstrumentationBase may call enable() from its constructor. Initialize our state first.
@@ -69,11 +72,28 @@ export class LiveKitInstrumentation extends InstrumentationBase {
 
   /** Instrument a client Room created before setup, or constructed from an existing ESM binding. */
   instrumentRoom<T extends object>(room: T): T {
+    // Keep only weak references across disable(): applications may retain rooms
+    // (or construct them through a saved facade) while tracing is turned off.
+    if (!this.knownRooms.has(room)) {
+      this.knownRooms.add(room);
+      const reference = new WeakRef(room);
+      this.rooms.add(reference);
+      this.collectedRooms.register(room, reference);
+    }
     if (this.isEnabled()) {
       this.wrap(room as Record<string, Method>, "connect", "room.connect");
       this.wrap(room as Record<string, Method>, "disconnect", "room.disconnect");
     }
     return room;
+  }
+
+  override enable(): void {
+    super.enable();
+    for (const reference of this.rooms) {
+      const room = reference.deref();
+      if (room) this.instrumentRoom(room);
+      else this.rooms.delete(reference);
+    }
   }
 
   override disable(): void {

@@ -56,11 +56,12 @@ jobs:
             --config packages/traceai_livekit/jest.config.js --runInBand
       - name: Real SDKs and OTLP with loopback-only networking
         run: |
-          # The oldest RTC native library leaves background handles open; the runner
-          # exits only after test assertions and asynchronous cleanup complete.
+          # Only the floor SDK lacks dispose(); latest must exit naturally.
+          exit_args=()
+          if [[ "${{ matrix.version }}" == floor ]]; then exit_args+=(--test-force-exit); fi
           sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
             env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" "$(command -v node)" \
-            --test --test-force-exit packages/traceai_livekit/test/compatibility.cjs
+            --test "${exit_args[@]}" packages/traceai_livekit/test/compatibility.cjs
           git diff --exit-code -- pnpm-lock.yaml
       - name: Install tarball with published dependencies
         run: |
@@ -71,7 +72,16 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/livekit-sdk" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
       - name: Test the tarball with loopback-only networking
         run: |
+          exit_args=()
+          if [[ "${{ matrix.version }}" == floor ]]; then exit_args+=(--test-force-exit); fi
           sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
             env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" \
             "LIVEKIT_INSTRUMENTATION_DIR=$RUNNER_TEMP/livekit-sdk/node_modules/@traceai/fi-instrumentation-livekit" \
-            "$(command -v node)" --test --test-force-exit packages/traceai_livekit/test/compatibility.cjs
+            "$(command -v node)" --test "${exit_args[@]}" packages/traceai_livekit/test/compatibility.cjs
+      - name: Standalone README exits naturally with latest RTC SDK
+        if: matrix.version == 'latest'
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" \
+            "LIVEKIT_INSTRUMENTATION_DIR=$RUNNER_TEMP/livekit-sdk/node_modules/@traceai/fi-instrumentation-livekit" \
+            "$(command -v node)" --test packages/traceai_livekit/test/readme-shutdown.cjs
