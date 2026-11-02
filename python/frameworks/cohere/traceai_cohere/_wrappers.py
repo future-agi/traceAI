@@ -69,7 +69,7 @@ class _ChatWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _ChatRequestAttributesExtractor()
+        self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
         self._response_extractor = _ChatResponseAttributesExtractor()
 
     def __call__(
@@ -128,7 +128,7 @@ class _AsyncChatWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _ChatRequestAttributesExtractor()
+        self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
         self._response_extractor = _ChatResponseAttributesExtractor()
 
     async def __call__(
@@ -186,7 +186,7 @@ class _ChatStreamWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _ChatRequestAttributesExtractor()
+        self._request_extractor = _ChatRequestAttributesExtractor(config=self._config)
         self._response_extractor = _ChatResponseAttributesExtractor()
 
     def __call__(

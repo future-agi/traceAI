@@ -498,6 +498,129 @@ async def test_abandoned_stream_finishes_span(tracing, asynchronous):
     assert len(exporter.get_finished_spans()) == 1
 
 
+IMAGE_URL = "https://example.invalid/PRIVATE_IMAGE_346.png"
+IMAGE_DATA = "data:image/png;base64,U1lOVEhFVElDX1BSSVZBVEVfSU1BR0VfMzQ2"
+
+
+def multimodal_message():
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": INPUT},
+            {"type": "image_url", "image_url": {"url": IMAGE_URL}},
+            {"type": "image_url", "image_url": {"url": IMAGE_DATA}},
+        ],
+    }
+
+
+def assert_image_privacy(exporter, privacy):
+    _, wire, attrs = wire_attributes(exporter)
+    # Check both copies and serialized OTLP, not just canonical attribute keys.
+    for value in (
+        attrs["input.value"],
+        attrs["gen_ai.input.messages.0.message.content"],
+        wire.decode("utf-8", errors="replace"),
+    ):
+        assert (IMAGE_URL in value) == (privacy != "hidden")
+        assert (IMAGE_DATA in value) == (privacy == "visible")
+        assert INPUT in value
+    assert attrs["gen_ai.input.messages.0.message.role"] == "user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("typed", [False, True])
+@pytest.mark.parametrize("configuration", ["explicit", "environment"])
+@pytest.mark.parametrize("privacy", ["visible", "hidden", "bounded"])
+async def test_multimodal_image_privacy_on_wire(
+    tracing, monkeypatch, asynchronous, streaming, typed, configuration, privacy
+):
+    import copy
+
+    cls = client_class(2, asynchronous)
+    if typed and not hasattr(cohere, "ImageUrlContent"):
+        pytest.skip("This SDK predates typed multimodal chat messages")
+    hidden = privacy == "hidden"
+    limit = 16 if privacy == "bounded" else 32000
+    monkeypatch.setenv(
+        "FI_HIDE_INPUT_IMAGES",
+        str(hidden if configuration == "environment" else not hidden).lower(),
+    )
+    monkeypatch.setenv(
+        "FI_BASE64_IMAGE_MAX_LENGTH",
+        str(
+            limit if configuration == "environment" else (32000 if limit == 16 else 16)
+        ),
+    )
+    _, exporter = tracing(
+        **(
+            {"hide_input_images": hidden, "base64_image_max_length": limit}
+            if configuration == "explicit"
+            else {}
+        )
+    )
+    message = multimodal_message()
+    if typed:
+        message = cohere.UserChatMessageV2(**message)
+    original = copy.deepcopy(message)
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        if streaming:
+            return httpx.Response(
+                200,
+                text="".join("data: " + json.dumps(e) + "\n\n" for e in events(2)),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(200, json=payload(2, "chat"))
+
+    args = {"model": "command-a-vision-07-2025", "messages": [message]}
+    if asynchronous:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+            client = cls(api_key="offline-placeholder", httpx_client=http)
+            if streaming:
+                response = [e async for e in client.chat_stream(**args)]
+            else:
+                response = await client.chat(**args)
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+            client = cls(api_key="offline-placeholder", httpx_client=http)
+            response = (
+                list(client.chat_stream(**args)) if streaming else client.chat(**args)
+            )
+    assert response is not None
+    assert message == original
+    assert len(requests) == 1
+    content = requests[0]["messages"][0]["content"]
+    assert content[0]["text"] == INPUT
+    assert content[1]["image_url"]["url"] == IMAGE_URL
+    assert content[2]["image_url"]["url"] == IMAGE_DATA
+    assert_image_privacy(exporter, privacy)
+
+
+@pytest.mark.parametrize("privacy", ["visible", "hidden", "bounded"])
+def test_multimodal_extractor_privacy_at_sdk_floor(tracing, privacy):
+    from traceai_cohere._request_attributes_extractor import (
+        _ChatRequestAttributesExtractor,
+    )
+
+    options = {
+        "hide_input_images": privacy == "hidden",
+        "base64_image_max_length": 16 if privacy == "bounded" else 32000,
+    }
+    _, exporter = tracing(**options)
+    extractor = _ChatRequestAttributesExtractor(config=TraceConfig(**options))
+    message = multimodal_message()
+    with CohereInstrumentor()._tracer.start_as_current_span("image-privacy") as span:
+        span.set_attributes(
+            dict(extractor.get_extra_attributes_from_request({"messages": [message]}))
+        )
+    assert message == multimodal_message()
+    assert_image_privacy(exporter, privacy)
+
+
 def test_unknown_event_extraction_does_not_break_stream(tracing):
     from traceai_cohere._wrappers import _ChatStreamWrapper
 

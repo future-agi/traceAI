@@ -5,12 +5,15 @@ from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
     RerankerAttributes,
     SpanAttributes,
 )
 from opentelemetry.util.types import AttributeValue
 
-from traceai_cohere._utils import _message_attributes
+from traceai_cohere._utils import _message_attributes, _to_dict
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -18,6 +21,36 @@ logger.addHandler(logging.NullHandler())
 
 class _ChatRequestAttributesExtractor:
     """Extract span attributes from Cohere chat request."""
+
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
+    def _mask_message_images(self, message: Any, index: int) -> Dict[str, Any]:
+        # Both input.value and message.content serialize entire content blocks.
+        # Apply the core's image mask before either copy loses its semantic keys.
+        # Copy only telemetry data: never redact the request sent to Cohere.
+        message = dict(_to_dict(message))
+        content = message.get("content")
+        if not isinstance(content, (list, tuple)):
+            return message
+        masked_content = []
+        for block_index, item in enumerate(content):
+            block = _to_dict(item)
+            if block.get("type") == "image_url":
+                image = _to_dict(block.get("image_url"))
+                key = (
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}."
+                    f"{MessageAttributes.MESSAGE_CONTENTS}.{block_index}."
+                    f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}."
+                    f"{ImageAttributes.IMAGE_URL}"
+                )
+                url = self._config.mask(key, image.get("url"))
+                if url is None:
+                    continue
+                block = {**block, "image_url": {**image, "url": url}}
+            masked_content.append(block)
+        message["content"] = masked_content
+        return message
 
     def get_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
@@ -58,7 +91,10 @@ class _ChatRequestAttributesExtractor:
             yield SpanAttributes.INPUT_VALUE, message
 
         if "messages" in request_parameters:
-            messages = request_parameters.get("messages") or []
+            messages = [
+                self._mask_message_images(message, i)
+                for i, message in enumerate(request_parameters.get("messages") or [])
+            ]
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
         for i, msg in enumerate(messages):
             yield from _message_attributes(
