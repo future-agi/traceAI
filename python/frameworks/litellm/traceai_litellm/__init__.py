@@ -322,7 +322,7 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
     # independent raw response aggregate after core filters semantic attributes.
     hide_message_output = bool(config and (config.hide_output_text or config.hide_output_messages))
     if not isinstance(result, EmbeddingResponse) and not (
-        hide_message_output and isinstance(result, ModelResponse)
+        hide_message_output and isinstance(result, (ModelResponse, ImageResponse))
     ):
         _set_raw_output(span, result)
     if isinstance(result, ModelResponse):
@@ -372,7 +372,8 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
                         f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
                         url,
                     )
-                    _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
+                    if not hide_message_output:
+                        _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
                 elif isinstance(img_data, dict) and (
                     url := (img_data.get("url") or img_data.get("b64_json"))
                 ):
@@ -381,7 +382,8 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
                         f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
                         url,
                     )
-                    _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
+                    if not hide_message_output:
+                        _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
     _set_usage(span, getattr(result, "usage", None))
 
 
