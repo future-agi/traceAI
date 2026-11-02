@@ -1078,6 +1078,13 @@
           "path": "client.go"
         }
       ]
+    },
+    "go/genkit": {
+      "release-type": "go",
+      "component": "go/genkit",
+      "package-name": "github.com/future-agi/traceAI/go/genkit",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
     }
   }
 }
