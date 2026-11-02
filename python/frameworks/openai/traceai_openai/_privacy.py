@@ -46,6 +46,19 @@ def request_credentials(instance: Any, options: Any, parameters: Mapping) -> tup
     return tuple(sorted(secrets, key=len, reverse=True))
 
 
+def response_credentials(response: Any) -> tuple[str, ...]:
+    """Use the request actually sent, not a shared client's last refreshed token.
+
+    Raw responses and streams retain their HTTP response. Reading its request
+    headers never calls the user's token provider or modifies authentication.
+    """
+    http_response = getattr(response, "http_response", None)
+    if http_response is None:
+        http_response = getattr(response, "response", None)
+    request = getattr(http_response, "request", None)
+    return request_credentials(None, request, {})
+
+
 def safe_tool(tool: Any) -> Any:
     if isinstance(tool, Mapping) and tool.get("type") == "mcp":
         return {key: value for key, value in tool.items() if key not in {"authorization", "headers"}}
@@ -71,4 +84,21 @@ def response_output(response: Any, config: TraceConfig | None = None) -> dict:
               "error", "incomplete_details"}
     if config is not None and getattr(config, "hide_error_details", False):
         fields.difference_update({"error", "incomplete_details"})
-    return response.model_dump(include=fields, exclude_none=True, mode="json")
+    output = response.model_dump(include=fields, exclude_none=True, mode="json")
+    if config is not None and getattr(config, "hide_error_details", False):
+        # These provider-owned error fields are not ordinary tool results or
+        # assistant text. Work on the dump only, leaving SDK objects untouched.
+        for item in output.get("output", []):
+            if not isinstance(item, dict) or item.get("type") not in {
+                "mcp_call", "mcp_list_tools", "image_generation_call",
+            }:
+                continue
+            error = item.pop("error", None)
+            if isinstance(error, dict) and error.get("type") in {
+                "http_error", "mcp_protocol_error", "mcp_tool_execution_error",
+            }:
+                classification = {"type": error["type"]}
+                if type(error.get("code")) is int:
+                    classification["code"] = error["code"]
+                item["error"] = classification
+    return output

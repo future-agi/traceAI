@@ -65,7 +65,8 @@ jobs:
             packages=(python/frameworks/{parallel,openai}/dist/*.tar.gz)
           fi
           .parallel-test-venv/bin/pip install "${packages[@]}" \
-            "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" pytest pytest-asyncio
+            "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" \
+            'fi-instrumentation-otel>=1.2.2' pytest pytest-asyncio
       - name: Test with only loopback networking
         shell: bash
         run: |

@@ -72,6 +72,23 @@ class _ResponseCloseProxy(ObjectProxy):
             _finish_on_exit(self._self_stream, error)
 
 
+class _RawResponse(ObjectProxy):
+    """Preserve the raw SDK envelope and parse cache while tracing its stream."""
+
+    def __init__(self, response: Any, parsed_stream: Any, stream: Any) -> None:
+        super().__init__(response)
+        self._self_parsed_stream = parsed_stream
+        self._self_stream = stream
+
+    def parse(self, *args: Any, **kwargs: Any) -> Any:
+        parsed = self.__wrapped__.parse(*args, **kwargs)
+        return self._self_stream if parsed is self._self_parsed_stream else parsed
+
+    @property
+    def http_response(self) -> Any:
+        return self._self_stream.response
+
+
 class _Stream(ObjectProxy):  # type: ignore
     __slots__ = (
         "_self_with_span",

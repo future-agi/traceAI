@@ -1,5 +1,6 @@
 """Responses privacy and lifecycle contracts with real SDKs, no vendor traffic."""
 import asyncio
+import inspect
 import json
 
 import httpx
@@ -394,6 +395,10 @@ def test_raw_failed_response_retains_sdk_contract(openai_tracing, async_):
 
 @pytest.mark.parametrize("async_", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.skipif(
+    "hide_error_details" not in inspect.signature(TraceConfig).parameters,
+    reason="Error-detail masking requires a core with hide_error_details support",
+)
 def test_hidden_error_details_apply_to_failed_response_json(tracing, async_, stream):
     provider, exporter = tracing
     instrumentor = OpenAIInstrumentor()

@@ -54,6 +54,11 @@ class _WithSpan:
     def is_finished(self) -> bool:
         return self._is_finished
 
+    def add_secrets(self, secrets: Tuple[str, ...]) -> None:
+        # Credentials resolved by an SDK token provider are available only after
+        # sending the request. Retain all known values for this span's lifetime.
+        self._secrets = tuple(sorted(set((*self._secrets, *secrets)), key=len, reverse=True))
+
     def record_exception(self, exception: BaseException) -> None:
         if self._is_finished:
             return
@@ -110,9 +115,15 @@ class _WithSpan:
                 self.set_attribute(key, value)
         if status is not None:
             try:
-                self._span.set_status(status=trace_api.Status(
-                    status.status_code, redact(status.description, self._secrets)
-                ))
+                description = redact(status.description, self._secrets)
+                if description:
+                    # Core removes tracebacks by consulting the in-flight SDK
+                    # exception. Its original message may contain credentials.
+                    # Remove the traceback here so core cannot reconstruct that
+                    # unsanitized message; the redacted event keeps the stack.
+                    description = description.partition("Traceback (most recent call last)")[0]
+                    description = description.rstrip() or None
+                self._span.set_status(status=trace_api.Status(status.status_code, description))
             except Exception:
                 logger.exception("Failed to set status code on span")
         try:

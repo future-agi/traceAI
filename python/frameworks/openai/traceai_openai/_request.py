@@ -18,7 +18,7 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
-from traceai_openai._privacy import redact, request_credentials, safe_request
+from traceai_openai._privacy import redact, request_credentials, response_credentials, safe_request
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
@@ -28,7 +28,7 @@ from traceai_openai._response_accumulator import (
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_openai._span_io_handler import add_io_to_span_attributes
-from traceai_openai._stream import _AsyncStream, _ResponseAccumulator, _Stream
+from traceai_openai._stream import _AsyncStream, _RawResponse, _ResponseAccumulator, _Stream
 from traceai_openai._utils import (
     _as_input_attributes,
     _finish_tracing,
@@ -218,9 +218,9 @@ class _WithOpenAI(ABC):
             except Exception:
                 logger.exception(f"Failed to parse response of type {type(response)}")
 
-        if self._is_streaming(response):
-            # Determine if the response is asynchronous
-            if self._is_async_stream(response):
+        if self._is_streaming(parsed_response):
+            # Raw-response parse() returns the stream, not the outer envelope.
+            if self._is_async_stream(parsed_response):
                 stream_wrapper = _AsyncStream
             else:
                 stream_wrapper = _Stream
@@ -237,11 +237,13 @@ class _WithOpenAI(ABC):
 
             # Wrap the response with the appropriate stream wrapper
             wrapped_stream = stream_wrapper(
-                stream=response,
+                stream=parsed_response,
                 with_span=with_span,
                 response_accumulator=response_accumulator,
             )
 
+            if parsed_response is not response:
+                return _RawResponse(response, parsed_response, wrapped_stream)
             return wrapped_stream
 
         else:
@@ -328,6 +330,8 @@ class _Request(_WithTracer, _WithOpenAI):
             add_io_to_span_attributes(with_span, input_data, None)
             try:
                 response = wrapped(*args, **kwargs)
+                with_span.add_secrets(request_credentials(instance, None, {}))
+                with_span.add_secrets(response_credentials(response))
 
                 if isinstance(response, CreateEmbeddingResponse):
                     with_span.set_attribute(
@@ -351,6 +355,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     request_parameters=request_parameters,
                 )
             except BaseException as e:
+                with_span.add_secrets(request_credentials(instance, getattr(e, "request", None), {}))
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
                     description=f"{type(e).__name__}: {e}",
@@ -409,6 +414,8 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             add_io_to_span_attributes(with_span, input_data, None)
             try:
                 response = await wrapped(*args, **kwargs)
+                with_span.add_secrets(request_credentials(instance, None, {}))
+                with_span.add_secrets(response_credentials(response))
 
                 if isinstance(response, CreateEmbeddingResponse):
                     with_span.set_attribute(
@@ -421,6 +428,9 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     config=self._config,
                 )
             except BaseException as exception:
+                with_span.add_secrets(request_credentials(
+                    instance, getattr(exception, "request", None), {}
+                ))
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
