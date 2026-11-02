@@ -453,6 +453,57 @@ test("duplicate setup, suppression, disable, re-enable, dispose and independent 
   again.dispose();
 });
 
+test("function-call arguments and tool responses redact nested credentials in spans and OTLP", async () => {
+  reset();
+  const ai = client();
+  const handle = instrumentGoogleGenAI(ai);
+  const credentials = {
+    authorization: "Bearer OUTPUT_AUTH_SENTINEL",
+    password: "OUTPUT_PASSWORD_SENTINEL",
+    nested: {
+      proxyAuthorization: "OUTPUT_PROXY_AUTH_SENTINEL",
+      passphrase: "OUTPUT_PASSPHRASE_SENTINEL",
+      city: "London",
+    },
+  };
+  try {
+    reply = (req, res) => json(res, {
+      candidates: [{ content: { role: "model", parts: [
+        { functionCall: { name: "weather", args: credentials } },
+      ] } }],
+    });
+    await ai.models.generateContent({
+      model: "gemini-test",
+      contents: [{ role: "user", parts: [
+        { functionResponse: { name: "weather", response: {
+          result: "sunny",
+          Authorization: "Bearer INPUT_AUTH_SENTINEL",
+          credentials: { password: "INPUT_PASSWORD_SENTINEL" },
+        } } },
+      ] }],
+    });
+    await provider.forceFlush();
+    assert.equal(spans().length, 1);
+    const attrs = spans()[0].attributes;
+    const input = attrs["gen_ai.input.messages"];
+    const output = attrs["gen_ai.output.messages"];
+    assert.match(input, /sunny/);
+    assert.match(output, /London/);
+    for (const content of [JSON.stringify(attrs), JSON.stringify(wire.map((w) => w.body))]) {
+      assert.doesNotMatch(content, /INPUT_AUTH_SENTINEL|INPUT_PASSWORD_SENTINEL|OUTPUT_AUTH_SENTINEL|OUTPUT_PASSWORD_SENTINEL|OUTPUT_PROXY_AUTH_SENTINEL|OUTPUT_PASSPHRASE_SENTINEL/);
+    }
+    const exported = wire.flatMap((w) =>
+      w.body.resourceSpans.flatMap((r) => r.scopeSpans.flatMap((s) => s.spans))
+    );
+    assert.equal(exported.length, 1);
+    const otlpAttrs = Object.fromEntries(exported[0].attributes.map((a) => [a.key, a.value.stringValue]));
+    assert.match(otlpAttrs["gen_ai.input.messages"], /sunny/);
+    assert.match(otlpAttrs["gen_ai.output.messages"], /London/);
+  } finally {
+    handle.dispose();
+  }
+});
+
 test("all FI privacy controls protect actual OTLP payload and credential boundaries", async () => {
   for (const env of [
     "FI_HIDE_INPUTS",

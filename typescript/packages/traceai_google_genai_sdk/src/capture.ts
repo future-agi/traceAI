@@ -72,7 +72,12 @@ export class Capture {
     const keys = Object.keys(record(value));
     if (keys.length > 32) this.truncated = true;
     for (const key of keys.slice(0, 32)) {
-      if (/data|bytes|base64|headers|api.?key|secret|token|uri|url/i.test(key))
+      // Tool arguments and responses can carry credentials at any nesting level.
+      if (
+        /data|bytes|base64|headers|api.?key|secret|token|uri|url|authorization|password|passphrase|passwd|pwd|credential|private.?key|access.?key/i.test(
+          key,
+        )
+      )
         continue;
       const boundedKey = this.text(key);
       if (boundedKey === undefined) break;
