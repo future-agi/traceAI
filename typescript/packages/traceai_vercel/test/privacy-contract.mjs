@@ -82,12 +82,13 @@ try {
   assert.ok(!JSON.stringify(report.embedding.exported).includes('private-embedding-input'));
   assert.ok(!JSON.stringify(report.embedding.exported).includes('0.123456'));
 
+  await ai.rerank({ model: { specificationVersion: major >= 7 ? 'v4' : 'v3', provider: 'synthetic.rerank', modelId: 'synthetic-reranker', doRerank: async () => ({ ranking: [{ index: 0, relevanceScore: 0.9 }], warnings: [] }) }, documents: ['Paris', 'Berlin'], query: 'France', topN: 1, ...telemetry(false) });
+  report.rerank = await collect();
+  assert.equal(report.rerank.raw.length, 2);
+  assert.equal(report.rerank.exported.length, report.rerank.raw.length, 'all native rerank spans exported');
+  assert.ok(report.rerank.exported.every(s => s.attrs['fi.span.kind'] === 'RERANKER'));
+
   if (major >= 7) {
-    await ai.rerank({ model: { specificationVersion: 'v4', provider: 'synthetic.rerank', modelId: 'synthetic-reranker', doRerank: async () => ({ ranking: [{ index: 0, relevanceScore: 0.9 }], warnings: [] }) }, documents: ['Paris', 'Berlin'], query: 'France', topN: 1, ...telemetry(false) });
-    report.rerank = await collect();
-    assert.equal(report.rerank.raw.length, 2);
-    assert.equal(report.rerank.exported.length, report.rerank.raw.length, 'all native rerank spans exported');
-    assert.ok(report.rerank.exported.every(s => s.attrs['fi.span.kind'] === 'RERANKER'));
     const speech = await ai.generateSpeech({ model: { specificationVersion: 'v4', provider: 'synthetic.speech', modelId: 'synthetic-speech', doGenerate: async () => ({ audio: new Uint8Array([0x49, 0x44, 0x33, 1, 2, 3]), warnings: [], response: { timestamp: new Date(0), modelId: 'synthetic-speech', headers: {} } }) }, text: 'Hello', ...telemetry(false) });
     assert.ok(speech.audio);
     report.speech = await collect();

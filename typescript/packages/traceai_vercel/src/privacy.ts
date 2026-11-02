@@ -25,7 +25,7 @@ type PrivacyConfig = ReturnType<typeof readPrivacyConfig>;
 // Drop the whole payload for any applicable content-hiding flag: selectively
 // masking JSON would leave alternate native/normalized copies unprotected.
 const inputKeys = new Set([
-  'input.value', 'input.mime_type', 'raw.input', 'ai.prompt', 'ai.prompt.messages',
+  'input.value', 'input.mime_type', 'raw.input', 'ai.prompt', 'ai.prompt.messages', 'ai.prompt.tools',
   'gen_ai.input.messages', 'gen_ai.system_instructions', 'gen_ai.tool.call.arguments',
   'gen_ai.tool.definitions', 'ai.toolCall.args', 'tool.parameters',
   'ai.value', 'ai.values', 'embedding.text', 'ai.documents', 'ai.request.text',

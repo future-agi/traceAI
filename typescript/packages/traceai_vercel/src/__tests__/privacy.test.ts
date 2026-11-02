@@ -43,6 +43,8 @@ for (const Processor of [FISimpleSpanProcessor, FIBatchSpanProcessor]) {
           'operation.name': 'ai.generateText.doGenerate',
           'ai.prompt': '{"prompt":"private-input"}',
           'ai.prompt.messages': '[{"role":"user","content":"private-input"}]',
+          'ai.prompt.tools': ['{"description":"private-input","parameters":{"enum":["private-input"]}}'],
+          'gen_ai.tool.definitions': '[{"description":"private-input"}]',
           'gen_ai.system_instructions': '[{"type":"text","content":"private-input"}]',
           'gen_ai.input.messages': '[{"role":"user","parts":[{"type":"blob","content":"private-input"}]}]',
           'input.value': 'private-input', 'raw.input': 'private-input',
@@ -150,8 +152,9 @@ for (const Processor of [FISimpleSpanProcessor, FIBatchSpanProcessor]) {
     });
 
     test('keeps content by default', async () => {
-      const { exported } = await capture({ 'ai.prompt': 'public-input', 'ai.response.text': 'public-output' }, true);
+      const { exported } = await capture({ 'ai.prompt': 'public-input', 'ai.prompt.tools': ['public-tool-definition'], 'ai.response.text': 'public-output' }, true);
       expect(exported.attributes['ai.prompt']).toBe('public-input');
+      expect(exported.attributes['ai.prompt.tools']).toEqual(['public-tool-definition']);
       expect(exported.attributes['ai.response.text']).toBe('public-output');
       expect(exported.status.message).toBe('private-error');
     });

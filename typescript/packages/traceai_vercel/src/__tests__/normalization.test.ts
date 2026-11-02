@@ -74,6 +74,13 @@ describe('AI SDK native span normalization', () => {
     expect(span.attributes).toEqual({ ...attrs, 'fi.span.kind': kind });
   });
 
+  test.each(['ai.rerank', 'ai.rerank.doRerank', 'ai.rerank customer-function', 'ai.rerank.doRerank customer-function'])(
+    'recognizes legacy SDK 6 %s spans', operation => {
+      const span = normalize({ 'operation.name': operation });
+      expect(isFISpan(span)).toBe(true);
+      expect(span.attributes['fi.span.kind']).toBe('RERANKER');
+    });
+
   test('does not alter unrelated spans or overwrite native GenAI messages', () => {
     expect(normalize({ 'http.request.method': 'GET' }).attributes).toStrictEqual({ 'http.request.method': 'GET' });
     const span = normalize({ ...llm, 'gen_ai.input.messages': 'native', 'ai.prompt.messages': '[]' });
