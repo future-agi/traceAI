@@ -255,6 +255,8 @@ func (r *record) invokeEvent(ev types.ResponseStream) {
 		return
 	}
 	switch e.Type {
+	case "message_stop":
+		r.streamComplete = true
 	case "message_start":
 		if e.Message != nil {
 			r.invokeUsage(e.Message.Usage)
