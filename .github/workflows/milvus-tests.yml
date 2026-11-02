@@ -34,8 +34,10 @@ jobs:
         env:
           PYMILVUS: ${{ matrix.pymilvus }}
         run: |
-          # PyMilvus 2.3.0 needs pkg_resources and environs 9's marshmallow API.
-          python -m pip install "pymilvus==$PYMILVUS" 'marshmallow<4' 'setuptools<81' \
+          # Start from latest transitive versions; package metadata must resolve
+          # compatible dependencies for the declared PyMilvus floor on its own.
+          python -m pip install --upgrade setuptools marshmallow
+          python -m pip install "pymilvus==$PYMILVUS" \
             'fi-instrumentation-otel==1.2.2' 'pytest==8.4.2' \
             'opentelemetry-exporter-otlp-proto-http>=1.20.0' \
             -e python/frameworks/milvus

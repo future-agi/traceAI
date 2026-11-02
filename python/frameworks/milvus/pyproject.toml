@@ -28,6 +28,10 @@ classifiers = [
 python = ">3.9,<3.14"
 fi-instrumentation-otel = ">=1.2.2"
 pymilvus = ">=2.3.0"
+# PyMilvus 2.3.x's environs 9 requires marshmallow 3's __version_info__.
+marshmallow = "<4"
+# PyMilvus 2.3.x imports pkg_resources, removed in setuptools 81.
+setuptools = "<81"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
