@@ -4,7 +4,7 @@ import type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { SemanticConventions as SC } from "@traceai/fi-semantic-conventions";
 
 import { NativePrivacy } from "./nativePrivacy";
-import { CycleOutcomes, finishReasons, outcome } from "./nativeOutcome";
+import { ChildOutcomes, finishReasons, outcome } from "./nativeOutcome";
 
 export interface StrandsSpanExporterOptions {
   /** Defaults to OTEL_SERVICE_NAME or the SDK's default, strands-agents. */
@@ -59,7 +59,7 @@ export class StrandsSpanExporter implements SpanExporter {
   private readonly scope: string;
   private readonly captureContent: boolean;
   private readonly privacy: NativePrivacy;
-  private readonly cycles = new CycleOutcomes();
+  private readonly children = new ChildOutcomes();
   private readonly modelProvider?: string;
 
   constructor(
@@ -79,13 +79,13 @@ export class StrandsSpanExporter implements SpanExporter {
       if (span.instrumentationScope.name !== this.scope) continue;
       const reasons = finishReasons(span);
       completions.set(span, reasons);
-      this.cycles.observe(span, outcome(span, reasons));
+      this.children.observe(span, outcome(span, reasons));
     }
     this.exporter.export(spans.map((span) => this.adapt(span, completions.get(span) ?? [])), resultCallback);
   }
 
   shutdown(): Promise<void> {
-    this.cycles.clear();
+    this.children.clear();
     return this.exporter.shutdown();
   }
 
@@ -97,7 +97,8 @@ export class StrandsSpanExporter implements SpanExporter {
     if (span.instrumentationScope.name !== this.scope) return span;
     // Loop-cycle spans have no gen_ai.operation.name, but still carry errors.
     const operation = String(span.attributes["gen_ai.operation.name"] ?? span.name);
-    const code = span.name === "execute_agent_loop_cycle" ? this.cycles.take(span) : outcome(span, reasons);
+    const aggregate = span.name === "execute_agent_loop_cycle" || operation === "invoke_graph" || operation === "invoke_swarm";
+    const code = aggregate ? this.children.take(span) : outcome(span, reasons);
     const selected: Attributes = {};
     for (const [key, value] of Object.entries(span.attributes)) {
       // Agent, graph and node usage is aggregated from child model calls. Keep
@@ -131,7 +132,8 @@ export class StrandsSpanExporter implements SpanExporter {
     // Keep only the validated completion metadata, not an arbitrary native value.
     delete attributes["gen_ai.response.finish_reasons"];
     if (reasons.length) attributes["gen_ai.response.finish_reasons"] = reasons;
-    if (code === SpanStatusCode.UNSET && (operation === "chat" || operation === "invoke_agent" || span.name === "execute_agent_loop_cycle")) {
+    if (code === SpanStatusCode.UNSET && (aggregate || operation === "chat" || operation === "invoke_agent" ||
+        operation === "execute_tool" || operation === "execute_node")) {
       attributes["strands.operation.outcome"] = "unknown";
     }
 

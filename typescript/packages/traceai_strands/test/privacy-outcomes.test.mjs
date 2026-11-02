@@ -282,3 +282,159 @@ test('parallel success and cancellation keep independent cycle outcomes', async 
   }
   assert.deepEqual(first.map(snapshot), second.map(snapshot));
 });
+
+// Use the released SDK's ImageBlock, not an OpenAI-shaped data URL fixture.
+for (const convention of conventions) {
+  for (const direction of ['input', 'tool']) {
+    test(`native ImageBlock bytes obey the size limit: ${direction} (${convention || 'default'})`, async () => {
+      process.env.OTEL_SEMCONV_STABILITY_OPT_IN = convention;
+      process.env.FI_BASE64_IMAGE_MAX_LENGTH = '16';
+      const bytes = Buffer.from('synthetic-native-image'.repeat(8));
+      const encoded = bytes.toString('base64');
+      const image = new sdk.ImageBlock({format:'png', source:{bytes}});
+      const a = new sdk.Agent({name:'image-limit', printer:false, model:new FixtureModel(direction === 'tool' ? 'tool' : 'text'),
+        tools:[new sdk.FunctionTool({name:'echo', description:'Image fixture', callback() { return image; }})]});
+      await a.invoke(direction === 'tool' ? 'safe' : [new sdk.Message({role:'user', content:[new sdk.TextBlock('safe'), image]})]);
+      const before = JSON.stringify(memory.getFinishedSpans().map(snapshot));
+      // Latest semconv omits user images upstream, but tool results carry them in all modes.
+      if (direction === 'tool' || !convention) assert.ok(before.includes(encoded), 'real native telemetry contains the image');
+      for (const captureErrorDetails of [false, true]) {
+        const payload = JSON.stringify(project({captureContent:true, captureErrorDetails}).map(snapshot));
+        assert.ok(!payload.includes(encoded), 'oversize native image escaped in content, projections or history');
+        assert.ok(payload.includes('safe'), 'unrelated content is preserved');
+      }
+      assert.equal(JSON.stringify(memory.getFinishedSpans().map(snapshot)), before, 'raw spans unchanged');
+    });
+  }
+
+  test(`native image byte limit keeps exact-boundary images (${convention || 'default'})`, async () => {
+    process.env.OTEL_SEMCONV_STABILITY_OPT_IN = convention;
+    const bytes = Buffer.from('small-image!');
+    const encoded = bytes.toString('base64');
+    const tool = new sdk.FunctionTool({name:'echo', description:'Image fixture', callback() {
+      return new sdk.ImageBlock({format:'png', source:{bytes}});
+    }});
+    await new sdk.Agent({printer:false, model:new FixtureModel('tool'), tools:[tool]}).invoke('safe');
+    for (const limit of [0, encoded.length - 1, encoded.length, encoded.length + 1]) {
+      process.env.FI_BASE64_IMAGE_MAX_LENGTH = String(limit);
+      const result = project({captureContent:true}).find(s => operation(s) === 'execute_tool');
+      assert.equal(JSON.stringify(snapshot(result)).includes(encoded), limit >= encoded.length, `limit=${limit}`);
+    }
+  });
+
+  test(`unfinished streaming tools and their cycle remain unknown (${convention || 'default'})`, async () => {
+    process.env.OTEL_SEMCONV_STABILITY_OPT_IN = convention;
+    let completed = false;
+    const tool = new sdk.FunctionTool({name:'echo', description:'Streaming fixture', async *callback() {
+      yield 'synthetic-progress';
+      await new Promise(resolve => setImmediate(resolve));
+      completed = true;
+      return 'synthetic-final';
+    }});
+    const a = new sdk.Agent({printer:false, model:new FixtureModel('tool'), tools:[tool], toolExecutor:'sequential'});
+    let observed = false;
+    for await (const event of a.stream('safe')) {
+      if (event.type === 'toolStreamUpdateEvent') { observed = true; break; }
+    }
+    assert.equal(observed, true);
+    assert.equal(completed, false, 'tool callback did not return a result');
+    const raw = memory.getFinishedSpans();
+    const rawTool = raw.find(s => operation(s) === 'execute_tool');
+    assert.equal(rawTool.attributes['gen_ai.tool.status'], undefined);
+    const before = JSON.stringify(raw.map(snapshot));
+    for (const list of projectedBatches(raw)) {
+      const tool = list.find(s => operation(s) === 'execute_tool');
+      const cycle = list.find(s => s.spanContext().spanId === rawTool.parentSpanContext.spanId);
+      for (const span of [tool, cycle]) {
+        assert.equal(span.status.code, 0, `${span.name}: completed model does not imply a completed tool/cycle`);
+        assert.equal(span.attributes['strands.operation.outcome'], 'unknown');
+      }
+      // SDK cleanup may drain another model turn. Its own completion is valid,
+      // but must not erase the unknown outcome of the unfinished tool's cycle.
+      assert.ok(list.filter(s => operation(s) === 'chat').every(s => s.status.code === 1));
+    }
+    assert.equal(JSON.stringify(raw.map(snapshot)), before);
+  });
+
+  for (const mode of ['cancelled', 'mixed', 'interrupted', 'recovered']) {
+    test(`graph native node outcomes: ${mode} (${convention || 'default'})`, async () => {
+      process.env.OTEL_SEMCONV_STABILITY_OPT_IN = convention;
+      const {BeforeNodeCallEvent, Status} = require('@strands-agents/sdk/multiagent');
+      const nodes = [new sdk.Agent({id:'first', printer:false, model:new FixtureModel(mode === 'recovered' ? 'tool' : 'text'), tools:[]})];
+      if (mode === 'mixed') nodes.push(new sdk.Agent({id:'second', printer:false, model:new FixtureModel()}));
+      const graph = new sdk.Graph({nodes, edges:[], maxSteps:3});
+      if (mode !== 'recovered') graph.addHook(BeforeNodeCallEvent, event => {
+        if (event.nodeId !== 'first') return;
+        if (mode === 'interrupted') event.interrupt({name:'synthetic-approval'});
+        else event.cancel = true;
+      });
+      const expectedStatus = mode === 'recovered' ? Status.COMPLETED : mode === 'interrupted' ? Status.INTERRUPTED : Status.CANCELLED;
+      const result = await graph.invoke('safe');
+      assert.equal(result.status, expectedStatus);
+      const raw = memory.getFinishedSpans();
+      const before = JSON.stringify(raw.map(snapshot));
+      for (const list of projectedBatches(raw)) {
+        assert.equal(list.find(s => operation(s) === 'invoke_graph').status.code, mode === 'recovered' ? 1 : 2);
+        const node = list.find(s => operation(s) === 'execute_node' && s.attributes['gen_ai.agent.id'] === 'first');
+        assert.equal(node.attributes['gen_ai.agent.status'], expectedStatus);
+        assert.equal(node.status.code, mode === 'recovered' ? 1 : 2);
+        if (mode === 'mixed') assert.equal(list.find(s => operation(s) === 'execute_node' && s.attributes['gen_ai.agent.id'] === 'second').status.code, 1);
+        if (mode === 'recovered') {
+          assert.equal(list.find(s => operation(s) === 'execute_tool').status.code, 2);
+          assert.equal(list.find(s => operation(s) === 'invoke_agent').status.code, 1, 'recovered tool failure does not fail the agent or graph');
+        }
+      }
+      assert.equal(JSON.stringify(raw.map(snapshot)), before);
+    });
+  }
+}
+
+for (const convention of conventions) {
+  test(`swarm node cancellation is propagated without content (${convention || 'default'})`, async () => {
+    process.env.OTEL_SEMCONV_STABILITY_OPT_IN = convention;
+    const {BeforeNodeCallEvent, Status} = require('@strands-agents/sdk/multiagent');
+    const swarm = new sdk.Swarm({nodes:[agent('swarm', 'swarm')], maxSteps:2});
+    swarm.addHook(BeforeNodeCallEvent, event => { event.cancel = true; });
+    assert.equal((await swarm.invoke('safe')).status, Status.CANCELLED);
+    for (const list of projectedBatches(memory.getFinishedSpans())) {
+      assert.equal(list.find(s => operation(s) === 'execute_node').status.code, 2);
+      assert.equal(list.find(s => operation(s) === 'invoke_swarm').status.code, 2);
+    }
+  });
+}
+
+test('native node statuses require completion evidence and preserve explicit errors', () => {
+  for (const status of ['COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'PENDING', undefined]) {
+    const span = provider.getTracer('strands-agents').startSpan(String(status), {attributes:{
+      'gen_ai.operation.name':'execute_node', 'gen_ai.agent.status':status,
+    }});
+    span.setStatus({code:1}); span.end();
+  }
+  const span = provider.getTracer('strands-agents').startSpan('explicit-error', {attributes:{'gen_ai.operation.name':'execute_node'}});
+  span.setStatus({code:2}); span.end();
+  const list = project();
+  assert.deepEqual(list.map(s => s.status.code), [1,2,2,2,0,0,2]);
+  assert.ok(list.filter(s => s.status.code === 0).every(s => s.attributes['strands.operation.outcome'] === 'unknown'));
+});
+
+test('native image masking preserves non-image byte fields and retained source metadata', () => {
+  process.env.FI_BASE64_IMAGE_MAX_LENGTH = '16';
+  const bytes = Buffer.from('synthetic-payload-not-an-image'.repeat(4)).toString('base64');
+  const span = provider.getTracer('strands-agents').startSpan('custom-content', {attributes:{
+    'custom.payload':JSON.stringify({source:{bytes}, image:{format:'png', source:{bytes}}}),
+  }});
+  span.end();
+  const payload = JSON.parse(project({captureContent:true})[0].attributes['custom.payload']);
+  assert.equal(payload.source.bytes, bytes, 'a plain bytes field is not necessarily an image');
+  assert.equal(payload.image.format, 'png');
+  assert.notEqual(payload.image.source.bytes, bytes);
+});
+
+function projectedBatches(raw) {
+  return [[raw], [[...raw].reverse()], raw.map(s => [s])].map(batches => {
+    const collected = [];
+    const adapter = new StrandsSpanExporter({export(spans, cb) { collected.push(...spans); cb({code:0}); }, async shutdown() {}});
+    for (const batch of batches) adapter.export(batch, () => {});
+    return collected;
+  });
+}

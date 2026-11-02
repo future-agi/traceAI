@@ -83,9 +83,20 @@ export class NativePrivacy {
       const ambiguousResult = !this.captureErrors && object.type === "tool_call_response" && !successfulTool;
       return Object.fromEntries(Object.entries(object).map(([key, child]) => [key,
         (errorResult && ["content", "response", "message", "output"].includes(key)) || (ambiguousResult && key === "response")
-          ? REDACTED_VALUE : this.value(child, successfulTool, depth + 1),
+          ? REDACTED_VALUE : this.value(key === "image" ? this.image(child) : child, successfulTool, depth + 1),
       ]));
     }
     return value;
+  }
+
+  private image(value: unknown): unknown {
+    // ImageBlock.toJSON() uses image.source.bytes with bare base64, not a data
+    // URL. Sanitize before projection so tool results and history share the cap.
+    if (!value || typeof value !== "object") return value;
+    const image = value as Record<string, unknown>;
+    if (!image.source || typeof image.source !== "object") return value;
+    const source = image.source as Record<string, unknown>;
+    if (typeof source.bytes !== "string" || source.bytes.length <= this.config.base64ImageMaxLength) return value;
+    return { ...image, source: { ...source, bytes: REDACTED_VALUE } };
   }
 }

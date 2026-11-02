@@ -43,22 +43,29 @@ export function outcome(span: ReadableSpan, reasons: string[]): SpanStatusCode {
   if (span.status.code === SpanStatusCode.ERROR || span.attributes["gen_ai.tool.status"] === "error" ||
       reasons.some((reason) => NON_SUCCESS.has(reason))) return SpanStatusCode.ERROR;
   const operation = span.attributes["gen_ai.operation.name"];
+  if (operation === "execute_node") {
+    const status = span.attributes["gen_ai.agent.status"];
+    if (status === "FAILED" || status === "CANCELLED" || status === "INTERRUPTED") return SpanStatusCode.ERROR;
+    if (status !== "COMPLETED") return SpanStatusCode.UNSET;
+  }
   // The SDK sets OK in finally, even when a consumer returns its iterator early.
   // No completion record means unknown, not success (nor a fabricated failure).
   if ((operation === "chat" || operation === "invoke_agent") && reasons.length === 0) return SpanStatusCode.UNSET;
+  if (operation === "execute_tool" && span.attributes["gen_ai.tool.status"] !== "success") return SpanStatusCode.UNSET;
   return span.status.code;
 }
 
-/** Correlate model/tool outcomes to their native cycle across processor batches.
- * No payloads or trace objects are retained; sampling/drops are bounded and fail
- * back to UNSET. Agent roots use their own completion, allowing recovered tools.
+/** Correlate model/tool outcomes to cycles and terminal node outcomes to native
+ * orchestrations across processor batches. No payloads or trace objects are
+ * retained; sampling/drops are bounded and fall back to UNSET. Agent/node roots
+ * use their own completion, so a recovered tool error does not fail the graph.
  */
-export class CycleOutcomes {
+export class ChildOutcomes {
   private readonly pending = new Map<string, SpanStatusCode>();
 
   observe(span: ReadableSpan, code: SpanStatusCode): void {
     const operation = span.attributes["gen_ai.operation.name"];
-    if ((operation !== "chat" && operation !== "execute_tool") || !span.parentSpanContext) return;
+    if ((operation !== "chat" && operation !== "execute_tool" && operation !== "execute_node") || !span.parentSpanContext) return;
     const key = `${span.spanContext().traceId}:${span.parentSpanContext.spanId}`;
     const previous = this.pending.get(key);
     const merged = previous === SpanStatusCode.ERROR || code === SpanStatusCode.ERROR ? SpanStatusCode.ERROR :
