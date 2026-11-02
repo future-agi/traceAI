@@ -62,7 +62,11 @@ final class KernelInvocationCompat {
         static <T> Mono<FunctionResult<T>> invoke(Kernel kernel, KernelFunction<T> function,
                 KernelFunctionArguments arguments, TracedInvocation invocation) {
             invocation.replaceRootFunctionSpan();
-            return kernel.invokeAsync(function).withArguments(arguments).withTelemetry(invocation.telemetry());
+            // Prompt templates and native functions call other functions through the kernel they
+            // receive, without the caller's invocation context. Give them a kernel whose functions
+            // report through this invocation.
+            return NativeTelemetry.routeKernel(kernel, invocation).invokeAsync(function)
+                .withArguments(arguments).withTelemetry(invocation.telemetry());
         }
     }
 }

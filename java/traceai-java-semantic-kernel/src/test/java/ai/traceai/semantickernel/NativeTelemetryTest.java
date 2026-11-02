@@ -286,7 +286,7 @@ class NativeTelemetryTest {
 
         SpanData tool = onlyFunctionSpan(spans);
         assertThat(tool.getName()).isEqualTo("function_invocation local-immediate");
-        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+        assertTraceAiTool(tool, "local-immediate");
         assertThat(tool.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
         assertThat(tool.getTraceId()).isEqualTo(only(spans, "CHAIN").getTraceId());
         assertThat(spans.stream().filter(span -> "LLM".equals(span.getAttributes().get(FI_KIND)))).hasSize(2);
@@ -331,6 +331,119 @@ class NativeTelemetryTest {
         SpanData tool = onlyFunctionSpan(exporter.getFinishedSpanItems());
         assertThat(tool.getName()).isEqualTo("function_invocation local-immediate");
         assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+    }
+
+    @Test
+    void promptTemplateFunctionCallIsATraceAiToolSpanWithHiddenErrorDetails() {
+        // The template engine calls {{plugin.function}} through the kernel without the caller's
+        // invocation context, so its span used to reach only the global tracer, unfiltered.
+        DelayedPlugin plugin = new DelayedPlugin();
+        TracedKernel traced = new TracedKernel(pluginKernel(plugin),
+            tracer(TraceConfig.builder().hideErrorDetails(true).build()));
+
+        assertThatThrownBy(() -> traced.invokePromptAsync("Value: {{local.failing}}").block());
+
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        assertThat(plugin.failingCalls).hasValue(1);
+        SpanData agent = only(spans, "AGENT");
+        SpanData tool = onlyFunctionSpan(spans);
+        assertThat(tool.getName()).isEqualTo("function_invocation local-failing");
+        assertTraceAiTool(tool, "local-failing");
+        assertThat(tool.getParentSpanId()).isEqualTo(agent.getSpanId());
+        assertThat(tool.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(tool.getStatus().getDescription()).isEmpty();
+        assertThat(spans).allSatisfy(span -> {
+            assertThat(span.getInstrumentationScopeInfo().getName()).isEqualTo("traceai-test");
+            assertThat(span.getEvents()).allSatisfy(event -> {
+                assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.message"))).isNull();
+                assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.stacktrace"))).isNull();
+            });
+            assertThat(span.toString()).doesNotContain(LocalOpenAi.ERROR_DETAIL);
+        });
+    }
+
+    @Test
+    void promptTemplateFunctionCallUsesTheTraceAiTracerWithoutGlobalTelemetry() {
+        GlobalOpenTelemetry.resetForTest();
+        DelayedPlugin plugin = new DelayedPlugin();
+
+        var result = new TracedKernel(pluginKernel(plugin), tracer())
+            .invokePromptAsync("Value: {{local.immediate}}").block();
+
+        assertThat(result.getResult()).isEqualTo(LocalOpenAi.ANSWER);
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        SpanData agent = only(spans, "AGENT");
+        SpanData tool = onlyFunctionSpan(spans);
+        assertTraceAiTool(tool, "local-immediate");
+        assertThat(tool.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        assertThat(tool.getParentSpanId()).isEqualTo(agent.getSpanId());
+        assertThat(only(spans, "LLM").getParentSpanId()).isEqualTo(agent.getSpanId());
+        assertThat(spans).hasSize(3);
+    }
+
+    @Test
+    void handlebarsHelperFunctionCallIsATraceAiToolSpan() {
+        DelayedPlugin plugin = new DelayedPlugin();
+        KernelFunction<String> function = KernelFunction.<String>createFromPrompt("Value: {{local-immediate}}")
+            .withTemplateFormat("handlebars")
+            .withPromptTemplateFactory(new com.microsoft.semantickernel.semanticfunctions.HandlebarsPromptTemplateFactory())
+            .build();
+
+        var result = new TracedKernel(pluginKernel(plugin), tracer()).invokeAsync(function).block();
+
+        assertThat(result.getResult()).isEqualTo(LocalOpenAi.ANSWER);
+        List<SpanData> spans = exporter.getFinishedSpanItems();
+        SpanData tool = onlyFunctionSpan(spans);
+        assertTraceAiTool(tool, "local-immediate");
+        assertThat(tool.getParentSpanId()).isEqualTo(only(spans, "AGENT").getSpanId());
+        assertThat(spans).allSatisfy(span ->
+            assertThat(span.getInstrumentationScopeInfo().getName()).isEqualTo("traceai-test"));
+    }
+
+    @Test
+    void nativeFunctionsReceiveAKernelWithTheSameFunctionsAndServices() {
+        KernelPlugin probe = KernelPluginFactory.createFromObject(new KernelProbe(), "probe");
+        Kernel kernel = Kernel.builder()
+            .withAIService(ChatCompletionService.class, openAi.chatService())
+            .withPlugin(probe)
+            .withPlugin(KernelPluginFactory.createFromObject(new DelayedPlugin(), "local"))
+            .build();
+
+        var result = new TracedKernel(kernel, tracer()).invokePromptAsync("{{probe.describe}}").block();
+
+        assertThat(result.getResult()).isEqualTo(LocalOpenAi.ANSWER);
+        assertThat(KernelProbe.seen).isEqualTo("plugins=2 functions=6 service=true");
+    }
+
+    private Kernel pluginKernel(DelayedPlugin plugin) {
+        return Kernel.builder()
+            .withAIService(ChatCompletionService.class, openAi.chatService())
+            .withPlugin(KernelPluginFactory.createFromObject(plugin, "local"))
+            .build();
+    }
+
+    private static void assertTraceAiTool(SpanData tool, String toolName) {
+        assertThat(tool.getAttributes().get(FI_KIND)).isEqualTo("TOOL");
+        assertThat(tool.getInstrumentationScopeInfo().getName()).isEqualTo("traceai-test");
+        assertThat(tool.getAttributes().get(AttributeKey.stringKey(SemanticConventions.GEN_AI_TOOL_NAME)))
+            .isEqualTo(toolName);
+    }
+
+    public static class KernelProbe {
+        static volatile String seen;
+
+        @DefineKernelFunction(name = "describe", returnType = "java.lang.String")
+        public String describe(Kernel kernel) {
+            boolean service;
+            try {
+                service = kernel.getService(ChatCompletionService.class) != null;
+            } catch (Exception e) {
+                service = false;
+            }
+            seen = "plugins=" + kernel.getPlugins().size() + " functions=" + kernel.getFunctions().size()
+                + " service=" + service;
+            return "described";
+        }
     }
 
     private InMemorySpanExporter runToolRound(DelayedPlugin plugin, FITracer tracer) {

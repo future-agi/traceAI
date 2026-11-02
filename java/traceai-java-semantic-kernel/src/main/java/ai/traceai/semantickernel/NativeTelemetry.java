@@ -12,6 +12,11 @@ import com.microsoft.semantickernel.implementation.telemetry.SemanticKernelTelem
 import com.microsoft.semantickernel.orchestration.FunctionResult;
 import com.microsoft.semantickernel.orchestration.InvocationContext;
 import com.microsoft.semantickernel.orchestration.InvocationReturnMode;
+import com.microsoft.semantickernel.plugin.KernelPlugin;
+import com.microsoft.semantickernel.services.AIService;
+import com.microsoft.semantickernel.services.AIServiceCollection;
+import com.microsoft.semantickernel.services.AIServiceSelector;
+import com.microsoft.semantickernel.services.ServiceNotFoundException;
 import com.microsoft.semantickernel.semanticfunctions.KernelArguments;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunction;
 import io.opentelemetry.api.common.AttributeKey;
@@ -24,6 +29,11 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -49,6 +59,8 @@ final class NativeTelemetry {
     // Semantic Kernel 1.4.x used these names before moving to gen_ai.usage.*.
     private static final String LEGACY_INPUT_TOKENS = "gen_ai.response.prompt_tokens";
     private static final String LEGACY_OUTPUT_TOKENS = "gen_ai.response.completion_tokens";
+    private static final String FUNCTION_NAME = "semantic_kernel.function.invocation.name";
+    private static final String FUNCTION_PLUGIN = "semantic_kernel.function.invocation.plugin_name";
 
     private NativeTelemetry() { }
 
@@ -62,6 +74,27 @@ final class NativeTelemetry {
      */
     static InvocationContext route(@Nullable InvocationContext context, TracedInvocation invocation) {
         return new RoutedInvocationContext(context, invocation);
+    }
+
+    /**
+     * A view of {@code kernel} whose functions report through this invocation. Semantic Kernel's
+     * prompt template engines ({@code {{plugin.function}}} and Handlebars helpers) and native
+     * functions that take a {@code Kernel} call other functions through the kernel they were given,
+     * without the caller's invocation context.
+     */
+    @Nullable
+    static Kernel routeKernel(@Nullable Kernel kernel, TracedInvocation invocation) {
+        if (kernel == null) {
+            return null;
+        }
+        if (kernel instanceof RoutedKernel) {
+            RoutedKernel routed = (RoutedKernel) kernel;
+            if (routed.invocation == invocation) {
+                return routed;
+            }
+            kernel = routed.delegate;
+        }
+        return new RoutedKernel(kernel, invocation);
     }
 
     private static boolean isCompletion(String name) {
@@ -125,7 +158,7 @@ final class NativeTelemetry {
         }
     }
 
-    /** Runs a tool function with this invocation's telemetry; otherwise identical to it. */
+    /** Runs a function with this invocation's telemetry; otherwise identical to it. */
     private static final class RoutedFunction<T> extends KernelFunction<T> {
         private final KernelFunction<T> delegate;
         private final TracedInvocation invocation;
@@ -136,14 +169,104 @@ final class NativeTelemetry {
             this.invocation = invocation;
         }
 
-        static <T> RoutedFunction<T> wrap(KernelFunction<T> function, TracedInvocation invocation) {
+        static <T> KernelFunction<T> wrap(KernelFunction<T> function, TracedInvocation invocation) {
+            if (function instanceof RoutedFunction) {
+                RoutedFunction<T> routed = (RoutedFunction<T>) function;
+                if (routed.invocation == invocation) {
+                    return routed;
+                }
+                // The innermost traced operation owns the call.
+                function = routed.delegate;
+            }
             return new RoutedFunction<>(function, invocation);
         }
 
         @Override
         public Mono<FunctionResult<T>> invokeAsync(Kernel kernel, @Nullable KernelArguments arguments,
                 @Nullable ContextVariableType<T> variableType, @Nullable InvocationContext invocationContext) {
-            return delegate.invokeAsync(kernel, arguments, variableType, route(invocationContext, invocation));
+            return delegate.invokeAsync(routeKernel(kernel, invocation), arguments, variableType,
+                route(invocationContext, invocation));
+        }
+    }
+
+    /**
+     * Delegates to the application's kernel and wraps every function it hands out. The copied
+     * plugins and hooks passed to the superclass only serve {@code Kernel.from(...)} and
+     * {@code toBuilder()}; every lookup reads the live delegate.
+     */
+    private static final class RoutedKernel extends Kernel {
+        private final Kernel delegate;
+        private final TracedInvocation invocation;
+
+        RoutedKernel(Kernel delegate, TracedInvocation invocation) {
+            super(new AIServiceCollection(), ignored -> delegate.getServiceSelector(),
+                new ArrayList<>(delegate.getPlugins()), delegate.getGlobalKernelHooks());
+            this.delegate = delegate;
+            this.invocation = invocation;
+        }
+
+        @Override
+        @Nullable
+        public KernelPlugin getPlugin(String pluginName) {
+            KernelPlugin plugin = delegate.getPlugin(pluginName);
+            return plugin == null ? null : routePlugin(plugin);
+        }
+
+        @Override
+        public Collection<KernelPlugin> getPlugins() {
+            List<KernelPlugin> plugins = new ArrayList<>();
+            for (KernelPlugin plugin : delegate.getPlugins()) {
+                plugins.add(routePlugin(plugin));
+            }
+            return Collections.unmodifiableList(plugins);
+        }
+
+        @Override
+        public <U> KernelFunction<U> getFunction(String pluginName, String functionName) {
+            return RoutedFunction.wrap(delegate.<U>getFunction(pluginName, functionName), invocation);
+        }
+
+        @Override
+        public List<KernelFunction<?>> getFunctions() {
+            List<KernelFunction<?>> functions = new ArrayList<>();
+            for (KernelFunction<?> function : delegate.getFunctions()) {
+                functions.add(RoutedFunction.wrap(function, invocation));
+            }
+            return functions;
+        }
+
+        @Override
+        public KernelHooks getGlobalKernelHooks() {
+            return delegate.getGlobalKernelHooks();
+        }
+
+        @Override
+        public AIServiceSelector getServiceSelector() {
+            return delegate.getServiceSelector();
+        }
+
+        @Override
+        public <S extends AIService> S getService(Class<S> clazz) throws ServiceNotFoundException {
+            return delegate.getService(clazz);
+        }
+
+        @Override
+        public <S extends AIService> S getService(Class<S> clazz, KernelArguments args)
+                throws ServiceNotFoundException {
+            return delegate.getService(clazz, args);
+        }
+
+        @Override
+        public Kernel.Builder toBuilder() {
+            return delegate.toBuilder();
+        }
+
+        private KernelPlugin routePlugin(KernelPlugin plugin) {
+            Map<String, KernelFunction<?>> functions = new LinkedHashMap<>();
+            for (Map.Entry<String, KernelFunction<?>> entry : plugin.getFunctions().entrySet()) {
+                functions.put(entry.getKey(), RoutedFunction.wrap(entry.getValue(), invocation));
+            }
+            return new KernelPlugin(plugin.getName(), plugin.getDescription(), functions);
         }
     }
 
@@ -167,6 +290,8 @@ final class NativeTelemetry {
         @Nullable private Context parent;
         private boolean noParent;
         @Nullable private String provider;
+        @Nullable private String functionName;
+        @Nullable private String pluginName;
 
         InvocationSpanBuilder(TracedInvocation invocation, String name) {
             this.invocation = invocation;
@@ -222,8 +347,20 @@ final class NativeTelemetry {
 
         @Override
         public <T> SpanBuilder setAttribute(AttributeKey<T> key, T value) {
-            if ("gen_ai.system".equals(key.getKey()) && value != null) {
-                provider = value.toString();
+            if (value != null) {
+                switch (key.getKey()) {
+                    case "gen_ai.system":
+                        provider = value.toString();
+                        break;
+                    case FUNCTION_NAME:
+                        functionName = value.toString();
+                        break;
+                    case FUNCTION_PLUGIN:
+                        pluginName = value.toString();
+                        break;
+                    default:
+                        break;
+                }
             }
             delegate.setAttribute(key, value);
             return this;
@@ -269,6 +406,11 @@ final class NativeTelemetry {
             }
             if (provider != null) {
                 span.setAttribute(SemanticConventions.LLM_SYSTEM, provider);
+            }
+            if (kind == FISpanKind.TOOL && functionName != null) {
+                // The name the model sees for the function, as in the span name.
+                span.setAttribute(SemanticConventions.GEN_AI_TOOL_NAME,
+                    pluginName == null || pluginName.isEmpty() ? functionName : pluginName + "-" + functionName);
             }
             for (Map.Entry<String, String> entry : invocation.contextAttributes().entrySet()) {
                 span.setAttribute(entry.getKey(), entry.getValue());

@@ -23,9 +23,11 @@ var result = traced.invokePromptAsync("Summarize the benefits of retrieval-augme
 System.out.println(result.getResult());
 ```
 
-The root invocation is an `AGENT` span. The adapter routes Semantic Kernel's native telemetry through your traceAI tracer: model calls become `LLM` children and nested function calls become `TOOL` spans. The native span for the root function shares the root observation instead of exporting a second function span. Token usage belongs only to model spans, never the root invocation.
+The root invocation is an `AGENT` span. The adapter routes Semantic Kernel's native telemetry through your traceAI tracer: model calls become `LLM` children and nested function calls become `TOOL` spans with `gen_ai.tool.name` set to `plugin-function`. The native span for the root function shares the root observation instead of exporting a second function span. Token usage belongs only to model spans, never the root invocation.
 
-You can also supply an `FITracer` explicitly with `new TracedKernel(kernel, tracer)`. The adapter does not replace the global OpenTelemetry instance or install another exporter. It registers the maintained OpenTelemetry Reactor context bridge, which propagates context through Reactor operators and scheduler hops.
+On 1.4.5 and 1.5.0, nested calls include functions called from prompt templates (`{{plugin.function}}` and Handlebars helpers) and functions that native code calls through the `Kernel` it receives. To route these, the invocation runs on a view of your kernel with the same plugins, services and hooks. Code inside a function therefore receives that view, not your original `Kernel` instance, so do not compare kernels by identity.
+
+You can also supply an `FITracer` explicitly with `new TracedKernel(kernel, tracer)`. The adapter does not replace the global OpenTelemetry instance or install another exporter. When the maintained OpenTelemetry Reactor context bridge (`opentelemetry-reactor-3.1`) is on the classpath, which Semantic Kernel 1.4.5 and later bring, the adapter registers it so context propagates through Reactor operators and scheduler hops. This artifact does not add the bridge to your dependencies. Semantic Kernel 1.3.0 does not bring it; there, the adapter's spans still nest correctly, but `Span.current()` in your own code after a scheduler hop is not set unless you add the bridge yourself.
 
 ## Capture service-level content, streaming and embeddings
 

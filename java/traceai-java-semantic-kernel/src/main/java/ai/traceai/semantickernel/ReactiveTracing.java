@@ -8,7 +8,6 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.ContextStorage;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.instrumentation.reactor.v3_1.ContextPropagationOperator;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -33,9 +32,8 @@ final class ReactiveTracing {
     static final AttributeKey<Boolean> CANCELLED = AttributeKey.booleanKey("semantic_kernel.cancelled");
 
     static {
-        // Use the maintained OTel bridge for scheduler hops, not a custom Reactor subscriber.
-        // Registration is idempotent and does not install an exporter or change global OTel.
-        ContextPropagationOperator.create().registerOnEachOperator();
+        // Use the maintained OTel bridge for scheduler hops when Semantic Kernel brings it.
+        ReactorOtelContext.bridged();
     }
 
     private ReactiveTracing() { }
@@ -47,8 +45,7 @@ final class ReactiveTracing {
             TracedInvocation invocation = start(tracer, name, kind, modelFallback, view);
             Mono<T> source = assemble(invocation, () -> operation.apply(invocation));
             return Mono.<T>fromDirect(subscribeWithin(source, invocation.context()))
-                .contextWrite(reactorContext -> ContextPropagationOperator
-                    .storeOpenTelemetryContext(reactorContext, invocation.context()))
+                .contextWrite(reactorContext -> ReactorOtelContext.store(reactorContext, invocation.context()))
                 .doOnSuccess(value -> {
                     try {
                         onSuccess.accept(invocation, value);
@@ -77,8 +74,7 @@ final class ReactiveTracing {
             TracedInvocation invocation = start(tracer, name, kind, modelFallback, view);
             Flux<T> source = assemble(invocation, () -> operation.apply(invocation), Flux::error);
             return Flux.<T>from(subscribeWithin(source, invocation.context()))
-                .contextWrite(reactorContext -> ContextPropagationOperator
-                    .storeOpenTelemetryContext(reactorContext, invocation.context()))
+                .contextWrite(reactorContext -> ReactorOtelContext.store(reactorContext, invocation.context()))
                 .doOnComplete(() -> {
                     invocation.span().setStatus(StatusCode.OK);
                     invocation.finish(SignalType.ON_COMPLETE);
@@ -97,8 +93,7 @@ final class ReactiveTracing {
 
     private static TracedInvocation start(FITracer tracer, String name, FISpanKind kind,
             boolean modelFallback, ContextView view) {
-        Context parent = ContextPropagationOperator.getOpenTelemetryContextFromContextView(
-            view, Context.current());
+        Context parent = ReactorOtelContext.read(view, Context.current());
         try (Scope ignored = parent.makeCurrent()) {
             Span span = tracer.startSpan(name, kind, parent);
             Context context = parent.with(span);
