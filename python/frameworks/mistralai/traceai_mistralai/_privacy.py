@@ -55,10 +55,17 @@ class _NativeTraceConfig(ObjectProxy):
         value = self.__wrapped__.mask(policy_key, value)
         if key in ("http.url", "url.full") and isinstance(value, str):
             # SDK HTTP metadata is independent of message-hiding flags. Never
-            # export proxy userinfo, including percent-encoded credentials.
+            # export userinfo, query parameters, or fragments: custom clients
+            # can attach credentials to the URL outside the message policy.
             try:
                 url = urlsplit(value)
-                return urlunsplit(url._replace(netloc=url.netloc.rsplit("@", 1)[-1]))
+                return urlunsplit(
+                    url._replace(
+                        netloc=url.netloc.rsplit("@", 1)[-1],
+                        query="",
+                        fragment="",
+                    )
+                )
             except ValueError:
                 return None
         if (

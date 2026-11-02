@@ -27,7 +27,7 @@ from test_review_regressions import (
     [
         (
             "https://user:password@proxy.invalid:8443/v1?q=ok#stream",
-            "https://proxy.invalid:8443/v1?q=ok#stream",
+            "https://proxy.invalid:8443/v1",
         ),
         ("https://user%40name:p%40ss@proxy.invalid/v1", "https://proxy.invalid/v1"),
         ("http://user:password@[::1]:8080/v1", "http://[::1]:8080/v1"),
@@ -36,10 +36,18 @@ from test_review_regressions import (
         ("https://user:password@[invalid/v1", None),
     ],
 )
-def test_url_mask_removes_only_userinfo(key, lazy, url, expected):
+def test_url_mask_removes_userinfo_query_and_fragment(key, lazy, url, expected):
     config = _NativeTraceConfig(TraceConfig())
     value = (lambda: url) if lazy else url
     assert config.mask(key, value) == expected
+
+
+@pytest.mark.parametrize("key", ["http.url", "url.full"])
+def test_url_mask_drops_query_credentials_and_fragment(key):
+    url = "https://api.mistral.ai/v1/chat/completions?api_key=synthetic-query-credential-458#private-fragment"
+    assert _NativeTraceConfig(TraceConfig(hide_inputs=True, hide_outputs=True)).mask(
+        key, url
+    ) == "https://api.mistral.ai/v1/chat/completions"
 
 
 @pytest.mark.skipif(not NATIVE, reason="Native SDK HTTP attributes")
@@ -87,6 +95,54 @@ def test_proxy_credentials_not_exported_but_request_unchanged(
         assert (
             spans[0].attributes["http.url"]
             == "https://proxy.invalid:8443/v1/chat/completions"
+        )
+
+
+@pytest.mark.skipif(not NATIVE, reason="Native SDK HTTP attributes")
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hide_content", [False, True])
+def test_query_credentials_not_exported_but_request_unchanged(
+    asynchronous, hide_content
+):
+    marker = "synthetic-query-credential-458"
+    observed = []
+
+    def respond(request):
+        observed.append(str(request.url))
+        return httpx.Response(200, json=CHAT)
+
+    with tracing(hide_inputs=hide_content, hide_outputs=hide_content) as (
+        exporter,
+        starts,
+    ):
+        params = dict(
+            model="mistral-test", messages=[{"role": "user", "content": "hello"}]
+        )
+        if asynchronous:
+
+            async def exercise():
+                async with httpx.AsyncClient(
+                    params={"api_key": marker}, transport=httpx.MockTransport(respond)
+                ) as transport:
+                    await Mistral(
+                        api_key="synthetic-key", async_client=transport
+                    ).chat.complete_async(**params)
+
+            asyncio.run(exercise())
+        else:
+            with httpx.Client(
+                params={"api_key": marker}, transport=httpx.MockTransport(respond)
+            ) as transport:
+                Mistral(
+                    api_key="synthetic-key", client=transport
+                ).chat.complete(**params)
+        spans = exporter.get_finished_spans()
+        assert len(spans) == len(starts.spans) == len(observed) == 1
+        assert marker in observed[0]
+        assert marker not in spans[0].to_json()
+        assert (
+            spans[0].attributes["http.url"]
+            == "https://api.mistral.ai/v1/chat/completions"
         )
 
 
