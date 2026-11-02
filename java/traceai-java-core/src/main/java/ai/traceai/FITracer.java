@@ -120,8 +120,7 @@ public class FITracer {
      */
     public void setRawInput(Span span, Object value) {
         if (!config.isHideInputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_INPUT, truncateIfNeeded(json));
+            setBoundedRawJson(span, SemanticConventions.RAW_INPUT, "fi.raw_input_truncated", value);
         }
     }
 
@@ -132,8 +131,20 @@ public class FITracer {
      */
     public void setRawOutput(Span span, Object value) {
         if (!config.isHideOutputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_OUTPUT, truncateIfNeeded(json));
+            setBoundedRawJson(span, SemanticConventions.RAW_OUTPUT, "fi.raw_output_truncated", value);
+        }
+    }
+
+    /**
+     * Omits oversized raw payloads rather than cutting through their JSON structure.
+     * The flag distinguishes a size-limited omission from absent or hidden content.
+     */
+    private void setBoundedRawJson(Span span, String key, String truncatedKey, Object value) {
+        String json = toJson(value);
+        if (json != null && json.length() > ATTRIBUTE_LIMIT) {
+            span.setAttribute(truncatedKey, true);
+        } else if (json != null) {
+            span.setAttribute(key, json);
         }
     }
 

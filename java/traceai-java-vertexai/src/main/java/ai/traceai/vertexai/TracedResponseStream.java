@@ -48,6 +48,7 @@ final class TracedResponseStream extends ResponseStream<GenerateContentResponse>
         private final JsonArray raw = new JsonArray();
         private int rawLength = 2;
         private boolean rawFull;
+        private boolean textFull;
         private boolean ended;
 
         Capture(Iterator<GenerateContentResponse> source, Span span, FITracer tracer) {
@@ -87,9 +88,17 @@ final class TracedResponseStream extends ResponseStream<GenerateContentResponse>
         private void capture(GenerateContentResponse response) {
             if (response.getCandidatesCount() > 0) {
                 Candidate candidate = response.getCandidates(0);
-                if (!tracer.getConfig().isHideOutputs() && candidate.hasContent() && text.length() < LIMIT) {
+                if (!tracer.getConfig().isHideOutputs() && candidate.hasContent() && !textFull) {
                     String delta = TracedGenerativeModel.extractContentText(candidate.getContent());
-                    text.append(delta, 0, Math.min(delta.length(), LIMIT - text.length()));
+                    int end = Math.min(delta.length(), LIMIT - text.length());
+                    if (end > 0 && end < delta.length()
+                            && Character.isHighSurrogate(delta.charAt(end - 1))
+                            && Character.isLowSurrogate(delta.charAt(end))) {
+                        end--;
+                    }
+                    text.append(delta, 0, end);
+                    // Once any text is omitted, later chunks must not fill the gap.
+                    textFull = end < delta.length() || text.length() == LIMIT;
                 }
                 if (candidate.getFinishReasonValue() != 0) {
                     span.setAttribute(AttributeKey.stringArrayKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON),

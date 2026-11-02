@@ -318,6 +318,44 @@ class VertexAIStreamTracingTest {
         assertThat(longAttr(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL)).isEqualTo(5L);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {31998, 31999})
+    void streamBufferKeepsACompleteUnicodePrefixAndDoesNotResumeAfterTruncation(int prefixLength) throws Exception {
+        String first = "a".repeat(prefixLength);
+        String tail = "🚀more";
+        service.streamChunks = List.of(chunk(first), chunk(tail), lastChunk("later"));
+        String returned = model().generateContentStream("hello").stream()
+            .map(r -> r.getCandidates(0).getContent().getParts(0).getText())
+            .collect(java.util.stream.Collectors.joining());
+        assertThat(returned).isEqualTo(first + tail + "later");
+        SpanData span = exporter.getFinishedSpanItems().get(0);
+        String captured = attr(span, "output.value");
+        assertThat(captured).isEqualTo(prefixLength == 31999 ? first : first + "🚀");
+        assertThat(returned).startsWith(captured);
+        assertThat(captured).isEqualTo(new String(captured.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(attr(span, "gen_ai.output.messages").length()).isLessThanOrEqualTo(32000);
+        assertThat(JsonParser.parseString(attr(span, "gen_ai.output.messages")).isJsonArray()).isTrue();
+        assertThat(longAttr(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL)).isEqualTo(5L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"a", "\"\\\n\t", "🚀"})
+    void oversizedUnaryRawJsonIsOmittedWithExplicitIndicators(String pattern) throws Exception {
+        String text = pattern.repeat(40000 / pattern.length());
+        service.unaryResponse = lastChunk(text);
+        var response = model().generateContent(List.of(Content.newBuilder().setRole("user")
+            .addParts(Part.newBuilder().setText(text)).build()));
+        assertThat(response).isEqualTo(service.unaryResponse);
+        SpanData span = exporter.getFinishedSpanItems().get(0);
+        assertThat(attr(span, "raw.input")).isNull();
+        assertThat(attr(span, "raw.output")).isNull();
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("fi.raw_input_truncated"))).isTrue();
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("fi.raw_output_truncated"))).isTrue();
+        assertThat(JsonParser.parseString(attr(span, "gen_ai.input.messages")).isJsonArray()).isTrue();
+        assertThat(JsonParser.parseString(attr(span, "gen_ai.output.messages")).isJsonArray()).isTrue();
+    }
+
     @Test
     void unaryErrorKeepsErrorStatusAndHiddenDetails() {
         service.unaryError = Status.INVALID_ARGUMENT.withDescription("private diagnostic");
