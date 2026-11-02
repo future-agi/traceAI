@@ -24,6 +24,7 @@ import {
   isErrorDetailAttribute,
   redactEmbeddingVectors,
   redactMessageText,
+  redactMessageImages,
   SHOW_ALL,
   type ScrubContext,
   scrubContent,
@@ -136,39 +137,71 @@ function sideModes(policy: ContentPolicy, isGeneration: boolean): { input: SideM
   return { input, output };
 }
 
-/**
- * ModelResponse / GenerateResponse are not purely output: `request` repeats input,
- * and (since Genkit 1.43) a failed generate serializes its exception into the partial
- * response's `finishMessage` and `error`. Sanitize the parsed copy before either
- * genkit:output or output.value is exported. Never inspect arbitrary tool/flow JSON.
- */
-function generationOutput(value: AttributeValue, policy: ContentPolicy): AttributeValue {
-  const hideErrors = hidesFreeText(policy);
-  const hideRequest = policy.hideInputs || policy.hideInputMessages;
-  if (!hideErrors && !hideRequest && !policy.hideInputText) return value;
-  const response = parseJson(value);
-  // A truncated response cannot be safely field-masked.
-  if (!isRecord(response)) return REDACTED_VALUE;
-  if (hideRequest) {
+/** Retain classification, never arbitrary provider message/details fields. */
+function maskError(record: Record<string, unknown>): void {
+  if (record.error === undefined) return;
+  const error = record.error;
+  record.error = isRecord(error) ? {
+    ...(typeof error.status === "string" ? { status: error.status } : {}),
+    ...(typeof error.code === "number" && Number.isFinite(error.code) ? { code: error.code } : {}),
+  } : {};
+}
+
+/** Mutates only JSON.parse's private copy, never an application object or native span. */
+function maskGeneration(response: Record<string, unknown>, policy: ContentPolicy, depth: number): void {
+  if (policy.hideInputs || policy.hideInputMessages) {
     delete response.request;
-  } else if (policy.hideInputText && response.request !== undefined) {
-    response.request = parseJson(redactMessageText(JSON.stringify(response.request))) ?? REDACTED_VALUE;
+  } else if (response.request !== undefined && (policy.hideInputText || policy.hideInputImages)) {
+    let request = JSON.stringify(response.request);
+    if (policy.hideInputText) request = redactMessageText(request) ?? REDACTED_VALUE;
+    if (policy.hideInputImages) request = redactMessageImages(request) ?? REDACTED_VALUE;
+    response.request = parseJson(request) ?? REDACTED_VALUE;
   }
-  if (hideErrors) {
+  if (hidesFreeText(policy)) {
     delete response.finishMessage;
-    if (response.error !== undefined) {
-      // RuntimeError.details is arbitrary provider data, not safe metadata. Only
-      // retain the canonical error classification; status/events retain ERROR too.
-      response.error = isRecord(response.error) && typeof response.error.status === "string"
-        ? { status: response.error.status }
-        : {};
-    }
+    maskError(response);
     if (Array.isArray(response.candidates)) {
       for (const candidate of response.candidates) {
         if (isRecord(candidate)) delete candidate.finishMessage;
       }
     }
   }
+  if (isRecord(response.operation)) {
+    if (depth >= 64) response.operation = REDACTED_VALUE;
+    else maskOperation(response.operation, policy, true, depth + 1);
+  }
+}
+
+/** OperationSchema is used by background-model, check-operation and cancel-operation. */
+function maskOperation(operation: Record<string, unknown>, policy: ContentPolicy, model: boolean, depth: number): void {
+  if (hidesFreeText(policy)) maskError(operation);
+  // Non-model background actions can return arbitrary output; only model operations
+  // have a GenerateResponse here. Error policy still covers every Operation.error.
+  const isModel = model || (typeof operation.action === "string" && operation.action.startsWith("/background-model/"));
+  if (isModel && operation.output !== undefined) {
+    if (policy.hideOutputs || policy.hideOutputMessages || depth >= 64) {
+      operation.output = REDACTED_VALUE;
+    } else if (isRecord(operation.output)) {
+      maskGeneration(operation.output, policy, depth + 1);
+      if (policy.hideOutputText) operation.output = parseJson(redactMessageText(JSON.stringify(operation.output))) ?? REDACTED_VALUE;
+    }
+  }
+}
+
+/**
+ * Generation responses repeat requests and errors, and may wrap an Operation.
+ * Poll/cancel actions carry Operation on BOTH sides, including a previous error.
+ * Parse only these native envelopes, never arbitrary util/tool/flow content.
+ */
+function generationOutput(value: AttributeValue, policy: ContentPolicy, operation = false, model = false): AttributeValue {
+  if (!hidesFreeText(policy) && !policy.hideInputs && !policy.hideInputMessages &&
+      !policy.hideInputText && !policy.hideInputImages &&
+      !(operation && (policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText))) return value;
+  const response = parseJson(value);
+  // Truncated native envelopes cannot be safely field-masked.
+  if (!isRecord(response)) return REDACTED_VALUE;
+  if (operation) maskOperation(response, policy, model, 0);
+  else maskGeneration(response, policy, 0);
   return JSON.stringify(response);
 }
 
@@ -196,7 +229,13 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const scrub = options.scrub ?? {};
   const kind = genkitSpanKind(source);
   const isModelCall = kind === FISpanKind.LLM;
-  const isGeneration = isModelCall || source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL;
+  const isAction = source[GenkitAttributes.TYPE] === GenkitSpanType.ACTION;
+  const subtype = isAction ? source[GenkitAttributes.SUBTYPE] : undefined;
+  const isBackgroundModel = subtype === "background-model";
+  const isOperation = subtype === "check-operation" || subtype === "cancel-operation";
+  const isGeneration = isModelCall ||
+    (source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL && source[GenkitAttributes.NAME] === "generate") ||
+    (subtype === "util" && source[GenkitAttributes.KEY] === "/util/generate");
   const modes = sideModes(policy, isGeneration);
   // FI_HIDE_EMBEDDING_VECTORS: the vectors are in an embedder span's output.
   const hideVectors = kind === FISpanKind.EMBEDDING && policy.hideEmbeddingVectors === true;
@@ -207,10 +246,16 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
     if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {
       const isInput = GENKIT_INPUT_KEYS.includes(key);
-      const content = isGeneration && key === GenkitAttributes.OUTPUT && modes.output !== "hide"
-        ? generationOutput(value, policy)
-        : value;
-      const exported = sideValue(content, isInput ? modes.input : modes.output, scrub, hideVectors && !isInput);
+      const mode = isInput ? modes.input : modes.output;
+      let content = value;
+      if (mode !== "hide") {
+        if (isOperation || (isGeneration && !isInput)) {
+          content = generationOutput(content, policy, isOperation || isBackgroundModel, isBackgroundModel);
+        } else if (isGeneration && isInput && policy.hideInputImages) {
+          content = redactMessageImages(content) ?? REDACTED_VALUE;
+        }
+      }
+      const exported = sideValue(content, mode, scrub, hideVectors && !isInput);
       if (exported !== undefined) out[key] = exported;
       continue;
     }
