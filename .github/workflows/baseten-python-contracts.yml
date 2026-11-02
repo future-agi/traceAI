@@ -53,6 +53,8 @@ jobs:
             env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
             python -m pytest python/frameworks/openai/tests/test_baseten_provider.py \
             python/frameworks/openai/tests/test_openai_compatible_spans.py \
+            python/frameworks/openai/tests/test_stream_lifecycle.py \
+            python/frameworks/openai/tests/test_stream_context_manager.py \
             --noconftest -p no:cacheprovider -o addopts='' -q
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \

@@ -26,7 +26,7 @@ class _ResponseAccumulator(Protocol):
 
 
 def _finish_on_exit(stream: Any, error: Optional[BaseException]) -> None:
-    """Finish even on an early context exit, without ending an exhausted span twice."""
+    """Finish on close, context exit or error without ending a span twice."""
     if stream._self_is_finished:
         return
     if error is None:
@@ -73,6 +73,16 @@ class _Stream(ObjectProxy):  # type: ignore
             raise
         finally:
             _finish_on_exit(self, exc)
+
+    def close(self) -> Any:
+        error: Optional[BaseException] = None
+        try:
+            return self.__wrapped__.close()
+        except BaseException as close_error:
+            error = close_error
+            raise
+        finally:
+            _finish_on_exit(self, error)
 
     def __iter__(self) -> Iterator[Any]:
         return self
@@ -164,6 +174,16 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, exc)
 
+    async def close(self) -> Any:
+        error: Optional[BaseException] = None
+        try:
+            return await self.__wrapped__.close()
+        except BaseException as close_error:
+            error = close_error
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __aiter__(self):
         return self
 
@@ -175,14 +195,9 @@ class _AsyncStream(ObjectProxy):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
-            if not self._self_is_finished:
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                self._self_with_span.record_exception(exception)
-                self._finish_tracing(status=status)
+        except BaseException as exception:
+            # Cancellation is a BaseException; finalize without swallowing it.
+            _finish_on_exit(self, exception)
             raise
         else:
             self._process_chunk(chunk)
