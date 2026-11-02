@@ -4,15 +4,18 @@
 package traceailambda
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambda/handlertrace"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-lambda-go/otellambda"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -38,7 +41,21 @@ type Provider interface {
 
 // WrapHandler wraps an AWS Lambda handler with otellambda's single SERVER span.
 // Build the provider and wrapper once, outside the handler, and register the
-// result with lambda.StartHandler. Do not also wrap it with otellambda.
+// result with lambda.Start or lambda.StartHandler. Do not also wrap it with
+// otellambda.
+//
+// For handlers built with lambda.NewHandler, the runtime sends the result with
+// the Content-Type it would use without the wrapper: application/json for JSON
+// results, and the result's own ContentType for io.Reader results such as
+// lambdaurl.Wrap's function URL response. The result is read inside the
+// invocation span, so a function URL response is delivered whole rather than
+// incrementally. The event is decoded as JSON, so an empty payload fails even
+// for a handler that takes no event. lambda.Start and lambda.StartWithOptions
+// use such a wrapped handler as it is, so pass runtime options such as
+// lambda.WithEnableSIGTERM, lambda.WithContextValue or
+// lambdaurl.WithDetectContentType to WrapHandler instead. JSON options such as
+// lambda.WithUseNumber stay on lambda.NewHandlerWithOptions for the handler you
+// wrap.
 //
 // HTTP API v2 / function URL events can supply a W3C traceparent. Other headers,
 // baggage, event and result content, error messages and stack traces are never
@@ -49,18 +66,90 @@ type Provider interface {
 // two-second maximum and a 250 ms invocation-deadline reserve. A deadline with
 // no reserve left skips flushing. Export failures do not change the result.
 // A hard platform timeout cannot guarantee delivery. A nil provider disables
-// instrumentation and returns the original handler.
-func WrapHandler(handler lambda.Handler, provider Provider) lambda.Handler {
-	if provider == nil {
+// instrumentation; without options it returns the original handler.
+func WrapHandler(handler lambda.Handler, provider Provider, options ...lambda.Option) lambda.Handler {
+	if provider == nil && len(options) == 0 {
 		return handler
 	}
-	return otellambda.WrapHandler(&metadataHandler{handler: handler},
-		otellambda.WithTracerProvider(provider),
-		otellambda.WithFlusher(boundedFlusher{provider: provider}),
-		otellambda.WithPropagator(propagation.TraceContext{}),
-		otellambda.WithEventToCarrier(eventCarrier),
-	)
+	invoke := handler
+	if provider != nil {
+		invoke = otellambda.WrapHandler(&metadataHandler{handler: handler},
+			otellambda.WithTracerProvider(provider),
+			otellambda.WithFlusher(boundedFlusher{provider: provider}),
+			otellambda.WithPropagator(propagation.TraceContext{}),
+			otellambda.WithEventToCarrier(eventCarrier),
+		)
+	}
+	// aws-lambda-go starts its own handlers as they are and sends their typed
+	// result; any other lambda.Handler result is sent as untyped bytes.
+	if lambda.NewHandler(handler) != handler {
+		if len(options) == 0 {
+			return invoke
+		}
+		return lambda.NewHandlerWithOptions(invoke, options...)
+	}
+	return lambda.NewHandlerWithOptions(func(ctx context.Context, payload json.RawMessage) (io.Reader, error) {
+		result := &resultCapture{}
+		ctx = handlertrace.NewContext(ctx, handlertrace.HandlerTrace{ResponseEvent: result.record})
+		body, err := invoke.Invoke(ctx, payload)
+		if err != nil {
+			return nil, err
+		}
+		return &typedResponse{Reader: bytes.NewReader(body), contentType: result.contentType(body)}, nil
+	}, options...)
 }
+
+const (
+	contentTypeJSON  = "application/json"
+	contentTypeBytes = "application/octet-stream"
+)
+
+// resultCapture records the value an aws-lambda-go handler returned, which
+// decides the Content-Type the runtime would have sent for it.
+type resultCapture struct {
+	seen  bool
+	value any
+}
+
+func (c *resultCapture) record(_ context.Context, value any) {
+	c.seen, c.value = true, value
+}
+
+// contentType mirrors aws-lambda-go: a result is encoded as JSON unless it is
+// an io.Reader that does not encode to a non-empty JSON object.
+func (c *resultCapture) contentType(body []byte) string {
+	if !c.seen {
+		// Handlers without a result value send JSON null. A handler built from a
+		// custom lambda.Handler reports no result and sends untyped bytes.
+		if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+			return contentTypeJSON
+		}
+		return contentTypeBytes
+	}
+	if _, ok := c.value.(io.Reader); !ok {
+		return contentTypeJSON
+	}
+	if encoded, err := json.Marshal(c.value); err == nil && !bytes.HasPrefix(encoded, []byte("{}")) {
+		return contentTypeJSON
+	}
+	if typed, ok := c.value.(interface{ ContentType() string }); ok {
+		return typed.ContentType()
+	}
+	return contentTypeBytes
+}
+
+var errRawResponse = errors.New("traceai lambda: raw response")
+
+// typedResponse is the handler result bytes with the runtime Content-Type.
+type typedResponse struct {
+	*bytes.Reader
+	contentType string
+}
+
+func (r *typedResponse) ContentType() string { return r.contentType }
+
+// MarshalJSON fails so aws-lambda-go sends the reader instead of encoding it.
+func (r *typedResponse) MarshalJSON() ([]byte, error) { return nil, errRawResponse }
 
 type metadataHandler struct {
 	handler lambda.Handler
