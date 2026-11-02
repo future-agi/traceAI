@@ -4,7 +4,11 @@ Trace ChromaDB collection reads, writes, and retrievals with OpenTelemetry and v
 
 ## Install
 
-Requires ChromaDB 0.5.1 or later and `fi-instrumentation-otel` 1.2.2 or later.
+Requires Python 3.10–3.13, ChromaDB 0.5.1 or later, and
+`fi-instrumentation-otel` 1.2.2 or later. Upgrade Python 3.9 applications to Python
+3.10 or later before upgrading this integration; the tracing core used for shared
+privacy settings requires Python 3.10 or later.
+
 Upgrade older Chroma installations before upgrading this integration; Chroma
 0.4.0 requires Pydantic 1 and cannot share an environment with the tracing core.
 
