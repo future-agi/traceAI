@@ -1,0 +1,54 @@
+name: Strands native adapter
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/strands/**'
+      - '.github/workflows/strands-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/strands/**'
+      - '.github/workflows/strands-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+        strands: ['1.0.0', '1.63.0']
+        distribution: ['wheel', 'sdist']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install the distribution
+        env:
+          DISTRIBUTION: ${{ matrix.distribution }}
+          STRANDS_VERSION: ${{ matrix.strands }}
+        run: |
+          python -m pip install 'build>=1.2,<2' 'hatchling>=1.27,<2'
+          python -m build python/frameworks/strands --outdir "$RUNNER_TEMP/dist"
+          if [ "$DISTRIBUTION" = wheel ]; then
+            artifact=$(find "$RUNNER_TEMP/dist" -name '*.whl' -print -quit)
+          else
+            artifact=$(find "$RUNNER_TEMP/dist" -name '*.tar.gz' -print -quit)
+          fi
+          python -m pip install "${artifact}[dev]" "strands-agents[otel,openai]==$STRANDS_VERSION"
+      - name: Test real Strands with only loopback networking
+        run: |
+          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
+          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          python -I -m pytest python/frameworks/strands/tests python/frameworks/strands/tests_native -q

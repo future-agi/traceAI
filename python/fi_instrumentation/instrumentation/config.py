@@ -156,6 +156,13 @@ def _has_content_prefix(key: str, prefixes: tuple) -> bool:
     return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
 
 
+def _is_embedding_text_key(key: str) -> bool:
+    # embedding.embeddings.<index>.embedding.text: the text that was embedded.
+    return key.startswith(SpanAttributes.EMBEDDING_EMBEDDINGS + ".") and key.endswith(
+        "." + EmbeddingAttributes.EMBEDDING_TEXT
+    )
+
+
 DEFAULT_HIDE_LLM_INVOCATION_PARAMETERS = False
 DEFAULT_HIDE_INPUTS = False
 DEFAULT_HIDE_OUTPUTS = False
@@ -419,6 +426,11 @@ class TraceConfig:
             and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
+            value = REDACTED_VALUE
+        elif (
+            self.hide_inputs or self.hide_input_messages or self.hide_input_text
+        ) and _is_embedding_text_key(key):
+            # Embedding input text is input content for all three flags.
             value = REDACTED_VALUE
         elif self.hide_input_images and _has_content_prefix(key, (SpanAttributes.INPUT_IMAGES,)):
             return None

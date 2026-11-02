@@ -33,20 +33,27 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.1",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
-    "@opentelemetry/sdk-trace-base": "^1.30.0",
-    "@opentelemetry/sdk-trace-node": "^1.30.0",
+    "@instructor-ai/instructor": "1.7.0",
+    "@opentelemetry/otlp-transformer": "0.202.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/sdk-trace-node": "^2.0.1",
+    "@traceai/openai": "0.1.14",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.10",
+    "instructor-floor": "npm:@instructor-ai/instructor@1.0.0",
     "jest": "^29.7.0",
+    "openai": "4.58.0",
     "rimraf": "^6.0.1",
     "ts-jest": "^29.2.5",
     "tsc-alias": "^1.8.10",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "zod": "3.25.76"
   },
   "peerDependencies": {
     "@instructor-ai/instructor": "^1.0.0"

@@ -1,6 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // Preserve native async handler classification in the CommonJS Lambda export.
+    "target": "ES2017",
     "outDir": "dist",
     "rootDir": ".",
     "baseUrl": "./src"
