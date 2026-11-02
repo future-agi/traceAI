@@ -167,11 +167,42 @@ class _EmbedRequestAttributesExtractor:
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
-        texts = request_parameters.get("texts", [])
-        if isinstance(texts, list):
+        texts = request_parameters.get("texts")
+        images = request_parameters.get("images")
+        inputs = request_parameters.get("inputs")
+
+        # Cohere v2 accepts image-only requests and, in newer SDKs, inputs
+        # containing both text and image components. Never serialize input
+        # objects here: they may contain private image data URIs.
+        plain_text_count = len(texts) if isinstance(texts, (list, tuple)) else 0
+        plain_image_count = len(images) if isinstance(images, (list, tuple)) else 0
+        mixed_count = len(inputs) if isinstance(inputs, (list, tuple)) else 0
+        text_count = plain_text_count
+        image_count = plain_image_count
+        for item in inputs if isinstance(inputs, (list, tuple)) else ():
+            content = _to_dict(item).get("content")
+            for block in content if isinstance(content, (list, tuple)) else ():
+                modality = _to_dict(block).get("type")
+                if modality == "text":
+                    text_count += 1
+                elif modality == "image_url":
+                    image_count += 1
+
+        if texts is not None or text_count:
+            yield "cohere.texts_count", text_count
+        if images is not None or image_count:
+            yield "cohere.images_count", image_count
+        if images is not None or inputs is not None:
+            # Mixed items each produce one embedding even with two components.
+            input_count = plain_text_count + plain_image_count + mixed_count
+            yield "cohere.inputs_count", input_count
+            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(
+                {"texts_count": text_count, "images_count": image_count,
+                 "inputs_count": input_count}
+            )
+        elif isinstance(texts, (list, tuple)):
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(texts[:5])  # Limit
-            yield "cohere.texts_count", len(texts)
-        else:
+        elif texts is not None:
             yield SpanAttributes.INPUT_VALUE, str(texts)
 
 
