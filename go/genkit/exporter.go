@@ -24,7 +24,14 @@ type Config struct {
 // ConfigFromEnv reads the privacy switches once at provider construction.
 func ConfigFromEnv() Config {
 	enabled := func(name string) bool { return strings.EqualFold(strings.TrimSpace(os.Getenv(name)), "true") }
-	return Config{HideInputs: enabled("FI_HIDE_INPUTS"), HideOutputs: enabled("FI_HIDE_OUTPUTS"), HideErrorDetails: enabled("FI_HIDE_ERROR_DETAILS")}
+	inputs, outputs := enabled("FI_HIDE_INPUTS"), enabled("FI_HIDE_OUTPUTS")
+	// Match the FI privacy default: hiding content also hides error text,
+	// which can quote private inputs or outputs. An explicit false overrides it.
+	errorDetails := inputs || outputs
+	if value, set := os.LookupEnv("FI_HIDE_ERROR_DETAILS"); set && strings.TrimSpace(value) != "" {
+		errorDetails = strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	return Config{HideInputs: inputs, HideOutputs: outputs, HideErrorDetails: errorDetails}
 }
 
 type redactingExporter struct {
@@ -47,9 +54,11 @@ func (e *redactingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Re
 		for _, kv := range span.Attributes() {
 			key := string(kv.Key)
 			switch {
-			case e.config.HideInputs && (strings.HasPrefix(key, "gen_ai.input.") || key == "gen_ai.system_instructions" || key == "genkit.input" || key == "input.value"):
+			case e.config.HideInputs && (strings.HasPrefix(key, "gen_ai.input.") || (key == "gen_ai.request.stop_sequences" || strings.HasPrefix(key, "gen_ai.request.stop_sequences.")) || key == "gen_ai.system_instructions" || key == "genkit.input" || key == "input.value"):
 				continue
-			case e.config.HideOutputs && (strings.HasPrefix(key, "gen_ai.output.") || key == "genkit.output" || key == "output.value"):
+			// Only output.type is currently known to be safe metadata; keep
+			// unknown output fields private if Genkit adds content keys.
+			case e.config.HideOutputs && ((strings.HasPrefix(key, "gen_ai.output.") && key != "gen_ai.output.type") || key == "genkit.output" || key == "output.value"):
 				continue
 			case e.config.HideErrorDetails && (key == "error.message" || strings.HasPrefix(key, "exception.")):
 				continue
