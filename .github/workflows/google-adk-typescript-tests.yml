@@ -54,9 +54,14 @@ jobs:
             set -euo pipefail
             ip link set lo up
             "$4" "$1/typescript/node_modules/jest/bin/jest.js" --config "$1/typescript/packages/traceai_google_adk/jest.config.js" --runInBand
-            "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs"
+            "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs" "$1/typescript/packages/traceai_google_adk/test/native-privacy.test.cjs"
             ADK_RUNTIME="$2" CAPTURE_CONTENT="$3" "$4" "$1/typescript/packages/traceai_google_adk/test/run-adk.cjs"
-          ' -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP/adk" "$CAPTURE" "$(command -v node)"
+            if [ "$5" = "2.4.0" ] && [ "$3" = "1" ]; then
+              for mode in default credentials hide-inputs hide-outputs hide-input-text hide-output-text hide-input-messages hide-output-messages pii; do
+                "$4" "$1/typescript/packages/traceai_google_adk/test/native-privacy-wire.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
+              done
+            fi
+          ' -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP/adk" "$CAPTURE" "$(command -v node)" "${{ matrix.adk }}"
       - name: Pack public entry points
         working-directory: typescript/packages/traceai_google_adk
         run: |

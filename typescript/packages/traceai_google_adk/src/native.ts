@@ -5,6 +5,8 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchSpanProcessor, ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { generateTraceConfig, REDACTED_VALUE, TraceConfig } from "@traceai/fi-core";
+import { nativeContent } from "./native-content";
 import { isPatched } from "./instrumentation";
 import { nativeTracingEnabled, enableNativeTracing } from "./native-state";
 
@@ -49,7 +51,7 @@ function count(value: unknown): number | undefined {
 }
 
 /** Translate only native ADK spans; never create or reparent spans. */
-function translate(span: ReadableSpan, options: GoogleADKNativeOptions): ReadableSpan {
+function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: TraceConfig): ReadableSpan {
   if (span.instrumentationScope.name !== SCOPE) return span;
   const source = span.attributes;
   const attributes: Attributes = {};
@@ -87,13 +89,15 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions): Readabl
   if (options.captureContent) {
     const input = kind === "TOOL" ? source["gcp.vertex.agent.tool_call_args"] : source["gcp.vertex.agent.llm_request"];
     const output = kind === "TOOL" ? source["gcp.vertex.agent.tool_response"] : source["gcp.vertex.agent.llm_response"];
-    if (typeof input === "string" && input !== "{}") {
-      attributes["input.value"] = input;
-      attributes["input.mime_type"] = "application/json";
+    const safeInput = nativeContent(input, true, config);
+    const safeOutput = nativeContent(output, false, config);
+    if (safeInput !== undefined) {
+      attributes["input.value"] = safeInput;
+      if (safeInput !== REDACTED_VALUE) attributes["input.mime_type"] = "application/json";
     }
-    if (typeof output === "string" && output !== "{}") {
-      attributes["output.value"] = output;
-      attributes["output.mime_type"] = "application/json";
+    if (safeOutput !== undefined) {
+      attributes["output.value"] = safeOutput;
+      if (safeOutput !== REDACTED_VALUE) attributes["output.mime_type"] = "application/json";
     }
   }
   // A new readable view avoids mutating spans seen by other processors. Native
@@ -128,10 +132,12 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions): Readabl
 
 /** Wrap the sole export path in an existing OTel SDK. Does not install a provider. */
 export class GoogleADKSpanExporter implements SpanExporter {
+  private readonly config = generateTraceConfig();
+
   constructor(private readonly exporter: SpanExporter, private readonly options: GoogleADKNativeOptions = {}) {}
 
   export(spans: ReadableSpan[], callback: (result: ExportResult) => void): void {
-    this.exporter.export(spans.map(span => translate(span, this.options)), callback);
+    this.exporter.export(spans.map(span => translate(span, this.options, this.config)), callback);
   }
 
   shutdown(): Promise<void> { return this.exporter.shutdown(); }

@@ -46,7 +46,15 @@ const tracing = configure({
 });
 ```
 
-`captureContent` maps native model/tool request and response JSON to the input/output fields. `captureSessionId` maps native conversation identifiers to `session.id`. Error messages and stack traces remain excluded. These options govern the native route; the legacy instrumentor's `traceConfig` settings do not configure it.
+`captureContent` maps native model/tool request and response JSON to the input/output fields. `captureSessionId` maps native conversation identifiers to `session.id`. Error messages and stack traces remain excluded. Set privacy environment variables **before** calling `configure()` or constructing `GoogleADKSpanExporter`. Content opt-in does not override these controls:
+
+- `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS`: redact the corresponding model and tool payloads.
+- `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES`: also redact the full corresponding native payload, since it can contain message history outside its main message field.
+- `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT`: redact all string values in the corresponding payload, including nested messages, system instructions and tool arguments/results.
+- `FI_HIDE_INPUT_IMAGES`: redact native inline/file data in inputs.
+- `FI_PII_REDACTION`: apply the shared PII scanner to captured JSON. With older `@traceai/fi-core` versions that do not expose the scanner, the adapter hides the full payload instead.
+
+Set a flag to `true` to enable it. Credential-bearing fields (including nested API keys, authorization headers, passwords and access tokens) and Bearer/Basic authorization values are redacted even when no hide flag is set. This is not a guarantee that arbitrary secrets embedded in prose will be recognized; keep content capture disabled when payloads must remain private. Token counts remain available when ADK reports them. The legacy instrumentor's `traceConfig` object does not configure the native route.
 
 ADK normally captures message content in its in-process spans. This adapter removes it before sending those spans through its exporter. Set `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false` before running ADK if content must not enter in-process spans at all. In that mode, content opt-in cannot recover payloads, and ADK's output-token counter excludes thinking tokens. When native response usage metadata is available, the adapter includes thinking tokens in output counts and preserves the reported total; it does not invent missing totals.
 

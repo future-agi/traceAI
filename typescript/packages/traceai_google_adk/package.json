@@ -23,7 +23,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "prepublishOnly": "npm run clean && npm run build",
-    "test:native": "node --test test/native.test.cjs"
+    "test:native": "node --test test/native.test.cjs test/native-privacy.test.cjs"
   },
   "keywords": [
     "opentelemetry",

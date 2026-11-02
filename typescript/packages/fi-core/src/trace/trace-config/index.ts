@@ -40,3 +40,4 @@ export {
 } from "./errorDetails";
 export { FITracer } from "./FITracer";
 export { type FISpan } from "./FISpan";
+export { redactPiiInString } from "./piiRedaction";
