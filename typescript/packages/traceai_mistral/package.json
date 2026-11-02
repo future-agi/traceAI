@@ -61,7 +61,7 @@
     "@mistralai/mistralai": "^1.0.0",
     "mistral-floor": "npm:@mistralai/mistralai@0.1.3",
     "mistral-v1": "npm:@mistralai/mistralai@1.0.0",
-    "mistral-current": "npm:@mistralai/mistralai@3.4.0",
+    "mistral-current": "npm:@mistralai/mistralai@3.5.0",
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16"
   },

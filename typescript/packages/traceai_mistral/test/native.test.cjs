@@ -374,3 +374,73 @@ test('localhost OTLP wire honors privacy for chat, streaming, embeddings, tools 
   assert.equal(spans.filter(s => s.status.code === SpanStatusCode.ERROR).length, 1);
   assert.ok(wire.includes(S.LLM_PROVIDER));
 });
+
+test('SDK parse hides parsed structured content on localhost OTLP wire', async t => {
+  const { createRequire } = require('node:module');
+  const { z } = createRequire(require.resolve('mistral-current/package.json'))('zod');
+  const marker = 'SYNTHETIC_PARSED_OUTPUT_CANARY';
+  const payloads = [];
+  const server = http.createServer(async (req, res) => {
+    const buffers = []; for await (const part of req) buffers.push(part);
+    payloads.push(JSON.parse(Buffer.concat(buffers).toString()));
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}');
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const exporter = new OTLPTraceExporter({ url: `http://127.0.0.1:${server.address().port}/v1/traces` });
+  const { Mistral } = await import('mistral-current');
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const instrumentation = new MistralInstrumentation({ traceConfig: { hideOutputText: true } });
+  instrumentation.setTracerProvider(provider);
+  t.after(async () => { instrumentation.disable(); await provider.shutdown(); });
+  const client = new Mistral({ apiKey: 'synthetic-not-a-key', httpClient: { request: async () => jsonResponse({ ...completion(), choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({ value: marker }) }, finish_reason: 'stop' }] }) } });
+  instrumentation.instrumentClient(client);
+  const result = await client.chat.parse({ ...request, responseFormat: z.object({ value: z.string() }) });
+  assert.equal(result.choices[0].message.parsed.value, marker);
+  await provider.forceFlush();
+  const spans = payloads.flatMap(p => p.resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  assert.equal(spans.length, 1);
+  assert.equal(JSON.stringify(spans).includes(marker), false);
+});
+
+test('current SDK pipeTo preventCancel releases source for resumption on sink failure and abort', async t => {
+  for (const mode of ['failure', 'abort']) {
+    const f = await modern(t);
+    f.instrumentation.instrumentClient(f.client);
+    f.respond(() => sseResponse([chunk('one'), chunk('two')]));
+    const stream = await f.client.chat.stream(request);
+    const controller = new AbortController();
+    const sink = new WritableStream({ write() { if (mode === 'failure') throw new Error('synthetic sink failure'); controller.abort(); } });
+    await assert.rejects(stream.pipeTo(sink, { preventCancel: true, signal: controller.signal }));
+    assert.equal(stream.locked, false, `${mode}: source lock retained`);
+    const reader = stream.getReader();
+    await reader.read();
+    reader.releaseLock();
+  }
+});
+
+test('SDK floor direct async generator next and return finalize spans', async t => {
+  const { default: Client } = await import('mistral-floor');
+  for (const method of ['next', 'return']) {
+    const f = fixture(t);
+    const client = new Client('synthetic-not-a-key', 'http://localhost:9999');
+    client._request = async () => (async function* () { yield Buffer.from(`data: ${JSON.stringify(chunk())}\n`); })();
+    f.instrumentation.instrumentClient(client);
+    const stream = client.chatStream(request);
+    if (method === 'next') {
+      assert.equal((await stream.next()).done, false);
+      assert.equal((await stream.next()).done, true);
+    } else await stream.return();
+    assert.equal(f.spans().length, 1, `${method}: span never finished`);
+  }
+});
+
+test('pipeTo default failure cancels original SDK stream and ends its span', async t => {
+  const f = await modern(t);
+  f.instrumentation.instrumentClient(f.client);
+  f.respond(() => sseResponse([chunk('one'), chunk('two')]));
+  const stream = await f.client.chat.stream(request);
+  await assert.rejects(stream.pipeTo(new WritableStream({ write() { throw new Error('synthetic sink failure'); } })));
+  assert.equal(stream.locked, false);
+  assert.equal(f.spans().length, 1);
+});

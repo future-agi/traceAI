@@ -33,9 +33,13 @@ export function observeStream<T>(
   // Web ReadableStream pipe/tee methods consume internally, bypassing getReader
   // and the async iterator. Use a lazy, zero-prefetch bridge only for these APIs.
   let bridge: ReadableStream<T> | undefined;
+  let bridgeIterator: AsyncIterator<T> | undefined;
   const pipedStream = () => {
     if (!bridge) {
-      const iterator = source[Symbol.asyncIterator]();
+      // A failed pipe with preventCancel must release this iterator's reader lock
+      // without cancelling the caller's original ReadableStream.
+      const iterator = (source as ReadableStream<T>).values({ preventCancel: true });
+      bridgeIterator = iterator;
       bridge = new ReadableStream<T>({
         async pull(controller) {
           try {
@@ -44,7 +48,10 @@ export function observeStream<T>(
             else controller.enqueue(result.value);
           } catch (error) { controller.error(error); }
         },
-        cancel(reason) { return cancel(() => iterator.return?.(reason)).then(() => undefined); },
+        async cancel(reason) {
+          await cancel(() => iterator.return?.(reason));
+          await (source as ReadableStream<T>).cancel(reason);
+        },
       }, { highWaterMark: 0 });
     }
     return bridge;
@@ -55,6 +62,12 @@ export function observeStream<T>(
       const value = Reflect.get(target, key, target);
       if ((key === Symbol.asyncIterator || key === "values") && typeof value === "function") {
         return (...args: unknown[]) => wrapIterator(Reflect.apply(value, target, args));
+      }
+      if (key === "next" && typeof value === "function") {
+        return (...args: unknown[]) => observe(() => Reflect.apply(value, target, args));
+      }
+      if ((key === "return" || key === "throw") && typeof value === "function") {
+        return (...args: unknown[]) => observe(() => Reflect.apply(value, target, args));
       }
       if (key === "getReader" && typeof value === "function") {
         return (...args: unknown[]) => {
@@ -75,7 +88,15 @@ export function observeStream<T>(
       if (["pipeTo", "pipeThrough", "tee"].includes(String(key)) && typeof value === "function") {
         return (...args: unknown[]) => {
           const stream = pipedStream();
-          return Reflect.apply(Reflect.get(stream, key), stream, args);
+          const result = Reflect.apply(Reflect.get(stream, key), stream, args);
+          if (key !== "pipeTo" || !(args[1] as { preventCancel?: boolean } | undefined)?.preventCancel) return result;
+          return Promise.resolve(result).catch(async error => {
+            // The bridge's pipeTo does not cancel on this path, so release its
+            // reader explicitly; the original stream remains available to resume.
+            try { await bridgeIterator?.return?.(); }
+            finally { bridge = undefined; bridgeIterator = undefined; }
+            throw error;
+          });
         };
       }
       // Native ReadableStream accessors/methods require their original receiver.
