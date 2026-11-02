@@ -1,0 +1,110 @@
+name: Semantic Kernel Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-semantic-kernel/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/semantic-kernel-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-semantic-kernel/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/semantic-kernel-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-kernel:
+    name: Semantic Kernel ${{ matrix.semantic-kernel }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        semantic-kernel: ['1.4.5', '1.5.0']
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Exercise synthetic SDK transport and OTLP loopback collector
+        run: >-
+          mvn -B -ntp -pl traceai-java-semantic-kernel -am test
+          -Dsemantic-kernel.version=${{ matrix.semantic-kernel }}
+          -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Djava.net.preferIPv4Stack=true
+      - name: Repeat offline with network namespace limited to loopback
+        run: |
+          sudo env "JAVA_HOME=$JAVA_HOME" "PATH=$PATH" unshare --net sh -c '
+            ip link set lo up
+            exec mvn -o -B -ntp -Dmaven.repo.local="$1" -pl traceai-java-semantic-kernel -am test \
+              -Dsemantic-kernel.version="$2" \
+              -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest \
+              -Dsurefire.failIfNoSpecifiedTests=false -Djava.net.preferIPv4Stack=true
+          ' sh "$HOME/.m2/repository" '${{ matrix.semantic-kernel }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semantic-kernel-${{ matrix.semantic-kernel }}-reports
+          path: java/traceai-java-semantic-kernel/target/surefire-reports/
+
+  legacy-binary:
+    name: Semantic Kernel binary consumers (1.3, 1.4, 1.5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Install current adapter and resolve each published Semantic Kernel graph
+        run: |
+          mvn -B -ntp -pl traceai-java-semantic-kernel -am install -DskipTests
+          traceai="$(mvn -B -q -ntp -N help:evaluate -Dexpression=project.version -DforceStdout)"
+          for version in 1.3.0 1.4.5 1.5.0; do
+            # A separate application pom: only that version's own dependency graph, no build classpath.
+            mvn -B -ntp -f traceai-java-semantic-kernel/src/test/compat/pom.xml dependency:build-classpath \
+              -Dsk.version="$version" -Dtraceai.version="$traceai" \
+              -Dmdep.outputFile="$PWD/traceai-java-semantic-kernel/target/consumer-$version.classpath"
+          done
+      - name: Compile consumers against each published ABI and run without outbound network
+        run: |
+          for version in 1.3.0 1.4.5 1.5.0; do
+            cp="$(cat "traceai-java-semantic-kernel/target/consumer-$version.classpath")"
+            case "$cp" in
+              *semantickernel-api-$version.jar*) ;;
+              *) echo "Semantic Kernel $version was not resolved"; exit 1 ;;
+            esac
+            # 1.3.0 does not bring the OpenTelemetry Reactor bridge; run the adapter without it.
+            if [ "$version" = 1.3.0 ]; then
+              case "$cp" in
+                *opentelemetry-reactor-3.1*) echo "1.3.0 classpath unexpectedly contains the Reactor bridge"; exit 1 ;;
+              esac
+            fi
+            out="traceai-java-semantic-kernel/target/consumer-$version"
+            mkdir -p "$out"
+            javac -cp "$cp" -d "$out" traceai-java-semantic-kernel/src/test/compat/LegacyBinaryCompatibility.java
+            sudo env "JAVA_HOME=$JAVA_HOME" "PATH=$PATH" unshare --net sh -c '
+              ip link set lo up
+              exec java -cp "$1" LegacyBinaryCompatibility
+            ' sh "$out:$cp"
+          done
