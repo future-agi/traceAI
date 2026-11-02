@@ -434,3 +434,128 @@ def test_legacy_context_exit_finishes_once(use_async, consume_first, exception_t
         expected = StatusCode.ERROR if exception_type is not None else StatusCode.OK
         assert span.status.status_code == expected
         assert "SYNTHETIC-CONSUMER-ERROR" not in serialized(span)
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("consume_first", [False, True])
+@pytest.mark.parametrize("cleanup", ["direct", "contextlib"])
+def test_aclose_finishes_once_and_releases_response(route, consume_first, cleanup):
+    from contextlib import aclosing
+
+    async def run(exporter):
+        closed = []
+        responses = []
+
+        class Body(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield f"data: {json.dumps(chunk(OUTPUT))}\n\n".encode()
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self):
+                closed.append(True)
+
+        async def handler(request):
+            response = httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=Body()
+            )
+            responses.append(response)
+            return response
+
+        async with client_for(route, handler, True) as client:
+            stream = await client.chat.completions.create(**PARAMS, stream=True)
+            assert isinstance(stream, openai.AsyncStream)
+            if cleanup == "contextlib":
+                async with aclosing(stream) as entered:
+                    assert entered is stream
+                    if consume_first:
+                        assert (await entered.__anext__()).choices[
+                            0
+                        ].delta.content == OUTPUT
+            else:
+                if consume_first:
+                    assert (await stream.__anext__()).choices[0].delta.content == OUTPUT
+                await stream.aclose()
+            await stream.aclose()
+            only_span(exporter)  # aclose itself must finalize, without a later close().
+            await stream.close()
+            assert responses[0].is_closed
+            assert closed == [True]
+            span = only_span(exporter)
+            assert span.status.status_code == StatusCode.OK
+            if consume_first:
+                assert OUTPUT in serialized(span)
+
+    with instrumented(route, TraceConfig()) as exporter:
+        asyncio.run(run(exporter))
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("policy", ["environment", "explicit", "override"])
+def test_invocation_privacy_covers_raw_copy(
+    route, use_async, streaming, policy, monkeypatch
+):
+    secret_stop = "SYNTHETIC-PRIVATE-STOP-PARAMETER"
+    secret_extra = "SYNTHETIC-PRIVATE-EXTRA-PARAMETER"
+    monkeypatch.setenv("FI_HIDE_LLM_INVOCATION_PARAMETERS", "true")
+    config = (
+        TraceConfig()
+        if policy == "environment"
+        else TraceConfig(hide_llm_invocation_parameters=policy == "explicit")
+    )
+    hidden = policy != "override"
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        if streaming:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=f"data: {json.dumps(chunk(OUTPUT))}\n\ndata: [DONE]\n\n",
+            )
+        return httpx.Response(200, json=COMPLETION)
+
+    kwargs = dict(
+        **PARAMS,
+        stop=[secret_stop],
+        temperature=0.7,
+        extra_body={"custom_parameter": secret_extra},
+        stream=streaming,
+    )
+
+    async def run_async():
+        async with client_for(route, handler, True) as client:
+            result = await client.chat.completions.create(**kwargs)
+            if streaming:
+                assert [c async for c in result]
+
+    with instrumented(route, config) as exporter:
+        if use_async:
+            asyncio.run(run_async())
+        else:
+            with client_for(route, handler) as client:
+                result = client.chat.completions.create(**kwargs)
+                if streaming:
+                    assert list(result)
+        span = only_span(exporter)
+        assert seen[0]["stop"] == [secret_stop]
+        assert seen[0]["temperature"] == 0.7
+        assert seen[0]["custom_parameter"] == secret_extra
+        assert seen[0]["messages"] == PARAMS["messages"]
+        assert INPUT in serialized(span)
+        assert OUTPUT in serialized(span)
+        if hidden:
+            assert "gen_ai.request.parameters" not in span.attributes
+            assert secret_stop not in serialized(span)
+            assert secret_extra not in serialized(span)
+            if route == "legacy":
+                raw = json.loads(span.attributes["input.value"])
+                assert raw == {"model": PARAMS["model"], "messages": PARAMS["messages"]}
+        else:
+            assert secret_stop in span.attributes["gen_ai.request.parameters"]
+            if route == "legacy":
+                raw = json.loads(span.attributes["input.value"])
+                assert raw["temperature"] == 0.7
+                assert raw["extra_body"] == {"custom_parameter": secret_extra}

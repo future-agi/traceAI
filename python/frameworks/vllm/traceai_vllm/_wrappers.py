@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     ImageAttributes,
@@ -48,11 +48,13 @@ class _WithTracer(ABC):
         tracer: trace_api.Tracer,
         vllm_base_urls: List[str],
         *args: Any,
+        config: Optional[TraceConfig] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         self._vllm_base_urls = vllm_base_urls
+        self._config = config if config is not None else TraceConfig()
 
     def _is_vllm_client(self, instance: Any) -> bool:
         """Check if the client instance is configured for vLLM."""
@@ -92,6 +94,8 @@ class _WithTracer(ABC):
 def _get_input_attributes(
     model: str,
     messages: list,
+    *,
+    hide_invocation_parameters: bool = False,
     **kwargs: Any,
 ) -> Dict[str, AttributeValue]:
     """Extract input attributes from request parameters."""
@@ -160,13 +164,16 @@ def _get_input_attributes(
                             f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"
                         ] = image["url"]
 
-    # Add raw input
+    # Keep messages visible, but do not duplicate private invocation settings
+    # (including provider-specific extra_body fields) into the raw input.
     raw_input = {"model": model, "messages": messages}
     raw_input.update(
         {
             k: v
             for k, v in kwargs.items()
-            if v is not None and k not in _TRANSPORT_OPTIONS
+            if v is not None
+            and k not in _TRANSPORT_OPTIONS
+            and not hide_invocation_parameters
         }
     )
     attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(raw_input)
@@ -415,6 +422,10 @@ class _AsyncStream(ObjectProxy):  # type: ignore[misc]
             raise
         self._self_tracking.finish()
 
+    async def aclose(self) -> None:
+        # ObjectProxy otherwise delegates the bound SDK alias past our close().
+        await self.close()
+
 
 def _finish_response(span: Span, response: Any) -> None:
     """End the span for a non-stream result.
@@ -463,7 +474,12 @@ class _CompletionsWrapper(_WithTracer):
         extra_kwargs = {
             k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")
         }
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(
+            model,
+            messages,
+            hide_invocation_parameters=self._config.hide_llm_invocation_parameters,
+            **extra_kwargs,
+        )
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
             try:
@@ -512,7 +528,12 @@ class _AsyncCompletionsWrapper(_WithTracer):
         extra_kwargs = {
             k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")
         }
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(
+            model,
+            messages,
+            hide_invocation_parameters=self._config.hide_llm_invocation_parameters,
+            **extra_kwargs,
+        )
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
             try:

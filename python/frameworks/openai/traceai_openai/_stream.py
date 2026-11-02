@@ -164,6 +164,19 @@ class _AsyncStream(ObjectProxy):
         finally:
             _finish_on_exit(self, exc)
 
+    async def aclose(self) -> None:
+        # Intercept the SDK alias: delegating its bound method bypasses tracing.
+        # Finish here as well as in close(), so alias cleanup is independently
+        # safe even when the wrapped SDK owns close(). Finalization is idempotent.
+        error = None
+        try:
+            await self.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __aiter__(self):
         return self
 

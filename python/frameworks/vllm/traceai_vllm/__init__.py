@@ -93,7 +93,9 @@ class VLLMInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer, vllm_base_urls=self._vllm_base_urls),
+            wrapper=_CompletionsWrapper(
+                tracer=self._tracer, vllm_base_urls=self._vllm_base_urls, config=config
+            ),
         )
 
         # Wrap asynchronous completions
@@ -101,7 +103,9 @@ class VLLMInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, vllm_base_urls=self._vllm_base_urls),
+            wrapper=_AsyncCompletionsWrapper(
+                tracer=self._tracer, vllm_base_urls=self._vllm_base_urls, config=config
+            ),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
