@@ -30,7 +30,14 @@ import java.util.function.Supplier;
  *
  * <p>Configure tools, system instructions and structured outputs with the SDK's
  * GenerateContentConfig. Close streams with try-with-resources, including early exits.
- * One span represents one logical SDK call, not each automatic function-call round.</p>
+ * One span represents one logical SDK call, not each automatic function-call round.
+ * Token counts come from the returned SDK response; the SDK does not expose usage
+ * from earlier automatic function-calling rounds, so these are not whole-call totals.</p>
+ *
+ * <p>Async generation with callable tools runs the SDK's synchronous tool loop on
+ * the common pool to propagate context through tool execution. Other async calls
+ * use the SDK's async API. Cancellation ends tracing but does not guarantee that
+ * in-flight SDK work or tools stop.</p>
  */
 public class TracedGenerativeModel {
     private final Client client;
@@ -66,13 +73,15 @@ public class TracedGenerativeModel {
     }
 
     public CompletableFuture<GenerateContentResponse> generateContentAsync(String prompt, GenerateContentConfig config) {
-        return async(generation(prompt, config), () -> client.async.models.generateContent(modelName, prompt, config),
-            (op, response) -> op.response(response, false));
+        return asyncGeneration(generation(prompt, config), config,
+            () -> client.async.models.generateContent(modelName, prompt, config),
+            () -> client.models.generateContent(modelName, prompt, config));
     }
 
     public CompletableFuture<GenerateContentResponse> generateContentAsync(List<Content> contents, GenerateContentConfig config) {
-        return async(generation(contents, config), () -> client.async.models.generateContent(modelName, contents, config),
-            (op, response) -> op.response(response, false));
+        return asyncGeneration(generation(contents, config), config,
+            () -> client.async.models.generateContent(modelName, contents, config),
+            () -> client.models.generateContent(modelName, contents, config));
     }
 
     public TracedResponseStream generateContentStream(String prompt, GenerateContentConfig config) {
@@ -163,6 +172,25 @@ public class TracedGenerativeModel {
         }
     }
 
+    private static CompletableFuture<GenerateContentResponse> asyncGeneration(GenAiOperation op,
+        GenerateContentConfig config, Supplier<CompletableFuture<GenerateContentResponse>> asyncCall,
+        Supplier<GenerateContentResponse> syncCall) {
+        // The SDK's private async workers do not propagate OTel context and have no
+        // executor hook on the supported floor. Run its synchronous tool loop in a
+        // scoped common-pool task instead. The SDK still owns tool invocation,
+        // arguments, history and limits; never reimplement automatic function calling.
+        return async(op, () -> {
+            boolean callableTools = config != null && config.tools().orElse(List.of()).stream()
+                .anyMatch(tool -> !tool.functions().orElse(List.of()).isEmpty());
+            if (!callableTools) return asyncCall.get();
+            return CompletableFuture.supplyAsync(() -> {
+                try (Scope ignored = op.context.makeCurrent()) {
+                    return syncCall.get();
+                }
+            });
+        }, (operation, response) -> operation.response(response, false));
+    }
+
     private static <T> CompletableFuture<T> async(GenAiOperation op, Supplier<CompletableFuture<T>> call,
                                                  BiConsumer<GenAiOperation, T> capture) {
         CompletableFuture<T> source;
@@ -184,8 +212,7 @@ public class TracedGenerativeModel {
                 if (result.isCancelled()) return;
                 if (error == null) GenAiOperation.safely(() -> capture.accept(op, value));
                 op.finish(unwrapError(error), false, false);
-                if (error == null) result.complete(value);
-                else result.completeExceptionally(unwrapError(error));
+                complete(op, result, value, unwrapError(error));
             }
         });
         return result;
@@ -212,17 +239,25 @@ public class TracedGenerativeModel {
             try (Scope ignored = op.context.makeCurrent()) {
                 if (error != null) {
                     op.finish(unwrapError(error), true, false);
-                    result.completeExceptionally(unwrapError(error));
+                    complete(op, result, null, unwrapError(error));
                 } else {
                     TracedResponseStream wrapped = new TracedResponseStream(value, op);
-                    if (!result.complete(wrapped)) wrapped.close();
+                    if (!complete(op, result, wrapped, null)) wrapped.close();
                 }
             } catch (RuntimeException | Error failure) {
                 op.finish(failure, true, false);
-                result.completeExceptionally(failure);
+                complete(op, result, null, failure);
             }
         });
         return result;
+    }
+
+    private static <T> boolean complete(GenAiOperation op, CompletableFuture<T> result, T value, Throwable error) {
+        // CompletableFuture runs registered non-async continuations inline. Do not
+        // expose the internal generation scope (which may already have ended).
+        try (Scope ignored = op.callerContext.makeCurrent()) {
+            return error == null ? result.complete(value) : result.completeExceptionally(error);
+        }
     }
 
     private static Throwable unwrapError(Throwable error) {

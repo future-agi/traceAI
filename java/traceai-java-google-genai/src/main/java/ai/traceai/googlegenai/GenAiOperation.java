@@ -24,6 +24,7 @@ final class GenAiOperation {
     final FITracer tracer;
     final Span span;
     final Context context;
+    final Context callerContext;
     private final AtomicBoolean ended = new AtomicBoolean();
     private final StringBuilder text = new StringBuilder();
     private final JsonArray chunks = new JsonArray();
@@ -32,8 +33,9 @@ final class GenAiOperation {
     GenAiOperation(FITracer tracer, String name, String model, FISpanKind kind,
                    Object input, GenerateContentConfig config) {
         this.tracer = tracer;
+        callerContext = Context.current();
         span = tracer.startSpan("Google GenAI " + name, kind);
-        context = Context.current().with(span);
+        context = callerContext.with(span);
         span.setAttribute(SemanticConventions.LLM_SYSTEM, "google-genai");
         span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
         span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);

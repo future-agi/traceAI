@@ -50,7 +50,7 @@ jobs:
             mvn -o -B -ntp -Dmaven.repo.local="'"$HOME"'/.m2/repository" \
               -f java/pom.xml -pl traceai-java-google-genai -am \
               -Dgoogle-genai.version=${{ matrix.genai }} \
-              -Dtest=TracedGenerativeModelTest -Dsurefire.failIfNoSpecifiedTests=false test
+              -Dtest=TracedGenerativeModelTest,AsyncContextTest -Dsurefire.failIfNoSpecifiedTests=false test
           '
       - uses: actions/upload-artifact@v4
         if: always()
