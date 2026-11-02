@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 
 /** Shared lifecycle for the v6 adapters. Never serializes queries, vectors or documents. */
@@ -85,8 +86,27 @@ final class WeaviateTracing {
                                      Supplier<CompletableFuture<T>> action) {
         Span span = start(operation, kind, limit);
         try (Scope ignored = span.makeCurrent()) {
-            CompletableFuture<T> future = action.get();
-            future.whenComplete((result, error) -> {
+            return new TracedFuture<>(action.get(), span);
+        } catch (RuntimeException | Error error) {
+            record(() -> tracer.setError(span, error));
+            record(span::end);
+            throw error;
+        }
+    }
+
+    /**
+     * Publish completion only after ending the span. Forward mutations to the SDK
+     * future so cancellation (including its interrupt flag), timeouts and manual
+     * completion still affect the original operation. A plain dependent future
+     * would neither propagate cancellation nor intercept orTimeout().
+     */
+    private final class TracedFuture<T> extends CompletableFuture<T> {
+        private final CompletableFuture<T> source;
+        private final CompletableFuture<Void> spanEnded = new CompletableFuture<>();
+
+        TracedFuture(CompletableFuture<T> source, Span span) {
+            this.source = Objects.requireNonNull(source, "SDK future");
+            source.whenComplete((result, error) -> {
                 try {
                     if (error == null) {
                         finish(span, result);
@@ -100,15 +120,51 @@ final class WeaviateTracing {
                     }
                 } finally {
                     record(span::end);
+                    spanEnded.complete(null);
+                }
+                // Do not relay through whenComplete's dependent future: it wraps
+                // cancellation in CompletionException and changes isCancelled().
+                if (error == null) {
+                    super.complete(result);
+                } else {
+                    super.completeExceptionally(error);
                 }
             });
-            // Do not return the dependent future: cancellation and exception identity
-            // must remain those of the SDK's original future.
-            return future;
-        } catch (RuntimeException | Error error) {
-            record(() -> tracer.setError(span, error));
-            record(span::end);
-            throw error;
+        }
+
+        @Override public boolean cancel(boolean mayInterruptIfRunning) {
+            return source.cancel(mayInterruptIfRunning);
+        }
+
+        @Override public boolean complete(T value) {
+            return source.complete(value);
+        }
+
+        @Override public boolean completeExceptionally(Throwable error) {
+            return source.completeExceptionally(error);
+        }
+
+        // CompletableFuture's asynchronous completion bypasses complete().
+        @Override public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier) {
+            source.completeAsync(supplier);
+            return this;
+        }
+
+        @Override public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier, Executor executor) {
+            source.completeAsync(supplier, executor);
+            return this;
+        }
+
+        @Override public void obtrudeValue(T value) {
+            source.obtrudeValue(value);
+            spanEnded.join();
+            super.obtrudeValue(value);
+        }
+
+        @Override public void obtrudeException(Throwable error) {
+            source.obtrudeException(error);
+            spanEnded.join();
+            super.obtrudeException(error);
         }
     }
 
