@@ -85,7 +85,7 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -175,7 +175,7 @@ class _AsyncStream(ObjectProxy):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
