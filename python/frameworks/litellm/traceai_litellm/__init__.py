@@ -150,6 +150,15 @@ def _has_tool_context(message):
     )
 
 
+def _has_non_text_content(message):
+    """Keep blocks without dedicated text/image attributes in input.value."""
+    content = message.get("content")
+    return isinstance(content, list) and any(
+        isinstance(item, Mapping) and item.get("type") not in ("text", "image_url")
+        for item in content
+    )
+
+
 def _get_attributes_from_message_content(
     content: Mapping[str, Any],
 ) -> Iterator[Tuple[str, AttributeValue]]:
@@ -205,9 +214,12 @@ def _instrument_func_type_completion(
             _set_span_attribute(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
-        if any(_has_tool_context(message) for message in messages):
-            # Preserve tool linkage without putting image bytes in input.value,
-            # whose privacy filter cannot inspect nested image content.
+        if any(
+            _has_tool_context(message) or _has_non_text_content(message)
+            for message in messages
+        ):
+            # Preserve tool linkage and non-text blocks (such as input_audio)
+            # without copying image bytes into input.value.
             _set_span_attribute(
                 span, SpanAttributes.INPUT_VALUE, safe_json_dumps(filtered_messages)
             )
@@ -260,12 +272,17 @@ def _instrument_func_type_embedding(
     )
     config = config or TraceConfig()
     for index, text in enumerate(batch):
-        # Released core 1.2.2 does not yet mask embedding.text. Apply the input
-        # policy before emitting any indexed copy, including for batch requests.
+        # Released core 1.2.2 does not yet mask embedding.text. All three
+        # input-content flags cover this indexed copy in the source core.
+        safe_text = (
+            "__REDACTED__"
+            if config.hide_inputs or config.hide_input_messages or config.hide_input_text
+            else str(text)
+        )
         _set_span_attribute(
             span,
             f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{EmbeddingAttributes.EMBEDDING_TEXT}",
-            config.mask(SpanAttributes.INPUT_VALUE, str(text)),
+            safe_text,
         )
     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(inputs))
 
