@@ -116,6 +116,31 @@ for (const preview of [false, true]) {
   }
 }
 
+for (const preview of [false, true]) {
+  test(`${preview ? 'preview' : 'stable'} records grounding and retrieval tool types without datastore IDs`, async () => {
+    instrument();
+    const tools = [
+      { googleSearchRetrieval: { disableAttribution: true } },
+      { retrieval: { vertexAiSearch: { datastore: 'projects/PRIVATE_DATASTORE' }, disableAttribution: true } },
+      { functionDeclarations: [{ name: 'lookup', description: 'tool description' }] },
+    ];
+    await model(preview, { tools }).generateContent('question');
+    assert.deepEqual(requests[0].body.tools, tools);
+    const captured = JSON.parse(exporter.getFinishedSpans()[0].attributes[S.LLM_INPUT_MESSAGES]);
+    assert.deepEqual(captured[0].content, [
+      { googleSearchRetrieval: { disableAttribution: true } },
+      { retrieval: { type: 'vertexAiSearch', disableAttribution: true } },
+      { functionDeclarations: tools[2].functionDeclarations },
+    ]);
+    assert.doesNotMatch(JSON.stringify(exporter.getFinishedSpans()[0].attributes), /PRIVATE_DATASTORE/);
+  });
+  test(`${preview ? 'preview' : 'stable'} hides grounding tool details with input privacy controls`, async () => {
+    instrument({ traceConfig: { hideInputText: true } });
+    await model(preview, { tools: [{ googleSearchRetrieval: { disableAttribution: true } }] }).generateContent('question');
+    assert.doesNotMatch(JSON.stringify(exporter.getFinishedSpans()[0].attributes), /googleSearchRetrieval|disableAttribution/);
+  });
+}
+
 test('constructor privacy config applies without a second enable call', async () => {
   instrument({ traceConfig: { hideInputs: true, hideOutputs: true } });
   await model().generateContent('private-question');

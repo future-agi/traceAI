@@ -192,7 +192,7 @@ function inputAttributes(instance: SDKObject, request: any, method: string): Att
   // text/messages privacy controls also hide tool arguments and declarations.
   if (Array.isArray(tools)) {
     if (tools.length > 32) attributes["vertexai.capture.truncated"] = true;
-    messages.unshift({ role: "system", content: tools.slice(0, 32).map((tool: SDKObject) => ({ functionDeclarations: tool.functionDeclarations })) });
+    messages.unshift({ role: "system", content: tools.slice(0, 32).map(safeTool) });
   }
   if (messages.length > 32) {
     const prefix = (instruction ? 1 : 0) + (Array.isArray(tools) ? 1 : 0);
@@ -207,6 +207,24 @@ function inputAttributes(instance: SDKObject, request: any, method: string): Att
     }
   }
   return attributes;
+}
+
+/** Capture supported tool kinds, never retrieval resource names or unknown payloads. */
+function safeTool(tool: SDKObject): SDKObject {
+  if (!tool || typeof tool !== "object") return { type: "unknown" };
+  if (Array.isArray(tool.functionDeclarations)) return { functionDeclarations: tool.functionDeclarations };
+  if (tool.googleSearchRetrieval && typeof tool.googleSearchRetrieval === "object") {
+    const config = tool.googleSearchRetrieval;
+    return { googleSearchRetrieval: typeof config.disableAttribution === "boolean"
+      ? { disableAttribution: config.disableAttribution } : {} };
+  }
+  if (tool.retrieval && typeof tool.retrieval === "object") {
+    const config = tool.retrieval;
+    const type = config.vertexAiSearch ? "vertexAiSearch" : config.vertexRagStore ? "vertexRagStore" : "retrieval";
+    return { retrieval: { type, ...(typeof config.disableAttribution === "boolean"
+      ? { disableAttribution: config.disableAttribution } : {}) } };
+  }
+  return { type: "unknown" };
 }
 
 function message(content: SDKObject, attributes: Attributes): SDKObject {
