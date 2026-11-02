@@ -38,7 +38,7 @@ import {
   CreateEmbeddingResponse,
   EmbeddingCreateParams,
 } from "openai/resources";
-import { assertUnreachable, isString } from "./typeUtils";
+import { assertUnreachable } from "./typeUtils";
 import { isTracingSuppressed } from "@opentelemetry/core";
 
 import {
@@ -99,6 +99,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
   private manuallyPatchedModule?: typeof openai;
+  // Only the instance that applied a patch may remove it. Another instrumentor
+  // sharing the module returns early from patch() but is still asked to unpatch.
+  private readonly patchedModules = new WeakSet<object>();
 
   constructor({
     instrumentationConfig,
@@ -216,7 +219,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           ...args: Parameters<ChatCompletionCreateType>
         ) {
           const body = args[0];
-          const { messages: _messages, ...invocationParameters } = body;
+          // Prediction text is input content, captured only in maskable payloads.
+          const { messages: _messages, prediction: _prediction, ...invocationParameters } = body;
 
           // diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
           
@@ -280,8 +284,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                // Override the model from the value sent by the server
-                [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                 [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
@@ -296,6 +298,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             } else {
               result = observeStream(result, span, (chunks) =>
                 consumeChatCompletionStreamChunks(chunks, span),
+                args[1]?.signal,
               );
             }
             return result;
@@ -319,7 +322,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           ...args: Parameters<CompletionsCreateType>
         ) {
           const body = args[0];
-          const { prompt: _prompt, ...invocationParameters } = body;
+          // Suffix is input text, not an unmasked tuning parameter.
+          const { prompt: _prompt, suffix: _suffix, ...invocationParameters } = body;
           const span = instrumentation.fiTracer.startSpan(
             `OpenAI Completions`,
             {
@@ -365,7 +369,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                 [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                 [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
@@ -380,12 +383,15 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             } else {
               result = observeStream(result, span, (chunks) => {
                 span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: chunks.map((chunk) => chunk.choices[0]?.text ?? "").join(""),
+                  ...getStreamMetadataAttributes(chunks),
+                  [SemanticConventions.OUTPUT_VALUE]: chunks
+                    .map((chunk) => chunk.choices.find((choice) => choice.index === 0)?.text ?? "")
+                    .join(""),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(chunks) ?? "",
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
-              });
+              }, args[1]?.signal);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -481,8 +487,22 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             this: unknown,
             ...args: Parameters<ResponsesCreateType>
           ) {
-            const body = args[0];
-            const { input: _messages, ...invocationParameters } = body;
+            // Stored prompts are declared by SDK releases newer than our build SDK.
+            const body = args[0] as ResponseCreateParamsBase & {
+              prompt?: { id: string; version?: string; variables?: Record<string, unknown> };
+            };
+            // Telemetry-only copy: MCP credentials must never reach any exported
+            // duplicate, but the original SDK request must remain untouched.
+            const telemetryBody = {
+              ...body,
+              ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }),
+              ...(body.input && { input: sanitizeResponsesInput(body.input) }),
+            };
+            const { input: _messages, instructions: _instructions, prompt, ...parameters } = telemetryBody;
+            const invocationParameters = {
+              ...parameters,
+              ...(prompt && { prompt: { id: prompt.id, version: prompt.version } }),
+            };
             const span = instrumentation.fiTracer.startSpan(
               `OpenAI Responses`,
               {
@@ -491,15 +511,16 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.FI_SPAN_KIND]:
                     FISpanKind.LLM,
                   [SemanticConventions.LLM_MODEL_NAME]: body.model,
-                  [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
+                  [SemanticConventions.INPUT_VALUE]: JSON.stringify(telemetryBody),
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
+                  [SemanticConventions.PROMPT_TEMPLATE_VARIABLES]: safelyJSONStringify(prompt?.variables) ?? undefined,
                   [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
-                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
+                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(telemetryBody) ?? "",
                 },
               },
             );
@@ -532,17 +553,26 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   if (endSpan) span.end();
                   return;
                 }
+                const output = {
+                  id: result.id, object: result.object, status: result.status,
+                  model: result.model, output: result.output, usage: result.usage,
+                };
                 span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
+                  [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(output),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_MODEL_NAME]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                   ...getResponsesOutputMessagesAttributes(result),
                   ...getResponsesUsageAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(output) ?? "",
                 });
-                span.setStatus({ code: SpanStatusCode.OK });
+                if (["failed", "incomplete", "cancelled"].includes(result.status ?? "") || result.error) {
+                  const message = result.error?.message ?? `Response ${result.status}`;
+                  span.recordException(new Error(message));
+                  span.setStatus({ code: SpanStatusCode.ERROR, message });
+                } else {
+                  span.setStatus({ code: SpanStatusCode.OK });
+                }
                 if (endSpan) span.end();
               };
               if (isResponseCreateResponse(result)) {
@@ -554,7 +584,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   async (chunks) => {
                     recordSpan(await consumeResponseStreamEvents(chunks), false);
                   },
-                  (event) => event.type === "response.completed",
+                  args[1]?.signal,
+                  (event) => event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete",
                 );
               }
 
@@ -567,6 +598,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     }
 
     _isFIPatched = true;
+    this.patchedModules.add(module);
     try {
       // This can fail if the module is made immutable via the runtime or bundler
       module.fiPatched = true;
@@ -585,6 +617,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     moduleVersion?: string,
   ) {
     // diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
+    if (!moduleExports || !this.patchedModules.delete(moduleExports)) return;
     this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
@@ -610,6 +643,7 @@ function observeStream<T>(
   stream: Stream<T>,
   span: Span,
   onComplete: (chunks: T[]) => void | Promise<void>,
+  requestSignal?: AbortSignal | null,
   retainChunk: (chunk: T) => boolean = () => true,
 ): Stream<T> {
   // Modern SDK helpers (notably tee) call the iterator factory directly.
@@ -619,21 +653,67 @@ function observeStream<T>(
   const originalIterator = hasIteratorFactory
     ? sdkStream.iterator!.bind(stream)
     : stream[Symbol.asyncIterator].bind(stream);
+  const signals = [stream.controller?.signal, requestSignal].filter(
+    (signal): signal is AbortSignal => signal != null,
+  );
+  let ended = false;
+  let awaitingNext = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    for (const signal of signals) signal.removeEventListener("abort", onAbort);
+    span.end();
+  };
+  const onAbort = () => {
+    if (ended) return;
+    // The SDK swallows AbortError and does not forward the request's reason to
+    // its own controller. Inspect the original signal before treating EOF as OK.
+    const deadline = signals.find(signal => signal.aborted && signal.reason?.name === "TimeoutError");
+    if (deadline) {
+      span.recordException(deadline.reason);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: deadline.reason.message });
+    }
+    // An SDK parser/transport error can abort its controller in finally before
+    // next() rejects. Let that rejection reach our catch before ending the span.
+    if (!deadline && awaitingNext) return;
+    // Other aborts include the SDK's automatic cancellation on a consumer's
+    // early return. End them as UNSET, not successful generations or failures.
+    finish();
+  };
+  for (const signal of signals) signal.addEventListener("abort", onAbort, { once: true });
+  if (signals.some(signal => signal.aborted)) onAbort();
   const observedIterator = async function* () {
     const chunks: T[] = [];
     try {
-      for await (const chunk of { [Symbol.asyncIterator]: originalIterator }) {
-        if (retainChunk(chunk)) chunks.push(chunk);
+      const source = {
+        [Symbol.asyncIterator]: () => {
+          const iterator = originalIterator();
+          return {
+            next: async () => {
+              awaitingNext = true;
+              try { return await iterator.next(); }
+              finally { awaitingNext = false; }
+            },
+            return: iterator.return?.bind(iterator),
+            throw: iterator.throw?.bind(iterator),
+          };
+        },
+      };
+      for await (const chunk of source) {
+        if (!ended && retainChunk(chunk)) chunks.push(chunk);
         yield chunk;
       }
-      await onComplete(chunks);
+      if (signals.some(signal => signal.aborted)) onAbort();
+      if (!ended) await onComplete(chunks);
     } catch (error) {
-      const exception = error instanceof Error ? error : new Error(String(error));
-      span.recordException(exception);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: exception.message });
+      if (!ended) {
+        const exception = error instanceof Error ? error : new Error(String(error));
+        span.recordException(exception);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: exception.message });
+      }
       throw error;
     } finally {
-      span.end();
+      finish();
     }
   };
   if (hasIteratorFactory) sdkStream.iterator = observedIterator;
@@ -710,6 +790,52 @@ function getLLMInputMessagesAttributes(
   };
 }
 
+/** URL userinfo, path, query and fragment may carry credentials. Export only the origin. */
+function sanitizeMcpServerURL(serverURL: string): string {
+  try {
+    const url = new URL(serverURL);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "[REDACTED]";
+    // Paths can themselves embed API tokens. Only the server origin is safe
+    // as telemetry metadata; the SDK still receives the original full URL.
+    return url.origin;
+  } catch {
+    return "[REDACTED]";
+  }
+}
+
+/** Remove MCP credentials from telemetry without mutating transport objects. */
+function sanitizeToolDefinitions(tools: { type: string }[]): { type: string }[] {
+  return tools.map((tool) => {
+    if (tool.type !== "mcp") return tool;
+    // MCP arrived after the SDK build floor. All headers are omitted because
+    // custom header names can carry credentials too.
+    const { authorization: _authorization, headers: _headers, ...definition } =
+      tool as { type: string; authorization?: string; headers?: Record<string, string> };
+    return {
+      ...definition,
+      ...("server_url" in definition && typeof definition.server_url === "string" && {
+        server_url: sanitizeMcpServerURL(definition.server_url),
+      }),
+    };
+  });
+}
+
+/** SDK 4 predates tool search; sanitize its loaded definitions when present. */
+function sanitizeResponsesInput(
+  input: ResponseCreateParamsBase["input"],
+): ResponseCreateParamsBase["input"] {
+  if (!Array.isArray(input)) return input;
+  return input.map((item) => {
+    if (item && typeof item === "object") {
+      const loaded = item as { type: string; tools?: { type: string }[] };
+      if (loaded.type === "tool_search_output" && Array.isArray(loaded.tools)) {
+        return { ...item, tools: sanitizeToolDefinitions(loaded.tools) } as unknown as typeof item;
+      }
+    }
+    return item;
+  });
+}
+
 /**
  * Converts tool definitions into a JSON blob
  */
@@ -720,8 +846,26 @@ function getLLMToolsJSONSchema(
     return {};
   }
   return {
-    [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(body.tools) ?? "[]",
+    [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(sanitizeToolDefinitions(body.tools)) ?? "[]",
   };
+}
+
+// Structural shape keeps the build compatible with SDK 4 while accepting the
+// discriminated custom-tool union introduced in later SDKs. Unknown variants
+// retain identity only; tracing must not make a valid SDK request throw.
+function serializeToolCall(tc: {
+  id: string;
+  type: string;
+  function?: { name: string; arguments: string };
+  custom?: { name: string; input: string };
+}): Record<string, unknown> {
+  const result: Record<string, unknown> = { id: tc.id, type: tc.type };
+  if (tc.type === "function" && tc.function) {
+    result.function = { name: tc.function.name, arguments: tc.function.arguments };
+  } else if (tc.type === "custom" && tc.custom) {
+    result.custom = { name: tc.custom.name, input: tc.custom.input };
+  }
+  return result;
 }
 
 /**
@@ -749,11 +893,7 @@ function serializeChatCompletionInputMessage(
   switch (role) {
     case "assistant":
       if (message.tool_calls) {
-        obj.tool_calls = message.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: tc.type,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        }));
+        obj.tool_calls = message.tool_calls.map(serializeToolCall);
       }
       break;
     case "function":
@@ -804,7 +944,7 @@ function getCompletionInputValueAndMimeType(
  * Get usage attributes
  */
 function getUsageAttributes(
-  completion: ChatCompletion | Completion,
+  completion: Pick<ChatCompletionChunk, "usage">,
 ): Attributes {
   if (completion.usage) {
     const usageAttributes: Attributes = {
@@ -826,6 +966,26 @@ function getUsageAttributes(
     return usageAttributes;
   }
   return {};
+}
+
+/** Usage-only final chunks have no choices. Collect metadata independently of deltas. */
+function getStreamMetadataAttributes(chunks: (ChatCompletionChunk | Completion)[]): Attributes {
+  const attributes: Attributes = {};
+  const finishReasons = new Map<number, string>();
+  for (const chunk of chunks) {
+    if (chunk.model) {
+      attributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = chunk.model;
+    }
+    if (chunk.id) attributes[SemanticConventions.GEN_AI_RESPONSE_ID] = chunk.id;
+    if (chunk.usage) Object.assign(attributes, getUsageAttributes(chunk));
+    for (const choice of chunk.choices) {
+      if (choice.finish_reason) finishReasons.set(choice.index, choice.finish_reason);
+    }
+  }
+  if (finishReasons.size) {
+    attributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = JSON.stringify([...finishReasons.values()]);
+  }
+  return attributes;
 }
 
 /**
@@ -855,11 +1015,7 @@ function serializeChatCompletionOutputMessage(
     obj.content = message.content;
   }
   if (message.tool_calls) {
-    obj.tool_calls = message.tool_calls.map((tc) => ({
-      id: tc.id,
-      type: tc.type,
-      function: { name: tc.function.name, arguments: tc.function.arguments },
-    }));
+    obj.tool_calls = message.tool_calls.map(serializeToolCall);
   }
   if (message.function_call) {
     obj.function_call = {
@@ -927,130 +1083,75 @@ function getEmbeddingEmbeddingsAttributes(
   }, {} as Attributes);
 }
 
-/**
- * Consumes the stream chunks and adds them to the span
- */
+// Structural union supports modern custom tools while compiling against SDK 4.
+type StreamToolCall = {
+  index: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+  custom?: { name?: string; input?: string };
+};
+
+/** Accumulate one tool by its stable SDK index, never its position in a chunk. */
+function accumulateToolCall(
+  tools: Map<number, StreamToolCall>,
+  delta: StreamToolCall,
+): void {
+  const tool = tools.get(delta.index) ?? { index: delta.index };
+  if (delta.id !== undefined) tool.id = delta.id;
+  if (delta.type !== undefined) tool.type = delta.type;
+  if (delta.function) {
+    tool.function ??= { name: "", arguments: "" };
+    tool.function.name = (tool.function.name ?? "") + (delta.function.name ?? "");
+    tool.function.arguments = (tool.function.arguments ?? "") + (delta.function.arguments ?? "");
+  }
+  if (delta.custom) {
+    tool.custom ??= { name: "", input: "" };
+    tool.custom.name = (tool.custom.name ?? "") + (delta.custom.name ?? "");
+    tool.custom.input = (tool.custom.input ?? "") + (delta.custom.input ?? "");
+  }
+  tools.set(delta.index, tool);
+}
+
+/** Consume the first choice, retaining SDK chunks unchanged for the caller. */
 async function consumeChatCompletionStreamChunks(
   stream: Iterable<ChatCompletionChunk>,
   span: Span,
 ) {
-  // --- ADD LOG ---
-  // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks CALLED for span: ${span.spanContext().spanId}`);
   let streamResponse = "";
-  // Tool and function call attributes can also arrive in the stream
-  // NB: the tools and function calls arrive in partial diffs
-  // So the final tool and function calls need to be aggregated
-  // across chunks
-  const toolAndFunctionCallAttributes: Attributes = {};
-  // The first message is for the assistant response so we start at 1
+  const tools = new Map<number, StreamToolCall>();
+  let functionName = "";
+  let functionArguments = "";
   const allChunks: ChatCompletionChunk[] = [];
   for await (const chunk of stream) {
-    allChunks.push(chunk); // Store all chunks
-    if (chunk.choices.length <= 0) {
-      continue;
+    allChunks.push(chunk);
+    const choice = chunk.choices.find((choice) => choice.index === 0);
+    if (!choice) continue;
+    streamResponse += choice.delta.content ?? "";
+    for (const tool of choice.delta.tool_calls ?? []) {
+      accumulateToolCall(tools, tool);
     }
-    const choice = chunk.choices[0];
-    if (choice.delta.content) {
-      streamResponse += choice.delta.content;
-    }
-    // Accumulate the tool and function call attributes
-    const toolAndFunctionCallAttributesDiff =
-      getToolAndFunctionCallAttributesFromStreamChunk(chunk);
-    for (const [key, value] of Object.entries(
-      toolAndFunctionCallAttributesDiff,
-    )) {
-      if (isString(toolAndFunctionCallAttributes[key]) && isString(value)) {
-        toolAndFunctionCallAttributes[key] += value;
-      } else if (isString(value)) {
-        toolAndFunctionCallAttributes[key] = value;
-      }
-    }
+    functionName += choice.delta.function_call?.name ?? "";
+    functionArguments += choice.delta.function_call?.arguments ?? "";
   }
-  // Build the output message as a JSON blob
   const outputMessage: Record<string, unknown> = {
     role: "assistant",
     content: streamResponse,
   };
-  // Aggregate tool calls from stream attributes into structured format
-  const toolCalls: Record<number, Record<string, unknown>> = {};
-  for (const [key, value] of Object.entries(toolAndFunctionCallAttributes)) {
-    // Parse tool call attributes from the nested format
-    const toolCallMatch = key.match(/^message\.tool_calls\.(\d+)\./);
-    if (toolCallMatch) {
-      const idx = parseInt(toolCallMatch[1]);
-      if (!toolCalls[idx]) toolCalls[idx] = {};
-      if (key.endsWith("tool_call.id")) toolCalls[idx].id = value;
-      if (key.endsWith("tool_call.function.name")) {
-        if (!toolCalls[idx].function) toolCalls[idx].function = {};
-        (toolCalls[idx].function as Record<string, unknown>).name = value;
-      }
-      if (key.endsWith("tool_call.function.arguments")) {
-        if (!toolCalls[idx].function) toolCalls[idx].function = {};
-        (toolCalls[idx].function as Record<string, unknown>).arguments = value;
-      }
-    }
-    // Handle legacy function_call
-    if (key === SemanticConventions.MESSAGE_FUNCTION_CALL_NAME) {
-      outputMessage.function_call_name = value;
-    }
-    if (key === SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON) {
-      outputMessage.function_call_arguments = value;
-    }
+  if (tools.size) {
+    outputMessage.tool_calls = [...tools.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, { index: _index, ...tool }]) => tool);
   }
-  const toolCallArray = Object.values(toolCalls);
-  if (toolCallArray.length > 0) {
-    outputMessage.tool_calls = toolCallArray;
-  }
+  if (functionName) outputMessage.function_call_name = functionName;
+  if (functionArguments) outputMessage.function_call_arguments = functionArguments;
 
-  const attributes: Attributes = {
+  span.setAttributes({
+    ...getStreamMetadataAttributes(allChunks),
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
     [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-  span.setAttributes(attributes);
-  // --- ADD LOG ---
-  // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
-}
-
-/**
- * Extracts the semantic attributes from the stream chunk for tool_calls and function_calls
- */
-function getToolAndFunctionCallAttributesFromStreamChunk(
-  chunk: ChatCompletionChunk,
-): Attributes {
-  if (chunk.choices.length <= 0) {
-    return {};
-  }
-  const choice = chunk.choices[0];
-  const attributes: Attributes = {};
-  if (choice.delta.tool_calls) {
-    choice.delta.tool_calls.forEach((toolCall, index) => {
-      const toolCallIndexPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
-      // Add the tool call id if it exists
-      if (toolCall.id) {
-        attributes[
-          `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_ID}`
-        ] = toolCall.id;
-      }
-      // Double check that the tool call has a function
-      // NB: OpenAI only supports tool calls with functions right now but this may change
-      if (toolCall.function) {
-        attributes[
-          toolCallIndexPrefix + SemanticConventions.TOOL_CALL_FUNCTION_NAME
-        ] = toolCall.function.name;
-        attributes[
-          toolCallIndexPrefix +
-            SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
-        ] = toolCall.function.arguments;
-      }
-    });
-  }
-  if (choice.delta.function_call) {
-    attributes[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME] =
-      choice.delta.function_call.name;
-    attributes[SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON] =
-      choice.delta.function_call.arguments;
-  }
-  return attributes;
+  });
+  span.setStatus({ code: SpanStatusCode.OK });
 }

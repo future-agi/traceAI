@@ -1,7 +1,7 @@
 {
   "name": "@traceai/fireworks",
   "version": "0.1.1",
-  "description": "TraceAI instrumentation for Fireworks AI",
+  "description": "Deprecated: use @traceai/openai for Fireworks AI tracing",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
   "types": "dist/cjs/index.d.ts",
@@ -41,15 +41,12 @@
     "directory": "typescript/packages/traceai_fireworks"
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/core": "^1.29.0",
-    "@opentelemetry/instrumentation": "^0.56.0",
-    "@traceai/fi-core": "workspace:^",
-    "@traceai/fi-semantic-conventions": "workspace:^"
+    "@traceai/openai": "workspace:^"
   },
   "devDependencies": {
-    "@opentelemetry/sdk-trace-base": "^1.29.0",
-    "@opentelemetry/sdk-trace-node": "^1.29.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@traceai/fi-core": "workspace:^",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.5",
     "jest": "^29.7.0",
@@ -60,12 +57,7 @@
     "typescript": "^5.7.2"
   },
   "peerDependencies": {
-    "openai": ">=4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "openai": {
-      "optional": true
-    }
+    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

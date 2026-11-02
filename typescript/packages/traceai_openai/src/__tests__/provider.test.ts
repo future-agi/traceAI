@@ -18,6 +18,7 @@ describe("providerForResource", () => {
     ["api.anannas.ai", "anannas"],
     ["anannas.ai", "anannas"],
     ["api.doubleword.ai", "doubleword"],
+    ["api.fireworks.ai", "fireworks"],
     ["resource.openai.azure.com", "azure"],
     ["resource.services.ai.azure.com", "azure"],
     ["resource.cognitiveservices.azure.com", "azure"],
@@ -38,6 +39,8 @@ describe("providerForResource", () => {
     { _client: { baseURL: "not a url" } }, { _client: { baseURL: "ftp://api.anannas.ai" } },
     { _client: { baseURL: "https://constructor" } }, { _client: { baseURL: "http://127.0.0.1/v1" } },
     { _client: { baseURL: "https://notopenai.azure.com" } },
+    { _client: { baseURL: "https://fireworks.ai/inference/v1" } },
+    { _client: { baseURL: "https://my-fireworks-proxy.example/inference/v1" } },
   ])("falls back safely for %p", (resource) => {
     expect(providerForResource(resource)).toBe("openai");
   });

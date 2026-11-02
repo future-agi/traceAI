@@ -83,7 +83,8 @@ async function check(expected, kind = 'chat', error = false, streaming = false) 
   assert.equal(attrs['gen_ai.provider.name'], expected);
   if (!streaming) assert.equal(span.status.code, error ? 2 : 1);
   if (kind !== 'embeddings') {
-    assert.equal(attrs[SC.LLM_MODEL_NAME], error || streaming ? requestedModel : responseModel);
+    assert.equal(attrs[SC.LLM_MODEL_NAME], requestedModel);
+    if (!error && !streaming) assert.equal(attrs['gen_ai.response.model'], responseModel);
     if (!error && !streaming) {
       assert.equal(attrs[SC.LLM_TOKEN_COUNT_PROMPT], 3);
       assert.equal(attrs[SC.LLM_TOKEN_COUNT_COMPLETION], 2);

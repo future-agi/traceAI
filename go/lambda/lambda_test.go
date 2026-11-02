@@ -1,9 +1,11 @@
 package traceailambda
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -162,20 +164,34 @@ func TestParentExtractionBoundaries(t *testing.T) {
 		{"xray-only", `{"version":"2.0","headers":{"x-amzn-trace-id":"Root=1-abcdef01-abcdef0123456789abcdef01"}}`, false},
 		{"malformed-event", `{`, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tp, recorder := recorderProvider(t)
-			h := WrapHandler(lambda.NewHandler(func(context.Context) error { return nil }), tp)
-			if _, err := h.Invoke(invocationContext(), []byte(tc.payload)); err != nil {
-				t.Fatal(err)
-			}
-			root := recorder.Ended()[0]
-			if root.Parent().IsRemote() != tc.remote {
-				t.Fatalf("unexpected parent: %v", root.Parent())
-			}
-			if !tc.remote && root.Parent().IsValid() {
-				t.Fatal("unsupported event continued a trace")
-			}
-		})
+		for kind, handler := range map[string]lambda.Handler{
+			"sdk":    lambda.NewHandler(func(context.Context) error { return nil }),
+			"custom": handlerFunc(func(context.Context, []byte) ([]byte, error) { return nil, nil }),
+		} {
+			t.Run(tc.name+"/"+kind, func(t *testing.T) {
+				tp, recorder := recorderProvider(t)
+				h := WrapHandler(handler, tp)
+				_, err := h.Invoke(invocationContext(), []byte(tc.payload))
+				if kind == "sdk" && tc.name == "malformed-event" {
+					// Like aws-lambda-go's typed handlers, the wrapper decodes the
+					// event as JSON; Lambda only delivers JSON events.
+					if err == nil || len(recorder.Ended()) != 0 {
+						t.Fatal("malformed JSON event reached the handler")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				root := recorder.Ended()[0]
+				if root.Parent().IsRemote() != tc.remote {
+					t.Fatalf("unexpected parent: %v", root.Parent())
+				}
+				if !tc.remote && root.Parent().IsValid() {
+					t.Fatal("unsupported event continued a trace")
+				}
+			})
+		}
 	}
 }
 
@@ -266,7 +282,9 @@ func TestFlushFailureIsSanitizedAndDoesNotFailInvocation(t *testing.T) {
 
 func TestConcurrentColdStart(t *testing.T) {
 	tp, recorder := recorderProvider(t)
-	h := WrapHandler(lambda.NewHandler(func() error { return nil }), tp)
+	// A custom handler: aws-lambda-go's own handlers return Invoke results in a
+	// pooled buffer that concurrent invocations can reuse (see README).
+	h := WrapHandler(handlerFunc(func(context.Context, []byte) ([]byte, error) { return nil, nil }), tp)
 	var wg sync.WaitGroup
 	for range 12 {
 		wg.Add(1)
@@ -293,5 +311,36 @@ func TestNilProviderDisablesInstrumentation(t *testing.T) {
 	h := lambda.NewHandler(func() error { return nil })
 	if WrapHandler(h, nil) != h {
 		t.Fatal("disabled wrapper replaced handler")
+	}
+}
+
+func TestResultContentTypeRules(t *testing.T) {
+	type jsonReader struct {
+		io.Reader `json:"-"`
+		Value     string `json:"value"`
+	}
+	for _, tc := range []struct {
+		name   string
+		seen   bool
+		value  any
+		body   string
+		expect string
+	}{
+		{"no-result", false, nil, "null", contentTypeJSON},
+		{"no-result-indented", false, nil, "null\n", contentTypeJSON},
+		{"custom-bytes", false, nil, `{"custom":true}`, contentTypeBytes},
+		{"json-value", true, map[string]string{"ok": "yes"}, `{"ok":"yes"}`, contentTypeJSON},
+		{"nil-value", true, nil, "null", contentTypeJSON},
+		{"plain-reader", true, strings.NewReader("raw"), "raw", contentTypeBytes},
+		{"empty-json-reader", true, bytes.NewBufferString("raw"), "raw", contentTypeBytes},
+		{"json-serializable-reader", true, jsonReader{strings.NewReader("raw"), "x"}, `{"value":"x"}`, contentTypeJSON},
+		{"typed-reader", true, &typedResponse{Reader: bytes.NewReader(nil), contentType: "text/csv"}, "", "text/csv"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := &resultCapture{seen: tc.seen, value: tc.value}
+			if got := capture.contentType([]byte(tc.body)); got != tc.expect {
+				t.Fatalf("content type %q, want %q", got, tc.expect)
+			}
+		})
 	}
 }

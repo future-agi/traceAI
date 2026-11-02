@@ -32,6 +32,18 @@ import { observeResponse } from "./responses.js";
 import { VERSION } from "./version.js";
 
 const NAME = "@traceai/elevenlabs";
+
+// The SDK spreads own enumerable JSON overrides, including null/undefined.
+// Inspect only recorded fields, never copy or retain arbitrary request options.
+function bodyField(
+  overrides: Record<string, unknown>,
+  key: string,
+  fallback: unknown,
+): unknown {
+  return Object.prototype.propertyIsEnumerable.call(overrides, key)
+    ? overrides[key]
+    : fallback;
+}
 const methods: Record<string, readonly string[]> = {
   textToSpeech: [
     "convert",
@@ -252,20 +264,28 @@ export class ElevenLabsInstrumentation extends InstrumentationBase {
           "gen_ai.operation.name": stt ? "transcription" : "speech",
           "elevenlabs.operation": method,
         };
-        const model = identifier(request.modelId);
+        const options = record(args[stt ? 1 : 2]);
+        const body = stt ? {} : record(options.additionalBodyParameters);
+        const model = identifier(bodyField(body, "model_id", request.modelId));
         if (model) attributes[S.LLM_MODEL_NAME] = model;
         const voice = !stt && identifier(args[0]);
         if (voice) attributes["elevenlabs.voice.id"] = voice;
-        const format = identifier(request.outputFormat);
+        // Unlike JSON body overrides, the SDK skips nullish query values.
+        const query = stt ? {} : record(options.queryParams);
+        const format = identifier(
+          bodyField(query, "output_format", undefined) ?? request.outputFormat,
+        );
         if (format) attributes["elevenlabs.output_format"] = format;
         if (
           !stt &&
-          typeof request.text === "string" &&
           !policy.hideInputs &&
           !policy.hideInputMessages &&
           !policy.hideInputText
-        )
-          attributes[S.INPUT_VALUE] = request.text.slice(0, TEXT_LIMIT);
+        ) {
+          const text = bodyField(body, "text", request.text);
+          if (typeof text === "string")
+            attributes[S.INPUT_VALUE] = text.slice(0, TEXT_LIMIT);
+        }
         const tracer = new FITracer({
           tracer: this.tracer,
           traceConfig: policy,

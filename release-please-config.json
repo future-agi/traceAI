@@ -961,7 +961,8 @@
       "package-name": "com.futureagi:traceai-java-parent",
       "skip-snapshot": true,
       "extra-files": [
-        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"}
+        {"type": "generic", "path": "compatibility/spring-ai/pom.xml"},
+        {"type": "generic", "path": "traceai-java-weaviate/README.md"}
       ]
     },
     "go/a2a": {
