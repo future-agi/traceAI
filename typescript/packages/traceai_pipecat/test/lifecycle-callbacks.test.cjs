@@ -112,16 +112,21 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     assert.deepEqual(connects(exporter.getFinishedSpans()).map(s => s.status.code), [SpanStatusCode.OK]);
   });
 
-  test(`${name}: lifecycle listeners are owned and removed after every completion path`, async t => {
+  test(`${name}: lifecycle callbacks are restored after every completion path without changing application listeners`, async t => {
     const sdk = require(name);
     const { client, transport, exporter, instrumentation } = setup(t, sdk);
     const appReady = () => {};
     const appDisconnected = () => {};
     client.on('botReady', appReady);
     client.on('disconnected', appDisconnected);
+    const callbacks = client._options.callbacks;
+    const originalReady = callbacks.onBotReady;
+    const originalDisconnected = callbacks.onDisconnected;
     const assertDetached = () => {
       assert.deepEqual(client.listeners('botReady'), [appReady]);
       assert.deepEqual(client.listeners('disconnected'), [appDisconnected]);
+      assert.equal(callbacks.onBotReady, originalReady);
+      assert.equal(callbacks.onDisconnected, originalDisconnected);
     };
     await client.connect();
     assertDetached();
@@ -136,8 +141,10 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     transport.sendReadyMessage = () => { awaitingBot = true; };
     const pending = client.connect();
     await ready(() => awaitingBot);
-    assert.equal(client.listeners('botReady').length, 2);
-    assert.equal(client.listeners('disconnected').length, 2);
+    assert.deepEqual(client.listeners('botReady'), [appReady]);
+    assert.deepEqual(client.listeners('disconnected'), [appDisconnected]);
+    assert.notEqual(callbacks.onBotReady, originalReady);
+    assert.notEqual(callbacks.onDisconnected, originalDisconnected);
     instrumentation.disable();
     assertDetached();
     const spans = connects(exporter.getFinishedSpans());

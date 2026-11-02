@@ -4,7 +4,6 @@ import {
 } from "@opentelemetry/instrumentation";
 import { context, createContextKey, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
-import { PipecatEventSource } from "./client";
 import { VERSION } from "./version";
 
 export interface PipecatInstrumentationConfig {
@@ -29,12 +28,15 @@ type ConnectionScope = {
   invoking: boolean;
   startingBot: boolean;
   handshaking: boolean;
+  ready: boolean;
   delegatedParams?: { value: unknown };
 };
 type FinishSpan = (code: SpanStatusCode) => void;
-type DisconnectScope = { instance: object; active: boolean; pending: Set<FinishSpan> };
+type PendingConnections = {
+  attempts: Map<FinishSpan, ConnectionScope>;
+  detach: () => void;
+};
 const CONNECTION_SCOPE = createContextKey("traceai.pipecat.connection-scope");
-const DISCONNECT_SCOPE = createContextKey("traceai.pipecat.disconnect-scope");
 const owners = new WeakMap<object, PipecatInstrumentation>();
 let patchedCount = 0;
 
@@ -44,8 +46,8 @@ export class PipecatInstrumentation extends InstrumentationBase {
   private traceConfig?: TraceConfigOptions;
   private patches?: Map<ClientPrototype, string[]>;
   private manualModules?: Set<unknown>;
-  // Iterable so unpatch/disable can finish spans and remove only our listeners.
-  private pendingConnections = new Map<object, Set<FinishSpan>>();
+  // Iterable so unpatch/disable can finish spans and restore owned callbacks.
+  private pendingConnections = new Map<object, PendingConnections>();
 
   constructor(config: PipecatInstrumentationConfig = {}) {
     super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
@@ -139,7 +141,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
     patchedCount--;
     for (const [client, pending] of this.pendingConnections ?? []) {
       if (Object.prototype.isPrototypeOf.call(prototype, client)) {
-        for (const finish of pending) finish(SpanStatusCode.ERROR);
+        for (const finish of pending.attempts.keys()) finish(SpanStatusCode.ERROR);
       }
     }
   }
@@ -168,35 +170,51 @@ export class PipecatInstrumentation extends InstrumentationBase {
     return result;
   }
 
-  private observeConnection(scope: ConnectionScope, finish: FinishSpan): () => void {
-    const events = scope.instance as Partial<PipecatEventSource>;
-    if (typeof events.on !== "function" || typeof events.off !== "function") return () => {};
-    // While an endpoint is starting a bot, a callback can make a separate
-    // connection. Its bot-ready event is not this endpoint call's handshake.
-    const ready = () => { if (scope.handshaking) finish(SpanStatusCode.OK); };
-    // Bot-ready resolves the SDK promise before invoking application callbacks.
-    // Let that synchronous dispatch complete if a callback disconnects immediately.
-    const disconnected = () => {
-      const disconnect = context.active().getValue(DISCONNECT_SCOPE) as DisconnectScope | undefined;
-      // Constructor callbacks run before the public event. A retry they create
-      // can already be listening, but does not belong to the old disconnect.
-      if (disconnect?.active && disconnect.instance === scope.instance && !disconnect.pending.has(finish)) return;
-      queueMicrotask(() => finish(SpanStatusCode.ERROR));
-    };
+  private observeConnections(client: object, pending: PendingConnections): () => void {
+    const restore: (() => void)[] = [];
     const detach = () => {
-      for (const [event, listener] of [["botReady", ready], ["disconnected", disconnected]] as const) {
-        try { events.off!(event, listener); }
+      for (const undo of restore) {
+        try { undo(); }
         catch { diag.warn("Pipecat client lifecycle telemetry cleanup failed"); }
       }
     };
     try {
-      events.on("botReady", ready);
-      events.on("disconnected", disconnected);
+      // Both supported SDKs share this callback table with the transport. Observe
+      // its dispatch boundary, BEFORE constructor callbacks and public listeners:
+      // either may synchronously create a retry belonging to a new attempt.
+      // This internal SDK contract is exercised with the real floor/latest clients.
+      const callbacks = (client as { _options?: { callbacks?: Record<string, ClientMethod> } })._options?.callbacks;
+      if (!callbacks) return detach;
+      for (const name of ["onBotReady", "onDisconnected"] as const) {
+        const original = callbacks[name];
+        if (typeof original !== "function") continue;
+        const wrapped: ClientMethod = function (this: unknown, ...args: unknown[]) {
+          if (name === "onBotReady") {
+            // Do not end spans as OK on a broadcast. The operation's own promise
+            // decides success/failure. Only protect already-ready handshakes from
+            // cancellation while that promise propagates through SDK delegation.
+            for (const scope of pending.attempts.values()) {
+              if (scope.handshaking) scope.ready = true;
+            }
+          } else {
+            PipecatInstrumentation.cancelConnections(new Map(pending.attempts));
+          }
+          return original.apply(this, args);
+        };
+        callbacks[name] = wrapped;
+        restore.push(() => { if (callbacks[name] === wrapped) callbacks[name] = original; });
+      }
     } catch {
       detach();
       diag.warn("Pipecat client lifecycle telemetry failed");
     }
     return detach;
+  }
+
+  private static cancelConnections(attempts: Map<FinishSpan, ConnectionScope>): void {
+    for (const [finish, scope] of attempts) {
+      if (!scope.ready) finish(SpanStatusCode.ERROR);
+    }
   }
 
   private traceOperation(original: ClientMethod, instance: unknown, args: unknown[], operation: string): unknown {
@@ -211,10 +229,10 @@ export class PipecatInstrumentation extends InstrumentationBase {
       inherited.handshaking = true;
       return context.with(parentContext.deleteValue(CONNECTION_SCOPE), () => original.apply(instance, args));
     }
-    const disconnect: DisconnectScope | undefined = operation === "client.disconnect" && client
-      ? { instance: client, active: true, pending: new Set(this.pendingConnections.get(client)) } : undefined;
-    // Snapshot attempts now; a disconnected callback may start a new connection.
-    for (const finish of disconnect?.pending ?? []) queueMicrotask(() => finish(SpanStatusCode.ERROR));
+    // Only successful disconnects (or actual transport notifications) cancel
+    // attempts. A rejected disconnect can leave the handshake running normally.
+    const disconnect = operation === "client.disconnect" && client
+      ? new Map(this.pendingConnections.get(client)?.attempts) : undefined;
     let span: Span;
     try {
       span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
@@ -230,17 +248,18 @@ export class PipecatInstrumentation extends InstrumentationBase {
       return original.apply(instance, args);
     }
     const scope: ConnectionScope | undefined = operation === "client.connect" && client
-      ? { instance: client, active: true, invoking: true, startingBot: false, handshaking: true } : undefined;
-    let detach = () => {};
+      ? { instance: client, active: true, invoking: true, startingBot: false, handshaking: true, ready: false } : undefined;
     let finished = false;
     const finish: FinishSpan = (code) => {
       if (finished) return;
       finished = true;
-      detach();
       if (scope) {
         const pending = this.pendingConnections.get(scope.instance);
-        pending?.delete(finish);
-        if (!pending?.size) this.pendingConnections.delete(scope.instance);
+        pending?.attempts.delete(finish);
+        if (pending && !pending.attempts.size) {
+          pending.detach();
+          this.pendingConnections.delete(scope.instance);
+        }
       }
       try {
         // Error messages and arguments may contain credentials or transcripts.
@@ -251,23 +270,23 @@ export class PipecatInstrumentation extends InstrumentationBase {
       }
     };
     let operationContext = trace.setSpan(parentContext, span);
-    if (disconnect) operationContext = operationContext.setValue(DISCONNECT_SCOPE, disconnect);
     if (scope) {
-      // A retry's transport has its own lifecycle, not the enclosing disconnect's.
-      operationContext = operationContext.deleteValue(DISCONNECT_SCOPE);
-      const pending = this.pendingConnections.get(scope.instance) ?? new Set<FinishSpan>();
-      pending.add(finish);
-      this.pendingConnections.set(scope.instance, pending);
-      detach = this.observeConnection(scope, finish);
+      let pending = this.pendingConnections.get(scope.instance);
+      if (!pending) {
+        pending = { attempts: new Map(), detach: () => {} };
+        this.pendingConnections.set(scope.instance, pending);
+        pending.detach = this.observeConnections(scope.instance, pending);
+      }
+      pending.attempts.set(finish, scope);
       operationContext = operationContext.setValue(CONNECTION_SCOPE, scope);
     }
     const settle = (code: SpanStatusCode) => {
       if (disconnect) {
-        disconnect.active = false;
-        disconnect.pending.clear();
+        if (code === SpanStatusCode.OK) PipecatInstrumentation.cancelConnections(disconnect);
+        disconnect.clear();
       }
       // A cancelled endpoint call may still delegate later. Keep its one-use
-      // delegation slot until SDK settlement, without retaining event listeners.
+      // delegation slot until SDK settlement, without retaining callback wrappers.
       if (scope) {
         scope.active = false;
         delete scope.delegatedParams;
