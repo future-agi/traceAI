@@ -254,9 +254,22 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
         return method;
       },
       set(_target, key, value, receiver) {
-        return Object.prototype.hasOwnProperty.call(target, key)
-          ? Reflect.set(target, key, value, receiver)
-          : Reflect.set(client, key, value, client);
+        if (Object.prototype.hasOwnProperty.call(target, key)) {
+          return Reflect.set(target, key, value, receiver);
+        }
+        if (isSubclassMember(key)) {
+          // Private brands live on the returned proxy for subclasses created
+          // from the wrapped constructor. Accessor setters need that receiver.
+          for (let proto = Object.getPrototypeOf(client); proto && proto !== subclassBase; proto = Object.getPrototypeOf(proto)) {
+            const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+            if (descriptor) {
+              return "set" in descriptor
+                ? Reflect.set(client, key, value, wrapped)
+                : Reflect.set(target, key, value, target);
+            }
+          }
+        }
+        return Reflect.set(client, key, value, client);
       },
     }) as T;
     this.clients.set(client, wrapped);
@@ -372,11 +385,14 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(args.parameters ?? {}),
+              // Parameters can contain request text (e.g. stop sequences).
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [SemanticConventions.LLM_INVOCATION_PARAMETERS]: JSON.stringify(args.parameters ?? {}) }
+                : {}),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
-              ...(!instrumentation.resolvedTraceConfig.hideInputs ? { [`${SemanticConventions.LLM_PROMPTS}.0`]: args.inputs } : {}),
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [`${SemanticConventions.LLM_PROMPTS}.0`]: args.inputs } : {}),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },
           },
@@ -661,8 +677,10 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(args.parameters ?? {}),
+              // Parameters can contain request text (e.g. stop sequences).
+              ...(!instrumentation.resolvedTraceConfig.hideInputs && !instrumentation.resolvedTraceConfig.hideInputText
+                ? { [SemanticConventions.LLM_INVOCATION_PARAMETERS]: JSON.stringify(args.parameters ?? {}) }
+                : {}),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(safeInput(args)) ?? "",
             },

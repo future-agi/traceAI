@@ -10,8 +10,9 @@ import { HuggingFaceInstrumentation } from "@traceai/huggingface";
 
 async function main() {
   // Step 1: Set up the tracer provider
-  const provider = new NodeTracerProvider();
-  provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+  const provider = new NodeTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],
+  });
   provider.register();
 
   // Step 2: Create and enable the instrumentation

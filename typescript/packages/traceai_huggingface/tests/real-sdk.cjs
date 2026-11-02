@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const { test, after } = require('node:test');
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
 const { context, trace } = require('@opentelemetry/api');
 const { suppressTracing } = require('@opentelemetry/core');
 const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
@@ -82,6 +85,7 @@ for (const mode of ['cjs', 'esm']) {
           #value = 'private-value';
           readPrivate() { return this.#value; }
           get privateGetter() { return this.#value; }
+          set privateGetter(value) { this.#value = value; }
         };
         const fetch = async () => textResponse();
         const ExistingSubclass = makeSubclass(OriginalClient);
@@ -92,6 +96,9 @@ for (const mode of ['cjs', 'esm']) {
           assert.equal(client.label, 'tenant-a');
           assert.equal(client.readPrivate(), 'private-value');
           assert.equal(client.privateGetter, 'private-value');
+          client.privateGetter = 'after-write';
+          assert.equal(client.privateGetter, 'after-write');
+          assert.equal(client.readPrivate(), 'after-write');
           assert.equal((await client.textGeneration(textInput)).generated_text, 'private-answer-sentinel');
         }
         assert.equal(exporter.getFinishedSpans().length, 2);
@@ -255,7 +262,7 @@ test('privacy survives constructor setup, provider replacement and OTLP HTTP exp
       const fetch = async () => streaming ? sse(textChunks) : json(value);
       const client = new sdk.InferenceClient('synthetic-key', { fetch });
       value = { choices: [{ text: 'private-answer-sentinel' }] };
-      await client.textGeneration(textInput);
+      await client.textGeneration({ ...textInput, parameters: { stop_sequences: ['private-stop-sentinel'] } });
       value = [0.25, 0.75];
       await client.featureExtraction(textInput);
       value = chatOutput;
@@ -266,7 +273,7 @@ test('privacy survives constructor setup, provider replacement and OTLP HTTP exp
       assert.equal(exporter.getFinishedSpans().length, 4);
       assert.equal(bodies.length, 4);
       const wire = bodies.join('');
-      for (const secret of ['private-prompt-sentinel', 'private-answer-sentinel', 'synthetic-key']) assert.ok(!wire.includes(secret), `${secret} leaked on OTLP wire`);
+      for (const secret of ['private-prompt-sentinel', 'private-answer-sentinel', 'private-stop-sentinel', 'synthetic-key']) assert.ok(!wire.includes(secret), `${secret} leaked on OTLP wire`);
       assert.ok(wire.includes('HuggingFace Text Generation'));
       assert.ok(wire.includes('REDACTED'));
       for (const span of exporter.getFinishedSpans()) {
@@ -327,4 +334,52 @@ test('subclasses, frozen clients, iterator closure and call arguments survive wr
     await frozen.textGeneration(textInput, options);
     assert.equal(exporter.getFinishedSpans().length, 3);
   });
+});
+
+for (const sdkName of ['@huggingface/inference-floor', '@huggingface/inference-current']) {
+  for (const traceConfig of [{ hideInputs: true }, { hideInputText: true }]) {
+    test(`${sdkName} text generation respects ${Object.keys(traceConfig)[0]}`, async () => {
+      const { HuggingFaceInstrumentation } = require('../dist/cjs');
+      await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+        const sdk = instrumentation.manuallyInstrument(require(sdkName));
+        const Client = sdk.InferenceClient || sdk.HfInference;
+        const fetch = async () => json(sdkName.endsWith('-floor') ? [{ generated_text: 'ok' }] : { choices: [{ text: 'ok' }] });
+        global.fetch = fetch;
+        const client = new Client('', { fetch });
+        const args = { ...textInput, parameters: { stop_sequences: ['private-stop-sentinel'] } };
+        await client.textGeneration(args);
+        const attrs = exporter.getFinishedSpans()[0].attributes;
+        assert.equal(attrs[S.INPUT_VALUE], '__REDACTED__');
+        assert.equal(attrs[`${S.LLM_PROMPTS}.0`], undefined);
+        assert.ok(!JSON.stringify(attrs).includes('private-stop-sentinel'));
+      }, traceConfig);
+    });
+  }
+}
+
+test('runnable example uses the OpenTelemetry 2.x provider API', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../examples/example.ts'), 'utf8');
+  assert.doesNotMatch(source, /\.addSpanProcessor\s*\(/);
+  assert.match(source, /new NodeTracerProvider\(\{\s*spanProcessors:\s*\[new SimpleSpanProcessor\(new ConsoleSpanExporter\(\)\)\],?\s*\}\)/);
+  const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(new InMemorySpanExporter())] });
+  await provider.shutdown();
+});
+
+test('FI_HIDE_INPUTS environment setting masks stop sequences', async () => {
+  const previous = process.env.FI_HIDE_INPUTS;
+  process.env.FI_HIDE_INPUTS = 'true';
+  try {
+    const { HuggingFaceInstrumentation } = require('../dist/cjs');
+    await fixture(HuggingFaceInstrumentation, async ({ instrumentation, exporter }) => {
+      const sdk = instrumentation.manuallyInstrument(require('@huggingface/inference-current'));
+      const client = new sdk.InferenceClient('', { fetch: async () => json({ choices: [{ text: 'ok' }] }) });
+      await client.textGeneration({ ...textInput, parameters: { stop_sequences: ['private-stop-sentinel'] } });
+      const attrs = exporter.getFinishedSpans()[0].attributes;
+      assert.equal(attrs[S.INPUT_VALUE], '__REDACTED__');
+      assert.ok(!JSON.stringify(attrs).includes('private-stop-sentinel'));
+    });
+  } finally {
+    if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+    else process.env.FI_HIDE_INPUTS = previous;
+  }
 });

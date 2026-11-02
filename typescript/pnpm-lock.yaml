@@ -1123,6 +1123,24 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
+      '@huggingface/inference-current':
+        specifier: npm:@huggingface/inference@4.13.32
+        version: '@huggingface/inference@4.13.32'
+      '@huggingface/inference-floor':
+        specifier: npm:@huggingface/inference@2.0.0
+        version: '@huggingface/inference@2.0.0'
+      '@opentelemetry/context-async-hooks':
+        specifier: ^2.7.1
+        version: '2.7.1(@opentelemetry/api@1.9.0)'
+      '@opentelemetry/exporter-trace-otlp-http':
+        specifier: ^0.202.0
+        version: '0.202.0(@opentelemetry/api@1.9.0)'
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.7.1
+        version: '2.7.1(@opentelemetry/api@1.9.0)'
+      '@opentelemetry/sdk-trace-node':
+        specifier: ^2.7.1
+        version: '2.7.1(@opentelemetry/api@1.9.0)'
       '@huggingface/inference':
         specifier: ^2.8.0
         version: 2.8.1
@@ -3995,10 +4013,6 @@ packages:
 
   '@huggingface/inference@4.13.32':
     resolution: {integrity: sha512-8ciIAPAV+Ck/om1PkvQ+flogKcoi6XEs4MDuwX9HeaYfmPdF1ooWXLsYo0wU5fRwxiYkqPaN4TuDUBXed3ywIA==}
-    engines: {node: '>=18'}
-
-  '@huggingface/jinja@0.5.11':
-    resolution: {integrity: sha512-YzEzwM5oQf4r0vs7ifWQ+yuVR1YkAHrjERQ+a8WRsStHHp4NRBg+NesjiFc+X2AFUpRvvrIeHDS1xFy9jY/IjQ==}
     engines: {node: '>=18'}
 
   '@huggingface/tasks@0.12.30':
@@ -13539,8 +13553,6 @@ snapshots:
     dependencies:
       '@huggingface/jinja': 0.5.11
       '@huggingface/tasks': 0.21.61
-
-  '@huggingface/jinja@0.5.11': {}
 
   '@huggingface/tasks@0.12.30': {}
 
