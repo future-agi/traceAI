@@ -25,9 +25,18 @@ export interface LambdaTracingOptions {
 export type LambdaCallback<Result> = (error?: Error | string | null, result?: Result) => void;
 
 type PendingFlush = { waiters: Set<() => void> };
-// Shared across wrappers using the same provider, without retaining dead providers.
-const pendingFlushes = new WeakMap<object, PendingFlush>();
-const wrappedHandlers = new WeakSet<object>();
+type LambdaLifecycleState = {
+  pendingFlushes: WeakMap<object, PendingFlush>;
+  wrappedHandlers: WeakSet<object>;
+};
+// CJS and ESM entry points must share guards in the same runtime. Version the
+// state shape, and keep weak keys so neither providers nor handlers are retained.
+const lifecycleKey = Symbol.for("@traceai/fi-core/aws-lambda/lifecycle/v1");
+const sharedGlobal = globalThis as typeof globalThis & { [lifecycleKey]?: LambdaLifecycleState };
+const { pendingFlushes, wrappedHandlers } = sharedGlobal[lifecycleKey] ??= {
+  pendingFlushes: new WeakMap<object, PendingFlush>(),
+  wrappedHandlers: new WeakSet<object>(),
+};
 const propagator = new W3CTraceContextPropagator();
 
 function diagnostic(message: string): void {
@@ -166,14 +175,16 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
     let span: Span | undefined;
     let active = ROOT_CONTEXT;
     try {
-      const parent = parentContext(event);
-      if (tracer) span = new FISpan({ config, span: tracer.startSpan("aws.lambda.invoke", { kind: SpanKind.SERVER, attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "faas.coldstart": cold,
-        "faas.invocation_id": metadata(invocation.awsRequestId),
-        "faas.name": metadata(invocation.functionName),
-      } }, parent) });
-      if (span) active = trace.setSpan(parent, span);
+      if (tracer) {
+        const parent = parentContext(event);
+        span = new FISpan({ config, span: tracer.startSpan("aws.lambda.invoke", { kind: SpanKind.SERVER, attributes: {
+          [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
+          "faas.coldstart": cold,
+          "faas.invocation_id": metadata(invocation.awsRequestId),
+          "faas.name": metadata(invocation.functionName),
+        } }, parent) });
+        active = trace.setSpan(parent, span);
+      }
     } catch { diagnostic("invocation span creation failed"); }
 
     const run = () => new Promise<Result>((resolve, reject) => {
@@ -189,8 +200,9 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
     });
     let outcome: Promise<Result> | undefined;
     try {
+      // Without an invocation span, preserve the caller's context and suppression.
       // A broken context manager must not run application code twice.
-      context.with(active, () => { outcome = run(); });
+      if (span) context.with(active, () => { outcome = run(); });
     } catch { diagnostic("context activation failed"); }
     if (!outcome) outcome = run();
     try {
