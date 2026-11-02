@@ -27,7 +27,7 @@ jest.mock("@traceai/fi-core", () => ({
     }),
   })),
   safelyJSONStringify: jest.fn((obj: any) => JSON.stringify(obj)),
-  TraceConfigOptions: {},
+  generateTraceConfig: jest.requireActual<typeof import("@traceai/fi-core")>("@traceai/fi-core").generateTraceConfig,
 }));
 
 describe("Google GenAI Instrumentation", () => {

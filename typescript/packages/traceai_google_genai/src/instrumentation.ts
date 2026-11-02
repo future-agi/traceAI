@@ -2,7 +2,6 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
   diag,
@@ -12,146 +11,105 @@ import {
   Attributes,
   SpanStatusCode,
   Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
-  SemanticConventions,
+  SemanticConventions as S,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import {
   FITracer,
   safelyJSONStringify,
+  generateTraceConfig,
+  TraceConfig,
   TraceConfigOptions,
 } from "@traceai/fi-core";
-import { isString } from "./typeUtils";
 
 const MODULE_NAME = "@google/generative-ai";
+const METHODS = [
+  "generateContent",
+  "embedContent",
+  "batchEmbedContents",
+] as const;
+type Operation = (typeof METHODS)[number];
+type ModelPrototype = Record<string, unknown>;
+type SDKModule = Record<string, unknown>;
 
-/**
- * Flag to check if the Google GenAI module has been patched
- */
-let _isFIPatched = false;
-
-/**
- * Function to check if instrumentation is enabled / disabled
- */
+// Ownership is per prototype, not per process or export namespace. ESM and CJS
+// namespaces can expose the same prototype, while nested SDKs expose different ones.
+const owners = new WeakMap<ModelPrototype, GoogleGenAIInstrumentation>();
+let patchedPrototypeCount = 0;
 export function isPatched() {
-  return _isFIPatched;
+  return patchedPrototypeCount > 0;
 }
 
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
+interface Part {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
 }
-
-// Type definitions for Google GenAI SDK
+interface Content {
+  role?: string;
+  parts: Part[];
+}
 interface GenerateContentRequest {
-  contents: Array<{
-    role?: string;
-    parts: Array<{
-      text?: string;
-      inlineData?: {
-        mimeType: string;
-        data: string;
-      };
-    }>;
-  }>;
-  generationConfig?: {
-    temperature?: number;
-    topP?: number;
-    topK?: number;
-    maxOutputTokens?: number;
-    stopSequences?: string[];
-  };
-  safetySettings?: Array<{
-    category: string;
-    threshold: string;
-  }>;
-  tools?: Array<{
-    functionDeclarations?: Array<{
-      name: string;
-      description?: string;
-      parameters?: Record<string, unknown>;
-    }>;
-  }>;
-  systemInstruction?: {
-    parts: Array<{ text: string }>;
-  };
+  contents: Content[];
+  generationConfig?: Record<string, unknown>;
+  safetySettings?: unknown[];
+  tools?: Array<{ functionDeclarations?: unknown[] }>;
+  toolConfig?: unknown;
+  systemInstruction?: string | Part | Content | null;
+  cachedContent?: string;
 }
-
+interface ModelDefaults {
+  model?: string;
+  generationConfig?: GenerateContentRequest["generationConfig"];
+  safetySettings?: GenerateContentRequest["safetySettings"];
+  tools?: GenerateContentRequest["tools"];
+  toolConfig?: unknown;
+  systemInstruction?: GenerateContentRequest["systemInstruction"];
+  cachedContent?: { name: string };
+}
 interface GenerateContentResponse {
   response: {
-    text: () => string;
-    candidates?: Array<{
-      content: {
-        role: string;
-        parts: Array<{
-          text?: string;
-          functionCall?: {
-            name: string;
-            args: Record<string, unknown>;
-          };
-        }>;
-      };
-      finishReason?: string;
-      safetyRatings?: Array<{
-        category: string;
-        probability: string;
-      }>;
-    }>;
+    text?: () => string;
+    modelVersion?: string;
+    candidates?: Array<{ content?: Content; finishReason?: string }>;
     usageMetadata?: {
-      promptTokenCount: number;
-      candidatesTokenCount: number;
-      totalTokenCount: number;
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
     };
   };
 }
-
 interface EmbedContentRequest {
-  content: {
-    parts: Array<{ text: string }>;
-  };
+  content: Content;
   taskType?: string;
   title?: string;
 }
-
-interface EmbedContentResponse {
-  embedding: {
-    values: number[];
-  };
-}
-
 interface BatchEmbedContentsRequest {
   requests: EmbedContentRequest[];
 }
-
+interface EmbedContentResponse {
+  embedding?: { values: number[] };
+}
 interface BatchEmbedContentsResponse {
-  embeddings: Array<{
-    values: number[];
-  }>;
+  embeddings?: Array<{ values: number[] }>;
 }
 
-/**
- * @param instrumentationConfig The config for the instrumentation
- * @param traceConfig The FI trace configuration for masking sensitive information
- */
+/** Legacy @google/generative-ai non-streaming compatibility instrumentation. */
 export class GoogleGenAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private privacy!: TraceConfig;
+  // Base construction may call enable/patch before subclass field initialization.
+  declare private patchedPrototypes?: Set<ModelPrototype>;
+  declare private manualModules?: Set<SDKModule>;
   public readonly instrumentationName = "@traceai/google-genai";
 
   constructor({
@@ -161,451 +119,397 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/google-genai",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
+    super("@traceai/google-genai", VERSION, { ...instrumentationConfig });
     this._traceConfig = traceConfig;
-    // InstrumentationBase calls enable() before our traceConfig is assigned.
-    // Rebuild even when the globally registered tracer has not changed, so the
-    // first manually or automatically instrumented call honors privacy options.
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
+    this.refreshTracer();
+  }
+
+  private refreshTracer() {
+    this.privacy = generateTraceConfig(this._traceConfig);
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this.privacy,
+    });
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   public override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    this.refreshTracer();
+    for (const module of this.manualModules ?? []) this.patch(module);
+  }
+
+  public override disable(): void {
+    super.disable();
+    for (const prototype of this.patchedPrototypes ?? [])
+      this.unpatchPrototype(prototype);
   }
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
-      "@google/generative-ai",
+    return new InstrumentationNodeModuleDefinition(
+      MODULE_NAME,
       [">=0.1.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
-    return module;
   }
 
-  /**
-   * Manually instruments the legacy @google/generative-ai module.
-   * The modern @google/genai SDK is not supported by this compatibility adapter.
-   */
-  manuallyInstrument(module: Record<string, unknown>) {
+  /** Also works when the SDK was imported before OpenTelemetry was registered. */
+  manuallyInstrument(module: SDKModule) {
+    (this.manualModules ??= new Set()).add(module);
     this.patch(module);
   }
 
-  /**
-   * Patches the Google GenAI module
-   */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const GenerativeModel = module?.GenerativeModel as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
-    // Do not mark an unsupported module as patched: doing so also prevents a
-    // subsequent call with the real legacy SDK from installing its wrappers.
-    if (!GenerativeModel?.prototype || ![
-      "generateContent", "embedContent", "batchEmbedContents",
-    ].some((method) => typeof GenerativeModel.prototype?.[method] === "function")) {
+  private patch(module: SDKModule) {
+    const prototype = (
+      module?.GenerativeModel as { prototype?: ModelPrototype }
+    )?.prototype;
+    if (
+      !prototype ||
+      !METHODS.some((method) => typeof prototype[method] === "function")
+    ) {
       diag.warn(
         "@traceai/google-genai only instruments the legacy @google/generative-ai SDK; " +
-        "the supplied module has no supported GenerativeModel methods. " +
-        "The modern @google/genai SDK is not supported by this adapter.",
+          "the supplied module has no supported GenerativeModel methods. " +
+          "The modern @google/genai SDK is not supported by this adapter.",
       );
       return module;
     }
-
-    if (module.fiPatched || _isFIPatched) {
-      return module;
-    }
-
-    const instrumentation: GoogleGenAIInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the legacy GenerativeModel class.
-    if (GenerativeModel?.prototype) {
-      // Patch generateContent method
-      if (typeof GenerativeModel.prototype.generateContent === 'function') {
-        this._wrap(
-          GenerativeModel.prototype,
-          "generateContent",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedGenerateContent(
-              this: { model?: string },
-              ...args: [GenerateContentRequest | string]
-            ) {
-              const request = typeof args[0] === 'string'
-                ? { contents: [{ parts: [{ text: args[0] }] }] }
-                : args[0];
-
-              const modelName = this.model || 'unknown';
-
-              const span = instrumentation.fiTracer.startSpan(
-                `Google GenAI generateContent`,
-                {
-                  kind: SpanKind.INTERNAL,
-                  attributes: {
-                    [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-                    [SemanticConventions.LLM_MODEL_NAME]: modelName,
-                    [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
-                    [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                    [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
-                    [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-                    ...getLLMInputMessagesAttributes(request),
-                    ...getGenerationConfigAttributes(request),
-                    [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                  },
-                },
-              );
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<GenerateContentResponse>).then((result) => {
-                span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: result.response.text(),
-                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.response.candidates?.[0] ? modelName : modelName,
-                  ...getLLMOutputMessagesAttributes(result),
-                  ...getUsageAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
-      }
-
-      // Patch embedContent method
-      if (typeof GenerativeModel.prototype.embedContent === 'function') {
-        this._wrap(
-          GenerativeModel.prototype,
-          "embedContent",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedEmbedContent(
-              this: { model?: string },
-              ...args: [EmbedContentRequest | string]
-            ) {
-              const request = typeof args[0] === 'string'
-                ? { content: { parts: [{ text: args[0] }] } }
-                : args[0];
-
-              const modelName = this.model || 'unknown';
-              const inputText = request.content?.parts?.[0]?.text || '';
-
-              const span = instrumentation.fiTracer.startSpan(`Google GenAI embedContent`, {
-                kind: SpanKind.INTERNAL,
-                attributes: {
-                  [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-                  [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
-                  [SemanticConventions.INPUT_VALUE]: inputText,
-                  [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
-                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-                  [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]: inputText,
-                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                },
-              });
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<EmbedContentResponse>).then((result) => {
-                span.setAttributes({
-                  [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_VECTOR}`]: result.embedding.values,
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
-      }
-
-      // Patch batchEmbedContents method
-      if (typeof GenerativeModel.prototype.batchEmbedContents === 'function') {
-        this._wrap(
-          GenerativeModel.prototype,
-          "batchEmbedContents",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (original: any): any => {
-            return function patchedBatchEmbedContents(
-              this: { model?: string },
-              ...args: [BatchEmbedContentsRequest]
-            ) {
-              const request = args[0];
-              const modelName = this.model || 'unknown';
-
-              const span = instrumentation.fiTracer.startSpan(`Google GenAI batchEmbedContents`, {
-                kind: SpanKind.INTERNAL,
-                attributes: {
-                  [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-                  [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
-                  [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
-                  [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
-                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-                  ...getBatchEmbeddingTextAttributes(request),
-                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
-                },
-              });
-
-              const execContext = getExecContext(span);
-              const execPromise = safeExecuteInTheMiddle(
-                () => {
-                  return context.with(trace.setSpan(execContext, span), () => {
-                    return original.apply(this, args);
-                  });
-                },
-                (error) => {
-                  if (error) {
-                    span.recordException(error);
-                    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                    span.end();
-                  }
-                },
-              );
-
-              const wrappedPromise = (execPromise as Promise<BatchEmbedContentsResponse>).then((result) => {
-                span.setAttributes({
-                  ...getBatchEmbeddingVectorAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-                return result;
-              }).catch((error: Error) => {
-                span.recordException(error);
-                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                span.end();
-                throw error;
-              });
-
-              return context.bind(execContext, wrappedPromise);
-            };
-          },
-        );
+    if (owners.has(prototype)) return module;
+    this.refreshTracer();
+    for (const method of METHODS) {
+      if (typeof prototype[method] === "function") {
+        this._wrap(prototype, method, this.wrapMethod(method));
       }
     }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
+    owners.set(prototype, this);
+    (this.patchedPrototypes ??= new Set()).add(prototype);
+    patchedPrototypeCount++;
     return module;
   }
 
-  /**
-   * Un-patches the Google GenAI module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const GenerativeModel = moduleExports.GenerativeModel as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
+  private unpatch(module: SDKModule) {
+    const prototype = (
+      module?.GenerativeModel as { prototype?: ModelPrototype }
+    )?.prototype;
+    if (prototype) this.unpatchPrototype(prototype);
+  }
 
-    if (GenerativeModel?.prototype) {
-      if (GenerativeModel.prototype.generateContent) {
-        this._unwrap(GenerativeModel.prototype, "generateContent");
-      }
-      if (GenerativeModel.prototype.embedContent) {
-        this._unwrap(GenerativeModel.prototype, "embedContent");
-      }
-      if (GenerativeModel.prototype.batchEmbedContents) {
-        this._unwrap(GenerativeModel.prototype, "batchEmbedContents");
-      }
+  private unpatchPrototype(prototype: ModelPrototype) {
+    if (owners.get(prototype) !== this) return;
+    for (const method of METHODS) {
+      if (typeof prototype[method] === "function")
+        this._unwrap(prototype, method);
     }
+    owners.delete(prototype);
+    this.patchedPrototypes?.delete(prototype);
+    patchedPrototypeCount--;
+  }
 
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
+  private wrapMethod(method: Operation) {
+    const instrumentation = this;
+    // The wrapper forwards every argument unchanged, including requestOptions.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (original: any): any =>
+      function (this: ModelDefaults, ...args: unknown[]) {
+        if (isTracingSuppressed(context.active()))
+          return original.apply(this, args);
+        const privacy = instrumentation.privacy;
+        let span: Span;
+        try {
+          span = instrumentation.fiTracer.startSpan(`Google GenAI ${method}`, {
+            kind: SpanKind.INTERNAL,
+            attributes: {
+              [S.FI_SPAN_KIND]:
+                method === "generateContent"
+                  ? FISpanKind.LLM
+                  : FISpanKind.EMBEDDING,
+              [method === "generateContent"
+                ? S.LLM_MODEL_NAME
+                : S.EMBEDDING_MODEL_NAME]: this.model || "unknown",
+              [S.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
+              [S.GEN_AI_OPERATION_NAME]:
+                method === "generateContent" ? "chat" : "embeddings",
+              ...safeAttributes(() =>
+                inputAttributes(method, args[0], this, privacy),
+              ),
+            },
+          });
+        } catch {
+          // A telemetry failure must never prevent the SDK from being called.
+          return original.apply(this, args);
+        }
+        const execContext = trace.setSpan(context.active(), span);
+        let result;
+        try {
+          result = context.with(execContext, () => original.apply(this, args));
+        } catch (error) {
+          finishError(span, error);
+          throw error;
+        }
+        const promise = Promise.resolve(result).then(
+          (value) => {
+            try {
+              span.setAttributes(
+                safeAttributes(() => outputAttributes(method, value, privacy)),
+              );
+              span.setStatus({ code: SpanStatusCode.OK });
+            } catch {
+              diag.debug("Google GenAI response telemetry unavailable");
+            } finally {
+              endSpan(span);
+            }
+            return value;
+          },
+          (error) => {
+            finishError(span, error);
+            throw error;
+          },
+        );
+        return context.bind(execContext, promise);
+      };
   }
 }
 
-/**
- * Converts the request to LLM input messages (JSON blob)
- */
-function getLLMInputMessagesAttributes(request: GenerateContentRequest): Attributes {
-  const messages: Array<Record<string, unknown>> = [];
-
-  // Add system instruction if present
-  if (request.systemInstruction?.parts) {
-    const systemText = request.systemInstruction.parts.map(p => p.text).join('');
-    messages.push({ role: 'system', content: systemText });
+function safeAttributes(extract: () => Attributes): Attributes {
+  try {
+    return extract();
+  } catch {
+    // Do not log payloads or extraction errors, which can contain hidden content.
+    diag.debug("Google GenAI telemetry extraction unavailable");
+    return {};
   }
+}
+function endSpan(span: Span) {
+  try {
+    span.end();
+  } catch {
+    /* exporter failures cannot change SDK results */
+  }
+}
+function finishError(span: Span, error: unknown) {
+  try {
+    span.recordException(error instanceof Error ? error : String(error));
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  } catch {
+    diag.debug("Google GenAI error telemetry unavailable");
+  } finally {
+    endSpan(span);
+  }
+}
 
-  // Add content messages
-  request.contents.forEach((content) => {
-    const textParts = content.parts.filter(p => p.text).map(p => p.text).join('');
-    const msg: Record<string, unknown> = { role: content.role || 'user' };
-    if (textParts) {
-      msg.content = textParts;
-    }
-    messages.push(msg);
-  });
-
-  const attributes: Attributes = {
-    [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+/** Normalize only the telemetry view; never modify SDK arguments or model defaults. */
+function contentFromInput(input: string | Array<string | Part>): Content {
+  const parts = (typeof input === "string" ? [input] : input).map((part) =>
+    typeof part === "string" ? { text: part } : part,
+  );
+  return {
+    role:
+      parts.length && parts.every((part) => part.functionResponse)
+        ? "function"
+        : "user",
+    parts,
   };
+}
+function systemContent(
+  input: GenerateContentRequest["systemInstruction"],
+): Content | undefined {
+  if (input == null) return undefined;
+  if (typeof input === "string")
+    return { role: "system", parts: [{ text: input }] };
+  if ("parts" in input)
+    return { role: input.role || "system", parts: input.parts };
+  return { role: "system", parts: [input] };
+}
+function effectiveRequest(
+  input: unknown,
+  model: ModelDefaults,
+): GenerateContentRequest {
+  const request =
+    typeof input === "string" || Array.isArray(input)
+      ? { contents: [contentFromInput(input)] }
+      : (input as GenerateContentRequest);
+  // The SDK replaces whole per-call fields, rather than deeply merging config.
+  return {
+    generationConfig: model.generationConfig,
+    safetySettings: model.safetySettings,
+    tools: model.tools,
+    toolConfig: model.toolConfig,
+    systemInstruction: model.systemInstruction,
+    cachedContent: model.cachedContent?.name,
+    ...request,
+  };
+}
+function embeddingRequest(input: unknown): EmbedContentRequest {
+  return typeof input === "string" || Array.isArray(input)
+    ? { content: contentFromInput(input) }
+    : (input as EmbedContentRequest);
+}
+function textOf(content?: Content): string {
+  return content?.parts?.map((part) => part.text || "").join("") || "";
+}
 
-  // Add tools if present
-  if (request.tools) {
-    const allFunctions = request.tools.flatMap(tool => tool.functionDeclarations || []);
-    if (allFunctions.length > 0) {
-      attributes[SemanticConventions.LLM_TOOLS] = safelyJSONStringify(allFunctions) ?? "[]";
+// Serialized copies are opaque to the shared fine-grained masking rules. Omit
+// them whenever they could contain hidden content; retain safe metadata and let
+// FITracer apply its canonical message, error and PII masking rules as well.
+function hideInputCopies(config: TraceConfig): boolean {
+  return (
+    config.hideInputs ||
+    config.hideInputMessages ||
+    config.hideInputText ||
+    config.hideInputImages
+  );
+}
+function hideOutputCopies(config: TraceConfig): boolean {
+  return (
+    config.hideOutputs || config.hideOutputMessages || config.hideOutputText
+  );
+}
+function inputAttributes(
+  method: Operation,
+  input: unknown,
+  model: ModelDefaults,
+  config: TraceConfig,
+): Attributes {
+  if (method === "generateContent") {
+    const request = effectiveRequest(input, model);
+    const messages: Array<Record<string, unknown>> = [];
+    const system = systemContent(request.systemInstruction);
+    if (system) messages.push({ role: "system", content: textOf(system) });
+    for (const content of request.contents ?? []) {
+      const text = textOf(content);
+      messages.push({
+        role: content.role || "user",
+        ...(text ? { content: text } : {}),
+      });
     }
+    const functions = request.tools?.flatMap(
+      (tool) => tool.functionDeclarations || [],
+    );
+    return {
+      [S.LLM_INPUT_MESSAGES]: json(messages),
+      ...(request.generationConfig
+        ? { [S.LLM_INVOCATION_PARAMETERS]: json(request.generationConfig) }
+        : {}),
+      ...(functions?.length ? { [S.LLM_TOOLS]: json(functions) } : {}),
+      ...(!hideInputCopies(config)
+        ? {
+            [S.INPUT_VALUE]: json(request),
+            [S.INPUT_MIME_TYPE]: MimeType.JSON,
+            [S.RAW_INPUT]: json(request),
+          }
+        : {}),
+    };
   }
-
+  const request =
+    method === "embedContent"
+      ? embeddingRequest(input)
+      : (input as BatchEmbedContentsRequest);
+  const requests = "requests" in request ? request.requests : [request];
+  const attributes: Attributes = {};
+  if (
+    !config.hideInputs &&
+    !config.hideInputText &&
+    !config.hideInputMessages
+  ) {
+    requests.forEach((entry, index) => {
+      attributes[`${S.EMBEDDING_EMBEDDINGS}.${index}.${S.EMBEDDING_TEXT}`] =
+        textOf(entry.content);
+    });
+  }
+  if (!hideInputCopies(config)) {
+    attributes[S.INPUT_VALUE] =
+      method === "embedContent" ? textOf(requests[0].content) : json(request);
+    attributes[S.INPUT_MIME_TYPE] =
+      method === "embedContent" ? MimeType.TEXT : MimeType.JSON;
+    attributes[S.RAW_INPUT] = json(request);
+  }
   return attributes;
 }
 
-/**
- * Gets generation config attributes
- */
-function getGenerationConfigAttributes(request: GenerateContentRequest): Attributes {
-  if (!request.generationConfig) {
-    return {};
+function outputAttributes(
+  method: Operation,
+  value: unknown,
+  config: TraceConfig,
+): Attributes {
+  const attributes: Attributes = {};
+  if (
+    !hideOutputCopies(config) &&
+    (method === "generateContent" || !config.hideEmbeddingVectors)
+  ) {
+    attributes[S.RAW_OUTPUT] = json(value);
   }
-  return {
-    [SemanticConventions.LLM_INVOCATION_PARAMETERS]: JSON.stringify(request.generationConfig),
-  };
+  if (method !== "generateContent") {
+    const embeddings =
+      method === "embedContent"
+        ? [(value as EmbedContentResponse).embedding]
+        : (value as BatchEmbedContentsResponse).embeddings;
+    if (!config.hideOutputs && !config.hideEmbeddingVectors) {
+      embeddings?.forEach((embedding, index) => {
+        attributes[`${S.EMBEDDING_EMBEDDINGS}.${index}.${S.EMBEDDING_VECTOR}`] =
+          embedding?.values;
+      });
+    }
+    return attributes;
+  }
+  const response = (value as GenerateContentResponse).response;
+  // Real SDK text() throws for safety-blocked responses. The successful SDK
+  // response (including promptFeedback) still belongs to the application.
+  if (!hideOutputCopies(config)) {
+    try {
+      const text = response.text?.();
+      if (text !== undefined) {
+        attributes[S.OUTPUT_VALUE] = text;
+        attributes[S.OUTPUT_MIME_TYPE] = MimeType.TEXT;
+      }
+    } catch {
+      /* response is inspectable even when text is unavailable */
+    }
+  }
+  if (response.modelVersion)
+    attributes[S.GEN_AI_RESPONSE_MODEL] = response.modelVersion;
+  const candidate = response.candidates?.[0];
+  if (candidate?.content) {
+    const text = textOf(candidate.content);
+    const toolCalls = config.hideOutputText
+      ? []
+      : candidate.content.parts
+          ?.filter((part) => part.functionCall)
+          .map((part) => ({
+            function: {
+              name: part.functionCall!.name,
+              arguments: json(part.functionCall!.args),
+            },
+          }));
+    attributes[S.LLM_OUTPUT_MESSAGES] = json([
+      {
+        role: candidate.content.role || "model",
+        ...(text ? { content: text } : {}),
+        ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
+      },
+    ]);
+  }
+  if (response.candidates) {
+    attributes[S.GEN_AI_RESPONSE_FINISH_REASONS] = json(
+      response.candidates.map((c) => c.finishReason).filter(Boolean),
+    );
+  }
+  const usage = response.usageMetadata;
+  if (usage) {
+    attributes[S.LLM_TOKEN_COUNT_PROMPT] = usage.promptTokenCount;
+    attributes[S.LLM_TOKEN_COUNT_COMPLETION] = usage.candidatesTokenCount;
+    attributes[S.LLM_TOKEN_COUNT_TOTAL] = usage.totalTokenCount;
+  }
+  return attributes;
 }
 
-/**
- * Gets usage attributes from response
- */
-function getUsageAttributes(result: GenerateContentResponse): Attributes {
-  const usage = result.response.usageMetadata;
-  if (!usage) {
-    return {};
-  }
-  return {
-    [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: usage.promptTokenCount,
-    [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: usage.candidatesTokenCount,
-    [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: usage.totalTokenCount,
-  };
-}
-
-/**
- * Converts the response to LLM output messages (JSON blob)
- */
-function getLLMOutputMessagesAttributes(result: GenerateContentResponse): Attributes {
-  const candidate = result.response.candidates?.[0];
-  if (!candidate) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: candidate.content.role || 'model' };
-
-  const textParts = candidate.content.parts.filter(p => p.text).map(p => p.text).join('');
-  if (textParts) {
-    msg.content = textParts;
-  }
-
-  // Handle function calls
-  const toolCalls = candidate.content.parts
-    .filter(part => part.functionCall)
-    .map(part => ({
-      function: { name: part.functionCall!.name, arguments: JSON.stringify(part.functionCall!.args) },
-    }));
-  if (toolCalls.length > 0) {
-    msg.tool_calls = toolCalls;
-  }
-
-  return {
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(
-      result.response.candidates?.map(c => c.finishReason).filter(Boolean)
-    ) ?? "[]",
-  };
-}
-
-/**
- * Gets batch embedding text attributes
- */
-function getBatchEmbeddingTextAttributes(request: BatchEmbedContentsRequest): Attributes {
-  return request.requests.reduce((acc, req, index) => {
-    const text = req.content?.parts?.[0]?.text || '';
-    acc[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.${SemanticConventions.EMBEDDING_TEXT}`] = text;
-    return acc;
-  }, {} as Attributes);
-}
-
-/**
- * Gets batch embedding vector attributes
- */
-function getBatchEmbeddingVectorAttributes(response: BatchEmbedContentsResponse): Attributes {
-  return response.embeddings.reduce((acc, embedding, index) => {
-    acc[`${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.${SemanticConventions.EMBEDDING_VECTOR}`] =
-      embedding.values;
-    return acc;
-  }, {} as Attributes);
+function json(value: unknown): string | undefined {
+  return safelyJSONStringify(value) ?? undefined;
 }
