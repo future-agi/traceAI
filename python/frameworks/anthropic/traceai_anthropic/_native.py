@@ -11,8 +11,10 @@ that one call.
 The call itself is not changed: the original method runs on the application's client,
 through any other wrappers on it, so client state such as lazily loaded cloud
 credentials stays on that client. While it runs, the SDK's span start
-(`start_api_call_span`, which may return `None` for "no span") returns `None` for this
-client's tracer only; other clients' calls inside it keep their spans.
+(`start_api_call_span`, which may return `None` for "no span") returns `None` for the
+tracer of this client. OpenTelemetry gives clients with the same tracer provider the same
+tracer, so an SDK call made inside the Messages call to that same provider (by another
+wrapper, say) has no span either; calls whose SDK spans go to another provider keep them.
 
 When the SDK's span goes elsewhere (another provider, or nowhere), both are left as
 they are, so each provider gets the call once.
@@ -51,7 +53,7 @@ _owned_client: ContextVar[Any] = ContextVar("traceai_anthropic_owned_client", de
 
 
 def _skip_owned_span(wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any) -> Any:
-    """`start_api_call_span`, returning `None` (no span) for the owned client's calls."""
+    """`start_api_call_span`, returning `None` (no span) for calls with the owned client's tracer."""
     client = _owned_client.get()
     if client is not None:
         try:
