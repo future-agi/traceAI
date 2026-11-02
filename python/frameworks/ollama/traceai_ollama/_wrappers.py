@@ -61,7 +61,7 @@ class _ChatWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     def __call__(
@@ -138,7 +138,7 @@ class _AsyncChatWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     async def __call__(
@@ -214,7 +214,7 @@ class _GenerateWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     def __call__(
@@ -290,7 +290,7 @@ class _AsyncGenerateWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     async def __call__(
@@ -366,7 +366,7 @@ class _EmbedWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     def __call__(
@@ -426,7 +426,7 @@ class _AsyncEmbedWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config=self._config)
         self._response_extractor = _ResponseAttributesExtractor(config=self._config)
 
     async def __call__(

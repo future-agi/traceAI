@@ -82,6 +82,10 @@ class _ResponseAttributesExtractor:
         # Core masks dedicated attributes but cannot inspect serialized JSON.
         # Apply directional privacy to a telemetry copy, not to SDK responses.
         output = dict(response)
+        if self._config.hide_output_messages or self._config.hide_output_text:
+            # Logprob tokens (including top alternatives) reveal generated text
+            # even when the visible response/message content has been masked.
+            output.pop("logprobs", None)
         if self._config.hide_embedding_vectors:
             for key in ("embedding", "embeddings"):
                 if key in output:
@@ -94,7 +98,7 @@ class _ResponseAttributesExtractor:
             if isinstance(output.get("message"), dict):
                 output["message"] = {
                     key: REDACTED_VALUE if key in ("content", "thinking") else value
-                    for key, value in output["message"].items()
+                    for key, value in output["message"].items() if key != "logprobs"
                 }
             for key in ("response", "thinking"):
                 if key in output:
