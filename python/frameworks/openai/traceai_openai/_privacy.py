@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -91,7 +92,11 @@ def response_output(response: Any, config: TraceConfig | None = None) -> dict:
               "error", "incomplete_details"}
     if config is not None and getattr(config, "hide_error_details", False):
         fields.difference_update({"error", "incomplete_details"})
-    output = response.model_dump(include=fields, exclude_none=True, mode="json")
+    if isinstance(response, Mapping):
+        output = {key: deepcopy(value) for key, value in response.items()
+                  if key in fields and value is not None}
+    else:
+        output = response.model_dump(include=fields, exclude_none=True, mode="json")
     if config is not None and getattr(config, "hide_error_details", False):
         # These provider-owned error fields are not ordinary tool results or
         # assistant text. Work on the dump only, leaving SDK objects untouched.

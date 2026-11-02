@@ -165,6 +165,9 @@ class _RawResponse(ObjectProxy):
     def iter_lines(self, *args: Any, **kwargs: Any) -> Iterator[str]:
         return self._iterate_body("iter_lines", *args, **kwargs)
 
+    def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        self._consume_body("stream_to_file", *args, **kwargs)
+
     @property
     def _self_is_finished(self) -> bool:
         return self._self_with_span.is_finished
@@ -284,6 +287,9 @@ class _AsyncRawResponse(_RawResponse):
 
     def iter_lines(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
         return self._aiterate_body("iter_lines", *args, **kwargs)
+
+    async def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        await self._consume_body("stream_to_file", *args, **kwargs)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         try:

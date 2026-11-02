@@ -22,7 +22,7 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
-from traceai_openai._privacy import redact, request_credentials, response_credentials, safe_request
+from traceai_openai._privacy import redact, request_credentials, response_credentials, response_output, safe_request
 from traceai_openai._request_context import capture_request_credentials
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
@@ -263,7 +263,7 @@ class _WithOpenAI(ABC):
                     if not isinstance(body, Mapping):
                         raise ValueError("Responses body is not an object")
                     status = _response_status(body)
-                    telemetry_response = cast_to.model_validate(body)
+                    telemetry_response = response_output(body, self._config)
                 except (TypeError, ValueError):
                     telemetry_response = None
                     status = trace_api.Status(
@@ -296,7 +296,14 @@ class _WithOpenAI(ABC):
             if isinstance(response, LegacyAPIResponse):
                 # Preserve eager legacy non-stream telemetry. Stream parse caches
                 # remain SDK-owned, and every later explicit parse type is traced.
-                raw.parse()
+                try:
+                    parsed = response.parse()
+                except Exception:
+                    # Optional eager telemetry must not change SDK behavior: callers
+                    # still receive the envelope and may inspect malformed bodies.
+                    logger.debug("Could not eagerly parse raw response for telemetry", exc_info=True)
+                else:
+                    raw._trace_parsed(parsed)
             return raw
         return on_parse(response)
 
