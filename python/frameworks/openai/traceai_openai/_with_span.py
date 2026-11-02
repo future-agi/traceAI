@@ -1,16 +1,28 @@
 import logging
 from typing import Any, Optional
 
+from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import Attributes
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# Non-streamed responses expose usage as extra attributes rather than primary
+# attributes. Keep these alongside the primary request/response data.
+_USAGE_ATTRIBUTES = frozenset(
+    (
+        SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS,
+        SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
+        SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS,
+    )
+)
+
 
 class _WithSpan:
     __slots__ = (
         "_span",
+        "_primary_attributes",
         "_context_attributes",
         "_extra_attributes",
         "_is_finished",
@@ -21,8 +33,10 @@ class _WithSpan:
         span: trace_api.Span,
         context_attributes: Attributes = None,
         extra_attributes: Attributes = None,
+        initial_attributes: Attributes = None,
     ) -> None:
         self._span = span
+        self._primary_attributes = dict(initial_attributes or {})
         self._context_attributes = context_attributes
         self._extra_attributes = extra_attributes
         try:
@@ -59,6 +73,7 @@ class _WithSpan:
     ) -> None:
         if self._is_finished:
             return
+        primary_attributes = {**self._primary_attributes, **(attributes or {})}
         for mapping in (
             attributes,
             self._context_attributes,
@@ -70,10 +85,15 @@ class _WithSpan:
             for key, value in mapping.items():
                 if value is None:
                     continue
-                try:
-                    self._span.set_attribute(key, value)
-                except Exception:
-                    logger.exception("Failed to set attribute on span")
+                if key in primary_attributes or key in _USAGE_ATTRIBUTES:
+                    # Preserve response-over-request precedence (e.g. served model).
+                    primary_attributes[key] = value
+                self.set_attribute(key, value)
+        # Restore primary data last, through the same privacy-masking span API.
+        # Indexed tool/message details may exceed even a custom attribute limit.
+        for key, value in primary_attributes.items():
+            if value is not None:
+                self.set_attribute(key, value)
         if status is not None:
             try:
                 self._span.set_status(status=status)
@@ -91,5 +111,7 @@ class _WithSpan:
             return
         try:
             self._span.set_attribute(key, value)
+            if key in self._primary_attributes and value is not None:
+                self._primary_attributes[key] = value
         except Exception:
             logger.exception(f"Failed to set attribute {key} on span")
