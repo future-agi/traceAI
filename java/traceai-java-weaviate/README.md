@@ -7,7 +7,7 @@ Trace Weaviate collection queries and object writes with retrieval counts, opera
 - **Weaviate client6:** use `TracedWeaviateCollection` or `TracedWeaviateCollectionAsync`. Requires Java 17+, `io.weaviate:client6` 6.0.0–6.3.2 and Weaviate server 1.32+.
 - **Legacy client v5:** keep using `TracedWeaviateClient` with `io.weaviate:client:5.5.0`. This entry point is retained for existing applications; it does not accept client6. Weaviate has discontinued v5, so use client6 for new applications.
 
-The v6 adapters are included in this source tree, not in the published traceAI `1.0.0` artifact. Until the next Java release, [build the Java SDK locally](../README.md#build-and-test). Do not install `1.0.0` from Central expecting the new classes.
+The v6 adapters require a [local build of this checkout](../README.md#build-and-test). The published traceAI `1.0.0` and `1.0.1` artifacts do not include these classes; installing either from Central is not sufficient.
 
 ## Install
 
@@ -17,7 +17,7 @@ After building and installing this checkout locally, add these dependencies. For
 <dependency>
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-weaviate</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version> <!-- x-release-please-version -->
 </dependency>
 <dependency>
     <groupId>io.weaviate</groupId>
@@ -78,7 +78,7 @@ var handle = client.collections.use("Article").withTenant("tenant-a");
 var articles = new TracedWeaviateCollection<>("Article", handle, tracer);
 ```
 
-For asynchronous calls, wrap a handle from `WeaviateClientAsync` with `TracedWeaviateCollectionAsync`. Spans end when the SDK future completes, fails or is cancelled. The adapter returns that original future and preserves the SDK's cancellation behavior.
+For asynchronous calls, wrap a handle from `WeaviateClientAsync` with `TracedWeaviateCollectionAsync`. The returned future becomes complete only after its span ends, so you can flush and shut down your provider in a terminal continuation without losing that span. Cancellation is forwarded to the SDK future, including the interrupt flag; timeouts and explicit completion also update the SDK future. Results and exceptions are preserved, but the returned future is not the same object as the SDK future.
 
 ## Coverage and data handling
 
