@@ -148,9 +148,22 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
       getNearestNeighbors: async (params) => { calls.push(params); return { data: { ids: [['doc1']] } }; },
     };
     collection = new sdk.Collection('test_collection', api);
-    await once('query', () => collection.query([[0.1, 0.2]], 3, { field: 'value' }));
-    assert.equal(calls[0].queryEmbedding.n_results, 3);
-    assert.deepEqual(calls[0].queryEmbedding.where, { field: 'value' });
+    const embeddings = [[0.1, 0.2]];
+    const where = { field: 'value' };
+    for (const nResults of [3, undefined, 0]) {
+      await once('query', () => collection.query(embeddings, nResults, where), {
+        'db.vector.query.top_k': nResults ?? 10,
+        'db.vector.query.filter': JSON.stringify(where),
+        'db.vector.results.count': 1,
+      });
+      assert.equal(calls.at(-1).queryEmbedding.n_results, nResults ?? 10);
+      assert.equal(calls.at(-1).queryEmbedding.query_embeddings, embeddings);
+      assert.equal(calls.at(-1).queryEmbedding.where, where);
+    }
+    await once('query', () => collection.query(embeddings), {
+      'db.vector.query.top_k': 10,
+      'db.vector.query.filter': undefined,
+    });
   } else {
     const client = new sdk.ChromaClient(major >= 3
       ? { host: '127.0.0.1', port, ssl: false, tenant: 'default_tenant', database: 'default_database' }
@@ -179,8 +192,15 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
       // Recent listCollections returns names rather than Collection instances.
       if (!value || typeof value.count !== 'function') continue;
       await once('count', () => value.count(), { 'db.vector.results.count': 2 });
-      await once('query', () => value.query({ queryEmbeddings: [[0.1, 0.2]], nResults: 2 }),
-        { 'db.vector.query.top_k': 2, 'db.vector.results.count': 2 });
+      await once('query', () => value.query({ queryEmbeddings: [[0.1, 0.2]], nResults: 2,
+        where: { field: 'value' }, include: ['metadatas', 'embeddings'] }), {
+        'db.vector.query.top_k': 2, 'db.vector.results.count': 2,
+        'db.vector.query.filter': JSON.stringify({ field: 'value' }),
+        'db.vector.query.include_metadata': true, 'db.vector.query.include_vectors': true,
+      });
+      assert.equal(requests.at(-1).body.n_results, 2);
+      assert.deepEqual(requests.at(-1).body.where, { field: 'value' });
+      assert.deepEqual(requests.at(-1).body.include, ['metadatas', 'embeddings']);
       if (typeof value.search === 'function') {
         await once('search', () => value.search([{}, {}], { readLevel: 'index_and_wal' }),
           { 'db.vector.search.count': 2, 'db.vector.results.count': 4 });

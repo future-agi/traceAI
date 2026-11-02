@@ -177,8 +177,13 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         if (activeCollection.getStore() === this) {
           return original.apply(this, args);
         }
+        // Early v1 query(embeddings, nResults, where) uses positional args.
+        // Normalize only the span metadata; forward the SDK args unchanged.
+        const params = name === "query" && Array.isArray(args[0])
+          ? { nResults: args[1], where: args[2] }
+          : args[0];
         return activeCollection.run(this, () =>
-          handler.call(instrumentation, () => original.apply(this, args), this, args[0])
+          handler.call(instrumentation, () => original.apply(this, args), this, params)
         );
       });
     }
@@ -324,7 +329,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     const collectionName = this.getCollectionName(instance);
     const attributes = this.getCommonAttributes("query", collectionName);
 
-    const nResults = params?.nResults || params?.n_results || 10;
+    const nResults = params?.nResults ?? params?.n_results ?? 10;
     attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = nResults;
 
     if (params?.where) {
