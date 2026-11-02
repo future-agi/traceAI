@@ -402,3 +402,113 @@ it("hides v1 terminal stream response echoes without losing generated text", asy
   expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe("hello");
   expect(spans[0].status.code).toBe(SpanStatusCode.OK);
 });
+
+// Connector authentication is not user content and must never enter telemetry.
+describe.each(["capture", "hideOutputs", "hideInputs"])("8.3.0 connector credentials (%s)", (mode) => {
+  it.each([false, true])("keeps credentials on the vendor request only (stream=%s)", async (streaming) => {
+    instrumentation.disable();
+    const captured = new InMemorySpanExporter();
+    const wireProvider = new NodeTracerProvider({ spanProcessors: [
+      new SimpleSpanProcessor(captured),
+      new SimpleSpanProcessor(new OTLPTraceExporter({ url: `${url}/v1/traces` })),
+    ] });
+    instrumentation = new CohereInstrumentation({ traceConfig: mode === "capture" ? {} : { [mode]: true } });
+    instrumentation.setTracerProvider(wireProvider);
+    try {
+      const client = clientFor(sdk8);
+      const connector = Object.freeze({ id: "fixture-connector", userAccessToken: "synthetic-connector-credential", continueOnFailure: true, options: { site: "example.test" } });
+      const input = Object.freeze({ ...request, connectors: Object.freeze([connector]) });
+      if (streaming) {
+        streamResponse(false);
+        for await (const _event of await client.chatStream(input)) { /* consume */ }
+      } else {
+        response = v1Response;
+        await client.chat(input);
+      }
+      await wireProvider.forceFlush();
+      expect(received).toHaveLength(1);
+      expect(received[0].body.connectors[0].user_access_token).toBe(connector.userAccessToken);
+      expect(input.connectors[0]).toBe(connector);
+      expect(input.connectors[0].userAccessToken).toBe("synthetic-connector-credential");
+      const spans = captured.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      expect(JSON.stringify(spans[0].attributes)).not.toContain(connector.userAccessToken);
+      expect(wire).not.toHaveLength(0);
+      expect(JSON.stringify(wire)).not.toContain(connector.userAccessToken);
+      if (mode === "hideInputs") {
+        expect(spans[0].attributes[S.RAW_INPUT]).toBeUndefined();
+      } else {
+        expect(JSON.parse(spans[0].attributes[S.RAW_INPUT] as string).connectors).toEqual([
+          { id: connector.id, continueOnFailure: true, options: { site: "example.test" } },
+        ]);
+      }
+    } finally {
+      await wireProvider.shutdown();
+    }
+  });
+});
+
+const finishCases = [
+  ...[false, true].flatMap(v2 => [false, true].flatMap(streaming =>
+    (v2 ? ["COMPLETE", "STOP_SEQUENCE", "MAX_TOKENS", "TOOL_CALL", "ERROR", "TIMEOUT"]
+      : ["COMPLETE", "STOP_SEQUENCE", "MAX_TOKENS", "ERROR", "ERROR_TOXIC", "ERROR_LIMIT", "TIMEOUT", "USER_CANCEL"])
+      .map(reason => ({ label: `8.3.0 v${v2 ? 2 : 1}`, sdk: sdk8, v2, streaming, reason })))),
+];
+describe.each([false, true])("finish reasons with hideOutputs=%s", (hideOutputs) => {
+  it.each(finishCases)("classifies $label stream=$streaming $reason without changing SDK results", async ({ sdk, v2, streaming, reason }) => {
+    instrumentation.disable();
+    instrumentation = new CohereInstrumentation({ traceConfig: { hideOutputs } });
+    instrumentation.setTracerProvider(provider);
+    const client = clientFor(sdk, v2);
+    const failed = ["ERROR", "ERROR_TOXIC", "ERROR_LIMIT", "TIMEOUT"].includes(reason);
+    const cancelled = reason === "USER_CANCEL";
+    if (streaming) {
+      const events = streamResponse(v2);
+      if (v2) (events[events.length - 1] as any).delta.finish_reason = reason;
+      else (events[events.length - 1] as any).finish_reason = reason;
+      response = events.map(event => v2 ? `data: ${JSON.stringify(event)}\n\n` : `${JSON.stringify(event)}\n`).join("");
+      const delivered = [];
+      for await (const event of await client.chatStream(v2 ? requestV2 : request)) delivered.push(event);
+      expect(delivered).toHaveLength(events.length);
+      const last = delivered[delivered.length - 1];
+      expect(v2 ? last.delta.finishReason : last.finishReason).toBe(reason);
+    } else {
+      response = { ...(v2 ? v2Response : v1Response), finish_reason: reason };
+      const pending = client.chat(v2 ? requestV2 : request);
+      const result = await pending;
+      expect(result.finishReason).toBe(reason);
+      expect(v2 ? result.message.content[0].text : result.text).toBe("hello");
+      expect((await pending.withRawResponse()).data).toBe(result);
+    }
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(failed ? SpanStatusCode.ERROR : cancelled ? SpanStatusCode.UNSET : SpanStatusCode.OK);
+    expect(spans[0].attributes[streaming ? "cohere.stream.cancelled" : "cohere.request.cancelled"]).toBe(cancelled ? true : undefined);
+    expect(spans[0].events.filter(event => event.name === "exception")).toHaveLength(failed ? 1 : 0);
+    expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe(hideOutputs ? undefined : "hello");
+    expect(spans[0].attributes[S.LLM_TOKEN_COUNT_PROMPT]).toBe(5);
+  });
+});
+
+it.each(["complete", "start-only", "cancelled", "eof"])("captures v2 content-start text for %s streams", async (mode) => {
+  const client = clientFor(sdk8, true);
+  const events: any[] = [{ type: "content-start", index: 0, delta: { message: { content: { type: "text", text: "initial-" } } } }];
+  if (mode === "complete") events.push({ type: "content-delta", index: 0, delta: { message: { content: { text: "final" } } } });
+  if (mode !== "eof") events.push({ type: "message-end", delta: { finish_reason: "COMPLETE" } });
+  contentType = "text/event-stream";
+  response = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+  const delivered = [];
+  for await (const event of await client.chatStream(requestV2)) {
+    delivered.push(event);
+    if (mode === "cancelled") break;
+  }
+  expect(delivered[0].delta.message.content.text).toBe("initial-");
+  expect(delivered).toHaveLength(mode === "cancelled" ? 1 : events.length);
+  const spans = exporter.getFinishedSpans();
+  expect(spans).toHaveLength(1);
+  const text = mode === "complete" ? "initial-final" : "initial-";
+  expect(spans[0].attributes[S.OUTPUT_VALUE]).toBe(text);
+  expect(JSON.parse(spans[0].attributes[S.LLM_OUTPUT_MESSAGES] as string)[0].content).toBe(text);
+  expect(JSON.parse(spans[0].attributes[S.RAW_OUTPUT] as string).text).toBe(text);
+  expect(spans[0].status.code).toBe(mode === "eof" ? SpanStatusCode.ERROR : mode === "cancelled" ? SpanStatusCode.UNSET : SpanStatusCode.OK);
+});

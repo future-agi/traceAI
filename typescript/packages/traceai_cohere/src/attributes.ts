@@ -11,6 +11,20 @@ const field = (data: Data, camel: string, snake: string) => data[camel] ?? data[
 export const hideInput = (config: TraceConfig) => config.hideInputs || config.hideInputMessages || config.hideInputText || config.hideInputImages;
 export const hideOutput = (config: TraceConfig) => config.hideOutputs || config.hideOutputMessages || config.hideOutputText;
 
+/** Connector authentication is never telemetry content, even with input capture
+ * enabled. Project only the telemetry copy; the SDK still needs these tokens.
+ */
+function withoutConnectorCredentials(request: Data): Data {
+  if (!Array.isArray(request.connectors)) return request;
+  return {
+    ...request,
+    connectors: request.connectors.map((connector) => {
+      const { userAccessToken: _camel, user_access_token: _snake, ...content } = object(connector);
+      return content;
+    }),
+  };
+}
+
 export function inputAttributes(operation: Operation, request: Data, config: TraceConfig): Attributes {
   const embedding = operation === "embed";
   const rerank = operation === "rerank";
@@ -68,7 +82,7 @@ export function inputAttributes(operation: Operation, request: Data, config: Tra
       if (request.tools) attrs[S.LLM_TOOLS] = json(request.tools);
     }
   }
-  if (!hideInput(config)) attrs[S.RAW_INPUT] = json(request);
+  if (!hideInput(config)) attrs[S.RAW_INPUT] = json(withoutConnectorCredentials(request));
   return attrs;
 }
 

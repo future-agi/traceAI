@@ -120,12 +120,29 @@ export class CohereInstrumentation extends InstrumentationBase {
         if (ended) return;
         ended = true;
         try {
+          // Resolved HTTP-200 chat responses can still signal failure or user
+          // cancellation. Use the same classification for both chat paths,
+          // independent of content capture and without rejecting SDK results.
+          if ((operation === "chat" || operation === "chatStream") && error === undefined && !cancelled) {
+            const reason = response.finishReason ?? response.finish_reason;
+            switch (reason) {
+              case "ERROR":
+              case "ERROR_TOXIC":
+              case "ERROR_LIMIT":
+              case "TIMEOUT":
+                error = new Error(`Cohere generation failed (${reason})`);
+                break;
+              case "USER_CANCEL":
+                cancelled = true;
+                break;
+            }
+          }
           span.setAttributes(outputAttributes(operation, response, config));
           if (error !== undefined) {
             span.recordException(error instanceof Error ? error : new Error(String(error)));
             span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
           } else if (cancelled) {
-            span.setAttribute("cohere.stream.cancelled", true);
+            span.setAttribute(operation === "chatStream" ? "cohere.stream.cancelled" : "cohere.request.cancelled", true);
           } else {
             span.setStatus({ code: SpanStatusCode.OK });
           }

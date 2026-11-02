@@ -17,7 +17,7 @@ class ChatAccumulator {
     const message = object(delta.message);
     if (this.captureContent) {
       if (type === "text-generation" && typeof event.text === "string") this.text += event.text;
-      if (type === "content-delta") {
+      if (type === "content-start" || type === "content-delta") {
         const text = object(message.content).text;
         if (typeof text === "string") this.text += text;
       }
@@ -36,13 +36,16 @@ class ChatAccumulator {
         });
       }
     }
-    if (type === "stream-end") this.response = object(event.response);
+    if (type === "stream-end") {
+      const response = object(event.response);
+      this.response = { ...response, finishReason: event.finishReason ?? event.finish_reason ?? response.finishReason ?? response.finish_reason };
+    }
     if (type === "message-end") this.response = { usage: delta.usage, finishReason: delta.finishReason ?? delta.finish_reason };
     return type === "stream-end" || type === "message-end";
   }
 
   result(): Data {
-    if (!this.captureContent) return { usage: this.response.usage, meta: this.response.meta };
+    if (!this.captureContent) return { usage: this.response.usage, meta: this.response.meta, finishReason: this.response.finishReason };
     // V1's terminal response has authoritative text/tool calls; v2 only sends usage.
     return {
       text: this.text,
@@ -87,12 +90,7 @@ export function wrapStream<T extends object>(stream: T, execContext: Context, ca
             const result = await context.with(execContext, () => fn.call(iterator, value));
             if (!ended && !result.done) {
               const terminal = accumulator.add(result.value);
-              if (terminal) {
-                const event = object(result.value);
-                const delta = object(event.delta);
-                const reason = event.finishReason ?? event.finish_reason ?? delta.finishReason ?? delta.finish_reason;
-                end(reason === "ERROR" || reason === "ERROR_TOXIC" ? new Error("Cohere stream failed") : undefined);
-              }
+              if (terminal) end();
             }
             if (!ended && (result.done || method === "return")) {
               // Terminal events finish the span above. A clean transport EOF

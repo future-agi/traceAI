@@ -67,13 +67,17 @@ const stream = await client.chatStream({
 });
 
 for await (const event of stream) {
-  if (event.type === "content-delta") {
+  if (event.type === "content-start" || event.type === "content-delta") {
     process.stdout.write(event.delta?.message?.content?.text ?? "");
   }
 }
 ```
 
-The span stays open while you consume the stream. It finishes at the terminal event, iterator completion, failure, early return or controller abort. A partial stream is marked `cohere.stream.cancelled`; token counts are only available if Cohere sends usage. Consume the stream or explicitly close/abort it rather than abandoning it. SDK stream controllers, events and `withRawResponse()` remain available.
+The span stays open while you consume the stream. It finishes at the terminal event, iterator completion, failure, early return or controller abort. Breaking or returning from the iterator, aborting its controller, or receiving `USER_CANCEL` sets `cohere.stream.cancelled` and leaves the span status unset. A stream that ends without a terminal event is an error, not a cancellation.
+
+For both chat and streaming chat, `ERROR`, `ERROR_TOXIC`, `ERROR_LIMIT` and `TIMEOUT` finish reasons mark the span as an error. A nonstreaming `USER_CANCEL` response sets `cohere.request.cancelled` with an unset status. Partial generated output is retained when content capture is enabled; token counts are available only if Cohere sends usage. These telemetry statuses do not change SDK results or turn resolved responses into exceptions.
+
+Consume the stream or explicitly close/abort it rather than abandoning it. SDK stream controllers, events and `withRawResponse()` remain available.
 
 ## Embed and rerank
 
@@ -106,7 +110,7 @@ This integration covers `chat`, `chatStream`, `embed` and `rerank`, not every en
 - **No v2 spans:** initialize instrumentation before constructing the client. V2 binds its methods in the constructor; recreate clients constructed before setup.
 - **Duplicate spans:** use one Cohere instrumentor per application and remove overlapping instrumentation.
 - **A stream span never finishes:** consume the stream, break/return from its iterator, or abort its controller before shutting down the provider.
-- **Missing content or vectors:** check your `traceConfig` and `FI_HIDE_*` environment settings. Input/output hiding also applies to Cohere-specific fields and raw payloads; vector hiding excludes the raw embedding response.
+- **Missing content or vectors:** check your `traceConfig` and `FI_HIDE_*` environment settings. Input/output hiding also applies to Cohere-specific fields and raw payloads; vector hiding excludes the raw embedding response. Connector access tokens are always omitted from telemetry, regardless of content settings; requests to Cohere retain them.
 
 ## Development
 
