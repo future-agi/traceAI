@@ -242,6 +242,12 @@ Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The sep
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
 
+### Legacy Azure OpenAI support
+
+`traceai-java-azure-openai` supports `com.azure:azure-ai-openai:1.0.0-beta.16`. It traces only the wrapper's blocking `getChatCompletions`, `getEmbeddings`, and `getCompletions` methods. `unwrap()` returns the original client: calls through it, including streaming, do not receive the wrapper's semantic spans. `OpenAIAsyncClient`, Responses, audio, images, and files are outside this wrapper's coverage. Native Azure HTTP spans, when configured separately, are not a substitute for the wrapper's model, message, and usage attributes.
+
+Microsoft's [Azure OpenAI SDK maintenance notice](https://github.com/Azure/azure-sdk-for-java/blob/5bf21284d74c27d37110169721e0ef2b6de4bc83/sdk/openai/azure-ai-openai/README.md) directs new-feature development to the official OpenAI Java SDK. Keep this wrapper for existing blocking Azure SDK applications; do not substitute `traceai-java-openai` as a drop-in migration. Client types, Azure attribution, streaming, and async behavior must be accounted for separately.
+
 ## Build and test
 
 Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
