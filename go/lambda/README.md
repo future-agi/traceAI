@@ -23,9 +23,13 @@ lambda.StartHandler(traceailambda.WrapHandler(lambda.NewHandler(handle), provide
 
 For a complete application with standard OTLP/HTTP exporter setup, see [example/main.go](example/main.go). Set `FI_API_KEY`, `FI_SECRET_KEY` and `FI_PROJECT_NAME` on the function; the example sends the two keys only to the trace endpoint at `{FI_BASE_URL}/tracer/v1/traces` (base defaults to `https://api.futureagi.com`). Missing either key disables exporting without failing the handler. The resource carries `project_name`, `project_type=observe` and `service.name`.
 
-For handlers built with `lambda.NewHandler`, the runtime sends results with the same Content-Type as an unwrapped handler: `application/json` for JSON results, and the result's own type for `io.Reader` results such as `lambdaurl.Wrap` responses on `RESPONSE_STREAM` function URLs. The result is read inside the invocation span, so a function URL response is delivered whole rather than streamed incrementally. `lambda.Start` and `lambda.StartWithOptions` use the wrapped handler as it is, so pass Lambda options to `WrapHandler` instead:
+For handlers built with `lambda.NewHandler`, the runtime sends results with the same Content-Type as an unwrapped handler: `application/json` for JSON results, and the result's own type for `io.Reader` results such as `lambdaurl.Wrap` responses on `RESPONSE_STREAM` function URLs. The result is read inside the invocation span, so a function URL response is delivered whole rather than streamed incrementally. The event is decoded as JSON, so an invocation with an empty payload fails even for a handler that takes no event; send `{}` instead.
+
+`lambda.Start` and `lambda.StartWithOptions` use the wrapped handler as it is, so pass runtime options such as `lambda.WithEnableSIGTERM`, `lambda.WithContextValue` and `lambdaurl.WithDetectContentType` to `WrapHandler` instead. JSON options such as `lambda.WithUseNumber` stay on `lambda.NewHandlerWithOptions` for the handler you wrap.
 
 ```go
+import "github.com/aws/aws-lambda-go/lambdaurl"
+
 lambda.StartHandler(traceailambda.WrapHandler(
     lambda.NewHandler(lambdaurl.Wrap(mux)), provider,
     lambdaurl.WithDetectContentType(true), lambda.WithEnableSIGTERM(onShutdown),

@@ -213,3 +213,16 @@ func TestWrapHandlerPreservesRuntimeResponse(t *testing.T) {
 		})
 	}
 }
+
+// The wrapper decodes the event as JSON, so an empty payload fails even for a
+// handler that takes no event, as it does for aws-lambda-go's typed handlers.
+func TestEmptyPayloadFailsForWrappedSDKHandlers(t *testing.T) {
+	plain := runThroughRuntime(t, "no-result/plain", "")
+	wrapped := runThroughRuntime(t, "no-result/wrapped", "")
+	if plain.endpoint != "response" || plain.body != "null" {
+		t.Fatalf("unexpected aws-lambda-go baseline: %+v", plain)
+	}
+	if wrapped.endpoint != "error" || !strings.Contains(wrapped.body, `"errorMessage":"EOF"`) {
+		t.Fatalf("empty payload limitation changed; update the README: %+v", wrapped)
+	}
+}

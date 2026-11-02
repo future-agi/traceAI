@@ -49,9 +49,13 @@ type Provider interface {
 // results, and the result's own ContentType for io.Reader results such as
 // lambdaurl.Wrap's function URL response. The result is read inside the
 // invocation span, so a function URL response is delivered whole rather than
-// incrementally. lambda.Start and lambda.StartWithOptions use such a wrapped
-// handler as it is, so pass Lambda options such as lambda.WithEnableSIGTERM or
-// lambdaurl.WithDetectContentType to WrapHandler instead.
+// incrementally. The event is decoded as JSON, so an empty payload fails even
+// for a handler that takes no event. lambda.Start and lambda.StartWithOptions
+// use such a wrapped handler as it is, so pass runtime options such as
+// lambda.WithEnableSIGTERM, lambda.WithContextValue or
+// lambdaurl.WithDetectContentType to WrapHandler instead. JSON options such as
+// lambda.WithUseNumber stay on lambda.NewHandlerWithOptions for the handler you
+// wrap.
 //
 // HTTP API v2 / function URL events can supply a W3C traceparent. Other headers,
 // baggage, event and result content, error messages and stack traces are never
