@@ -133,6 +133,7 @@ func TestStreamCompletionFallback(t *testing.T) {
 	h.HandleLLMGenerateContentStart(ctx, nil)
 	h.HandleStreamingFunc(ctx, []byte("hello"))
 	h.HandleLLMGenerateContentEnd(ctx, nil)
+	h.EndRun(ctx) // Nil ends are provisional until an error or final response is ruled out.
 	spans := exp.GetSpans()
 	if len(spans) != 1 || attr(spans[0].Attributes, "output.value") != "hello" {
 		t.Fatal("missing successful streamed output")

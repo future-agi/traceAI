@@ -15,7 +15,10 @@ Until the first `go/langchaingo/v0.1.0` tag is released, use `@dev` instead of `
 Set `FI_API_KEY`, `FI_SECRET_KEY`, `FI_PROJECT_NAME` and the credential for your chosen model provider. The [example](example/main.go) configures an OpenTelemetry OTLP/HTTP exporter with the full endpoint `https://api.futureagi.com/tracer/v1/traces`, headers `X-Api-Key` and `X-Secret-Key`, no compression, and the `project_name` and `project_type=observe` resource attributes.
 
 ```go
-handler := traceailangchaingo.NewHandler(traceailangchaingo.WithTracerProvider(tp))
+handler := traceailangchaingo.NewHandler(
+    traceailangchaingo.WithTracerProvider(tp),
+    traceailangchaingo.WithModel("your-configured-model"),
+)
 model, err := openai.New(openai.WithCallback(handler))
 if err != nil { return err }
 ctx := traceailangchaingo.ContextWithRun(context.Background())
@@ -33,6 +36,6 @@ For embeddings, which have no callbacks in LangChainGo, wrap the embedder once:
 embedder = handler.WrapEmbedder(embedder)
 ```
 
-`FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` prevent capture of input and output text. You can also use `WithHideInputs(true)` and `WithHideOutputs(true)`. Binary images, reasoning blocks, tool arguments, document bodies and raw error text are never exported. Input and output text fields are limited to 4 KiB. Streaming chunks are buffered to at most 4 KiB and used only when a successful completion has no response text. On error, partial output is discarded. Token counts use the provider's `PromptTokens`, `CompletionTokens` and `TotalTokens` fields when present; missing counts are not inferred.
+`FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` prevent capture of input and output text; `FI_HIDE_INPUT_TEXT=true` and `FI_HIDE_OUTPUT_TEXT=true` also hide text in this adapter. Values are case-insensitive. You can also use `WithHideInputs(true)` and `WithHideOutputs(true)`. Tool content is scrubbed for common credential fields and bearer tokens, but arbitrary secrets in free-form text cannot be identified reliably; use the hide switches when content may be sensitive. Binary images, reasoning blocks, tool arguments, document bodies and raw error text are never exported. Input and output text fields are limited to 4 KiB. Streaming chunks are buffered to at most 4 KiB and used only when a successful completion has no response text. A nil completion is provisional because some providers signal it before reporting success or failure; `EndRun` closes a streamed nil completion if no subsequent response or error arrives. On error, partial output is discarded. `WithModel` supplies the request model when the callback does not; response `GenerationInfo` model fields are used as a fallback. Token counts use the provider's `PromptTokens`, `CompletionTokens` and `TotalTokens` fields when present; missing counts are not inferred.
 
 To find a run, open the project named by `FI_PROJECT_NAME` in Future AGI and inspect its traces. If no spans appear, verify that the exact `ContextWithRun` context reached the callback, that your model was given the handler, and that the provider flushes on shutdown.
