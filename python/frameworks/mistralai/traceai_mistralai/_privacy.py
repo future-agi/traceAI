@@ -3,9 +3,11 @@
 import json
 import logging
 from typing import Any, Callable, Optional, Union
+from urllib.parse import urlsplit, urlunsplit
 
 from fi_instrumentation import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
+    EmbeddingAttributes,
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
@@ -15,6 +17,19 @@ from opentelemetry.util.types import AttributeValue
 from wrapt import ObjectProxy
 
 logger = logging.getLogger(__name__)
+
+
+class _EmbeddingTraceConfig(ObjectProxy):
+    """Use the input-text policy also on published cores predating its alias."""
+
+    def mask(self, key, value):
+        if key.startswith(SpanAttributes.EMBEDDING_EMBEDDINGS + ".") and key.endswith(
+            "." + EmbeddingAttributes.EMBEDDING_TEXT
+        ):
+            # Core 1.2.2 supports selective message privacy but not the embedding
+            # text alias yet. Preserve that policy without duplicating payloads.
+            key = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"
+        return self.__wrapped__.mask(key, value)
 
 
 class _NativeTraceConfig(ObjectProxy):
@@ -30,6 +45,14 @@ class _NativeTraceConfig(ObjectProxy):
         value: Union[AttributeValue, Callable[[], AttributeValue]],
     ) -> Optional[AttributeValue]:
         value = self.__wrapped__.mask(key, value)
+        if key in ("http.url", "url.full") and isinstance(value, str):
+            # SDK HTTP metadata is independent of message-hiding flags. Never
+            # export proxy userinfo, including percent-encoded credentials.
+            try:
+                url = urlsplit(value)
+                return urlunsplit(url._replace(netloc=url.netloc.rsplit("@", 1)[-1]))
+            except ValueError:
+                return None
         if (
             key
             not in (

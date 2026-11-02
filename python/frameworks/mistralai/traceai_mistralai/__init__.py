@@ -142,13 +142,18 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
         )
 
         from mistralai.embeddings import Embeddings
+        from traceai_mistralai._privacy import _EmbeddingTraceConfig
 
+        embedding_tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, tracer_provider),
+            config=_EmbeddingTraceConfig(config),
+        )
         self._embedding_methods = (Embeddings.create, Embeddings.create_async)
         wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create", wrapper=_EmbeddingWrapper(
-            "MistralClient.embeddings", self._tracer, mistralai
+            "MistralClient.embeddings", embedding_tracer, mistralai
         ))
         wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create_async", wrapper=_AsyncEmbeddingWrapper(
-            "MistralAsyncClient.embeddings", self._tracer, mistralai
+            "MistralAsyncClient.embeddings", embedding_tracer, mistralai
         ))
 
     def _uninstrument(self, **kwargs: Any) -> None:

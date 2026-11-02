@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import warnings
@@ -292,7 +293,7 @@ class _AsyncChatWrapper(_WithTracer, _WithMistralAI):
         ) as with_span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except (Exception, asyncio.CancelledError) as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -347,7 +348,7 @@ class _AsyncStreamChatWrapper(_WithTracer, _WithMistralAI):
         ) as with_span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except (Exception, asyncio.CancelledError) as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

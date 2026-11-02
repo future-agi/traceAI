@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from contextlib import contextmanager
 from functools import wraps
 from threading import RLock
 from typing import Any
@@ -25,6 +26,8 @@ class _NativeSpan(ObjectProxy):
     def __init__(self, span):
         super().__init__(span)
         self._self_status = None
+        self._self_iteration_depth = 0
+        self._self_pending_end = None
 
     def set_status(self, status, description=None):
         if (
@@ -38,10 +41,47 @@ class _NativeSpan(ObjectProxy):
             else trace.Status(status, description)
         )
 
+    @contextmanager
+    def observe_iteration(self):
+        # HTTPX can close at EOF before the SDK decodes its buffered last event.
+        # Delay only the end, so decoding failures still update this same span.
+        self._self_iteration_depth += 1
+        try:
+            yield
+        except (StopIteration, StopAsyncIteration, GeneratorExit):
+            raise
+        except BaseException as error:
+            _record_error(self, error)
+            self.end()
+            raise
+        finally:
+            self._self_iteration_depth -= 1
+            if self._self_iteration_depth == 0 and self._self_pending_end is not None:
+                args, kwargs = self._self_pending_end
+                self._self_pending_end = None
+                self.end(*args, **kwargs)
+
     def end(self, *args, **kwargs):
+        if self._self_iteration_depth:
+            self._self_pending_end = (args, kwargs)
+            return
         if self._self_status is not None:
             self.__wrapped__.set_status(self._self_status)
         return self.__wrapped__.end(*args, **kwargs)
+
+
+def _record_error(span, error):
+    if isinstance(error, GeneratorExit):
+        return
+    try:
+        if (
+            span._self_status is None
+            or span._self_status.status_code != trace.StatusCode.ERROR
+        ):
+            span.record_exception(error)
+            span.set_status(trace.Status(trace.StatusCode.ERROR))
+    except Exception:
+        logger.debug("Could not record Mistral stream error")
 
 
 class _ErrorStream(ObjectProxy):
@@ -51,19 +91,11 @@ class _ErrorStream(ObjectProxy):
         super().__init__(stream)
         self._self_span = span
 
-    def _error(self, error):
-        if not isinstance(error, GeneratorExit):
-            try:
-                self._self_span.record_exception(error)
-                self._self_span.set_status(trace.Status(trace.StatusCode.ERROR))
-            except Exception:
-                logger.debug("Could not record Mistral stream error")
-
     def __iter__(self):
         try:
             yield from self.__wrapped__
         except BaseException as error:
-            self._error(error)
+            _record_error(self._self_span, error)
             raise
 
     async def __aiter__(self):
@@ -71,7 +103,7 @@ class _ErrorStream(ObjectProxy):
             async for chunk in self.__wrapped__:
                 yield chunk
         except BaseException as error:
-            self._error(error)
+            _record_error(self._self_span, error)
             raise
 
 
@@ -83,7 +115,9 @@ class _NativeTracer(FITracer):
             kind = "AGENT"
         elif name.startswith("execute_tool"):
             kind = "TOOL"
-        elif any(part in name for part in ("chat", "completion", "fim")):
+        elif any(
+            part in name for part in ("chat", "completion", "fim", "stream_agents")
+        ):
             kind = "LLM"
         else:
             kind = "CHAIN"
@@ -123,6 +157,7 @@ class _NativeInstrumentation:
         self._async_sends = WeakKeyDictionary()
         self._lock = RLock()
         from mistralai.extra.observability.otel import TracedResponse
+        from mistralai.client.utils.eventstreaming import EventStream, EventStreamAsync
 
         self._originals = []
         for cls, method, wrapper in (
@@ -130,6 +165,8 @@ class _NativeInstrumentation:
             (TracingHook, "after_error", self._after_error),
             (TracingHook, "after_success", self._after_success),
             (TracedResponse, "_finalize_span", self._finalize_span),
+            (EventStream, "__next__", self._stream_next),
+            (EventStreamAsync, "__anext__", self._stream_anext),
         ):
             self._originals.append((cls, method, getattr(cls, method)))
             wrap_function_wrapper(cls, method, wrapper)
@@ -198,6 +235,20 @@ class _NativeInstrumentation:
             response.stream = _ErrorStream(response.stream, span)
         return response
 
+    def _stream_next(self, wrapped, instance, args, kwargs):
+        span = getattr(instance.response, "span", None)
+        if not isinstance(span, _NativeSpan):
+            return wrapped(*args, **kwargs)
+        with span.observe_iteration():
+            return wrapped(*args, **kwargs)
+
+    async def _stream_anext(self, wrapped, instance, args, kwargs):
+        span = getattr(instance.response, "span", None)
+        if not isinstance(span, _NativeSpan):
+            return await wrapped(*args, **kwargs)
+        with span.observe_iteration():
+            return await wrapped(*args, **kwargs)
+
     def _finalize_span(self, wrapped, instance, args, kwargs):
         span = instance.span
         if (
@@ -209,6 +260,7 @@ class _NativeInstrumentation:
         # Adapt conversation SSE attributes on that same span, not a second span.
         try:
             parts = []
+            tool_calls = {}
             data_lines = []
             for line in bytes(instance._accumulated_sse).decode(
                 "utf-8", errors="replace"
@@ -251,14 +303,25 @@ class _NativeInstrumentation:
                                 format_output_message({"message": message})["parts"]
                             )
                     elif event_type == "function.call.delta":
-                        parts.append(
-                            {
+                        # Deltas for different calls may be interleaved. Keep
+                        # the first-seen output order and append each argument
+                        # fragment to its call instead of emitting duplicates.
+                        identity = (
+                            event.get("output_index"),
+                            event.get("tool_call_id"),
+                        )
+                        part = tool_calls.get(identity)
+                        if part is None:
+                            part = {
                                 "type": "tool_call",
                                 "id": event.get("tool_call_id"),
                                 "name": event.get("name"),
-                                "arguments": event.get("arguments"),
+                                "arguments": "",
                             }
-                        )
+                            tool_calls[identity] = part
+                            parts.append(part)
+                        if isinstance(event.get("arguments"), str):
+                            part["arguments"] += event["arguments"]
                     elif event_type == "conversation.response.error":
                         span.set_status(trace.Status(trace.StatusCode.ERROR))
             if parts:
