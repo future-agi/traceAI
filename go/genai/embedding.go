@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/genai"
 )
 
 // Text-only documents use at most two flattened attributes each. Keep this
@@ -86,32 +87,48 @@ func parseEmbeddingRequest(body []byte, tc TraceConfig, batch bool) parsedReques
 // embeddingResponseAttributes records only counts, never vector values. A
 // dimension is reported only when all returned vectors have the same size.
 // Gemini Developer API does not return token usage for these endpoints.
-func embeddingResponseAttributes(body []byte) ([]attribute.KeyValue, error) {
+func embeddingResponseAttributes(body []byte, batch bool) ([]attribute.KeyValue, error) {
+	// Match the SDK's map -> backend field selection -> public response type
+	// pipeline. Decoding raw JSON into a partial struct differs for duplicate
+	// keys, field casing, numeric normalization and errors in ignored fields.
 	// The SDK accepts an empty HTTP body as an empty response object.
-	if len(body) == 0 {
-		return nil, nil
+	var raw map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
 	}
-	type embedding struct {
-		Values []float32 `json:"values"`
+	selected := make(map[string]any)
+	if batch {
+		selected["embeddings"] = raw["embeddings"]
+		selected["metadata"] = raw["metadata"]
+	} else if embedding := raw["embedding"]; embedding != nil {
+		// The direct Gemini embedContent REST route returns a single embedding;
+		// the Go SDK's Gemini backend uses batchEmbedContents even for one input.
+		selected["embeddings"] = []any{embedding}
 	}
-	var r struct {
-		Embedding  *embedding  `json:"embedding"`
-		Embeddings []embedding `json:"embeddings"`
+	// Do not decode sdkHttpResponse from the body: the SDK replaces it with
+	// the actual HTTP headers. Public response types validate all accepted
+	// fields, including statistics/metadata, without duplicating their schema.
+	normalized, err := json.Marshal(selected)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
+	var r genai.EmbedContentResponse
+	if err := json.Unmarshal(normalized, &r); err != nil {
 		return nil, err
 	}
 	embeddings := r.Embeddings
-	if r.Embedding != nil {
-		embeddings = []embedding{*r.Embedding}
-	}
 	if len(embeddings) == 0 {
 		return nil, nil
 	}
 	attrs := []attribute.KeyValue{attribute.Int(EmbeddingCount, len(embeddings))}
+	if embeddings[0] == nil {
+		return attrs, nil
+	}
 	dim := len(embeddings[0].Values)
 	for _, e := range embeddings[1:] {
-		if len(e.Values) != dim {
+		if e == nil || len(e.Values) != dim {
 			return attrs, nil
 		}
 	}

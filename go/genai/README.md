@@ -20,7 +20,7 @@ embedding count and vector dimensions. Vector values are never captured.
 | Gemini SDK | `google.golang.org/genai` v1.71.0 or later (the `go.mod` minimum) |
 | Backend | Gemini Developer API (`genai.BackendGeminiAPI`). Vertex AI is not tested and not claimed. |
 | Go | 1.26.0 or later, the common minimum across traceAI Go modules |
-| Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and the standard library. No exporter is built in. `google.golang.org/genai` and the OTel SDK are used by the tests and the example only. |
+| Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`), Google Gen AI SDK response types (`google.golang.org/genai`) and the standard library. No exporter is built in. The OTel SDK is used by the tests and the example only. |
 
 The retired module `github.com/google/generative-ai-go` (support ended 2025-11-30) is not
 supported and not wrapped.

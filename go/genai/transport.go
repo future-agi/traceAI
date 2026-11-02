@@ -237,7 +237,7 @@ func (t *Transport) traceRequest(req *http.Request, method string) (*http.Respon
 	case method == methodStreamGenerate:
 		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc, secrets)
 	default:
-		c.endJSON(reqCtx, span, res, embedding)
+		c.endJSON(reqCtx, span, res, method)
 	}
 	return res, nil
 }
@@ -302,7 +302,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // endJSON reads a non-streaming response, restores the body for the SDK and
 // ends the span with the response attributes.
-func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, embedding bool) {
+func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, method string) {
 	if res.Body == nil {
 		span.End()
 		return
@@ -316,8 +316,8 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 		return
 	}
 	res.Body = io.NopCloser(bytes.NewReader(b))
-	if embedding {
-		attrs, err := embeddingResponseAttributes(b)
+	if method == methodEmbed || method == methodBatchEmbed {
+		attrs, err := embeddingResponseAttributes(b, method == methodBatchEmbed)
 		if err != nil {
 			// Decoder errors may contain response content. Keep only a safe
 			// classification, and leave the original body for the SDK to decode.
