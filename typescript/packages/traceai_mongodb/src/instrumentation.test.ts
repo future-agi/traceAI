@@ -69,7 +69,7 @@ async function wirePeer(mongo: typeof import("mongodb")) {
         };
         if (command.ismaster || command.isMaster || command.hello) {
           reply({ ok: 1, ismaster: true, isWritablePrimary: true, helloOk: true,
-            minWireVersion: 0, maxWireVersion: 21, logicalSessionTimeoutMinutes: 30,
+            minWireVersion: 0, maxWireVersion: 25, logicalSessionTimeoutMinutes: 30,
             maxBsonObjectSize: 16777216, maxMessageSizeBytes: 48000000, maxWriteBatchSize: 100000 });
         } else if (command.find || command.aggregate) {
           const send = () => {
@@ -93,6 +93,14 @@ async function wirePeer(mongo: typeof import("mongodb")) {
           reply({ ok: 1, n: 1, nModified: 1 });
         } else if (command.delete) {
           reply({ ok: 1, n: 1 });
+        } else if (command.bulkWrite) {
+          const writeResultError = command.ops?.some((op: any) => op.document?.private === "secret-write-result-error");
+          reply(command.ops?.some((op: any) => op.document?.private === "secret-write-error")
+            ? { ok: 0, code: 2, codeName: "BadValue", errmsg: "secret-bulk-write-error" }
+            : { ok: 1, cursor: { id: BSON.Long.ZERO, ns: "admin.$cmd.bulkWrite",
+              firstBatch: writeResultError ? [{ ok: 0, idx: 0, code: 11000, errmsg: "secret-write-result-error" }] : [] },
+              nErrors: writeResultError ? 1 : 0, nInserted: writeResultError ? 0 : command.ops.length,
+              nMatched: 0, nModified: 0, nUpserted: 0, nDeleted: 0 });
         } else reply({ ok: 1 });
       }
     });
@@ -238,6 +246,38 @@ describe.each(drivers)("mongodb %s command monitoring", (_version, mongo) => {
     expect((await collection.deleteOne({})).deletedCount).toBe(1);
     expect(exporter.getFinishedSpans().map((span) => span.status.code)).toEqual([1, 1, 1]);
     expect(exporter.getFinishedSpans()[0].attributes["db.response.inserted_count"]).toBe(2);
+  });
+
+  if (_version === "7.8.0") test("client.bulkWrite traces successful and failed commands without write payloads or cross-namespace collection names", async () => {
+    const inserted = await client.bulkWrite([
+      { name: "insertOne", namespace: "synthetic.secret-collection-a", document: { private: "secret-document-a" } },
+      { name: "insertOne", namespace: "synthetic.secret-collection-b", document: { private: "secret-document-b" } },
+    ]);
+    expect(inserted.insertedCount).toBe(2);
+    await expect(client.bulkWrite([
+      { name: "insertOne", namespace: "synthetic.secret-collection-a", document: { private: "secret-write-error" } },
+    ])).rejects.toThrow("Mongo client bulk write encountered an error");
+    expect(peer.commands.filter((command) => command.bulkWrite)).toHaveLength(2);
+    const spans = exporter.getFinishedSpans();
+    expect(spans.map((span) => span.name)).toEqual(["mongodb bulkWrite", "mongodb bulkWrite"]);
+    expect(spans.map((span) => span.status.code)).toEqual([SpanStatusCode.OK, SpanStatusCode.ERROR]);
+    expect(spans[0].attributes).toMatchObject({
+      "db.namespace": "admin", "db.operation.name": "bulkWrite", "db.system": "mongodb",
+    });
+    for (const span of spans) {
+      expect(span.attributes).not.toHaveProperty("db.collection.name");
+      expect(JSON.stringify({ attributes: span.attributes, status: span.status, events: span.events })).not.toContain("secret-");
+    }
+  });
+
+  if (_version === "7.8.0") test("client.bulkWrite marks acknowledged per-operation write errors as errors", async () => {
+    await expect(client.bulkWrite([
+      { name: "insertOne", namespace: "synthetic.secret-collection", document: { private: "secret-write-result-error" } },
+    ])).rejects.toThrow();
+    const spans = exporter.getFinishedSpans();
+    expect(spans.map((span) => span.name)).toEqual(["mongodb bulkWrite"]);
+    expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
+    expect(JSON.stringify({ attributes: spans[0].attributes, status: spans[0].status, events: spans[0].events })).not.toContain("secret-");
   });
 
   test("preserves command failures and hides error details by default", async () => {

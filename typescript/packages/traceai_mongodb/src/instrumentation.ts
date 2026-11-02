@@ -20,7 +20,7 @@ const VERSION = "0.1.1"; // x-release-please-version
 
 // Only application commands: never authentication, handshakes or session payloads.
 const COMMANDS = new Set([
-  "aggregate", "find", "getMore", "killCursors", "insert", "update", "delete",
+  "aggregate", "find", "getMore", "killCursors", "insert", "update", "delete", "bulkWrite",
   "findAndModify", "count", "distinct", "createSearchIndexes", "updateSearchIndex",
   "dropSearchIndex",
 ]);
@@ -61,6 +61,7 @@ type CommandReply = {
   n?: number;
   nModified?: number;
   writeErrors?: unknown[];
+  nErrors?: number;
   writeConcernError?: unknown;
 };
 
@@ -305,7 +306,7 @@ export class MongoDBInstrumentation extends InstrumentationBase {
         }
         if (typeof reply?.nModified === "number") span.setAttribute("db.response.modified_count", reply.nModified);
         // MongoDB reports write failures in an otherwise successful command reply.
-        if (reply?.writeErrors?.length || reply?.writeConcernError) {
+        if (reply?.writeErrors?.length || reply?.writeConcernError || (reply?.nErrors ?? 0) > 0) {
           span.setStatus({ code: SpanStatusCode.ERROR });
         } else {
           span.setStatus({ code: SpanStatusCode.OK });
