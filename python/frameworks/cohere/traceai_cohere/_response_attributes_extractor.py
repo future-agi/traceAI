@@ -198,6 +198,9 @@ class _EmbedResponseAttributesExtractor:
 class _RerankResponseAttributesExtractor:
     """Extract span attributes from Cohere rerank response."""
 
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
     def get_attributes(
         self,
         response: Optional[Dict[str, Any]],
@@ -240,13 +243,14 @@ class _RerankResponseAttributesExtractor:
         if scores:
             yield "cohere.rerank.scores", safe_json_dumps(scores)
 
-        yield (
-            SpanAttributes.OUTPUT_VALUE,
-            safe_json_dumps(
-                [
-                    {"index": r.get("index"), "score": r.get("relevance_score")}
-                    for r in results[:5]
-                ]
-            ),
-        )
+        # return_documents echoes the submitted input. Preserve the ranking
+        # metadata in telemetry without changing the SDK response for callers.
+        if self._config.hide_inputs:
+            response = dict(response)
+            response["results"] = [
+                {key: value for key, value in result.items() if key != "document"}
+                if isinstance(result, dict)
+                else result
+                for result in results
+            ]
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)

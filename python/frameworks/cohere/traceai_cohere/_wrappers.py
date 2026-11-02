@@ -358,7 +358,9 @@ class _RerankWrapper(_WithTracer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._request_extractor = _RerankRequestAttributesExtractor(config=self._config)
-        self._response_extractor = _RerankResponseAttributesExtractor()
+        self._response_extractor = _RerankResponseAttributesExtractor(
+            config=self._config
+        )
 
     def __call__(
         self,
@@ -416,7 +418,9 @@ class _AsyncRerankWrapper(_WithTracer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._request_extractor = _RerankRequestAttributesExtractor(config=self._config)
-        self._response_extractor = _RerankResponseAttributesExtractor()
+        self._response_extractor = _RerankResponseAttributesExtractor(
+            config=self._config
+        )
 
     async def __call__(
         self,
