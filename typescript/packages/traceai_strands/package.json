@@ -22,7 +22,7 @@
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
     "prepare": "pnpm run build",
-    "test:native": "node --test test/native.test.mjs test/privacy-outcomes.test.mjs"
+    "test:native": "node --test test/native.test.mjs test/privacy-outcomes.test.mjs test/orchestration.test.mjs"
   },
   "keywords": [
     "opentelemetry",

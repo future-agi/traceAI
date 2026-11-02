@@ -86,7 +86,7 @@ jobs:
         run: |
           tests=("$PWD/packages/traceai_strands/test/$SUITE.test.mjs")
           if [ "$SUITE" = native ]; then
-            tests+=("$PWD/packages/traceai_strands/test/wire.test.mjs" "$PWD/packages/traceai_strands/test/privacy-outcomes.test.mjs")
+            tests+=("$PWD/packages/traceai_strands/test/wire.test.mjs" "$PWD/packages/traceai_strands/test/privacy-outcomes.test.mjs" "$PWD/packages/traceai_strands/test/orchestration.test.mjs")
           fi
           sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
             env STRANDS_TEST_ROOT="$RUNNER_TEMP/strands-consumer" STRANDS_TEST_PACKED=1 \

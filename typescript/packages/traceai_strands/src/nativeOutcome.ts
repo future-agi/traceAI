@@ -43,6 +43,12 @@ export function outcome(span: ReadableSpan, reasons: string[]): SpanStatusCode {
   if (span.status.code === SpanStatusCode.ERROR || span.attributes["gen_ai.tool.status"] === "error" ||
       reasons.some((reason) => NON_SUCCESS.has(reason))) return SpanStatusCode.ERROR;
   const operation = span.attributes["gen_ai.operation.name"];
+  if (operation === "invoke_graph" || operation === "invoke_swarm") {
+    const status = span.attributes["strands.orchestration.status"];
+    if (status === "COMPLETED") return SpanStatusCode.OK;
+    if (status === "FAILED" || status === "CANCELLED" || status === "INTERRUPTED") return SpanStatusCode.ERROR;
+    return SpanStatusCode.UNSET;
+  }
   if (operation === "execute_node") {
     const status = span.attributes["gen_ai.agent.status"];
     if (status === "FAILED" || status === "CANCELLED" || status === "INTERRUPTED") return SpanStatusCode.ERROR;
@@ -78,6 +84,14 @@ export class ChildOutcomes {
     const key = `${span.spanContext().traceId}:${span.spanContext().spanId}`;
     const code = this.pending.get(key) ?? SpanStatusCode.UNSET;
     this.pending.delete(key);
+    const operation = span.attributes["gen_ai.operation.name"];
+    if (operation === "invoke_graph" || operation === "invoke_swarm") {
+      const own = outcome(span, []);
+      // A completed child says nothing about whether all graph work ran or the
+      // swarm subsequently returned FAILED. Only explicit result evidence can
+      // establish success; negative child evidence remains useful without it.
+      return own !== SpanStatusCode.UNSET ? own : code === SpanStatusCode.ERROR ? code : SpanStatusCode.UNSET;
+    }
     return span.status.code === SpanStatusCode.ERROR ? SpanStatusCode.ERROR : code;
   }
 

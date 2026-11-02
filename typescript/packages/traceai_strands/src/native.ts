@@ -5,6 +5,7 @@ import { SemanticConventions as SC } from "@traceai/fi-semantic-conventions";
 
 import { NativePrivacy } from "./nativePrivacy";
 import { ChildOutcomes, finishReasons, outcome } from "./nativeOutcome";
+export { StrandsSpanProcessor } from "./nativeOrchestration";
 
 export interface StrandsSpanExporterOptions {
   /** Defaults to OTEL_SERVICE_NAME or the SDK's default, strands-agents. */
