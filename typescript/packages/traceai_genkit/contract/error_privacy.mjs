@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { genkit } from 'genkit';
+import { mockModel } from 'genkit/testing';
 import { enableTelemetry, flushTracing } from 'genkit/tracing';
 import { register, ProjectType } from '@traceai/fi-core';
 import { FIGenkitSpanProcessor } from '@traceai/genkit';
@@ -94,15 +95,46 @@ if (!process.argv[2]) {
     const success = ai.defineFlow('offlineSuccessFlow', async () => 'synthetic success');
     await success();
     await assert.rejects(failure(), { message: marker });
+    const prompt = 'SYNTHETIC_HIDDEN_PROMPT';
+    const reply = 'SYNTHETIC_PUBLIC_REPLY';
+    const model = mockModel(ai, {
+      name: 'offline/success',
+      respond: () => ({ text: reply, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }),
+    });
+    const failingModel = mockModel(ai, {
+      name: 'offline/failure', respond() { throw new Error(marker); },
+    });
+    // A fixed reply cannot echo the prompt. Any prompt on the wire is a mapping leak.
+    assert.equal((await ai.generate({ model, prompt })).text, reply);
+    await assert.rejects(ai.generate({ model: failingModel, prompt }), { message: marker });
     await flushTracing();
     await processor.forceFlush();
 
     const wire = payloads.flatMap((p) => p.resourceSpans ?? []).flatMap((r) => r.scopeSpans).flatMap((s) => s.spans);
-    assert.equal(wire.length, 3, 'one export per native flow/tool span');
+    assert.equal(wire.length, 7, 'one export per native flow/tool/generate/model span');
     assert.equal(new Set(wire.map((s) => s.spanId)).size, wire.length, 'no duplicate spans');
     const errorSpans = wire.filter((s) => s.status?.code === 2);
-    assert.equal(errorSpans.length, 2, 'flow and tool both retain ERROR status');
+    assert.equal(errorSpans.length, 4, 'flow, tool, generate and model retain ERROR status');
     assert.equal(JSON.stringify(wire).includes(marker), !test.hidden, 'private marker on OTLP wire');
+    const enabled = (option, env) => test.config?.[option] ?? (test.env?.[env] === 'true');
+    const hiddenInput = test.captureContent === false || contentFlags
+      .filter(([key]) => key.startsWith('hideInput')).some(([key, env]) => enabled(key, env));
+    const hiddenOutput = test.captureContent === false || contentFlags
+      .filter(([key]) => key.startsWith('hideOutput')).some(([key, env]) => enabled(key, env));
+    assert.equal(JSON.stringify(wire).includes(prompt), !hiddenInput, 'input policy covers embedded request');
+    assert.equal(JSON.stringify(wire).includes(reply), !hiddenOutput, 'input hiding retains public model output');
+    for (const span of wire.filter((s) => s.name === 'generate')) {
+      const attrs = Object.fromEntries(span.attributes.map((a) => [a.key, a.value.stringValue]));
+      if (attrs['genkit:output'] && attrs['genkit:output'] !== '__REDACTED__') {
+        assert.equal(attrs['genkit:output'], attrs['output.value'], 'both response representations use the same policy');
+        const output = JSON.parse(attrs['genkit:output']);
+        if (output.error) {
+          assert.equal(output.finishReason, 'failed');
+          assert.equal(output.error.status, 'INTERNAL', 'safe error classification survives');
+          assert.equal(output.error.message?.includes(marker) ?? false, !test.hidden);
+        }
+      }
+    }
     for (const { span, original } of native) {
       assert.equal(JSON.stringify({ status: span.status, attributes: span.attributes, events: span.events }), original, 'native span is unchanged');
       const exported = wire.find((s) => s.spanId === span.spanContext().spanId);

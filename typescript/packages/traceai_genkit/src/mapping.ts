@@ -118,23 +118,58 @@ function modelCallAttributes(source: Attributes): Attributes {
 /** How one side (input or output) of a span is exported. */
 type SideMode = "show" | "text" | "hide";
 
-function sideModes(policy: ContentPolicy, isModelCall: boolean): { input: SideMode; output: SideMode } {
-  // On a model span `genkit:input` is the request (the message list) and `genkit:output` the
-  // response message, so the *_MESSAGES and *_TEXT flags apply there as they do to
-  // gen_ai.input.messages / gen_ai.output.messages in fi-core.
+function sideModes(policy: ContentPolicy, isGeneration: boolean): { input: SideMode; output: SideMode } {
+  // Both model actions and the surrounding native generate (util) spans carry the
+  // same LLM messages. Mask both copies, without treating tool/flow content as messages.
   const input: SideMode =
-    policy.hideInputs || (isModelCall && policy.hideInputMessages)
+    policy.hideInputs || (isGeneration && policy.hideInputMessages)
       ? "hide"
-      : isModelCall && policy.hideInputText
+      : isGeneration && policy.hideInputText
         ? "text"
         : "show";
   const output: SideMode =
-    policy.hideOutputs || (isModelCall && policy.hideOutputMessages)
+    policy.hideOutputs || (isGeneration && policy.hideOutputMessages)
       ? "hide"
-      : isModelCall && policy.hideOutputText
+      : isGeneration && policy.hideOutputText
         ? "text"
         : "show";
   return { input, output };
+}
+
+/**
+ * ModelResponse / GenerateResponse are not purely output: `request` repeats input,
+ * and (since Genkit 1.43) a failed generate serializes its exception into the partial
+ * response's `finishMessage` and `error`. Sanitize the parsed copy before either
+ * genkit:output or output.value is exported. Never inspect arbitrary tool/flow JSON.
+ */
+function generationOutput(value: AttributeValue, policy: ContentPolicy): AttributeValue {
+  const hideErrors = hidesFreeText(policy);
+  const hideRequest = policy.hideInputs || policy.hideInputMessages;
+  if (!hideErrors && !hideRequest && !policy.hideInputText) return value;
+  const response = parseJson(value);
+  // A truncated response cannot be safely field-masked.
+  if (!isRecord(response)) return REDACTED_VALUE;
+  if (hideRequest) {
+    delete response.request;
+  } else if (policy.hideInputText && response.request !== undefined) {
+    response.request = parseJson(redactMessageText(JSON.stringify(response.request))) ?? REDACTED_VALUE;
+  }
+  if (hideErrors) {
+    delete response.finishMessage;
+    if (response.error !== undefined) {
+      // RuntimeError.details is arbitrary provider data, not safe metadata. Only
+      // retain the canonical error classification; status/events retain ERROR too.
+      response.error = isRecord(response.error) && typeof response.error.status === "string"
+        ? { status: response.error.status }
+        : {};
+    }
+    if (Array.isArray(response.candidates)) {
+      for (const candidate of response.candidates) {
+        if (isRecord(candidate)) delete candidate.finishMessage;
+      }
+    }
+  }
+  return JSON.stringify(response);
 }
 
 function sideValue(
@@ -161,7 +196,8 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const scrub = options.scrub ?? {};
   const kind = genkitSpanKind(source);
   const isModelCall = kind === FISpanKind.LLM;
-  const modes = sideModes(policy, isModelCall);
+  const isGeneration = isModelCall || source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL;
+  const modes = sideModes(policy, isGeneration);
   // FI_HIDE_EMBEDDING_VECTORS: the vectors are in an embedder span's output.
   const hideVectors = kind === FISpanKind.EMBEDDING && policy.hideEmbeddingVectors === true;
   const out: Attributes = {};
@@ -171,7 +207,10 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
     if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {
       const isInput = GENKIT_INPUT_KEYS.includes(key);
-      const exported = sideValue(value, isInput ? modes.input : modes.output, scrub, hideVectors && !isInput);
+      const content = isGeneration && key === GenkitAttributes.OUTPUT && modes.output !== "hide"
+        ? generationOutput(value, policy)
+        : value;
+      const exported = sideValue(content, isInput ? modes.input : modes.output, scrub, hideVectors && !isInput);
       if (exported !== undefined) out[key] = exported;
       continue;
     }
