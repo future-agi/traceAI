@@ -90,6 +90,21 @@ def response(outcome):
             }
             for delta in deltas
         ]
+        # A successful generation finishes its choice before the usage-only
+        # tail. [DONE] alone is transport termination, not model completion.
+        chunks.append(
+            {
+                "id": "c",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": MODEL,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "tool_calls" if outcome == "tool_stream" else "stop",
+                }],
+            }
+        )
         chunks.append(
             {
                 "id": "c",
