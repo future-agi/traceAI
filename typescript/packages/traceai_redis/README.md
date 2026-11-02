@@ -1,469 +1,127 @@
 # @traceai/redis
 
-OpenTelemetry instrumentation for [Redis Vector Search](https://redis.io/docs/stack/search/reference/vectors/) (RediSearch) in Node.js/TypeScript applications.
+Trace Redis hash, JSON and RediSearch operations with OpenTelemetry, including vector-search metadata and result counts.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/redis
-# or
-pnpm add @traceai/redis
-# or
-yarn add @traceai/redis
+npm install @traceai/redis @traceai/fi-core redis
 ```
 
-## Prerequisites
+Use Node.js 18.19 or later and `redis` 4.x, 5.x or 6.x. JSON and search commands also require the corresponding Redis server capabilities.
 
-- Node.js >= 18
-- Redis client (`redis` >= 4.0.0)
-- Redis Stack or Redis with RediSearch module
-- OpenTelemetry SDK configured in your application
+## Send traces to Future AGI
 
-## Quick Start
+Set `FI_API_KEY` and `FI_SECRET_KEY` to your Future AGI credentials, and `REDIS_URL` to your Redis connection URL. Keep credentials in your environment or secret manager, not in source code.
 
 ```typescript
+import { register, ProjectType } from "@traceai/fi-core";
 import { RedisInstrumentation } from "@traceai/redis";
-import { createClient } from "redis";
+import * as redisModule from "redis";
 
-// Initialize instrumentation
+const provider = register({
+  projectName: "redis-search",
+  projectType: ProjectType.OBSERVE,
+});
 const instrumentation = new RedisInstrumentation({
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
+  traceConfig: { hideErrorDetails: true },
 });
+instrumentation.setTracerProvider(provider);
 
-// Enable instrumentation
-instrumentation.enable();
-
-// Manually instrument the redis module
-import * as redis from "redis";
-instrumentation.manuallyInstrument(redis);
-
-// Now all Redis operations will be traced
-const client = createClient({ url: process.env.REDIS_URL });
+// Use the returned module: native ESM namespace bindings are read-only.
+const redis = instrumentation.manuallyInstrument(redisModule);
+const client = redis.createClient({ url: process.env.REDIS_URL });
+client.on("error", (error) => console.error(error));
 await client.connect();
 
-// Vector search with FT.SEARCH (traced)
-const results = await client.ft.search("idx:products", "*=>[KNN 10 @embedding $vector AS score]", {
-  PARAMS: {
-    vector: Buffer.from(new Float32Array([0.1, 0.2, 0.3]).buffer),
-  },
-  RETURN: ["name", "price", "score"],
-  SORTBY: { BY: "score" },
-  DIALECT: 2,
-});
-```
-
-## Configuration Options
-
-```typescript
-interface RedisInstrumentationConfig {
-  // Enable/disable the instrumentation
-  enabled?: boolean;
-
-  // Capture query vectors in span attributes
-  captureQueryVectors?: boolean;
-
-  // Capture result documents
-  captureDocuments?: boolean;
-}
-
-interface TraceConfigOptions {
-  // Mask sensitive input data
-  maskInputs?: boolean;
-
-  // Mask sensitive output data
-  maskOutputs?: boolean;
+try {
+  await client.hSet("product:1", { name: "Trail shoes" });
+  const name = await client.hGet("product:1", "name");
+  console.log(name);
+} finally {
+  await client.quit();
+  instrumentation.disable();
+  await provider.shutdown();
 }
 ```
 
-## Traced Operations
+Open the `redis-search` project in Future AGI to inspect `redis hSet` and `redis hGet` spans. Each supported command produces a client span; commands inside an active OpenTelemetry span become its children.
 
-The instrumentation automatically traces Redis operations with special handling for vector search:
+If your application already has an OpenTelemetry provider, reuse it with `setTracerProvider()` instead of registering a second provider.
 
-### Vector Search Operations
+## Instrument existing clients
 
-- `FT.SEARCH` - Vector similarity search
-- `FT.AGGREGATE` - Aggregation with vector scoring
-- `FT.CREATE` - Create search index
-
-### Hash Operations (for vector storage)
-
-- `HSET` - Store hash with vector field
-- `HGET` / `HMGET` - Retrieve hash fields
-- `HDEL` - Delete hash
-
-### JSON Operations (for document storage)
-
-- `JSON.SET` - Store JSON document
-- `JSON.GET` - Retrieve JSON document
-
-## Span Attributes
-
-Each traced operation includes relevant attributes:
-
-| Attribute                 | Description                                    |
-| ------------------------- | ---------------------------------------------- |
-| `db.system`               | Always "redis"                                 |
-| `db.operation`            | Operation name (e.g., "FT.SEARCH", "HSET")     |
-| `db.redis.index_name`     | Search index name                              |
-| `db.redis.query`          | Search query                                   |
-| `db.redis.vector_field`   | Vector field name                              |
-| `db.redis.k`              | Number of neighbors (KNN)                      |
-| `db.redis.result_count`   | Number of results returned                     |
-
-## Real-World Use Cases
-
-### 1. E-commerce Product Search
+For a client created before instrumentation, or one returned by `duplicate()`, instrument the client directly. Its identity and command results are preserved.
 
 ```typescript
-import { RedisInstrumentation } from "@traceai/redis";
-import { createClient, SchemaFieldTypes, VectorAlgorithms } from "redis";
-
-const instrumentation = new RedisInstrumentation();
-instrumentation.enable();
-
-const client = createClient({ url: process.env.REDIS_URL });
-await client.connect();
-
-// Create product search index
-async function createProductIndex() {
-  try {
-    await client.ft.create(
-      "idx:products",
-      {
-        "$.name": { type: SchemaFieldTypes.TEXT, AS: "name" },
-        "$.description": { type: SchemaFieldTypes.TEXT, AS: "description" },
-        "$.category": { type: SchemaFieldTypes.TAG, AS: "category" },
-        "$.price": { type: SchemaFieldTypes.NUMERIC, AS: "price" },
-        "$.embedding": {
-          type: SchemaFieldTypes.VECTOR,
-          AS: "embedding",
-          ALGORITHM: VectorAlgorithms.HNSW,
-          TYPE: "FLOAT32",
-          DIM: 384,
-          DISTANCE_METRIC: "COSINE",
-        },
-      },
-      { ON: "JSON", PREFIX: "product:" }
-    );
-  } catch (e: any) {
-    if (!e.message.includes("Index already exists")) throw e;
-  }
-}
-
-// Semantic product search (traced)
-async function searchProducts(queryVector: number[], filters?: ProductFilters) {
-  const query = buildSearchQuery(filters);
-
-  const results = await client.ft.search(
-    "idx:products",
-    `${query}=>[KNN 20 @embedding $vector AS score]`,
-    {
-      PARAMS: {
-        vector: Buffer.from(new Float32Array(queryVector).buffer),
-      },
-      RETURN: ["name", "description", "price", "category", "score"],
-      SORTBY: { BY: "score" },
-      LIMIT: { from: 0, size: 20 },
-      DIALECT: 2,
-    }
-  );
-
-  return results.documents.map((doc) => ({
-    id: doc.id.replace("product:", ""),
-    ...doc.value,
-  }));
-}
-
-function buildSearchQuery(filters?: ProductFilters): string {
-  const parts: string[] = ["*"];
-
-  if (filters?.category) {
-    parts.push(`@category:{${filters.category}}`);
-  }
-  if (filters?.minPrice !== undefined) {
-    parts.push(`@price:[${filters.minPrice} +inf]`);
-  }
-  if (filters?.maxPrice !== undefined) {
-    parts.push(`@price:[-inf ${filters.maxPrice}]`);
-  }
-
-  return parts.length > 1 ? `(${parts.slice(1).join(" ")})` : parts[0];
-}
-```
-
-### 2. Real-time Recommendation Cache
-
-```typescript
-async function cacheUserRecommendations(
-  userId: string,
-  recommendations: Recommendation[]
-) {
-  const pipeline = client.multi();
-
-  // Store recommendations as JSON with embeddings
-  for (const rec of recommendations) {
-    pipeline.json.set(`rec:${userId}:${rec.itemId}`, "$", {
-      itemId: rec.itemId,
-      name: rec.name,
-      score: rec.score,
-      embedding: rec.embedding,
-      cachedAt: Date.now(),
-    });
-  }
-
-  // Set expiration
-  for (const rec of recommendations) {
-    pipeline.expire(`rec:${userId}:${rec.itemId}`, 3600); // 1 hour TTL
-  }
-
-  await pipeline.exec();
-}
-
-// Find similar to what user is viewing (traced)
-async function getSimilarFromCache(userId: string, itemEmbedding: number[]) {
-  const results = await client.ft.search(
-    "idx:recommendations",
-    `@userId:{${userId}}=>[KNN 5 @embedding $vector AS similarity]`,
-    {
-      PARAMS: {
-        vector: Buffer.from(new Float32Array(itemEmbedding).buffer),
-      },
-      RETURN: ["itemId", "name", "score", "similarity"],
-      SORTBY: { BY: "similarity" },
-      DIALECT: 2,
-    }
-  );
-
-  return results.documents;
-}
-```
-
-### 3. Session-based Semantic Search
-
-```typescript
-interface SearchSession {
-  sessionId: string;
-  queries: { text: string; embedding: number[]; timestamp: number }[];
-}
-
-async function sessionAwareSearch(
-  sessionId: string,
-  queryEmbedding: number[],
-  recentQueryWeight = 0.3
-) {
-  // Get session context
-  const sessionData = await client.json.get(`session:${sessionId}`);
-
-  let searchVector = queryEmbedding;
-
-  if (sessionData?.queries?.length > 0) {
-    // Blend with recent query embeddings for context
-    const recentEmbedding = sessionData.queries[sessionData.queries.length - 1].embedding;
-    searchVector = queryEmbedding.map(
-      (val, i) =>
-        val * (1 - recentQueryWeight) + recentEmbedding[i] * recentQueryWeight
-    );
-  }
-
-  // Search with blended vector (traced)
-  const results = await client.ft.search(
-    "idx:content",
-    "*=>[KNN 10 @embedding $vector AS score]",
-    {
-      PARAMS: {
-        vector: Buffer.from(new Float32Array(searchVector).buffer),
-      },
-      RETURN: ["title", "content", "score"],
-      DIALECT: 2,
-    }
-  );
-
-  // Update session
-  await client.json.arrAppend(`session:${sessionId}`, "$.queries", {
-    text: "",
-    embedding: queryEmbedding,
-    timestamp: Date.now(),
-  });
-
-  return results.documents;
-}
-```
-
-### 4. Real-time Anomaly Detection
-
-```typescript
-async function detectAnomaly(metricVector: number[], threshold = 0.8) {
-  // Search for similar historical patterns (traced)
-  const similar = await client.ft.search(
-    "idx:metrics",
-    "*=>[KNN 10 @embedding $vector AS similarity]",
-    {
-      PARAMS: {
-        vector: Buffer.from(new Float32Array(metricVector).buffer),
-      },
-      RETURN: ["timestamp", "label", "similarity"],
-      DIALECT: 2,
-    }
-  );
-
-  const normalPatterns = similar.documents.filter(
-    (doc) => doc.value.label === "normal" && parseFloat(doc.value.similarity) > threshold
-  );
-
-  const isAnomaly = normalPatterns.length < 3;
-
-  if (isAnomaly) {
-    // Store anomaly for future reference
-    await client.json.set(`anomaly:${Date.now()}`, "$", {
-      embedding: metricVector,
-      timestamp: Date.now(),
-      similarPatterns: similar.documents.slice(0, 3),
-    });
-  }
-
-  return {
-    isAnomaly,
-    confidence: 1 - (normalPatterns.length / 10),
-    similarPatterns: similar.documents,
-  };
-}
-```
-
-### 5. Multi-index Federated Search
-
-```typescript
-async function federatedSearch(queryVector: number[]) {
-  // Search across multiple indices in parallel (all traced)
-  const [products, articles, support] = await Promise.all([
-    client.ft.search(
-      "idx:products",
-      "*=>[KNN 5 @embedding $vector AS score]",
-      {
-        PARAMS: { vector: Buffer.from(new Float32Array(queryVector).buffer) },
-        RETURN: ["name", "price", "score"],
-        DIALECT: 2,
-      }
-    ),
-    client.ft.search(
-      "idx:articles",
-      "*=>[KNN 5 @embedding $vector AS score]",
-      {
-        PARAMS: { vector: Buffer.from(new Float32Array(queryVector).buffer) },
-        RETURN: ["title", "excerpt", "score"],
-        DIALECT: 2,
-      }
-    ),
-    client.ft.search(
-      "idx:support",
-      "*=>[KNN 5 @embedding $vector AS score]",
-      {
-        PARAMS: { vector: Buffer.from(new Float32Array(queryVector).buffer) },
-        RETURN: ["question", "answer", "score"],
-        DIALECT: 2,
-      }
-    ),
-  ]);
-
-  return {
-    products: products.documents,
-    articles: articles.documents,
-    supportFAQs: support.documents,
-  };
-}
-```
-
-### 6. Geo + Vector Hybrid Search
-
-```typescript
-async function nearbySemanticSearch(
-  queryVector: number[],
-  location: { lat: number; lon: number },
-  radiusKm: number
-) {
-  // Combine geo filter with vector search (traced)
-  const results = await client.ft.search(
-    "idx:places",
-    `@location:[${location.lon} ${location.lat} ${radiusKm} km]=>[KNN 20 @embedding $vector AS relevance]`,
-    {
-      PARAMS: {
-        vector: Buffer.from(new Float32Array(queryVector).buffer),
-      },
-      RETURN: ["name", "address", "location", "relevance"],
-      SORTBY: { BY: "relevance" },
-      DIALECT: 2,
-    }
-  );
-
-  return results.documents.map((doc) => ({
-    ...doc.value,
-    id: doc.id,
-  }));
-}
-```
-
-## Index Creation Examples
-
-```typescript
-// HNSW index for high-recall scenarios
-await client.ft.create(
-  "idx:documents",
-  {
-    embedding: {
-      type: SchemaFieldTypes.VECTOR,
-      ALGORITHM: VectorAlgorithms.HNSW,
-      TYPE: "FLOAT32",
-      DIM: 1536,
-      DISTANCE_METRIC: "COSINE",
-      M: 40,
-      EF_CONSTRUCTION: 200,
-    },
-  },
-  { ON: "HASH", PREFIX: "doc:" }
-);
-
-// FLAT index for exact search on smaller datasets
-await client.ft.create(
-  "idx:cache",
-  {
-    embedding: {
-      type: SchemaFieldTypes.VECTOR,
-      ALGORITHM: VectorAlgorithms.FLAT,
-      TYPE: "FLOAT32",
-      DIM: 384,
-      DISTANCE_METRIC: "L2",
-    },
-  },
-  { ON: "JSON", PREFIX: "cache:" }
+const client = instrumentation.instrumentClient(
+  redisModule.createClient({ url: process.env.REDIS_URL }),
 );
 ```
 
-## Integration with OpenTelemetry
+CommonJS modules can also be patched in place with `manuallyInstrument(require("redis"))`. Automatic CommonJS instrumentation is available when you construct the instrumentor before loading `redis`. For native ESM, use the returned module as shown above rather than previously imported factory bindings. Do not combine this package with another Redis command-tracing instrumentor on the same clients.
+
+Calling `manuallyInstrument()` or `instrumentClient()` repeatedly does not add duplicate spans. `disable()` restores this instrumentor's factories and client methods, including manually instrumented clients. `enable()` resumes tracing on still-live registered modules and clients. Clients created while disabled must be passed to `instrumentClient()` after re-enabling.
+
+## Trace vector searches
+
+For an existing RediSearch index named `idx:products` with a three-dimensional FLOAT32 vector field named `embedding`:
 
 ```typescript
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { RedisInstrumentation } from "@traceai/redis";
-
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: "http://localhost:4318/v1/traces",
-  }),
-  instrumentations: [new RedisInstrumentation()],
-});
-
-sdk.start();
+const results = await client.ft.search(
+  "idx:products",
+  "*=>[KNN 10 @embedding $vector AS score]",
+  {
+    PARAMS: { vector: Buffer.from(new Float32Array([0.1, 0.2, 0.3]).buffer) },
+    RETURN: ["name", "score"],
+    SORTBY: { BY: "score" },
+    LIMIT: { from: 0, size: 10 },
+    DIALECT: 2,
+  },
+);
 ```
 
-## Performance Tips
+The span records the index name, vector-search operation type, requested result limit and returned counts. It does not record the query text, vector bytes or returned documents.
 
-1. **Use HNSW** for large datasets (>100k vectors)
-2. **Tune M and EF_CONSTRUCTION** based on recall requirements
-3. **Use connection pooling** for high-throughput scenarios
-4. **Leverage Redis pipelining** for batch operations
-5. **Set appropriate TTLs** for cached vectors
+## Supported operations
+
+The following direct client methods and their uppercase aliases are traced:
+
+| Redis methods | Span operation |
+| --- | --- |
+| `ft.search`, `ft.create`, `ft.dropIndex`, `ft.info`, `ft.aggregate` | `ftSearch`, `ftCreate`, `ftDropIndex`, `ftInfo`, `ftAggregate` |
+| `hSet`, `hGet`, `hGetAll`, `del` | `hSet`, `hGet`, `hGetAll`, `del` |
+| `json.set`, `json.get` | `json.set`, `json.get` |
+
+Factory wrapping covers `createClient`, `createCluster`, `createClientPool` and `createSentinel` when the installed `redis` version exports them. Only the methods above are traced, not every Redis command. `multi()` transactions, `sendCommand()`, pool `execute()` callbacks and clients created directly through `@redis/client` are not automatically instrumented. You can pass an individual borrowed or separately created client to `instrumentClient()` to trace its supported direct commands.
+
+Redis's native OpenTelemetry observability exports metrics; it does not replace these command traces. Future AGI ingests traces, not Redis metrics.
+
+## Attributes and privacy
+
+| Attribute | Value |
+| --- | --- |
+| `db.system` | `redis` |
+| `db.operation.name` | Operation from the table above |
+| `fi.span.kind` | `VECTOR_DB` |
+| `db.redis.index_name` | Search index name |
+| `db.redis.key` | Single string key for hash, JSON and delete operations |
+| `db.operation.type` | `vector_search` for a KNN search |
+| `db.vector.query.top_k` | `LIMIT.size`, when supplied; not the KNN clause's neighbor count |
+| `db.operation.batch_size` | Number of keys in an array passed to `del` |
+| `db.response.total_count` | Search response `total` |
+| `db.response.returned_rows` | Number of search documents returned |
+| `db.redis.num_docs` | Index document count from `ft.info` |
+
+Query text, hash values, JSON content, result documents and vectors are not captured. The legacy `captureQueryVectors` and `captureResultVectors` options remain accepted but have no effect. There is no `captureDocuments` option.
+
+Keys and index names are exported as metadata; keep personal data out of these names or remove these attributes in your collector. `hideInputs` and `hideOutputs` do not remove Redis key or index metadata. Use `traceConfig: { hideErrorDetails: true }` to omit exception messages and stack traces, which can contain server-supplied content. Errors still propagate unchanged to your application and mark the span as an error.
+
+## Troubleshooting
+
+- **No spans with ESM:** create clients through the value returned by `manuallyInstrument()`, or call `instrumentClient()` on an existing client. Imported namespace objects and previously imported factory bindings cannot be rewritten.
+- **No spans after setup:** confirm you set the tracer provider and flush or shut it down before a short-lived process exits.
+- **Some commands have no spans:** check the supported-method table. This package is not general-purpose Redis command tracing.
 
 ## License
 
