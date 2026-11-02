@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import sys
+import weakref
 from typing import Any, AsyncIterator, Generator, Iterator, Optional, Protocol, Tuple
 
 from openai.types.chat import ChatCompletionChunk
@@ -26,7 +29,7 @@ class _ResponseAccumulator(Protocol):
 
 
 def _finish_on_exit(stream: Any, error: Optional[BaseException]) -> None:
-    """Finish even on an early context exit, without ending an exhausted span twice."""
+    """Finish on close, context exit or error without ending a span twice."""
     if stream._self_is_finished:
         return
     if error is None:
@@ -46,6 +49,7 @@ class _Stream(ObjectProxy):  # type: ignore
         "_self_iteration_count",
         "_self_is_finished",
         "_self_response_accumulator",
+        "_self_defer_close",
     )
 
     def __init__(
@@ -59,6 +63,29 @@ class _Stream(ObjectProxy):  # type: ignore
         self._self_iteration_count = 0
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
+        self._self_defer_close = False
+        # The SDK's high-level .stream() helpers close the HTTP response
+        # directly, bypassing raw_stream.close() on early context exit.
+        response = stream.response
+        original_close = response.close
+        stream_ref = weakref.ref(self)
+
+        def close_response() -> Any:
+            # A high-level context manager closes the response while handling
+            # the user's exception; preserve that failure on the span.
+            error: Optional[BaseException] = sys.exc_info()[1]
+            try:
+                return original_close()
+            except BaseException as close_error:
+                error = close_error
+                raise
+            finally:
+                response.close = original_close
+                traced = stream_ref()
+                if traced is not None and not traced._self_defer_close:
+                    _finish_on_exit(traced, error)
+
+        response.close = close_response
 
     def __enter__(self) -> "_Stream":
         # ObjectProxy otherwise returns the SDK stream, bypassing our iterator.
@@ -66,33 +93,46 @@ class _Stream(ObjectProxy):  # type: ignore
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        self._self_defer_close = True
         try:
             return self.__wrapped__.__exit__(exc_type, exc, tb)
         except BaseException as close_error:
             exc = close_error
             raise
         finally:
+            self._self_defer_close = False
             _finish_on_exit(self, exc)
+
+    def close(self) -> Any:
+        error: Optional[BaseException] = None
+        self._self_defer_close = True
+        try:
+            return self.__wrapped__.close()
+        except BaseException as close_error:
+            error = close_error
+            raise
+        finally:
+            self._self_defer_close = False
+            _finish_on_exit(self, error)
 
     def __iter__(self) -> Iterator[Any]:
         return self
 
     def __next__(self) -> Any:
         try:
-            chunk = self.__wrapped__.__next__()
+            self._self_defer_close = True
+            try:
+                chunk = self.__wrapped__.__next__()
+            finally:
+                self._self_defer_close = False
         except StopIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
-            if not self._self_is_finished:
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                self._self_with_span.record_exception(exception)
-                self._finish_tracing(status=status)
+        except BaseException as exception:
+            # Interruptions also terminate the stream; preserve the error span.
+            _finish_on_exit(self, exception)
             raise
         else:
             self._process_chunk(chunk)
@@ -137,6 +177,7 @@ class _AsyncStream(ObjectProxy):
         "_self_iteration_count",
         "_self_is_finished",
         "_self_response_accumulator",
+        "_self_defer_close",
     )
 
     def __init__(
@@ -150,39 +191,75 @@ class _AsyncStream(ObjectProxy):
         self._self_iteration_count = 0
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
+        self._self_defer_close = None
+        response = stream.response
+        original_close = response.aclose
+        stream_ref = weakref.ref(self)
+
+        async def close_response() -> Any:
+            error: Optional[BaseException] = sys.exc_info()[1]
+            try:
+                return await original_close()
+            except BaseException as close_error:
+                error = close_error
+                raise
+            finally:
+                response.aclose = original_close
+                traced = stream_ref()
+                if traced is not None and traced._self_defer_close is not asyncio.current_task():
+                    _finish_on_exit(traced, error)
+
+        response.aclose = close_response
 
     async def __aenter__(self) -> "_AsyncStream":
         await self.__wrapped__.__aenter__()
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        self._self_defer_close = asyncio.current_task()
         try:
             return await self.__wrapped__.__aexit__(exc_type, exc, tb)
         except BaseException as close_error:
             exc = close_error
             raise
         finally:
+            self._self_defer_close = None
             _finish_on_exit(self, exc)
+
+    async def close(self) -> Any:
+        error: Optional[BaseException] = None
+        self._self_defer_close = asyncio.current_task()
+        try:
+            return await self.__wrapped__.close()
+        except BaseException as close_error:
+            error = close_error
+            raise
+        finally:
+            self._self_defer_close = None
+            _finish_on_exit(self, error)
+
+    async def aclose(self) -> Any:
+        # The SDK alias must use our close path, not bypass span finalization.
+        return await self.close()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
         try:
-            chunk = await self.__wrapped__.__anext__()
+            self._self_defer_close = asyncio.current_task()
+            try:
+                chunk = await self.__wrapped__.__anext__()
+            finally:
+                self._self_defer_close = None
         except StopAsyncIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
-            if not self._self_is_finished:
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                self._self_with_span.record_exception(exception)
-                self._finish_tracing(status=status)
+        except BaseException as exception:
+            # Cancellation is a BaseException; finalize without swallowing it.
+            _finish_on_exit(self, exception)
             raise
         else:
             self._process_chunk(chunk)

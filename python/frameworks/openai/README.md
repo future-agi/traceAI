@@ -100,6 +100,25 @@ with OpenAI() as client:
 trace_provider.force_flush()  # Flush before a short-lived script exits.
 ```
 
+## Baseten
+
+Use the same `OpenAIInstrumentor` with Baseten's OpenAI-compatible clients; no
+second instrumentor is needed. After the Quickstart tracer setup, create your
+client with `api_key=os.environ["BASETEN_API_KEY"]` and the appropriate base URL:
+
+- Model APIs: `https://inference.baseten.co/v1`.
+- Dedicated deployments: your deployment's OpenAI-compatible base URL, such as
+  `https://model-abc123.api.baseten.co/environments/production/sync/v1`.
+
+The hosted endpoint and dedicated `model-*.api.baseten.co` endpoints, including
+regional model endpoints, are attributed to `baseten`. Unknown proxies retain
+`openai` unless you set an explicit client provider override. Supported API
+routes and model names depend on the deployment; use the values in
+[Baseten's inference API reference](https://docs.baseten.co/reference/inference-api/overview).
+The standalone Model APIs recipe in `python/examples/baseten` accepts only Model
+APIs URLs; use the OpenAI client directly for a dedicated deployment. Baseten's
+separate Performance Client and non-OpenAI protocols need their own tracing setup.
+
 ## Vercel AI Gateway
 
 Use the same `OpenAIInstrumentor` for Chat Completions sent to Vercel AI Gateway;

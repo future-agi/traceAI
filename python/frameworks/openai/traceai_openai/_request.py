@@ -340,7 +340,8 @@ class _Request(_WithTracer, _WithOpenAI):
                     cast_to=cast_to,
                     request_parameters=request_parameters,
                 )
-            except Exception as e:
+            except BaseException as e:
+                # end_on_exit=False: an interrupted request also needs finalization.
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
                     description=f"{type(e).__name__}: {e}",
@@ -406,7 +407,8 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                 add_io_to_span_attributes(
                     with_span, None, response, is_streaming=self._is_streaming(response)
                 )
-            except Exception as exception:
+            except BaseException as exception:
+                # end_on_exit=False: cancellation also needs explicit finalization.
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
