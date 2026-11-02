@@ -75,7 +75,8 @@ jobs:
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             env PATH="$PATH" OPENAI_CONSUMER_DIR="$OPENAI_CONSUMER_DIR" \
             node --test packages/traceai_openai/test/recallRegressions.cjs \
-              packages/traceai_openai/test/privacyContext.cjs
+              packages/traceai_openai/test/privacyContext.cjs \
+              packages/traceai_openai/test/reviewRegressions.cjs
       - name: Typecheck current SDK request contracts
         if: matrix.sdk == '7.47.0'
         env:
@@ -116,4 +117,8 @@ jobs:
             env PATH="$PATH" node packages/traceai_openai/node_modules/jest/bin/jest.js \
             --config packages/traceai_openai/jest.config.js --runInBand
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
-            env PATH="$PATH" pnpm --filter @traceai/fi-core test --runInBand
+            env PATH="$PATH" node packages/fi-core/node_modules/jest/bin/jest.js \
+            --config packages/fi-core/jest.config.js --runInBand
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            env PATH="$PATH" FI_CORE_FIXTURE="${{ runner.temp }}/consumer" \
+            node --test packages/fi-core/test/genai-privacy.test.cjs

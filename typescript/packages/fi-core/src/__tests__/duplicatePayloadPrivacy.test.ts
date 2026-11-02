@@ -4,10 +4,10 @@ import { FITracer } from "../trace/trace-config/FITracer";
 import { TraceConfigOptions } from "../trace/trace-config/types";
 
 const cases: [keyof TraceConfigOptions, string[]][] = [
-  ["hideInputs", [`${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`, `${SC.EMBEDDING_EMBEDDINGS}.12.${SC.EMBEDDING_TEXT}`]],
-  ["hideInputText", [SC.INPUT_VALUE, SC.RAW_INPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`]],
-  ["hideInputImages", [SC.INPUT_VALUE, SC.RAW_INPUT]],
-  ["hideInputMessages", [SC.INPUT_VALUE, SC.RAW_INPUT]],
+  ["hideInputs", [SC.PROMPT_TEMPLATE_VARIABLES, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`, `${SC.EMBEDDING_EMBEDDINGS}.12.${SC.EMBEDDING_TEXT}`]],
+  ["hideInputText", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`]],
+  ["hideInputImages", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
+  ["hideInputMessages", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
   ["hideOutputText", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT]],
   ["hideOutputMessages", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT]],
   ["hideEmbeddingVectors", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_VECTOR}`]],
