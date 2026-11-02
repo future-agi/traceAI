@@ -15,9 +15,24 @@ def callback_roots() -> list[type]:
     roots = [dspy.Module, dspy.BaseLM, dspy.Adapter, dspy.Tool, Teleprompter]
     roots.extend(
         cls
-        for name in ("Evaluate", "CodeInterpreter")
+        for name in (
+            "Evaluate",
+            "CodeInterpreter",
+            "PythonInterpreter",
+            "LocalInterpreter",
+        )
         if isinstance(cls := getattr(dspy, name, None), type)
     )
+    # TypeSafe and the concrete interpreters implement DSPy's callback protocol
+    # structurally: they do not inherit BaseLM / CodeInterpreter. TypeSafe is
+    # not re-exported at the top level, and is absent on older DSPy releases.
+    try:
+        from dspy.clients.typesafe import TypeSafe
+    except ModuleNotFoundError as exc:
+        if exc.name != "dspy.clients.typesafe":
+            raise
+    else:
+        roots.append(TypeSafe)
     return roots
 
 
@@ -74,7 +89,7 @@ class _SubclassGuard:
 
 
 class _ContextGuard:
-    def __init__(self, tracer: Any) -> None:
+    def __init__(self, tracer: Any, **kwargs: Any) -> None:
         self._enabled = True
 
     def __call__(self, wrapped, instance, args, kwargs):

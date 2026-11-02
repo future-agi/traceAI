@@ -8,7 +8,7 @@ from typing import Any
 
 import dspy
 from dspy.utils.callback import BaseCallback
-from fi_instrumentation import FITracer, safe_json_dumps
+from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     FiSpanKindValues,
@@ -25,6 +25,13 @@ from traceai_dspy import (
     _llm_output_messages,
 )
 
+from traceai_dspy._privacy import (
+    capture_attributes,
+    generation_parameters,
+    lm_inputs,
+    payload,
+)
+
 
 @dataclass
 class _Call:
@@ -36,12 +43,13 @@ class _Call:
 def _payload(value: Any) -> str:
     # DSPyJSONEncoder handles Predictions without serializing Module/LM __dict__
     # (which can contain clients, callbacks and credentials).
-    return safe_json_dumps(value, cls=DSPyJSONEncoder)
+    return payload(value, DSPyJSONEncoder)
 
 
 class _DSPyCallback(BaseCallback):
-    def __init__(self, tracer: FITracer) -> None:
+    def __init__(self, tracer: FITracer, config: TraceConfig) -> None:
         self._tracer = tracer
+        self._config = config
         self._calls: dict[str, _Call] = {}
         self._lock = RLock()
         self._enabled = True
@@ -70,6 +78,8 @@ class _DSPyCallback(BaseCallback):
                 name = _get_predict_span_name(instance)
                 if isinstance(instance, dspy.Retrieve):
                     kind = FiSpanKindValues.RETRIEVER.value
+            if kind == FiSpanKindValues.LLM.value:
+                inputs = lm_inputs(inputs)
             attributes = {
                 SpanAttributes.GEN_AI_SPAN_KIND: kind,
                 SpanAttributes.INPUT_VALUE: _payload(inputs),
@@ -88,22 +98,12 @@ class _DSPyCallback(BaseCallback):
                 # controls, never arbitrary client configuration.
                 parameters = dict(getattr(instance, "kwargs", {}) or {})
                 parameters.update(inputs.get("kwargs", {}) or {})
-                allowed = {
-                    "temperature",
-                    "max_tokens",
-                    "max_completion_tokens",
-                    "top_p",
-                    "top_k",
-                    "n",
-                    "seed",
-                    "stop",
-                    "frequency_penalty",
-                    "presence_penalty",
-                }
                 attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = _payload(
-                    {key: value for key, value in parameters.items() if key in allowed}
+                    generation_parameters(parameters)
                 )
-            span = self._tracer.start_span(name, attributes=attributes)
+            span = self._tracer.start_span(
+                name, attributes=capture_attributes(attributes, self._config)
+            )
             token = context.attach(trace.set_span_in_context(span))
             self._calls[call_id] = _Call(span, token, kind)
 
@@ -127,9 +127,14 @@ class _DSPyCallback(BaseCallback):
                 call.span.record_exception(exception)
                 call.span.set_status(StatusCode.ERROR)
             else:
-                call.span.set_attribute(SpanAttributes.OUTPUT_VALUE, _payload(outputs))
-                call.span.set_attribute(
-                    SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
+                call.span.set_attributes(
+                    capture_attributes(
+                        {
+                            SpanAttributes.OUTPUT_VALUE: _payload(outputs),
+                            SpanAttributes.OUTPUT_MIME_TYPE: "application/json",
+                        },
+                        self._config,
+                    )
                 )
                 if call.kind == FiSpanKindValues.LLM.value:
                     call.span.set_attributes(dict(_llm_output_messages(outputs)))

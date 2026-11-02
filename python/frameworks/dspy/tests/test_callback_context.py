@@ -127,6 +127,9 @@ def test_user_callback_context_is_restored(placement, operation, fail):
         elif operation == "custom_adapter":
             # Define overrides AFTER instrument(), as in customer setup snippets.
             class CustomAdapter(dspy.Adapter):
+                def format(self, signature, demos, inputs):
+                    return [{"role": "user", "content": inputs["question"]}]
+
                 def parse(self, signature, completion):
                     return {"answer": local_work()}
 

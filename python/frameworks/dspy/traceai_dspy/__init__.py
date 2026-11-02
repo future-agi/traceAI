@@ -1,5 +1,6 @@
 import json
 from abc import ABC
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from enum import Enum
 from inspect import getattr_static, signature
@@ -37,6 +38,9 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.types import AttributeValue
+from traceai_dspy._privacy import (
+    capture_attributes, generation_parameters, lm_inputs, payload,
+)
 from traceai_dspy.package import _instruments
 from traceai_dspy.version import __version__
 from wrapt import (
@@ -66,6 +70,7 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             config = TraceConfig()
         else:
             assert isinstance(config, TraceConfig)
+        self._config = config
         self._tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
@@ -76,6 +81,13 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
         self._patches = []
         self._wrappers = []
         self._callback = None
+        try:
+            self._install(dspy)
+        except BaseException:
+            self._uninstrument()
+            raise
+
+    def _install(self, dspy: Any) -> None:
         try:
             from dspy.utils.callback import BaseCallback  # noqa: F401
         except ModuleNotFoundError as exc:
@@ -98,6 +110,12 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
                 callback_roots,
             )
 
+            # Check settings ownership before mutating global methods or hooks.
+            # Do not replace or mutate the application's callback list.
+            callback = _DSPyCallback(self._tracer, self._config)
+            dspy.configure(callbacks=[*dspy.settings.callbacks, callback])
+            self._callback = callback
+
             # Callbacks remain the sole span producers. Lexical guards restore
             # OTel context after DSPy's FIFO teardown of all user callbacks.
             for cls in callback_classes():
@@ -112,15 +130,12 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
                     (cls, method, original, patched, method in cls.__dict__)
                 )
                 setattr(cls, method, patched)
-            self._callback = _DSPyCallback(self._tracer)
-            # Configure from the settings-owning thread, just like dspy.configure.
-            # Do not replace or mutate the application's callback list.
-            dspy.configure(callbacks=[*dspy.settings.callbacks, self._callback])
 
         # DSPy does not emit callbacks for these two components. Only these
         # supplemental patches produce spans on callback-capable releases.
         self._patch(getattr(dspy, "ColBERTv2", None), "__call__", _RetrieverModelCallWrapper)
         self._patch(getattr(dspy, "Embedder", None), "__call__", _EmbedderCallWrapper)
+        self._patch(getattr(dspy, "Embedder", None), "acall", _AsyncEmbedderCallWrapper)
 
     def _patch_callback_class(self, cls: type) -> None:
         from traceai_dspy._context import callback_methods
@@ -133,7 +148,7 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             return
         original = getattr(cls, method)
         owned = method in cls.__dict__
-        handler = wrapper(self._tracer)
+        handler = wrapper(self._tracer, config=self._config)
         self._wrappers.append(handler)
         patched = CopyableFunctionWrapper(original, handler)
         setattr(cls, method, patched)
@@ -211,10 +226,17 @@ class _WithTracer(ABC):
     Base class for wrappers that need a tracer. Acts as a trait for the wrappers
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, *args: Any,
+        config: Optional[TraceConfig] = None, **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._config = config if config is not None else TraceConfig()
         self._enabled = True
+
+    def _attributes(self, attributes: Iterable[Tuple[str, Any]]) -> Dict[str, Any]:
+        return capture_attributes(dict(attributes), self._config)
 
 
 class _LMCallWrapper(_WithTracer):
@@ -231,13 +253,13 @@ class _LMCallWrapper(_WithTracer):
     ) -> Any:
         if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
-        arguments = _bind_arguments(wrapped, *args, **kwargs)
+        arguments = lm_inputs(_bind_arguments(wrapped, *args, **kwargs))
         messages = arguments.get("messages")
         prompts = arguments.get("prompt")
         span_name = instance.__class__.__name__ + ".__call__"
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: LLM,
@@ -256,7 +278,7 @@ class _LMCallWrapper(_WithTracer):
             response = wrapped(*args, **kwargs)
             span.set_status(StatusCode.OK)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             **dict(_raw_output(response)),
@@ -313,7 +335,7 @@ class _PredictForwardWrapper(_WithTracer):
 
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: CHAIN,
@@ -331,7 +353,7 @@ class _PredictForwardWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             prediction = wrapped(*args, **kwargs)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             OUTPUT_VALUE: safe_json_dumps(
@@ -380,7 +402,7 @@ class _ModuleForwardWrapper(_WithTracer):
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: CHAIN,
@@ -409,7 +431,7 @@ class _ModuleForwardWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             prediction = wrapped(*args, **kwargs)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             OUTPUT_VALUE: safe_json_dumps(
@@ -447,7 +469,7 @@ class _RetrieverForwardWrapper(_WithTracer):
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: RETRIEVER.value,
@@ -461,7 +483,7 @@ class _RetrieverForwardWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             prediction = wrapped(*args, **kwargs)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             RETRIEVAL_DOCUMENTS: [
@@ -498,7 +520,7 @@ class _RetrieverModelCallWrapper(_WithTracer):
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: RETRIEVER.value,
@@ -512,7 +534,7 @@ class _RetrieverModelCallWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             retrieved_documents = wrapped(*args, **kwargs)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             RETRIEVAL_DOCUMENTS: [
@@ -546,7 +568,7 @@ class _AdapterCallWrapper(_WithTracer):
         span_name = instance.__class__.__name__ + ".__call__"
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
+            attributes=self._attributes(
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: CHAIN,
@@ -560,7 +582,7 @@ class _AdapterCallWrapper(_WithTracer):
             response = wrapped(*args, **kwargs)
             span.set_status(StatusCode.OK)
             span.set_attributes(
-                dict(
+                self._attributes(
                     _flatten(
                         {
                             **dict(_output_value_and_mime_type(response)),
@@ -572,53 +594,59 @@ class _AdapterCallWrapper(_WithTracer):
 
 
 class _EmbedderCallWrapper(_WithTracer):
-    """
-    Wrapper for __call__ method on dspy.Embedder
-    """
+    """Supplement DSPy's callback-free embedding API, sharing sync/async policy."""
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return wrapped(*args, **kwargs)
-
+    @contextmanager
+    def _span(self, wrapped, instance, args, kwargs, operation):
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         input_texts = arguments.get("inputs", arguments.get("texts", args[0] if args else []))
         if isinstance(input_texts, str):
             input_texts = [input_texts]
-        span_name = instance.__class__.__name__ + ".__call__"
-
         with self._tracer.start_as_current_span(
-            span_name,
-            attributes=dict(
-                _flatten(
-                    {
-                        GEN_AI_SPAN_KIND: EMBEDDING,
-                        INPUT_VALUE: safe_json_dumps(input_texts),
-                        INPUT_MIME_TYPE: TEXT,
-                        **dict(_raw_input(arguments)),
-                        **dict(_embedder_model_name(instance)),
-                        **dict(get_attributes_from_context()),
-                        **dict(_get_embedding_input(input_texts)),
-                    }
-                )
-            ),
+            f"{instance.__class__.__name__}.{operation}",
+            attributes=self._attributes(_flatten({
+                GEN_AI_SPAN_KIND: EMBEDDING,
+                INPUT_MIME_TYPE: JSON,
+                **dict(_raw_input(arguments)),
+                **dict(_embedder_model_name(instance)),
+                **dict(get_attributes_from_context()),
+                **dict(_get_embedding_input(input_texts)),
+            })),
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
+            try:
+                yield span
+            except BaseException as exception:
+                # asyncio.CancelledError is not an Exception on supported Python.
+                # FITracer still applies the configured error-detail policy.
+                span.record_exception(exception)
+                span.set_status(StatusCode.ERROR)
+                raise
+            else:
+                span.set_status(StatusCode.OK)
+
+    def _finish(self, span, response):
+        if not self._config.hide_embedding_vectors:
+            span.set_attributes(self._attributes(_get_embedding_output(response)))
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        with self._span(wrapped, instance, args, kwargs, "__call__") as span:
             response = wrapped(*args, **kwargs)
-            span.set_status(StatusCode.OK)
-            span.set_attributes(
-                dict(
-                    _flatten(
-                        {
-                            **dict(_get_embedding_output(response)),
-                        }
-                    )
-                )
-            )
+            self._finish(span, response)
+        return response
+
+
+class _AsyncEmbedderCallWrapper(_EmbedderCallWrapper):
+    async def __call__(self, wrapped, instance, args, kwargs):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return await wrapped(*args, **kwargs)
+        # Enter in the awaiting task, not when the coroutine is constructed.
+        with self._span(wrapped, instance, args, kwargs, "acall") as span:
+            response = await wrapped(*args, **kwargs)
+            self._finish(span, response)
         return response
 
 
@@ -682,7 +710,7 @@ def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> s
         *args,
         **kwargs,
     )
-    return safe_json_dumps(
+    return payload(
         {
             **{
                 argument_name: argument_value
@@ -691,7 +719,7 @@ def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> s
             },
             **bound_arguments.arguments.get("kwargs", {}),
         },
-        cls=DSPyJSONEncoder,
+        DSPyJSONEncoder,
     )
 
 
@@ -745,7 +773,7 @@ def _input_value_and_mime_type(
     arguments: Mapping[str, Any]
 ) -> Iterator[Tuple[str, Any]]:
     yield INPUT_MIME_TYPE, JSON
-    yield INPUT_VALUE, safe_json_dumps(arguments)
+    yield INPUT_VALUE, payload(arguments, DSPyJSONEncoder)
 
 
 def _llm_prompt(prompts: Any) -> Iterator[Tuple[str, Any]]:
@@ -786,16 +814,16 @@ def _convert_to_dict(obj: Any) -> Any:
 
 def _raw_input(raw_input: Any) -> Iterator[Tuple[str, Any]]:
     if raw_input:
-        yield INPUT_VALUE, safe_json_dumps(_convert_to_dict(raw_input))
+        yield INPUT_VALUE, payload(raw_input, DSPyJSONEncoder)
 
 
 def _raw_output(raw_output: Any) -> Iterator[Tuple[str, Any]]:
     if raw_output:
-        yield OUTPUT_VALUE, safe_json_dumps(_convert_to_dict(raw_output))
+        yield OUTPUT_VALUE, payload(raw_output, DSPyJSONEncoder)
 
 
 def _output_value_and_mime_type(response: Any) -> Iterator[Tuple[str, Any]]:
-    yield OUTPUT_VALUE, safe_json_dumps(response)
+    yield OUTPUT_VALUE, payload(response, DSPyJSONEncoder)
     yield OUTPUT_MIME_TYPE, JSON
 
 
@@ -831,7 +859,7 @@ def _llm_invocation_parameters(
 ) -> Iterator[Tuple[str, Any]]:
     lm_kwargs = _ if isinstance(_ := getattr(lm, "kwargs", {}), dict) else {}
     kwargs = _ if isinstance(_ := arguments.get("kwargs"), dict) else {}
-    yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(lm_kwargs | kwargs)
+    yield GEN_AI_REQUEST_PARAMETERS, payload(generation_parameters(lm_kwargs | kwargs), DSPyJSONEncoder)
 
 
 def _bind_arguments(
