@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from typing import Any
 
 from fi_instrumentation import TraceConfig, safe_json_dumps
@@ -93,11 +94,25 @@ def sanitize(value: Any) -> Any:
 
 
 def payload(value: Any, encoder: type[json.JSONEncoder]) -> str:
-    # Respect the encoder's default: safe_json_dumps supplies default=str,
-    # which would turn Example/Prediction records into opaque, unsanitizable
-    # strings. Sanitize again once the encoder exposes their nested fields.
+    # The DSPy encoder exposes Example/Prediction and namedtuple fields, but
+    # falls back to repr for other objects. Reprs can contain credentials with
+    # no field boundaries left to sanitize. Preserve the structured cases,
+    # expand dataclasses, and omit everything else instead of exporting repr.
+    class CaptureEncoder(encoder):
+        def default(self, record: Any) -> Any:
+            if is_dataclass(record) and not isinstance(record, type):
+                try:
+                    return {field.name: getattr(record, field.name) for field in fields(record)}
+                except Exception:
+                    return "[object omitted]"
+            from dspy.primitives.example import Example
+
+            if isinstance(record, Example) or hasattr(record, "_asdict"):
+                return super().default(record)
+            return "[object omitted]"
+
     return safe_json_dumps(
-        sanitize(json.loads(json.dumps(sanitize(value), cls=encoder)))
+        sanitize(json.loads(json.dumps(sanitize(value), cls=CaptureEncoder)))
     )
 
 
