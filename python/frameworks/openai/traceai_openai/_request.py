@@ -438,7 +438,8 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                 add_io_to_span_attributes(
                     with_span, None, response, is_streaming=self._is_streaming(response)
                 )
-            except Exception as exception:
+            # Cancellation can arrive before a stream/response takes ownership.
+            except BaseException as exception:
                 with_span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

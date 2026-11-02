@@ -557,3 +557,110 @@ def test_responses_terminal_events(
         assert a["gen_ai.output.messages.0.message.content"] == ANSWER
     assert spans[0].status.code == (2 if event_type == "response.failed" else 1)
     assert b"PRIVATE_VENDOR_ERROR" not in spans[0].SerializeToString()
+
+
+@pytest.mark.parametrize("route", ["legacy", "shared", "legacy_first", "shared_first"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("responses", [False, True])
+@pytest.mark.parametrize("hide_error_details", [False, True])
+def test_cancelled_create_is_finished_as_error(
+    wire, route, streaming, responses, hide_error_details
+):
+    spans = wire(route, hide_error_details=hide_error_details)
+    if responses and route == "legacy":
+        pytest.skip("Legacy instrumentor supports Chat Completions only")
+
+    async def run():
+        waiting = asyncio.Event()
+        cancellations = []
+
+        async def respond(request):
+            waiting.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as error:
+                cancellations.append(error)
+                raise
+
+        async with openai.AsyncOpenAI(
+            api_key="offline-key",
+            base_url="https://api.deepseek.com",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ) as client:
+            async def create():
+                resource = client.responses if responses else client.chat.completions
+                params = dict(model="deepseek-reasoner", stream=streaming)
+                params.update(
+                    dict(input="hello") if responses
+                    else dict(messages=[dict(role="user", content="hello")])
+                )
+                try:
+                    await resource.create(**params)
+                except asyncio.CancelledError as error:
+                    cancellations.append(error)
+                    raise
+
+            task = asyncio.create_task(create())
+            await asyncio.wait_for(waiting.wait(), timeout=5)
+            task.cancel("PRIVATE_CREATE_CANCEL")
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # Compare before the Task boundary, which can discard details on 3.10.
+            assert len(cancellations) == 2
+            assert cancellations[0] is cancellations[1]
+            assert len(spans) == 1, "cancelled create must finish before client close"
+            assert spans[0].status.code == 2
+            assert sum(event.name == "exception" for event in spans[0].events) == 1
+            exported = spans[0].SerializeToString()
+            assert (b"PRIVATE_CREATE_CANCEL" not in exported) == hide_error_details
+        assert len(spans) == 1
+        assert spans[0].status.code == 2
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("has_summary", [False, True])
+@pytest.mark.parametrize(
+    "policy", [None, "hide_outputs", "hide_output_messages", "hide_output_text"]
+)
+def test_responses_plaintext_reasoning(
+    wire, monkeypatch, asynchronous, streaming, has_summary, policy
+):
+    spans = wire("shared", **({policy: True} if policy else {}))
+    body = copy.deepcopy(RESPONSE)
+    summary = "PRIVATE_SUMMARY_7382"
+    body["output"].insert(0, dict(
+        id="rs-offline", type="reasoning", status="completed",
+        summary=[dict(type="summary_text", text=summary)] if has_summary else [],
+        content=[dict(type="reasoning_text", text=text) for text in (REASONING, "more")],
+    ))
+    monkeypatch.setattr(sys.modules[__name__], "RESPONSE", body)
+    response = call(asynchronous=asynchronous, streaming=streaming, responses=True)
+    if not streaming:
+        # Instrumentation must not strip reasoning from the SDK object.
+        assert response.model_dump()["output"][0]["content"][0]["text"] == REASONING
+    a = attrs(spans)
+    assert a["gen_ai.usage.output_tokens"] == 7
+    assert spans[0].status.code == 1
+    if policy != "hide_outputs":
+        if streaming:
+            assert a["output.value"] == ANSWER
+        else:
+            assert json.loads(a["output.value"])["output_text"] == ANSWER
+    if policy:
+        if policy != "hide_outputs":
+            a.pop("output.value", None)  # Raw output has an independent policy.
+        encoded = json.dumps(a)
+        assert REASONING not in encoded
+        assert summary not in encoded
+        assert ANSWER not in encoded
+    else:
+        prefix = "gen_ai.output.messages.0.message.contents."
+        offset = int(has_summary)
+        if has_summary:
+            assert a[f"{prefix}0.message_content.text"] == summary
+        assert a[f"{prefix}{offset}.message_content.text"] == REASONING
+        assert a[f"{prefix}{offset + 1}.message_content.text"] == "more"
+        assert a["gen_ai.output.messages.1.message.content"] == ANSWER

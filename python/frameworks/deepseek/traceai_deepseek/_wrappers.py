@@ -184,7 +184,8 @@ class _AsyncChatCompletionWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            # Cancellation can arrive before a stream/response takes ownership.
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

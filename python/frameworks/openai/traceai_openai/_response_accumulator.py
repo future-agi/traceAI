@@ -97,9 +97,12 @@ class _ResponsesAccumulator:
             # For Responses API, extract output items
             output_items = []
             for item in result.output:
-                if hasattr(item, "content") and item.content:
-                    for content in item.content:
-                        if hasattr(content, "text"):
+                if (
+                    getattr(item, "type", None) == "message"
+                    and getattr(item, "role", None) == "assistant"
+                ):
+                    for content in item.content or []:
+                        if getattr(content, "type", None) == "output_text":
                             output_items.append(content.text)
             if output_items:
                 output_content = " ".join(output_items)
