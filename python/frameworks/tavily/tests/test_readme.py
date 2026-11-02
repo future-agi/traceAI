@@ -14,10 +14,20 @@ from test_extended_operations import PRIVATE_OUTPUT, PRIVATE_URL, Transport
 from test_extended_wire import receiver
 
 
+def test_readme_scope_matches_published_package():
+    # 0.1.0 is the published baseline. Expand this contract only once a
+    # released wheel supports the new operations and the README pins it.
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    methods = re.findall(r"^\| `([^`]+)` \| `tavily\.[^`]+`", readme, re.M)
+    assert methods == ["search", "extract"]
+    assert 'pip install "traceAI-tavily>=0.1.0"' in readme
+    assert "client.research(" not in readme
+
+
 def test_readme_snippets_run_end_to_end(monkeypatch):
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
     snippets = re.findall(r"```python\n(.*?)```", readme, re.S)
-    assert len(snippets) == 3
+    assert len(snippets) == 1
     transport = Transport()
     original = requests.Session.send
 
@@ -44,10 +54,8 @@ def test_readme_snippets_run_end_to_end(monkeypatch):
         span for _, payload in records for resource in payload["resourceSpans"]
         for scope in resource["scopeSpans"] for span in scope["spans"]
     ]
-    assert [span["name"] for span in spans] == [
-        "tavily.search", "tavily.research", "tavily.get_research", "tavily.research",
-    ]
-    assert [method for method, _ in transport.calls] == ["search", "research", "research", "research"]
-    assert PRIVATE_OUTPUT in namespace["result"]["content"]
+    assert [span["name"] for span in spans] == ["tavily.search"]
+    assert [method for method, _ in transport.calls] == ["search"]
+    assert namespace["response"]["results"] == [PRIVATE_URL, PRIVATE_URL]
     for private in (TAVILY_KEY, PRIVATE_URL, PRIVATE_OUTPUT):
         assert private not in json.dumps(spans)
