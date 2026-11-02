@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, Protocol, Tuple
 
@@ -90,10 +91,10 @@ class _RawResponse(ObjectProxy):
         self._self_parsed = {}
         self._self_body_status: Optional[trace_api.Status] = None
 
-    def _record_body_consumption(self) -> None:
+    def _record_body_consumption(self, body_bytes: Optional[bytes] = None) -> None:
         # read/text/json consume a non-SSE envelope without calling parse().
-        # Do not force SDK parsing (or its post_parser) on a raw-body caller.
-        # SSE still needs a terminal event from the traced iterator.
+        # Iterators do not cache HTTPX content, so inspect their collected bytes.
+        # Never invoke the SDK post_parser or export the raw body.
         if (
             self._self_is_finished
             or self._self_body_status is not None
@@ -101,7 +102,10 @@ class _RawResponse(ObjectProxy):
         ):
             return
         try:
-            body = self.__wrapped__.http_response.json()
+            body = (
+                json.loads(body_bytes) if body_bytes is not None
+                else self.__wrapped__.http_response.json()
+            )
         except Exception:
             body = None  # Successful raw reads need not contain JSON.
         self._self_body_status = _response_status(body)
@@ -123,6 +127,43 @@ class _RawResponse(ObjectProxy):
 
     def json(self, *args: Any, **kwargs: Any) -> Any:
         return self._consume_body("json", *args, **kwargs)
+
+    def _iterate_body(self, method: str, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        is_sse = getattr(self.__wrapped__, "_is_sse_stream", False)
+        body = bytearray()
+        too_large = False
+        try:
+            for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                if not is_sse and not too_large:
+                    encoded = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    if method == "iter_lines":
+                        encoded += b"\n"
+                    if len(body) + len(encoded) <= 8 * 1024 * 1024:
+                        body.extend(encoded)
+                    else:
+                        too_large = True
+                        body.clear()
+                yield chunk
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        else:
+            # Partial iteration and SSE must not report a completed response.
+            if too_large:
+                self._self_body_status = trace_api.Status(
+                    trace_api.StatusCode.ERROR, "Response body too large to inspect"
+                )
+            elif not is_sse:
+                self._record_body_consumption(bytes(body))
+
+    def iter_bytes(self, *args: Any, **kwargs: Any) -> Iterator[bytes]:
+        return self._iterate_body("iter_bytes", *args, **kwargs)
+
+    def iter_text(self, *args: Any, **kwargs: Any) -> Iterator[str]:
+        return self._iterate_body("iter_text", *args, **kwargs)
+
+    def iter_lines(self, *args: Any, **kwargs: Any) -> Iterator[str]:
+        return self._iterate_body("iter_lines", *args, **kwargs)
 
     @property
     def _self_is_finished(self) -> bool:
@@ -179,6 +220,14 @@ class _RawResponse(ObjectProxy):
             self._self_with_span.finish_tracing(status=status)
 
 
+class _LegacyRawResponse(_RawResponse):
+    """LegacyAPIResponse.text is a string property, unlike APIResponse.text()."""
+
+    @property
+    def text(self) -> str:
+        return self.__wrapped__.text
+
+
 class _AsyncRawResponse(_RawResponse):
     """AsyncAPIResponse has awaitable parse/close; LegacyAPIResponse does not."""
 
@@ -199,6 +248,42 @@ class _AsyncRawResponse(_RawResponse):
 
     async def json(self, *args: Any, **kwargs: Any) -> Any:
         return await self._consume_body("json", *args, **kwargs)
+
+    async def _aiterate_body(self, method: str, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        is_sse = getattr(self.__wrapped__, "_is_sse_stream", False)
+        body = bytearray()
+        too_large = False
+        try:
+            async for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                if not is_sse and not too_large:
+                    encoded = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                    if method == "iter_lines":
+                        encoded += b"\n"
+                    if len(body) + len(encoded) <= 8 * 1024 * 1024:
+                        body.extend(encoded)
+                    else:
+                        too_large = True
+                        body.clear()
+                yield chunk
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        else:
+            if too_large:
+                self._self_body_status = trace_api.Status(
+                    trace_api.StatusCode.ERROR, "Response body too large to inspect"
+                )
+            elif not is_sse:
+                self._record_body_consumption(bytes(body))
+
+    def iter_bytes(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
+        return self._aiterate_body("iter_bytes", *args, **kwargs)
+
+    def iter_text(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+        return self._aiterate_body("iter_text", *args, **kwargs)
+
+    def iter_lines(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+        return self._aiterate_body("iter_lines", *args, **kwargs)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         try:

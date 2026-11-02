@@ -1,3 +1,4 @@
+import json
 import logging
 from abc import ABC
 from contextlib import contextmanager
@@ -35,6 +36,7 @@ from traceai_openai._span_io_handler import add_io_to_span_attributes
 from traceai_openai._stream import (
     _AsyncRawResponse,
     _AsyncStream,
+    _LegacyRawResponse,
     _RawResponse,
     _ResponseAccumulator,
     _Stream,
@@ -248,14 +250,35 @@ class _WithOpenAI(ABC):
                 with_span.set_attribute(
                     SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
                 )
-            add_io_to_span_attributes(with_span, None, parsed, config=self._config)
-
+            telemetry_response = parsed
+            status = _response_status(parsed)
+            if cast_to is self._openai.types.responses.response.Response and not isinstance(
+                parsed, cast_to
+            ):
+                # parse(to=dict/str) returns the original SDK value to the caller,
+                # but telemetry must pass through the same Response allowlist as
+                # the default parse. Never serialize the arbitrary raw value.
+                try:
+                    body = json.loads(parsed) if isinstance(parsed, str) else parsed
+                    if not isinstance(body, Mapping):
+                        raise ValueError("Responses body is not an object")
+                    status = _response_status(body)
+                    telemetry_response = cast_to.model_validate(body)
+                except (TypeError, ValueError):
+                    telemetry_response = None
+                    status = trace_api.Status(
+                        trace_api.StatusCode.ERROR, "Response body could not be inspected"
+                    )
+            if telemetry_response is not None:
+                add_io_to_span_attributes(
+                    with_span, None, telemetry_response, config=self._config
+                )
             _finish_tracing(
-                status=_response_status(parsed),
+                status=status,
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,
-                    response=parsed,
+                    response=telemetry_response,
                     response_attributes_extractor=self._response_attributes_extractor,
                 ),
             )
@@ -265,7 +288,9 @@ class _WithOpenAI(ABC):
             # Modern envelopes are deliberately lazy, even for non-SSE responses.
             # Do not call async parse from sync I/O/attribute extraction paths.
             raw_wrapper = (
-                _AsyncRawResponse if iscoroutinefunction(response.parse) else _RawResponse
+                _LegacyRawResponse if isinstance(response, LegacyAPIResponse)
+                else _AsyncRawResponse if iscoroutinefunction(response.parse)
+                else _RawResponse
             )
             raw = raw_wrapper(response, with_span, response_accumulator, on_parse)
             if isinstance(response, LegacyAPIResponse):
