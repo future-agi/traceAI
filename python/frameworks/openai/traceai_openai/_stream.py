@@ -124,6 +124,29 @@ class _RawResponse(ObjectProxy):
     def json(self, *args: Any, **kwargs: Any) -> Any:
         return self._consume_body("json", *args, **kwargs)
 
+    def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        try:
+            for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                yield chunk
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        else:
+            # The caller may stop iteration early; only exhaustion consumes it.
+            self._record_body_consumption()
+
+    def iter_bytes(self, *args: Any, **kwargs: Any) -> Iterator[bytes]:
+        return self._consume_iterator("iter_bytes", *args, **kwargs)
+
+    def iter_text(self, *args: Any, **kwargs: Any) -> Iterator[str]:
+        return self._consume_iterator("iter_text", *args, **kwargs)
+
+    def iter_lines(self, *args: Any, **kwargs: Any) -> Iterator[str]:
+        return self._consume_iterator("iter_lines", *args, **kwargs)
+
+    def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        self._consume_body("stream_to_file", *args, **kwargs)
+
     @property
     def _self_is_finished(self) -> bool:
         return self._self_with_span.is_finished
@@ -199,6 +222,31 @@ class _AsyncRawResponse(_RawResponse):
 
     async def json(self, *args: Any, **kwargs: Any) -> Any:
         return await self._consume_body("json", *args, **kwargs)
+
+    async def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        try:
+            async for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                yield chunk
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        else:
+            self._record_body_consumption()
+
+    async def iter_bytes(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
+        async for chunk in self._consume_iterator("iter_bytes", *args, **kwargs):
+            yield chunk
+
+    async def iter_text(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+        async for chunk in self._consume_iterator("iter_text", *args, **kwargs):
+            yield chunk
+
+    async def iter_lines(self, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
+        async for chunk in self._consume_iterator("iter_lines", *args, **kwargs):
+            yield chunk
+
+    async def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        await self._consume_body("stream_to_file", *args, **kwargs)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         try:

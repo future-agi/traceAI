@@ -20,7 +20,7 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._client_provider import _get_client_provider
 from traceai_openai._providers import provider_from_host
-from traceai_openai._privacy import redact, request_credentials, response_credentials, safe_request
+from traceai_openai._privacy import redact, request_credentials, response_credentials, response_output, safe_request
 from traceai_openai._request_context import capture_request_credentials
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
@@ -239,7 +239,12 @@ class _WithOpenAI(ABC):
                 with_span.set_attribute(
                     SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
                 )
-            add_io_to_span_attributes(with_span, None, parsed, config=self._config)
+            telemetry_output = (
+                response_output(parsed, self._config)
+                if cast_to is self._openai.types.responses.response.Response
+                and isinstance(parsed, dict) else parsed
+            )
+            add_io_to_span_attributes(with_span, None, telemetry_output, config=self._config)
             _finish_tracing(
                 status=_response_status(parsed),
                 with_span=with_span,
@@ -261,7 +266,14 @@ class _WithOpenAI(ABC):
             if isinstance(response, LegacyAPIResponse):
                 # Preserve eager legacy non-stream telemetry. Stream parse caches
                 # remain SDK-owned, and every later explicit parse type is traced.
-                raw.parse()
+                try:
+                    parsed = response.parse()
+                except Exception:
+                    # Optional eager telemetry must not change SDK behavior: callers
+                    # still receive the envelope and may inspect malformed bodies.
+                    logger.debug("Could not eagerly parse raw response for telemetry", exc_info=True)
+                else:
+                    raw._trace_parsed(parsed)
             return raw
         return on_parse(response)
 
