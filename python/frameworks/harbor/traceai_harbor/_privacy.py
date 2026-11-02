@@ -12,13 +12,35 @@ from ._transport import Settings
 _SECRET_KEY = re.compile(
     r"password|secret|token|api.?key|authorization|credential", re.I
 )
+_USAGE_COUNTS = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_tokens",
+        "input_tokens",
+        "output_tokens",
+        "total_prompt_tokens",
+        "total_completion_tokens",
+        "total_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+    }
+)
+
+
+def _sensitive(key: str, value: Any) -> bool:
+    return bool(_SECRET_KEY.search(key)) and not (
+        key in _USAGE_COUNTS and type(value) in {int, float}
+    )
+
+
 _SECRET_VALUE = re.compile(
     r"(?i)(?:bearer\s+\S+|(?:sk|fi|api)[_-][a-z0-9_-]{12,}|(?:password|secret|token|api[_-]?key)\s*[=:]\s*[^\s,;]+)"
 )
 # Embedded JSON often arrives as ordinary text or as JSON escaped inside tool arguments.
 # Redact the entire string rather than trying to guess where a quoted value ends.
 _QUOTED_SECRET = re.compile(
-    r"""(?i)\\?["'](?:password|secret|token|api[_-]?key|authorization|credential)\\?["']\s*:"""
+    r"""(?i)\\?["'][\w.-]*(?:password|secret|token|api[_-]?key|authorization|credential)[\w.-]*\\?["']\s*:"""
 )
 _LOCATION = re.compile(
     r"(?:https?://[^\s\"']+|file://[^\s\"']+|(?<![\w])(?:[A-Za-z]:[\\/]|/)[^\s\"']+)"
@@ -50,9 +72,7 @@ class Privacy:
         # Artifact complexity has already been bounded by the reader.
         if isinstance(value, dict):
             return {
-                self.text(k, 256): "[redacted]"
-                if _SECRET_KEY.search(k) and not k.endswith(("tokens", "token_count"))
-                else self.tree(v)
+                self.text(k, 256): "[redacted]" if _sensitive(k, v) else self.tree(v)
                 for k, v in value.items()
             }
         if isinstance(value, list):
@@ -75,7 +95,7 @@ class Privacy:
         if isinstance(value, dict):
             return {
                 self.text(k, 256): "[redacted]"
-                if _SECRET_KEY.search(k)
+                if _sensitive(k, v)
                 else self._nested(v, depth + 1)
                 for k, v in value.items()
             }

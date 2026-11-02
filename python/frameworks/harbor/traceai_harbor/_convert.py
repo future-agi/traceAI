@@ -7,8 +7,8 @@ import math
 from datetime import datetime, timezone
 
 import harbor_atif2otel
-from harbor.models.trial.result import TrialResult
 from harbor.models.trajectories import Trajectory
+from harbor.models.trial.result import TrialResult
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
@@ -156,9 +156,10 @@ def _result_attrs(result, privacy, prefix="harbor"):
 
 def convert_trial(
     root_fd: int, trial_name: str, job_id: str, settings: Settings
-) -> tuple[str, bytes, bool, str]:
+) -> tuple[str, bytes, bool, str, str]:
     component(trial_name)
     raw = read_bytes(root_fd, (trial_name, "result.json"))
+    result_digest = hashlib.sha256(raw).hexdigest()
     fingerprint = hashlib.sha256(raw)
     data = parse(raw)
     if not isinstance(data, dict) or not data.get("id"):
@@ -356,6 +357,10 @@ def convert_trial(
                     elif (
                         settings.capture_content
                         and key in {"input.value", "output.value"}
+                        and not (
+                            (key == "input.value" and settings.hide_inputs)
+                            or (key == "output.value" and settings.hide_outputs)
+                        )
                         and field == "string_value"
                     ):
                         projected.append(attr(key, privacy.text(value.string_value)))
@@ -435,4 +440,4 @@ def convert_trial(
     if len(payload) > 8 * 1024 * 1024:
         raise ArtifactError("payload_size")
     fingerprint.update(payload)
-    return str(result.id), payload, incomplete, fingerprint.hexdigest()
+    return str(result.id), payload, incomplete, fingerprint.hexdigest(), result_digest

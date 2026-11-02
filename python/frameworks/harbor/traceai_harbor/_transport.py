@@ -18,6 +18,11 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 ENDPOINT = "https://api.futureagi.com/tracer/v1/traces"
 
 
+def _hidden(*names: str) -> bool:
+    # Match the shared trace config's case-insensitive true semantics.
+    return any(os.environ.get(name, "").lower() == "true" for name in names)
+
+
 class DeliveryError(RuntimeError):
     """A sanitized delivery category. Response bodies are never included."""
 
@@ -27,6 +32,8 @@ class Settings:
     endpoint: str = ENDPOINT
     project_name: str = "harbor"
     capture_content: bool = False
+    hide_inputs: bool = False
+    hide_outputs: bool = False
     api_key: str = field(default="", repr=False)
     secret_key: str = field(default="", repr=False)
 
@@ -38,6 +45,12 @@ class Settings:
             endpoint=os.environ.get("FI_HARBOR_ENDPOINT", ENDPOINT),
             project_name=project_name or os.environ.get("FI_PROJECT_NAME", "harbor"),
             capture_content=capture_content,
+            hide_inputs=_hidden(
+                "FI_HIDE_INPUTS", "FI_HIDE_INPUT_TEXT", "FI_HIDE_INPUT_MESSAGES"
+            ),
+            hide_outputs=_hidden(
+                "FI_HIDE_OUTPUTS", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_OUTPUT_MESSAGES"
+            ),
             api_key=os.environ.get("FI_API_KEY", ""),
             secret_key=os.environ.get("FI_SECRET_KEY", ""),
         )
@@ -70,7 +83,10 @@ class Settings:
         if (
             not self.project_name
             or len(self.project_name) > 256
-            or type(self.capture_content) is not bool
+            or any(
+                type(value) is not bool
+                for value in (self.capture_content, self.hide_inputs, self.hide_outputs)
+            )
         ):
             raise ValueError("Invalid project_name or capture_content")
 
@@ -81,10 +97,12 @@ class Settings:
         return hashlib.sha256(
             json.dumps(
                 [
-                    "traceai-harbor-policy-v1",
+                    "traceai-harbor-policy-v2",
                     self.endpoint,
                     self.project_name,
                     self.capture_content,
+                    self.hide_inputs,
+                    self.hide_outputs,
                     self.api_key,
                     self.secret_key,
                 ]

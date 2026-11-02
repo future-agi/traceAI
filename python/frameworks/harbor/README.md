@@ -31,7 +31,7 @@ traceai-harbor import-job ./jobs/my-harbor-job
 
 The command prints counts of sent, skipped, failed, conflicting and incomplete trials. It exits nonzero on delivery or artifact failures. Fix the configuration or delivery issue and run it again; successfully acknowledged traces are skipped. The plugin also reconciles final results at job end.
 
-Keep the `.traceai-harbor` directory with the job when moving it. It stores locked, atomically written acknowledgement digests, not credentials or trace content. A different endpoint, project, credential pair or content policy has separate acknowledgement state. A changed previously exported trace is reported as a conflict, never silently overwritten. Preserve the original artifacts; run a new Harbor job to record a revised execution rather than deleting acknowledgement state.
+Keep the `.traceai-harbor` directory with the job when moving it. It stores locked, atomically written acknowledgement digests, not credentials or trace content. A different endpoint, project, credential pair or content policy has separate acknowledgement state. A changed previously exported complete trace is reported as a conflict, never silently overwritten. Incomplete traces have provisional acknowledgements: a later import skips the unchanged envelope and sends only newly reconstructed spans if missing trajectories are restored. Already accepted spans, including the original incomplete marker, are not updated. Changing the trial result itself is still a conflict. Preserve the original artifacts; run a new Harbor job to record a revised execution rather than deleting acknowledgement state.
 
 A process crash after the server accepts a request but before acknowledgement is saved can cause retransmission. Partial OTLP responses are unacknowledged and retried on the next import, so accepted spans in a partial response can also repeat. Deterministic span IDs do not guarantee server-side deduplication.
 
@@ -45,7 +45,7 @@ To include bounded input/output text:
 harbor run --config ./job.json --plugin futureagi --plugin-kwarg futureagi.capture_content=true
 ```
 
-For finished jobs, add `--capture-content`. Known FI credentials, common credential fields/token patterns and local paths/URLs are redacted. This is not a general PII detector: review your agent's content before opting in. Strings are limited to 2 KiB; reasoning and tool schemas remain excluded. Enabling content changes the export policy and may send traces previously exported metadata-only.
+For finished jobs, add `--capture-content`. The host's `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_MESSAGES` and `FI_HIDE_OUTPUT_MESSAGES` flags suppress the corresponding captured content even when capture is enabled. The effective directional policy has separate acknowledgement state. Known FI credentials, common credential fields/token patterns and local paths/URLs are redacted. This is not a general PII detector: review your agent's content before opting in. Strings are limited to 2 KiB; reasoning and tool schemas remain excluded. Enabling content changes the export policy and may send traces previously exported metadata-only.
 
 The default full trace endpoint is `https://api.futureagi.com/tracer/v1/traces`. `FI_HARBOR_ENDPOINT` overrides it without appending a suffix. Use HTTPS outside loopback. Redirects are rejected and environment HTTP proxies are ignored.
 

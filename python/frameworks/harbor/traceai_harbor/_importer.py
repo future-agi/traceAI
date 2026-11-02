@@ -14,6 +14,9 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from harbor.models.job.result import JobResult
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 
 from ._artifacts import ArtifactError, directory, read_json
 from ._convert import convert_trial
@@ -77,24 +80,50 @@ def _manifest(root_fd, destination):
         os.close(state)
 
 
-def _acknowledged(state: int, trial_id: str) -> str | None:
+def _is_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def _acknowledged(state: int, trial_id: str) -> dict | None:
     try:
         manifest = read_json(state, trial_id + ".json")
     except FileNotFoundError:
         return None
-    if not isinstance(manifest, dict) or manifest.get("version") != 1:
+    if not isinstance(manifest, dict) or manifest.get("version") not in {1, 2}:
         raise ArtifactError("invalid_manifest")
-    digest = manifest.get("digest")
-    if (
-        not isinstance(digest, str)
-        or len(digest) != 64
-        or any(c not in "0123456789abcdef" for c in digest)
-    ):
+    if not _is_digest(manifest.get("digest")):
         raise ArtifactError("invalid_manifest")
-    return digest
+    if manifest["version"] == 2:
+        ids = manifest.get("span_ids")
+        if (
+            not _is_digest(manifest.get("result_digest"))
+            or not isinstance(ids, list)
+            or len(ids) > 8192
+            or len(set(map(str, ids))) != len(ids)
+            or any(
+                not isinstance(sid, str)
+                or len(sid) != 16
+                or any(c not in "0123456789abcdef" for c in sid)
+                for sid in ids
+            )
+        ):
+            raise ArtifactError("invalid_manifest")
+    return manifest
 
 
-def _acknowledge(state: int, trial_id: str, digest: str) -> None:
+def _acknowledge(
+    state: int,
+    trial_id: str,
+    digest: str,
+    *,
+    incomplete: bool = False,
+    result_digest: str = "",
+    span_ids: list[str] | None = None,
+) -> None:
     temporary = ".pending-" + uuid4().hex
     fd = os.open(
         temporary,
@@ -104,7 +133,15 @@ def _acknowledge(state: int, trial_id: str, digest: str) -> None:
     )
     try:
         with os.fdopen(fd, "wb") as stream:
-            stream.write(json.dumps({"version": 1, "digest": digest}).encode())
+            manifest = {"version": 1, "digest": digest}
+            if incomplete:
+                manifest = {
+                    "version": 2,
+                    "digest": digest,
+                    "result_digest": result_digest,
+                    "span_ids": span_ids,
+                }
+            stream.write(json.dumps(manifest).encode())
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, trial_id + ".json", src_dir_fd=state, dst_dir_fd=state)
@@ -166,21 +203,54 @@ def _import(
                 materialized = 0
                 for name in names:
                     try:
-                        trial_id, payload, incomplete, digest = convert_trial(
-                            root, name, job_id, settings
+                        trial_id, payload, incomplete, digest, result_digest = (
+                            convert_trial(root, name, job_id, settings)
                         )
                         materialized += 1
                         previous = _acknowledged(state, trial_id)
-                        if previous is not None:
-                            if previous != digest:
-                                summary.conflicts += 1
-                                errors["artifact_conflict"] += 1
-                            else:
-                                summary.skipped += 1
+                        if previous is not None and previous["digest"] == digest:
+                            summary.skipped += 1
                             continue
-                        send(payload, settings)
-                        _acknowledge(state, trial_id, digest)
-                        summary.sent += 1
+                        if previous is not None and (
+                            previous["version"] != 2
+                            or previous["result_digest"] != result_digest
+                        ):
+                            summary.conflicts += 1
+                            errors["artifact_conflict"] += 1
+                            continue
+                        # An incomplete envelope has already been accepted. On
+                        # recovery, deliver only newly reconstructed span IDs;
+                        # never replay or mutate previously accepted spans.
+                        request = ExportTraceServiceRequest.FromString(payload)
+                        seen = set(previous["span_ids"]) if previous else set()
+                        all_ids = set(seen)
+                        new_count = 0
+                        for resource in request.resource_spans:
+                            for scope in resource.scope_spans:
+                                fresh = [
+                                    s
+                                    for s in scope.spans
+                                    if s.span_id.hex() not in seen
+                                ]
+                                all_ids.update(s.span_id.hex() for s in fresh)
+                                new_count += len(fresh)
+                                scope.ClearField("spans")
+                                scope.spans.extend(fresh)
+                        if new_count:
+                            send(
+                                request.SerializeToString(deterministic=True), settings
+                            )
+                            summary.sent += 1
+                        else:
+                            summary.skipped += 1
+                        _acknowledge(
+                            state,
+                            trial_id,
+                            digest,
+                            incomplete=incomplete,
+                            result_digest=result_digest,
+                            span_ids=sorted(all_ids),
+                        )
                         summary.incomplete += int(incomplete)
                     except DeliveryError as exc:
                         summary.failed += 1
