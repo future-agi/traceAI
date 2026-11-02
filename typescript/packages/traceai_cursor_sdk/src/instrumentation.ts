@@ -18,7 +18,8 @@ import { RunWatcher, TracingContext, isPatched, patchAgentClass, wrapAgent } fro
 
 export const INSTRUMENTATION_NAME = "@traceai/cursor-sdk";
 const MODULE_NAME = "@cursor/sdk";
-const SUPPORTED_VERSIONS = [">=1.0.0 <2"];
+// SDK 1.0.7 has a synchronous Agent.create() and no usage event; 1.0.37 is the earliest verified async API.
+const SUPPORTED_VERSIONS = [">=1.0.37 <2"];
 const DEFAULT_GRACE_MS = 2000;
 const DEFAULT_DRAIN_MS = 30_000;
 

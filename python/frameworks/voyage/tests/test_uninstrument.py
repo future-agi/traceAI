@@ -29,10 +29,9 @@ from _support import (  # noqa: E402
 )
 
 _WRAPPED = [
-    (voyageai.Client, "embed"),
-    (voyageai.Client, "rerank"),
-    (voyageai.AsyncClient, "embed"),
-    (voyageai.AsyncClient, "rerank"),
+    (cls, method)
+    for cls in (voyageai.Client, voyageai.AsyncClient)
+    for method in ("embed", "rerank", "multimodal_embed", "contextualized_embed")
 ]
 
 
@@ -46,16 +45,20 @@ def _all_calls(fake) -> None:
     voyage = client(fake)
     voyage.embed(TEXTS, model=EMBED_MODEL)
     voyage.rerank(QUERY, DOCUMENTS, model=RERANK_MODEL)
+    voyage.multimodal_embed([TEXTS], model="voyage-multimodal-3")
+    voyage.contextualized_embed([TEXTS], model="voyage-context-3")
 
     async def calls() -> None:
         avoyage = async_client(fake)
         await avoyage.embed(TEXTS, model=EMBED_MODEL)
         await avoyage.rerank(QUERY, DOCUMENTS, model=RERANK_MODEL)
+        await avoyage.multimodal_embed([TEXTS], model="voyage-multimodal-3")
+        await avoyage.contextualized_embed([TEXTS], model="voyage-context-3")
 
     asyncio.run(calls())
 
 
-def test_instrument_wraps_exactly_four_methods_and_uninstrument_restores_them(fake):
+def test_instrument_wraps_exactly_eight_methods_and_uninstrument_restores_them(fake):
     originals = {(cls, name): cls.__dict__[name] for cls, name in _WRAPPED}
     with instrumented() as traced:
         for cls, name in _WRAPPED:
@@ -64,8 +67,12 @@ def test_instrument_wraps_exactly_four_methods_and_uninstrument_restores_them(fa
         assert [span.name for span in traced.spans()] == [
             "voyage.embed",
             "voyage.rerank",
+            "voyage.multimodal_embed",
+            "voyage.contextualized_embed",
             "voyage.embed",
             "voyage.rerank",
+            "voyage.multimodal_embed",
+            "voyage.contextualized_embed",
         ]
 
     for (cls, name), original in originals.items():
@@ -73,7 +80,7 @@ def test_instrument_wraps_exactly_four_methods_and_uninstrument_restores_them(fa
 
     # No spans once uninstrumented.
     _all_calls(fake)
-    assert len(traced.spans()) == 4
+    assert len(traced.spans()) == 8
 
 
 def test_instrument_again_after_uninstrument(fake):

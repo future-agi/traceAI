@@ -1,8 +1,49 @@
 """Pytest fixtures for traceai-agno tests."""
 
 import pytest
+
+import gzip
+import sysconfig
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+
+import httpx
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from openai import OpenAI
+from openinference.instrumentation.agno import AgnoInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from traceai_agno import AgnoInstrumentorWrapper
 from unittest.mock import MagicMock, patch
 from typing import Any, Dict, List, Optional
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--require-installed-package",
+        action="store_true",
+        help="Fail if traceai_agno is imported from outside this environment's site-packages.",
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def require_installed_package(request):
+    if not request.config.getoption("--require-installed-package"):
+        return
+
+    import traceai_agno
+
+    imported = Path(traceai_agno.__file__).resolve()
+    expected = (
+        Path(sysconfig.get_path("purelib")) / "traceai_agno" / "__init__.py"
+    ).resolve()
+    assert imported == expected, (
+        f"Expected installed traceai_agno at {expected}, imported {imported}. "
+        "Run pytest with --import-mode=importlib to prevent checkout shadowing."
+    )
 
 
 class MockModel:
@@ -292,3 +333,64 @@ def reset_instrumentor():
     # Cleanup after test
     AgnoInstrumentorWrapper._instance = None
     AgnoInstrumentorWrapper._is_instrumented = False
+
+
+@pytest.fixture
+def tracing():
+    delegate = AgnoInstrumentor()
+    if delegate.is_instrumented_by_opentelemetry:
+        delegate.uninstrument()
+    AgnoInstrumentorWrapper._instance = None
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    yield provider, exporter
+    if delegate.is_instrumented_by_opentelemetry:
+        delegate.uninstrument()
+    AgnoInstrumentorWrapper._instance = None
+    provider.shutdown()
+
+
+@pytest.fixture
+def agent():
+    def respond(request):
+        assert request.url.host == "model.invalid"
+        return httpx.Response(200, json={
+            "id": "chatcmpl-test", "object": "chat.completion", "created": 0,
+            "model": "gpt-4o-mini", "choices": [{"index": 0,
+                "message": {"role": "assistant", "content": "Paris"},
+                "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        client = OpenAI(api_key="synthetic-test-key", base_url="https://model.invalid/v1", http_client=http)
+        yield Agent(model=OpenAIChat(id="gpt-4o-mini", client=client), telemetry=False)
+
+
+@pytest.fixture
+def receiver():
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.headers.get("Content-Encoding") == "gzip":
+                payload = gzip.decompress(payload)
+            requests.append((self.path, dict(self.headers), payload))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-protobuf")
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/tracer/v1/traces", requests
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()

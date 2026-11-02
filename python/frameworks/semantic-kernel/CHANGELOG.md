@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-semantic-kernel-v0.1.0...traceai-semantic-kernel-v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **semantic-kernel:** bound connector support and privacy claims ([#451](https://github.com/future-agi/traceAI/issues/451)) ([5db73cb](https://github.com/future-agi/traceAI/commit/5db73cb04b911a30856e36e2a00a812fa115dc62))
+
 ## 0.1.0
 
 - Initial release. `SemanticKernelInstrumentor().instrument()` enables Semantic Kernel's native OpenTelemetry GenAI diagnostics in process and installs a mapping-only span processor (span kind, provider alias, total tokens, session, content default). No `wrapt`, no wrapping of `Kernel.invoke`.

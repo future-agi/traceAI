@@ -158,6 +158,12 @@ public class FITracer
     /// </summary>
     public FISpan StartSpan(string name, FISpanKind kind)
     {
+        if (SuppressTracing.IsSuppressed)
+        {
+            // Do not start an Activity: another listener may sample it even when OTel is suppressed.
+            return new FISpan(new Activity(name) { IsAllDataRequested = false }, _config, recording: false);
+        }
+
         var activity = _activitySource.StartActivity(name, ActivityKind.Internal)
             ?? throw new InvalidOperationException(
                 "Failed to create activity. Ensure a TracerProvider with a listener is configured.");
@@ -202,9 +208,9 @@ public class FITracer
 
     // ── Internal helpers ────────────────────────────────────────
 
-    private static void ApplyContextAttributes(Activity activity)
+    private void ApplyContextAttributes(Activity activity)
     {
-        foreach (var (key, value) in ContextAttributes.GetAttributesFromContext())
+        foreach (var (key, value) in ContextAttributes.GetAttributesFromContext(_config))
         {
             activity.SetTag(key, value);
         }

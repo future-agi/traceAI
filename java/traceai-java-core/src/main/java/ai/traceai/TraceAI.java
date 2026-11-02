@@ -1,11 +1,10 @@
 package ai.traceai;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
-import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
@@ -43,13 +42,20 @@ public final class TraceAI {
     private static final String TRACER_NAME = "traceai-java";
 
     private static FITracer instance;
-    private static SdkTracerProvider tracerProvider;
+    // Non-null only for the provider constructed by init(config), never for a borrowed SDK.
+    private static SdkTracerProvider ownedTracerProvider;
+    private static boolean shutdownHookRegistered;
     private static boolean initialized = false;
     private static final Object lock = new Object();
 
     /**
-     * Initializes TraceAI with the given configuration.
-     * This method is idempotent - calling it multiple times has no effect after the first call.
+     * Initializes TraceAI with its own tracer provider and configured exporters.
+     * This method is idempotent - calling it multiple times has no effect until shutdown.
+     *
+     * <p>The provider is local to TraceAI. It neither registers nor replaces global
+     * OpenTelemetry, so initialization also works with a Java agent and after shutdown.
+     * Spans created through global tracers do not use this provider. To share an existing
+     * SDK's export pipeline instead, use {@link #init(TraceConfig, OpenTelemetry)}.</p>
      *
      * @param config the trace configuration
      * @throws IllegalArgumentException if config is null
@@ -63,6 +69,13 @@ public final class TraceAI {
             if (initialized) {
                 logger.debug("TraceAI already initialized, skipping");
                 return;
+            }
+
+            // One hook for all owned-provider lifetimes, not one per reinitialization.
+            // Register before allocating resources, since registration can fail during JVM shutdown.
+            if (!shutdownHookRegistered) {
+                Runtime.getRuntime().addShutdownHook(new Thread(TraceAI::shutdown, "traceai-shutdown"));
+                shutdownHookRegistered = true;
             }
 
             // Build resource with service name
@@ -123,25 +136,45 @@ public final class TraceAI {
                 logger.info("TraceAI console exporter enabled");
             }
 
-            tracerProvider = providerBuilder.build();
-
-            // Register globally
-            OpenTelemetrySdk sdk = OpenTelemetrySdk.builder()
-                .setTracerProvider(tracerProvider)
-                .buildAndRegisterGlobal();
-
-            // Create FITracer instance
-            Tracer tracer = GlobalOpenTelemetry.getTracer(TRACER_NAME, getVersion());
+            ownedTracerProvider = providerBuilder.build();
+            Tracer tracer = ownedTracerProvider.get(TRACER_NAME, getVersion());
             instance = new FITracer(tracer, config);
             initialized = true;
 
-            // Register shutdown hook
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logger.debug("Shutting down TraceAI");
-                shutdown();
-            }));
-
             logger.info("TraceAI initialized successfully (version {})", getVersion());
+        }
+    }
+
+    /**
+     * Initializes TraceAI using an application-owned OpenTelemetry instance.
+     *
+     * <p>For a Java agent or globally registered SDK, pass
+     * {@code GlobalOpenTelemetry.get()}. No provider, exporter, processor or shutdown
+     * hook is created. The caller retains responsibility for configuring export,
+     * resource attributes, flushing and shutdown. Only FITracer options such as
+     * input/output and error-detail hiding are used from {@code config}; export and
+     * resource options are ignored. This method does not change global OpenTelemetry.</p>
+     *
+     * <p>Like {@link #init(TraceConfig)}, the first initialization wins until
+     * {@link #shutdown()}. Shutdown only detaches a borrowed instance; it never
+     * flushes or closes the caller's provider.</p>
+     *
+     * @param config the FITracer configuration
+     * @param openTelemetry the caller-owned OpenTelemetry instance
+     * @throws IllegalArgumentException if either argument is null
+     */
+    public static void init(TraceConfig config, OpenTelemetry openTelemetry) {
+        if (config == null || openTelemetry == null) {
+            throw new IllegalArgumentException("TraceConfig and OpenTelemetry cannot be null");
+        }
+        synchronized (lock) {
+            if (initialized) {
+                logger.debug("TraceAI already initialized, skipping");
+                return;
+            }
+            instance = new FITracer(openTelemetry.getTracer(TRACER_NAME, getVersion()), config);
+            initialized = true;
+            logger.info("TraceAI initialized with application-owned OpenTelemetry (version {})", getVersion());
         }
     }
 
@@ -188,14 +221,16 @@ public final class TraceAI {
     }
 
     /**
-     * Shuts down TraceAI and flushes any pending spans.
+     * Flushes and closes a TraceAI-owned provider, or detaches a borrowed instance.
+     * Does not change global OpenTelemetry or flush/close an application-owned SDK.
+     * Subsequent initialization is allowed; obtain a new FITracer after reinitializing.
      */
     public static void shutdown() {
         synchronized (lock) {
-            if (tracerProvider != null) {
-                tracerProvider.forceFlush().join(10, TimeUnit.SECONDS);
-                tracerProvider.shutdown().join(10, TimeUnit.SECONDS);
-                tracerProvider = null;
+            if (ownedTracerProvider != null) {
+                ownedTracerProvider.forceFlush().join(10, TimeUnit.SECONDS);
+                ownedTracerProvider.shutdown().join(10, TimeUnit.SECONDS);
+                ownedTracerProvider = null;
             }
             instance = null;
             initialized = false;
