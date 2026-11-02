@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
@@ -36,7 +37,9 @@ class BedrockAsyncCompletionTest {
         "converse, failure", "invokeModel, failure",
         "converse, sdk-cancel", "invokeModel, sdk-cancel",
         "converse, caller-cancel-true", "invokeModel, caller-cancel-true",
-        "converse, caller-cancel-false", "invokeModel, caller-cancel-false"
+        "converse, caller-cancel-false", "invokeModel, caller-cancel-false",
+        "converse, caller-failure", "invokeModel, caller-failure",
+        "converse, caller-timeout", "invokeModel, caller-timeout"
     })
     void endsSpanBeforeApplicationCallbackFlushesAndShutsDown(String operation, String outcome) throws Exception {
         List<ExportTraceServiceRequest> exports = new CopyOnWriteArrayList<>();
@@ -91,8 +94,13 @@ class BedrockAsyncCompletionTest {
                 if (outcome.equals("success")) {
                     assertThat(value).isSameAs(response);
                     assertThat(error).isNull();
-                } else if (outcome.equals("failure")) {
+                } else if (outcome.equals("failure") || outcome.equals("caller-failure")) {
                     assertThat(error).isSameAs(failure);
+                    assertThat(sdkFuture).isCompletedExceptionally();
+                } else if (outcome.equals("caller-timeout")) {
+                    assertThat(error).isInstanceOf(TimeoutException.class);
+                    assertThat(sdkFuture).isCompletedExceptionally();
+                    assertThatThrownBy(sdkFuture::join).hasCause(error);
                 } else {
                     assertThat(error).isInstanceOf(CancellationException.class);
                     assertThat(future.isCancelled()).isTrue();
@@ -103,6 +111,8 @@ class BedrockAsyncCompletionTest {
             switch (outcome) {
                 case "success" -> sdkFuture.complete(response);
                 case "failure" -> sdkFuture.completeExceptionally(failure);
+                case "caller-failure" -> assertThat(future.completeExceptionally(failure)).isTrue();
+                case "caller-timeout" -> future.orTimeout(30, TimeUnit.MILLISECONDS);
                 case "sdk-cancel" -> sdkFuture.cancel(false);
                 case "caller-cancel-true", "caller-cancel-false" -> {
                     boolean mayInterrupt = outcome.endsWith("true");
@@ -115,7 +125,8 @@ class BedrockAsyncCompletionTest {
             appCompletion.get(5, TimeUnit.SECONDS);
             assertThat(exports).hasSize(1);
             assertThat(sdkFuture.complete(response)).isFalse();
-            if (outcome.equals("success") || outcome.equals("failure")) {
+            assertThat(future.completeExceptionally(new IllegalStateException("late failure"))).isFalse();
+            if (!outcome.contains("cancel")) {
                 assertThat(future.cancel(true)).isFalse();
             } else {
                 assertThat(future.cancel(false)).isTrue();

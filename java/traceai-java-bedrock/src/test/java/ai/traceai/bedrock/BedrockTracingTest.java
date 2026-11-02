@@ -20,6 +20,7 @@ import java.lang.reflect.Proxy;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 class BedrockTracingTest {
     @RegisterExtension
@@ -156,6 +157,65 @@ class BedrockTracingTest {
             .body(SdkBytes.fromUtf8String("{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image\","
                 + "\"source\":{\"type\":\"base64\",\"data\":\"private-binary\"}}]}]}")).build());
         assertThat(otel.getSpans().get(0).getAttributes().toString()).doesNotContain("private-binary").contains("omitted");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"42", "true", "null", "\"ordinary text\"", "[1,2,3]", "{\"nested\":42}"})
+    void toolArgumentsAreNotBinarySources(String bytesValue) {
+        String arguments = "{\"bytes\":" + bytesValue + ",\"type\":\"base64\",\"data\":\"ordinary data\","
+            + "\"image\":{\"source\":{\"bytes\":\"ordinary nested data\"}}}";
+        String content = "[{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"read_file\",\"input\":" + arguments + "}]";
+        var response = InvokeModelResponse.builder().body(SdkBytes.fromUtf8String("{\"content\":" + content + "}")).build();
+        new TracedBedrockRuntimeClient(stub(response), tracer(false)).invokeModel(InvokeModelRequest.builder()
+            .modelId("us.anthropic.model").body(SdkBytes.fromUtf8String(
+                "{\"messages\":[{\"role\":\"assistant\",\"content\":" + content + "}]}")).build());
+        SpanData span = otel.getSpans().get(0);
+        assertSoftly(soft -> {
+            for (String key : new String[] {SemanticConventions.LLM_INPUT_MESSAGES, SemanticConventions.LLM_OUTPUT_MESSAGES,
+                SemanticConventions.RAW_INPUT, SemanticConventions.RAW_OUTPUT}) {
+                soft.assertThat(value(span, key)).as(key).contains("\"input\":" + arguments);
+            }
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"data\":\"private-binary\"}}",
+        "{\"type\":\"document\",\"source\":{\"type\":\"base64\",\"data\":\"private-binary\"}}",
+        "{\"image\":{\"format\":\"png\",\"source\":{\"bytes\":\"private-binary\"}}}",
+        "{\"document\":{\"format\":\"pdf\",\"source\":{\"bytes\":\"private-binary\"}}}",
+        "{\"type\":\"tool_result\",\"tool_use_id\":\"tool-1\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"data\":\"private-binary\"}}]}",
+        "{\"toolResult\":{\"toolUseId\":\"tool-1\",\"content\":[{\"image\":{\"format\":\"png\",\"source\":{\"bytes\":\"private-binary\"}}}]}}"
+    })
+    void recognizedMediaSourcesRemainRedacted(String block) {
+        String content = "[" + block + "]";
+        var response = InvokeModelResponse.builder().body(SdkBytes.fromUtf8String("{\"content\":" + content + "}")).build();
+        new TracedBedrockRuntimeClient(stub(response), tracer(false)).invokeModel(InvokeModelRequest.builder()
+            .modelId("anthropic.model").body(SdkBytes.fromUtf8String(
+                "{\"messages\":[{\"role\":\"user\",\"content\":" + content + "}]}")).build());
+        SpanData span = otel.getSpans().get(0);
+        for (String key : new String[] {SemanticConventions.LLM_INPUT_MESSAGES, SemanticConventions.LLM_OUTPUT_MESSAGES,
+            SemanticConventions.RAW_INPUT, SemanticConventions.RAW_OUTPUT}) {
+            assertThat(value(span, key)).as(key).doesNotContain("private-binary").contains("omitted");
+        }
+    }
+
+    @Test
+    void novaOutputRedactsMediaButPreservesToolJson() {
+        String arguments = "{\"bytes\":42,\"type\":\"base64\",\"data\":\"ordinary data\"}";
+        String message = "{\"role\":\"assistant\",\"content\":["
+            + "{\"image\":{\"format\":\"png\",\"source\":{\"bytes\":\"private-binary\"}}},"
+            + "{\"toolUse\":{\"toolUseId\":\"tool-1\",\"name\":\"read_file\",\"input\":" + arguments + "}},"
+            + "{\"toolResult\":{\"toolUseId\":\"tool-1\",\"content\":[{\"json\":" + arguments + "}]}}]}";
+        var response = InvokeModelResponse.builder().body(SdkBytes.fromUtf8String(
+            "{\"output\":{\"message\":" + message + "}}")).build();
+        new TracedBedrockRuntimeClient(stub(response), tracer(false)).invokeModel(InvokeModelRequest.builder()
+            .modelId("amazon.nova-pro-v1:0").body(SdkBytes.fromUtf8String("{\"messages\":[" + message + "]}")).build());
+        SpanData span = otel.getSpans().get(0);
+        for (String key : new String[] {SemanticConventions.LLM_INPUT_MESSAGES, SemanticConventions.RAW_INPUT, SemanticConventions.RAW_OUTPUT}) {
+            assertThat(value(span, key)).as(key).contains("\"input\":" + arguments, "\"json\":" + arguments, "omitted")
+                .doesNotContain("private-binary");
+        }
     }
 
     static ConverseRequest request() {

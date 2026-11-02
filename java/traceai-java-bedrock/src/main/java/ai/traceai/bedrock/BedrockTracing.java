@@ -33,6 +33,7 @@ final class BedrockTracing {
     static final ContextKey<SdkRequest> WRAPPED_REQUEST = ContextKey.named("traceai-bedrock-request");
     private static final Set<String> REGIONS = Set.of("us", "eu", "apac", "global", "au", "jp");
     private static final Set<String> PROVIDERS = Set.of("anthropic", "amazon", "ai21", "cohere", "meta", "mistral", "stability");
+    private static final Set<String> MEDIA_TYPES = Set.of("image", "document", "audio", "video");
     private final FITracer tracer;
 
     BedrockTracing(FITracer tracer) {
@@ -140,9 +141,10 @@ final class BedrockTracing {
         JsonObject json = JsonParser.parseString(body).getAsJsonObject();
         if (json.has("messages")) span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "chat");
         if (tracer.getConfig().isHideInputs()) return;
-        setJson(span, SemanticConventions.RAW_INPUT, redactBinary(json));
+        json = redactBinary(json);
+        setJson(span, SemanticConventions.RAW_INPUT, json);
         if (json.has("messages") && json.get("messages").isJsonArray()) {
-            JsonArray messages = redactBinary(json.get("messages")).getAsJsonArray();
+            JsonArray messages = json.getAsJsonArray("messages");
             setMessages(span, messages, true);
             tracer.setInputValue(span, messagesText(messages));
         } else if ("amazon".equals(provider) && json.has("inputText")) {
@@ -169,10 +171,11 @@ final class BedrockTracing {
             span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, json.get("stop_reason").getAsString());
         }
         if (tracer.getConfig().isHideOutputs()) return;
-        setJson(span, SemanticConventions.RAW_OUTPUT, redactBinary(json));
+        json = redactBinary(json);
+        setJson(span, SemanticConventions.RAW_OUTPUT, json);
         if (json.has("content") && json.get("content").isJsonArray()) {
             JsonArray messages = new JsonArray();
-            messages.add(message("assistant", redactBinary(json.get("content")).getAsJsonArray()));
+            messages.add(message("assistant", json.getAsJsonArray("content")));
             setMessages(span, messages, false);
             tracer.setOutputValue(span, messagesText(messages));
         } else if (json.has("results") && json.getAsJsonArray("results").size() > 0) {
@@ -286,26 +289,76 @@ final class BedrockTracing {
         return result;
     }
 
-    /** Never export inline image/document bytes from provider JSON payloads. */
-    private static JsonElement redactBinary(JsonElement value) {
-        return redactBinary(value, 0);
+    /** Redact only media sources in message content, never arbitrary tool arguments. */
+    private static JsonObject redactBinary(JsonObject payload) {
+        JsonObject result = boundedCopy(payload, 0).getAsJsonObject();
+        JsonElement messages = result.get("messages");
+        if (messages != null && messages.isJsonArray()) {
+            for (JsonElement message : messages.getAsJsonArray()) {
+                if (message.isJsonObject()) redactContent(message.getAsJsonObject().get("content"));
+            }
+        }
+        redactContent(result.get("content"));
+        JsonElement output = result.get("output");
+        if (output != null && output.isJsonObject()) {
+            JsonElement message = output.getAsJsonObject().get("message");
+            if (message != null && message.isJsonObject()) redactContent(message.getAsJsonObject().get("content"));
+        }
+        return result;
     }
 
-    private static JsonElement redactBinary(JsonElement value, int depth) {
+    private static void redactContent(JsonElement content) {
+        if (content == null || !content.isJsonArray()) return;
+        for (JsonElement item : content.getAsJsonArray()) {
+            if (!item.isJsonObject()) continue;
+            JsonObject block = item.getAsJsonObject();
+            String type = jsonString(block.get("type"));
+            if (MEDIA_TYPES.contains(type)) {
+                redactSource(block.get("source"));
+            }
+            // Nova uses named content members rather than a type discriminator.
+            for (String media : MEDIA_TYPES) {
+                JsonElement member = block.get(media);
+                if (member != null && member.isJsonObject()) redactSource(member.getAsJsonObject().get("source"));
+            }
+            if (type.equals("tool_result")) redactContent(block.get("content"));
+            JsonElement toolResult = block.get("toolResult");
+            if (toolResult != null && toolResult.isJsonObject()) redactContent(toolResult.getAsJsonObject().get("content"));
+            // tool_use.input and toolResult.content[].json are user JSON, not media.
+        }
+    }
+
+    private static void redactSource(JsonElement source) {
+        if (source == null || !source.isJsonObject()) return;
+        JsonObject object = source.getAsJsonObject();
+        JsonElement bytes = object.get("bytes");
+        if (bytes != null && bytes.isJsonPrimitive() && bytes.getAsJsonPrimitive().isString()) {
+            object.add("bytes", omitted());
+        }
+        JsonElement data = object.get("data");
+        if (jsonString(object.get("type")).equals("base64") && data != null
+            && data.isJsonPrimitive() && data.getAsJsonPrimitive().isString()) {
+            object.add("data", omitted());
+        }
+    }
+
+    private static String jsonString(JsonElement value) {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+            ? value.getAsString() : "";
+    }
+
+    /** Bound traversal even for deeply nested user JSON; primitives are immutable. */
+    private static JsonElement boundedCopy(JsonElement value, int depth) {
         if (depth > 32) return omitted();
         if (value.isJsonArray()) {
             JsonArray result = new JsonArray();
-            for (JsonElement member : value.getAsJsonArray()) result.add(redactBinary(member, depth + 1));
+            for (JsonElement member : value.getAsJsonArray()) result.add(boundedCopy(member, depth + 1));
             return result;
         }
         if (value.isJsonObject()) {
-            JsonObject source = value.getAsJsonObject();
             JsonObject result = new JsonObject();
-            boolean base64 = source.has("type") && source.get("type").isJsonPrimitive()
-                && source.get("type").getAsString().equals("base64");
-            source.entrySet().forEach(entry -> result.add(entry.getKey(),
-                entry.getKey().equals("bytes") || base64 && entry.getKey().equals("data")
-                    ? omitted() : redactBinary(entry.getValue(), depth + 1)));
+            value.getAsJsonObject().entrySet().forEach(entry ->
+                result.add(entry.getKey(), boundedCopy(entry.getValue(), depth + 1)));
             return result;
         }
         return value;
