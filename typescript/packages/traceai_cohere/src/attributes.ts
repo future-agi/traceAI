@@ -110,6 +110,7 @@ function withoutInputEchoes(operation: Operation, response: Data): Data {
         return { type: content.type, text: content.text, thinking: content.thinking };
       }) : message.content,
       toolCalls: field(message, "toolCalls", "tool_calls"),
+      toolPlan: field(message, "toolPlan", "tool_plan"),
     },
   };
 }
@@ -148,6 +149,8 @@ export function outputAttributes(operation: Operation, response: Data, config: T
     const text = typeof response.text === "string" ? response.text : list(message.content).map((part) => object(part).text ?? "").join("");
     const calls = field(message, "toolCalls", "tool_calls") ?? field(response, "toolCalls", "tool_calls");
     const normalized: Data = { role: "assistant", content: message.content ?? text };
+    const toolPlan = field(message, "toolPlan", "tool_plan");
+    if (typeof toolPlan === "string") normalized.tool_plan = toolPlan;
     if (calls) normalized.tool_calls = list(calls).map((item) => {
       const call = object(item);
       return call.function ? call : { function: { name: call.name, arguments: typeof call.parameters === "string" ? call.parameters : json(call.parameters) } };

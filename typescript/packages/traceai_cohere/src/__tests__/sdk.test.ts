@@ -589,6 +589,79 @@ describe.each(outputModes)("generated content with %s", (mode) => {
     });
   });
 
+  it.each(["chat", "complete", "cancelled", "eof"])("retains v2 generated tool plans (%s)", async (ending) => {
+    await captureOutput(async (captured) => {
+      const client = clientFor(sdk8, true);
+      const plan = "synthetic-generated-tool-plan-continued";
+      if (ending === "chat") {
+        response = { ...v2Response, message: { role: "assistant", tool_plan: plan, tool_calls: [{ id: "call-1", type: "function", function: { name: "lookup", arguments: "{}" } }] } };
+        const result = await client.chat(requestV2);
+        expect(result.message.toolPlan).toBe(plan);
+      } else {
+        const events: any[] = [
+          { type: "tool-plan-delta", delta: { message: { tool_plan: "synthetic-generated-tool-plan-" } } },
+          { type: "tool-plan-delta", delta: { message: { tool_plan: "continued" } } },
+          { type: "tool-call-start", index: 0, delta: { message: { tool_calls: { id: "call-1", type: "function", function: { name: "lookup", arguments: "{}" } } } } },
+        ];
+        if (ending === "complete") events.push({ type: "message-end", delta: { finish_reason: "TOOL_CALL" } });
+        contentType = "text/event-stream";
+        response = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+        const delivered = [];
+        for await (const event of await client.chatStream(requestV2)) {
+          delivered.push(event);
+          if (ending === "cancelled" && delivered.length === 3) break;
+        }
+        expect(delivered[0].delta.message.toolPlan).toBe("synthetic-generated-tool-plan-");
+      }
+      const spans = captured.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      const attrs = spans[0].attributes;
+      expect(spans[0].status.code).toBe(ending === "cancelled" ? SpanStatusCode.UNSET : ending === "eof" ? SpanStatusCode.ERROR : SpanStatusCode.OK);
+      if (hidden) {
+        expect(attrs[S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
+        expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
+      } else {
+        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(plan);
+        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_plan).toBe(plan);
+        expect(attrs[S.OUTPUT_VALUE]).not.toContain(plan);
+      }
+    });
+  });
+
+  it.each(["cancelled", "eof", "terminal", "generation"])("retains v1 generated tool plans (%s)", async (ending) => {
+    await captureOutput(async (captured) => {
+      const client = clientFor(sdk8);
+      const partial = "synthetic-generated-tool-plan-continued";
+      const events: any[] = [
+        { event_type: "tool-calls-chunk", tool_call_delta: { index: 0, text: "synthetic-generated-tool-plan-", name: "lookup", parameters: "{}" } },
+        { event_type: "tool-calls-chunk", tool_call_delta: { index: 0, text: "continued" } },
+      ];
+      if (ending === "generation") events.push({ event_type: "tool-calls-generation", text: partial, tool_calls: [{ name: "lookup", parameters: {} }] });
+      if (ending === "terminal") events.push({ event_type: "stream-end", finish_reason: "COMPLETE", response: { text: partial, tool_calls: [{ name: "lookup", parameters: {} }] } });
+      contentType = "application/x-ndjson";
+      response = events.map(event => `${JSON.stringify(event)}\n`).join("");
+      const delivered = [];
+      for await (const event of await client.chatStream(request)) {
+        delivered.push(event);
+        if (ending === "cancelled" && delivered.length === 2) break;
+      }
+      expect(delivered[0].toolCallDelta.text).toBe("synthetic-generated-tool-plan-");
+      const spans = captured.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      const attrs = spans[0].attributes;
+      expect(spans[0].status.code).toBe(ending === "terminal" ? SpanStatusCode.OK : ending === "cancelled" ? SpanStatusCode.UNSET : SpanStatusCode.ERROR);
+      if (hidden) {
+        expect(attrs[S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
+        expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        expect(JSON.stringify(attrs)).not.toContain("synthetic-generated-");
+      } else {
+        expect(JSON.parse(attrs[S.RAW_OUTPUT] as string).message.toolPlan).toBe(partial);
+        expect(JSON.parse(attrs[S.LLM_OUTPUT_MESSAGES] as string)[0].tool_plan).toBe(partial);
+      }
+    });
+  });
+
   it.each(["cancelled", "eof", "terminal", "generation"])("preserves v1 tool chunks (%s)", async (ending) => {
     await captureOutput(async (captured) => {
       const client = clientFor(sdk8);

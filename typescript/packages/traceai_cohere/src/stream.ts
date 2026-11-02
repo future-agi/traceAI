@@ -6,6 +6,7 @@ type Finish = (response: Data, error?: unknown, cancelled?: boolean) => void;
 /** Aggregate content, not the event log. Consumers still receive original events. */
 class ChatAccumulator {
   private text = "";
+  private toolPlan = "";
   private content = new Map<number, Data>();
   private tools = new Map<number, Data>();
   private response: Data = {};
@@ -34,8 +35,13 @@ class ChatAccumulator {
         if (block.type) this.content.set(index, block);
         if (typeof content.text === "string") this.text += content.text;
       }
+      if (type === "tool-plan-delta") {
+        const plan = message.toolPlan ?? message.tool_plan;
+        if (typeof plan === "string") this.toolPlan += plan;
+      }
       if (type === "tool-calls-chunk") {
         const call = object(event.toolCallDelta ?? event.tool_call_delta);
+        if (typeof call.text === "string") this.toolPlan += call.text;
         const index = typeof call.index === "number" ? call.index : 0;
         const previous = this.tools.get(index) ?? {};
         this.tools.set(index, {
@@ -46,6 +52,7 @@ class ChatAccumulator {
         });
       }
       if (type === "tool-calls-generation") {
+        if (typeof event.text === "string") this.toolPlan = event.text;
         this.tools.clear();
         list(event.toolCalls ?? event.tool_calls).forEach((call, index) => this.tools.set(index, object(call)));
       }
@@ -63,6 +70,8 @@ class ChatAccumulator {
     }
     if (type === "stream-end") {
       const response = object(event.response);
+      // V1's terminal text is authoritative after provisional tool chunks.
+      if (this.toolPlan && typeof response.text === "string" && response.text) this.toolPlan = response.text;
       this.response = { ...response, finishReason: event.finishReason ?? event.finish_reason ?? response.finishReason ?? response.finish_reason };
     }
     if (type === "message-end") this.response = { usage: delta.usage, finishReason: delta.finishReason ?? delta.finish_reason };
@@ -75,9 +84,10 @@ class ChatAccumulator {
     return {
       text: this.text,
       toolCalls: [...this.tools].sort(([a], [b]) => a - b).map(([, call]) => call),
-      ...(this.content.size ? { message: {
+      ...(this.content.size || this.toolPlan ? { message: {
         role: "assistant",
-        content: [...this.content].sort(([a], [b]) => a - b).map(([, block]) => block),
+        ...(this.content.size ? { content: [...this.content].sort(([a], [b]) => a - b).map(([, block]) => block) } : {}),
+        ...(this.toolPlan ? { toolPlan: this.toolPlan } : {}),
       } } : {}),
       ...this.response,
     };
