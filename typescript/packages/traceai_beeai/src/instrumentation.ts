@@ -230,7 +230,7 @@ function spanKind(namespace: string[]): FISpanKind {
   const category = namespace[0] === "backend" || (namespace[0] === "langchain" && namespace[1] === "backend")
     ? namespace[2] : namespace[0];
   if (category === "tool") return FISpanKind.TOOL;
-  if (category === "agent") return FISpanKind.AGENT;
+  if (category === "agent" || (namespace[0] === "a2a" && namespace[1] === "agent")) return FISpanKind.AGENT;
   if (category === "llm" || category === "chat") return FISpanKind.LLM;
   if (category === "embedding") return FISpanKind.EMBEDDING;
   return FISpanKind.CHAIN;
@@ -248,6 +248,9 @@ function payloadJSON(value: unknown, hideEmbeddingVectors: boolean): string | un
     // Export the answer, not runner memory, intermediate iterations or history.
     if (isRecord(item)) {
       if ("result" in item && "memory" in item) return { result: item.result };
+      // A2A returns { result, event }; completed task events contain request history.
+      if ("result" in item && "event" in item && isRecord(item.event)
+        && typeof item.event.kind === "string") return { result: item.result };
       // RePlanAgent uses message/intermediateMemory instead of result/memory.
       if ("message" in item && "intermediateMemory" in item) return { message: item.message };
     }

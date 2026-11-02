@@ -496,3 +496,52 @@ for (const traceConfig of [
     assert.equal(spans()[2].status.code, SpanStatusCode.ERROR);
   } finally { privateInstrumentation.disable(); instrumentation.enable(); }
 });
+
+// BeeAI 0.1.31 introduces A2AAgent; its completed task keeps the request in
+// event.history, while result contains only the public response.
+for (const flag of ['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT']) {
+  test(`A2A agent output excludes transport history directly and nested: ${flag}`, {
+    skip: sdk('beeai-framework/package.json').version === '0.1.2',
+  }, async () => {
+    const previous = process.env[flag];
+    process.env[flag] = 'true';
+    const remote = createServer(async (request, response) => {
+      const parts = [];
+      for await (const part of request) parts.push(part);
+      const body = JSON.parse(Buffer.concat(parts).toString());
+      assert.equal(body.method, 'message/stream');
+      const answer = { kind: 'message', role: 'agent', messageId: 'synthetic-answer',
+        parts: [{ kind: 'text', text: 'public-answer' }] };
+      const task = { kind: 'task', id: 'synthetic-task', contextId: 'synthetic-context',
+        status: { state: 'completed', message: answer },
+        artifacts: [{ artifactId: 'synthetic-artifact', parts: answer.parts }],
+        history: [body.params.message, answer] };
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result: task })}\n\n`);
+    }).listen(0, '127.0.0.1');
+    try {
+      await once(remote, 'listening');
+      const endpoint = `http://127.0.0.1:${remote.address().port}/rpc`;
+      const { A2AAgent } = await upstream('beeai-framework/adapters/a2a/agents/agent');
+      const { UnconstrainedMemory } = await upstream('beeai-framework/memory/unconstrainedMemory');
+      const agent = new A2AAgent({ url: endpoint, memory: new UnconstrainedMemory() });
+      agent.agentCard = { name: 'synthetic-agent', description: 'offline', url: endpoint,
+        version: '1.0.0', protocolVersion: '0.3.0', capabilities: { streaming: true },
+        defaultInputModes: ['text'], defaultOutputModes: ['text'], skills: [] };
+      const result = await agent.run({ input: 'PRIVATE_A2A_PROMPT' });
+      assert.equal(result.result.text, 'public-answer');
+      assert.ok(JSON.stringify(result.event.history).includes('PRIVATE_A2A_PROMPT'));
+      await new Workflow({ schema: z.object({ nested: z.any().optional() }) })
+        .addStep('return', state => { state.nested = result; return Workflow.END; }).run({});
+      await provider.forceFlush();
+      const agentOutput = spans().find(s => s.name === 'A2AAgent Run');
+      assert.equal(kind(agentOutput), 'AGENT');
+      assert.deepEqual(Object.keys(JSON.parse(agentOutput.attributes[SC.OUTPUT_VALUE])), ['result']);
+      assert.ok(JSON.stringify(spans().find(s => s.name === 'Workflow Run').attributes[SC.OUTPUT_VALUE]).includes('public-answer'));
+      assert.ok(!JSON.stringify(wire).includes('PRIVATE_A2A_PROMPT'));
+    } finally {
+      if (previous === undefined) delete process.env[flag]; else process.env[flag] = previous;
+      await new Promise(resolve => remote.close(resolve));
+    }
+  });
+}

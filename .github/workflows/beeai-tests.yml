@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['0.1.2', '0.1.31']
+        sdk: ['0.1.2', '0.1.32']
     defaults:
       run:
         working-directory: typescript
@@ -48,9 +48,12 @@ jobs:
           corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
           echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
           corepack pnpm --filter @traceai/beeai... install --frozen-lockfile --ignore-scripts
-          # Optional provider peers are unnecessary for synthetic model subclasses.
+          # Model provider peers are unnecessary; A2A is installed for the real agent contract.
           npm install --prefix "$RUNNER_TEMP/beeai" --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
             beeai-framework@${{ matrix.sdk }} zod@3.25.76
+          if [[ "${{ matrix.sdk }}" != "0.1.2" ]]; then
+            npm install --prefix "$RUNNER_TEMP/beeai" --ignore-scripts --legacy-peer-deps --no-audit --no-fund @a2a-js/sdk@0.3.4
+          fi
       - name: Build the package and its dependencies
         run: |
           pnpm run build:deps
