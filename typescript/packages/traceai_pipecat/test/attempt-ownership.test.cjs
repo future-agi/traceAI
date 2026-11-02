@@ -60,7 +60,12 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
         first = false;
         disconnect = client.disconnect();
       },
-      onDisconnected() { if (!retry) retry = client.connect(); },
+      onDisconnected() {
+        if (!retry) {
+          retry = client.connect();
+          retry.catch(() => {}); // The awaited disconnect now includes deferred cleanup.
+        }
+      },
     });
     const original = transport.connect.bind(transport);
     const failure = new Error('synthetic retry transport failure');
@@ -199,7 +204,10 @@ test('latest: old endpoint bot-ready cannot mark a callback-created failed endpo
       disconnect = client.disconnect();
     },
     onDisconnected() {
-      if (!retry) retry = client.connect({ endpoint: 'http://127.0.0.1/synthetic/retry' });
+      if (!retry) {
+        retry = client.connect({ endpoint: 'http://127.0.0.1/synthetic/retry' });
+        retry.catch(() => {}); // The awaited disconnect now includes deferred cleanup.
+      }
     },
   });
   const fetch = globalThis.fetch;
@@ -285,4 +293,48 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     await client.disconnect();
     assert.equal(connects(exporter).length, 3, 'a later cycle must not retain the abandoned attempt');
   });
+}
+
+// Disposal is allowed immediately after awaited disconnect; no caller should
+// need to know that instrumentation scheduled a zero-delay cleanup timer.
+for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
+  for (const disposal of ['forceFlush', 'shutdown']) {
+    test(`${name}: ${disposal} after disconnect includes an abandoned bot-ready attempt`, async t => {
+      const sdk = require(name);
+      const exported = [];
+      let closed = false;
+      const exporter = {
+        export(spans, done) {
+          if (!closed) exported.push(...spans);
+          done({ code: closed ? 1 : 0 });
+        },
+        shutdown() { closed = true; return Promise.resolve(); },
+      };
+      const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+      const manager = new AsyncLocalStorageContextManager().enable();
+      context.setGlobalContextManager(manager);
+      const instrumentation = new PipecatInstrumentation();
+      instrumentation.setTracerProvider(provider);
+      instrumentation.manuallyInstrument(sdk);
+      const { client, transport } = createClient(sdk);
+      client.setLogLevel(sdk.LogLevel.NONE);
+      t.after(async () => { instrumentation.disable(); await provider.shutdown(); manager.disable(); context.disable(); });
+      client._options.enableMic = true;
+      const originalInit = transport.initDevices.bind(transport);
+      let release;
+      const gate = new Promise(resolve => { release = resolve; });
+      transport.initDevices = async () => { await gate; return originalInit(); };
+      let firstSettled = false, secondSettled = false;
+      client.connect().then(() => { firstSettled = true; }, () => { firstSettled = true; });
+      client.connect().then(() => { secondSettled = true; }, () => { secondSettled = true; });
+      release();
+      await wait(() => secondSettled);
+      assert.equal(firstSettled, false, 'SDK abandoned the earlier resolver');
+      await client.disconnect();
+      await provider[disposal]();
+      const spans = exported.filter(s => s.attributes['pipecat.operation'] === 'client.connect');
+      assert.equal(spans.length, 2, 'provider disposal must see both attempts');
+      assert.deepEqual(spans.map(s => s.status.code).sort(), [SpanStatusCode.OK, SpanStatusCode.ERROR].sort());
+    });
+  }
 }

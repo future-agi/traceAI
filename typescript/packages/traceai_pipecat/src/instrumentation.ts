@@ -212,15 +212,15 @@ export class PipecatInstrumentation extends InstrumentationBase {
     return detach;
   }
 
-  private static cancelConnections(attempts: Map<FinishSpan, ConnectionScope>): void {
+  private static cancelConnections(attempts: Map<FinishSpan, ConnectionScope>, deferReady = true): void {
     for (const [finish, scope] of attempts) {
-      if (scope.ready) {
-        // bot-ready resolves the SDK promise before invoking application
-        // callbacks, but instrumentation's .then may run after a callback
-        // disconnects. Give it one turn to settle, then finish any overlapping
-        // attempt whose resolver the SDK replaced. finish is idempotent.
+      if (scope.ready && deferReady) {
+        // A transport notification may fire inside the bot-ready callback,
+        // before the resolved connection's .then can mark its span successful.
         setTimeout(() => finish(SpanStatusCode.ERROR), 0);
       } else {
+        // Once the public disconnect promise has settled, callers may flush or
+        // shut down immediately. Do not leave abandoned attempts on a timer.
         finish(SpanStatusCode.ERROR);
       }
     }
@@ -291,7 +291,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
     }
     const settle = (code: SpanStatusCode) => {
       if (disconnect) {
-        if (code === SpanStatusCode.OK) PipecatInstrumentation.cancelConnections(disconnect);
+        if (code === SpanStatusCode.OK) PipecatInstrumentation.cancelConnections(disconnect, false);
         disconnect.clear();
       }
       // A cancelled endpoint call may still delegate later. Keep its one-use
@@ -309,7 +309,17 @@ export class PipecatInstrumentation extends InstrumentationBase {
       });
       if (result instanceof Promise) {
         return result.then(
-          (value) => { settle(SpanStatusCode.OK); return value; },
+          async (value) => {
+            if (disconnect && [...disconnect.values()].some(scope => scope.ready)) {
+              // The SDK may resolve connect immediately before invoking bot-ready
+              // callbacks that disconnect. Let its connect continuation mark OK
+              // before cancelling abandoned attempts. Await the turn here so an
+              // awaited disconnect is also a reliable flush/shutdown boundary.
+              await new Promise<void>(resolve => setTimeout(resolve, 0));
+            }
+            settle(SpanStatusCode.OK);
+            return value;
+          },
           (error: unknown) => { settle(SpanStatusCode.ERROR); throw error; },
         );
       }
