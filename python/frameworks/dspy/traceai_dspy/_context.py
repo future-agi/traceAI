@@ -16,6 +16,7 @@ def callback_roots() -> list[type]:
     roots.extend(
         cls
         for name in (
+            "Retrieve",
             "Evaluate",
             "CodeInterpreter",
             "PythonInterpreter",

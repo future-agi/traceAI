@@ -828,7 +828,8 @@ def _output_value_and_mime_type(response: Any) -> Iterator[Tuple[str, Any]]:
 
 
 def _llm_model_name(lm: "LM") -> Iterator[Tuple[str, Any]]:
-    if (model_name := getattr(lm, "model_name", None)) is not None:
+    model_name = getattr(lm, "model", None) or getattr(lm, "model_name", None)
+    if isinstance(model_name, str):
         yield GEN_AI_REQUEST_MODEL, model_name
 
 
@@ -894,8 +895,8 @@ def _get_embedding_output(response: list) -> Iterator[Tuple[str, Any]]:
 
 
 def _embedder_model_name(embedder: Any) -> Iterator[Tuple[str, Any]]:
-    if (model_name := getattr(embedder, "name", None)) is not None:
-        yield "embedder.model_name", model_name
+    if isinstance(model_name := getattr(embedder, "model", None), str):
+        yield SpanAttributes.EMBEDDING_MODEL_NAME, model_name
 
 
 JSON = FiMimeTypeValues.JSON.value

@@ -68,10 +68,11 @@ def sanitize(value: Any) -> Any:
 
 
 def payload(value: Any, encoder: type[json.JSONEncoder]) -> str:
-    # Sanitize again after encoding: DSPy Predictions become mappings in the
-    # encoder, and may themselves contain credential-named fields.
+    # Respect the encoder's default: safe_json_dumps supplies default=str,
+    # which would turn Example/Prediction records into opaque, unsanitizable
+    # strings. Sanitize again once the encoder exposes their nested fields.
     return safe_json_dumps(
-        sanitize(json.loads(safe_json_dumps(sanitize(value), cls=encoder)))
+        sanitize(json.loads(json.dumps(sanitize(value), cls=encoder)))
     )
 
 
