@@ -55,6 +55,6 @@ Open the **Instructor** project in Future AGI. Each extraction is a `CHAIN` span
 - Where per-call hooks are supported, attempt and validation-error counts are recorded without registering listeners on shared clients. Existing application hooks keep running.
 - Lazy streams finish on exhaustion, error, or explicit `close()` / `aclose()`. Consume or close them before flushing. Their output is the last parsed item, with `instructor.stream.chunks` recording the item count; telemetry does not accumulate the stream.
 
-The SDK's own return values and exceptions are preserved. Instructor 1.0's partial-stream implementation is incompatible with the Pydantic versions required by this package; upgrade Instructor to use partial streaming. Eager SDK results remain eager.
+The SDK's own return values and exceptions are preserved. Use Instructor 1.10 or later for partial streaming with this package's required Pydantic version. Eager SDK results remain eager.
 
 See the [Instructor integration guide](https://docs.futureagi.com/docs/integrations/traceai/instructor) for setup details.

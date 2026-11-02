@@ -177,20 +177,6 @@ def test_real_sync_stream_routes(traces, method):
     exporter, _, _ = traces
     with sdk(handler=lambda request: streaming_response(method == "create_iterable")) as raw:
         client = instructor.from_openai(raw, mode=instructor.Mode.JSON)
-        if method == "create_partial" and version("instructor") == "1.0.0":
-            # The floor SDK calls create_model(__model_name=...), incompatible
-            # with Pydantic >=2.9 required by our core. Preserve its exception.
-            _, provider, instrumentor = traces
-            instrumentor.uninstrument()
-            with pytest.raises(TypeError, match="model_name"):
-                client.create_partial(**PARAMS)
-            assert not exporter.get_finished_spans()
-            instrumentor.instrument(tracer_provider=provider)
-            with pytest.raises(TypeError, match="model_name"):
-                client.create_partial(**PARAMS)
-            span, = exporter.get_finished_spans()
-            assert span.status.status_code == trace.StatusCode.ERROR
-            return
         stream = getattr(client, method)(**PARAMS)
         # Instructor 1.17 materializes sync partials as a ListResponse itself.
         # Never make an eager SDK result lazy (or consume a lazy one eagerly).
@@ -213,18 +199,6 @@ async def test_real_async_stream_routes(traces, method):
     exporter, _, _ = traces
     async with sdk(async_=True, handler=lambda request: streaming_response(method == "create_iterable")) as raw:
         client = instructor.from_openai(raw, mode=instructor.Mode.JSON)
-        if method == "create_partial" and version("instructor") == "1.0.0":
-            _, provider, instrumentor = traces
-            instrumentor.uninstrument()
-            with pytest.raises(TypeError, match="model_name"):
-                [item async for item in client.create_partial(**PARAMS)]
-            assert not exporter.get_finished_spans()
-            instrumentor.instrument(tracer_provider=provider)
-            with pytest.raises(TypeError, match="model_name"):
-                [item async for item in client.create_partial(**PARAMS)]
-            span, = exporter.get_finished_spans()
-            assert span.status.status_code == trace.StatusCode.ERROR
-            return
         stream = getattr(client, method)(**PARAMS)
         assert not exporter.get_finished_spans()
         chunks = [item async for item in stream]
@@ -343,3 +317,56 @@ def test_generated_callables_are_disabled_on_uninstrument(traces):
         instrumentor.uninstrument()
         assert create(**PARAMS).name == "Ada"
         assert not exporter.get_finished_spans()
+
+
+@pytest.mark.parametrize("flag,direction", [
+    ("hide_input_messages", "input"), ("hide_input_text", "input"),
+    ("hide_input_images", "input"), ("hide_output_messages", "output"),
+    ("hide_output_text", "output"),
+])
+def test_narrow_privacy_flags_never_export_content(traces, flag, direction):
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    exporter, provider, instrumentor = traces
+    instrumentor.uninstrument()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**{flag: True}))
+    messages = [{"role": "user", "content": (
+        [{"type": "image_url", "image_url": {"url": "data:image/png;base64,c3ludGhldGljLWltYWdl"}}]
+        if flag == "hide_input_images" else "synthetic-private-prompt"
+    )}]
+    with sdk() as raw:
+        instructor.from_openai(raw, mode=instructor.Mode.JSON).create(
+            **{**PARAMS, "messages": messages})
+    wire = encode_spans(exporter.get_finished_spans()).SerializeToString()
+    if direction == "input":
+        assert b"synthetic-private-prompt" not in wire
+        assert b"c3ludGhldGljLWltYWdl" not in wire
+    else:
+        assert b"Ada" not in wire
+    span, = exporter.get_finished_spans()
+    assert f"{direction}.value" not in span.attributes
+
+
+@pytest.mark.parametrize("flag", ["hide_output_messages", "hide_output_text"])
+def test_narrow_output_privacy_covers_streams(traces, flag):
+    exporter, provider, instrumentor = traces
+    instrumentor.uninstrument()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**{flag: True}))
+    with sdk(handler=lambda request: streaming_response()) as raw:
+        stream = instructor.from_openai(raw, mode=instructor.Mode.JSON).create_partial(**PARAMS)
+        chunks = list(stream)
+    assert chunks[-1].name == "Ada"
+    span, = exporter.get_finished_spans()
+    assert "output.value" not in span.attributes
+    if not isinstance(stream, list):
+        assert span.attributes["instructor.stream.chunks"] == len(chunks)
+
+
+def test_declared_floor_supports_partial_and_installs_provider_dependencies():
+    import tomllib
+    from pathlib import Path
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+    metadata = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    requirement = Requirement("instructor" + metadata["tool"]["poetry"]["dependencies"]["instructor"])
+    assert any(spec.operator == ">=" and Version(spec.version) >= Version("1.10.0")
+               for spec in requirement.specifier)

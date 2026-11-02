@@ -46,11 +46,17 @@ def _content(span, key, mime_key, value):
 
 
 class _Request:
-    def __init__(self, tracer, name, kwargs, hooks_class):
+    def __init__(self, tracer, name, kwargs, hooks_class, config):
         self.span = tracer.start_span(name, attributes={
             SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.CHAIN.value,
         })
         self.hooks_class = hooks_class
+        # Generic JSON values mix text and image content; omit the whole value
+        # rather than leave a second unredacted copy behind narrower flags.
+        self.capture_input = not any((config.hide_inputs, config.hide_input_messages,
+                                      config.hide_input_text, config.hide_input_images))
+        self.capture_output = not any((config.hide_outputs, config.hide_output_messages,
+                                       config.hide_output_text))
         self.with_completion = name.endswith(".create_with_completion")
         self.attempts = 0
         self.validation_errors = 0
@@ -61,7 +67,7 @@ class _Request:
         if isinstance(kwargs.get("model"), str):
             self.span.set_attribute(SpanAttributes.GEN_AI_REQUEST_MODEL, kwargs["model"])
         # Allowlist request content. Never record kwargs, headers, context or clients.
-        if "messages" in kwargs:
+        if self.capture_input and "messages" in kwargs:
             _content(self.span, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE,
                      kwargs["messages"])
 
@@ -141,7 +147,8 @@ class _Request:
             return _Stream(value, self)
         # create_with_completion returns (parsed_model, raw_sdk_response).
         output = value[0] if self.with_completion and isinstance(value, tuple) and len(value) == 2 else value
-        _content(self.span, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, output)
+        if self.capture_output:
+            _content(self.span, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, output)
         self.finish()
         return value
 
@@ -157,7 +164,8 @@ class _Request:
         self.finished = True
         if self.chunks:
             self.span.set_attribute("instructor.stream.chunks", self.chunks)
-            _content(self.span, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, self.last)
+            if self.capture_output:
+                _content(self.span, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, self.last)
         if error is not None:
             self.span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)))
             self.span.record_exception(error)
@@ -250,9 +258,10 @@ class _AsyncStream:
 
 class _RequestWrapper:
     def __init__(self, tracer: trace.Tracer, hooks_class: Optional[type] = None,
-                 name: str = "instructor.create") -> None:
+                 name: str = "instructor.create", config: Any = None) -> None:
         self.tracer = tracer
         self.hooks_class = hooks_class
+        self.config = config
         self.name = name
         self.enabled = True
 
@@ -272,7 +281,7 @@ class _RequestWrapper:
             async def invoke():
                 if not self.enabled or _ACTIVE.get() or context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
                     return await wrapped(*args, **kwargs)
-                request = _Request(self.tracer, self.name, values, self.hooks_class)
+                request = _Request(self.tracer, self.name, values, self.hooks_class, self.config)
                 with request.activate():
                     try:
                         call_args, call_kwargs = request.arguments(args, kwargs, bound)
@@ -281,7 +290,7 @@ class _RequestWrapper:
                         request.finish(error)
                         raise
             return invoke()
-        request = _Request(self.tracer, self.name, values, self.hooks_class)
+        request = _Request(self.tracer, self.name, values, self.hooks_class, self.config)
         with request.activate():
             try:
                 call_args, call_kwargs = request.arguments(args, kwargs, bound)

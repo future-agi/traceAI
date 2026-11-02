@@ -64,12 +64,12 @@ class InstructorInstrumentor(BaseInstrumentor):
                     supports_hooks = "hooks" in signature(getattr(cls, name)).parameters
                     callback = _RequestWrapper(
                         self._tracer, hooks_class if supports_hooks else None,
-                        name=f"instructor.{name}",
+                        name=f"instructor.{name}", config=config,
                     )
                     self._callbacks.append(callback)
                     self._wrap(cls, name, callback)
 
-        generated = _RequestWrapper(self._tracer, hooks_class)
+        generated = _RequestWrapper(self._tracer, hooks_class, config=config)
         self._callbacks.append(generated)
         # v2 factories also cover patch imports captured before instrumentation,
         # from_provider(), and the provider adapters that bypass the root alias.
