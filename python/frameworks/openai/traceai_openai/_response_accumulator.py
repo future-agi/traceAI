@@ -19,6 +19,7 @@ from typing import (
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
+from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._utils import _as_output_attributes, _to_dict, _ValueAndType, _io_value_and_type
 
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
     from openai.types import Completion
     from openai.types.chat import ChatCompletion
     from openai.types.responses.response import Response
-    from openai.types.responses.response_completed_event import ResponseCompletedEvent
 
 __all__ = (
     "_CompletionAccumulator",
@@ -64,19 +64,29 @@ class _ResponsesAccumulator:
         self._response_attributes_extractor = response_attributes_extractor
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
-        self._values: Optional["ResponseCompletedEvent"] = None
+        self._values: Optional["Response"] = None
 
     def process_chunk(self, chunk: Any) -> None:
-        if type(chunk).__name__ == "ResponseCompletedEvent":
+        if getattr(chunk, "type", None) in (
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+        ):
             self._is_null = False
             self._cached_result = None
-            self._values = chunk
+            self._values = chunk.response
 
     def _result(self) -> Any:
         if self._is_null:
             return None
-        if self._values:
-            return self._values.response
+        return self._values
+
+    def get_status(self) -> Optional[trace_api.Status]:
+        if self._values is not None and self._values.status == "failed":
+            # Vendor error messages can contain private input. Status alone is
+            # sufficient here; do not copy error details into output or events.
+            return trace_api.Status(status_code=trace_api.StatusCode.ERROR)
+        return None
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -97,10 +107,12 @@ class _ResponsesAccumulator:
         if output_content:
             yield SpanAttributes.OUTPUT_VALUE, output_content
         else:
-            # Fallback to full response if we can't extract content
-            yield from _as_output_attributes(
-                _io_value_and_type(result),
-            )
+            # Preserve non-text output, but never treat vendor error details as
+            # assistant output (output.value has a separate privacy policy).
+            output = {
+                key: value for key, value in _to_dict(result).items() if key != "error"
+            }
+            yield from _as_output_attributes(_io_value_and_type(output))
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -224,6 +236,9 @@ class _ChatCompletionAccumulator:
                 output_value = safe_json_dumps(messages)
         yield SpanAttributes.OUTPUT_VALUE, output_value
 
+    def get_status(self) -> Optional[trace_api.Status]:
+        return None
+
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
             return
@@ -296,6 +311,9 @@ class _CompletionAccumulator:
             yield from _as_output_attributes(
                 _ValueAndType(json_string, FiMimeTypeValues.JSON),
             )
+
+    def get_status(self) -> Optional[trace_api.Status]:
+        return None
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):

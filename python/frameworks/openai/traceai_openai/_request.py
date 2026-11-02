@@ -262,8 +262,16 @@ class _WithOpenAI(ABC):
             return wrapped_stream
 
         else:
+            failed_response = (
+                isinstance(response, self._openai.types.responses.response.Response)
+                and response.status == "failed"
+            )
             _finish_tracing(
-                status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                status=trace_api.Status(
+                    status_code=(
+                        trace_api.StatusCode.ERROR if failed_response else trace_api.StatusCode.OK
+                    )
+                ),
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,

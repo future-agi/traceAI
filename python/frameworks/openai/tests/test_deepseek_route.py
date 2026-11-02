@@ -1,7 +1,9 @@
 """Real SDK, synthetic provider transport, and localhost OTLP migration contract."""
 
 import asyncio
+import copy
 import json
+import sys
 import threading
 from dataclasses import fields
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -410,3 +412,148 @@ def test_explicit_configuration_overrides_environment(wire, monkeypatch, asynchr
     monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
     call(asynchronous, streaming=True)
     assert attrs(spans)["deepseek.reasoning_content"] == REASONING
+
+
+@pytest.mark.parametrize("route", ["legacy", "shared", "legacy_first", "shared_first"])
+@pytest.mark.parametrize("explicit_close", [False, True])
+def test_cancelled_stream_is_finished_as_error(wire, route, explicit_close):
+    spans = wire(route, hide_error_details=True)
+
+    async def run():
+        reading = asyncio.Event()
+        cancellations = []
+
+        class WaitingBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                reading.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError as error:
+                    cancellations.append(error)
+                    raise
+                yield b""
+
+        def respond(request):
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=WaitingBody()
+            )
+
+        async with openai.AsyncOpenAI(
+            api_key="offline-key",
+            base_url="https://api.deepseek.com",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ) as client:
+            stream = await client.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=[{"role": "user", "content": "hello"}],
+                stream=True,
+            )
+
+            async def consume():
+                try:
+                    async for _ in stream:
+                        pass
+                except asyncio.CancelledError as error:
+                    cancellations.append(error)
+                    raise
+                finally:
+                    if explicit_close:
+                        await stream.close()
+
+            task = asyncio.create_task(consume())
+            await asyncio.wait_for(reading.wait(), timeout=5)
+            task.cancel("PRIVATE_CANCEL_REASON")
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # Python 3.10 may lose the cancellation message at the Task boundary.
+            # Assert identity where the exception passes through instrumentation.
+            assert len(cancellations) == 2
+            assert cancellations[0] is cancellations[1]
+            assert len(spans) == 1, "cancelled requests must export exactly one span"
+            assert spans[0].status.code == 2
+            assert any(event.name == "exception" for event in spans[0].events)
+            assert b"PRIVATE_CANCEL_REASON" not in spans[0].SerializeToString()
+            await stream.close()
+            assert len(spans) == 1
+            assert spans[0].status.code == 2
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "policy", [None, "hide_outputs", "hide_output_messages", "hide_output_text"]
+)
+def test_responses_tool_output_privacy(wire, monkeypatch, asynchronous, streaming, policy):
+    spans = wire("shared", **({policy: True} if policy else {}))
+    body = copy.deepcopy(RESPONSE)
+    body["output"] = [
+        dict(
+            type="function_call", id="fc-offline", call_id="call-offline",
+            name="lookup", arguments=TOOL_ARGS, status="completed",
+        )
+    ]
+    monkeypatch.setattr(sys.modules[__name__], "RESPONSE", body)
+    call(asynchronous=asynchronous, streaming=streaming, responses=True)
+    a = attrs(spans)
+    assert a["gen_ai.usage.output_tokens"] == 7
+    if not policy:
+        arguments = "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments"
+        assert a[arguments] == TOOL_ARGS
+        return
+    if policy != "hide_outputs":
+        a.pop("output.value", None)  # Raw output has its own documented hide policy.
+    assert "PRIVATE_TOOL_9271" not in json.dumps(a)
+
+
+@pytest.mark.parametrize(
+    "event_type", ["response.completed", "response.incomplete", "response.failed"]
+)
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("has_output", [False, True])
+@pytest.mark.parametrize(
+    "streaming,mode", [(True, "full"), (True, "early"), (False, "full")]
+)
+def test_responses_terminal_events(
+    wire, monkeypatch, event_type, asynchronous, has_output, streaming, mode
+):
+    spans = wire("shared", hide_error_details=True)
+    body = copy.deepcopy(RESPONSE)
+    body["status"] = event_type.split(".")[1]
+    if not has_output:
+        body["output"] = []
+    if event_type == "response.incomplete":
+        body["incomplete_details"] = {"reason": "max_output_tokens"}
+    if event_type == "response.failed":
+        body["error"] = {"code": "server_error", "message": "PRIVATE_VENDOR_ERROR"}
+
+    def respond(request):
+        if not streaming:
+            return httpx.Response(200, json=body)
+        event = dict(type=event_type, sequence_number=1, response=body)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content="event: " + event_type + "\ndata: " + json.dumps(event) + "\n\n",
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], "respond", respond)
+    response = call(
+        asynchronous=asynchronous, streaming=streaming, responses=True, mode=mode
+    )
+    if not streaming:
+        assert response.status == body["status"]
+        if event_type == "response.failed":
+            assert response.error.message == "PRIVATE_VENDOR_ERROR"
+    a = attrs(spans)
+    assert a["gen_ai.usage.input_tokens"] == 5
+    assert a["gen_ai.usage.output_tokens"] == 7
+    assert a["gen_ai.usage.total_tokens"] == 12
+    assert a["deepseek.reasoning_tokens"] == 4
+    assert a["deepseek.response_id"] == "resp-offline"
+    if has_output:
+        if streaming:
+            assert a["output.value"] == ANSWER
+        assert a["gen_ai.output.messages.0.message.content"] == ANSWER
+    assert spans[0].status.code == (2 if event_type == "response.failed" else 1)
+    assert b"PRIVATE_VENDOR_ERROR" not in spans[0].SerializeToString()

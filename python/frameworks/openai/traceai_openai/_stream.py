@@ -20,6 +20,8 @@ logger.addHandler(logging.NullHandler())
 class _ResponseAccumulator(Protocol):
     def process_chunk(self, chunk: Any) -> None: ...
 
+    def get_status(self) -> Optional[trace_api.Status]: ...
+
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
@@ -95,7 +97,7 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -125,6 +127,11 @@ class _Stream(ObjectProxy):  # type: ignore
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
@@ -195,7 +202,7 @@ class _AsyncStream(ObjectProxy):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -225,6 +232,11 @@ class _AsyncStream(ObjectProxy):
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,

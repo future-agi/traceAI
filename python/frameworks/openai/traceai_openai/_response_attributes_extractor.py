@@ -117,7 +117,17 @@ class _ResponseAttributesExtractor:
         response: Response,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield from _ResponsesApiAttributes._get_attributes_from_response(response)
+        for key, value in _ResponsesApiAttributes._get_attributes_from_response(response):
+            if (
+                self._provider == "deepseek"
+                and key.startswith(f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.")
+                and not key.endswith(f".{MessageAttributes.MESSAGE_ROLE}")
+            ):
+                # Tool arguments and reasoning are output text too; older cores
+                # only recognize the standard message.content privacy key.
+                yield from _output_alias(self._config, key, value)
+            else:
+                yield key, value
 
     def _get_attributes_from_chat_completion(
         self,
