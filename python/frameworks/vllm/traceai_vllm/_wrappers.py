@@ -293,6 +293,17 @@ class _StreamSpan:
         self.content = ""
         self.finished = False
 
+    def __del__(self) -> None:
+        # Preserve the old generators' finally cleanup when a caller abandons
+        # iteration. Only end tracing: SDK transport cleanup may require an
+        # event loop and remains the caller's responsibility via close/context exit.
+        try:
+            self.finish()
+        except Exception:
+            # Destruction must not surface tracing failures or assume that
+            # logging is still available during interpreter shutdown.
+            pass
+
     def process(self, chunk: Any) -> None:
         try:
             self.chunks.append(chunk)

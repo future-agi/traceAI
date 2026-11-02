@@ -1,6 +1,7 @@
 """Retained and shared vLLM routes: privacy and cancellation at SDK boundaries."""
 
 import asyncio
+import gc
 import importlib.util
 import json
 from contextlib import contextmanager
@@ -559,3 +560,117 @@ def test_invocation_privacy_covers_raw_copy(
                 raw = json.loads(span.attributes["input.value"])
                 assert raw["temperature"] == 0.7
                 assert raw["extra_body"] == {"custom_parameter": secret_extra}
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("consumer_exit", ["break", "return"])
+@pytest.mark.parametrize("hide_output_text", [False, True])
+def test_legacy_partial_stream_disposal_keeps_span(
+    use_async, consumer_exit, hide_output_text
+):
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=f"data: {json.dumps(chunk(OUTPUT))}\n\ndata: [DONE]\n\n",
+        )
+
+    def run_sync():
+        with client_for("legacy", handler) as client:
+            for value in client.chat.completions.create(**PARAMS, stream=True):
+                assert value.choices[0].delta.content == OUTPUT
+                if consumer_exit == "return":
+                    return
+                break
+
+    async def run_async():
+        async with client_for("legacy", handler, True) as client:
+            async for value in await client.chat.completions.create(
+                **PARAMS, stream=True
+            ):
+                assert value.choices[0].delta.content == OUTPUT
+                if consumer_exit == "return":
+                    return
+                break
+
+    with instrumented(
+        "legacy", TraceConfig(hide_output_text=hide_output_text)
+    ) as exporter:
+        if use_async:
+            asyncio.run(run_async())  # Includes async-generator shutdown.
+        else:
+            run_sync()
+        gc.collect()
+        span = only_span(exporter)
+        assert span.status.status_code == StatusCode.OK
+        assert span.attributes["gen_ai.provider.name"] == "vllm"
+        assert (OUTPUT in serialized(span)) is not hide_output_text
+        assert INPUT in serialized(span)
+    assert only_span(exporter) is span  # Provider shutdown cannot duplicate it.
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("consume_first", [False, True])
+def test_legacy_disposal_finalizes_without_closing_transport(use_async, consume_first):
+    closed = []
+
+    class SyncBody(httpx.SyncByteStream):
+        def __iter__(self):
+            yield f"data: {json.dumps(chunk(OUTPUT))}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        def close(self):
+            closed.append(True)
+
+    class AsyncBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield f"data: {json.dumps(chunk(OUTPUT))}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        async def aclose(self):
+            closed.append(True)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=AsyncBody() if use_async else SyncBody(),
+        )
+
+    def assert_disposed(exporter, native):
+        # Retain the SDK stream: tracking disposal must be independent of SDK
+        # garbage collection, network cleanup and async-generator shutdown.
+        gc.collect()
+        span = only_span(exporter)
+        assert span.status.status_code == StatusCode.OK
+        assert (OUTPUT in serialized(span)) is consume_first
+        assert not native.response.is_closed
+        assert not closed
+
+    async def run_async(exporter):
+        async with client_for("legacy", handler, True) as client:
+            stream = await client.chat.completions.create(**PARAMS, stream=True)
+            native = stream.__wrapped__
+            if consume_first:
+                await stream.__anext__()
+            assert not exporter.get_finished_spans()
+            del stream
+            assert_disposed(exporter, native)  # No await or loop shutdown needed.
+            await native.response.aclose()
+
+    with instrumented("legacy", TraceConfig()) as exporter:
+        if use_async:
+            asyncio.run(run_async(exporter))
+        else:
+            with client_for("legacy", handler) as client:
+                stream = client.chat.completions.create(**PARAMS, stream=True)
+                native = stream.__wrapped__
+                if consume_first:
+                    next(stream)
+                assert not exporter.get_finished_spans()
+                del stream
+                assert_disposed(exporter, native)
+                native.response.close()
+        gc.collect()
+        assert closed == [True]
+        only_span(exporter)
