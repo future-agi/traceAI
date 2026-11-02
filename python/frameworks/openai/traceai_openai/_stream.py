@@ -115,6 +115,12 @@ class _Stream(ObjectProxy):  # type: ignore
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if self._self_is_finished:
+            return
+        if status is None or status.status_code is not trace_api.StatusCode.ERROR:
+            get_status = getattr(self._self_response_accumulator, "get_status", None)
+            if get_status is not None:
+                status = get_status()
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
@@ -205,6 +211,12 @@ class _AsyncStream(ObjectProxy):
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if self._self_is_finished:
+            return
+        if status is None or status.status_code is not trace_api.StatusCode.ERROR:
+            get_status = getattr(self._self_response_accumulator, "get_status", None)
+            if get_status is not None:
+                status = get_status()
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,

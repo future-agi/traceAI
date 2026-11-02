@@ -19,6 +19,7 @@ from typing import (
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
+from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._utils import _as_output_attributes, _to_dict, _ValueAndType, _io_value_and_type
 
@@ -122,6 +123,7 @@ class _ChatCompletionAccumulator:
         "_chat_completion_type",
         "_content",
         "_raw_data",
+        "_choice_completion",
     )
 
     def __init__(
@@ -136,6 +138,7 @@ class _ChatCompletionAccumulator:
         self._is_null = True
         self._content: List[str] = []
         self._raw_data: List[Dict[str, Any]] = []
+        self._choice_completion: Dict[int, bool] = {}
         self._cached_result: Optional[Dict[str, Any]] = None
         self._values = _ValuesAccumulator(
             choices=_IndexedAccumulator(
@@ -162,6 +165,13 @@ class _ChatCompletionAccumulator:
     def process_chunk(self, chunk: Any) -> None:
         raw_chunk = _to_dict(chunk)
         self._raw_data.append(raw_chunk)
+        for choice in raw_chunk.get("choices", []):
+            index = choice.get("index")
+            if isinstance(index, int):
+                self._choice_completion[index] = (
+                    self._choice_completion.get(index, False)
+                    or bool(choice.get("finish_reason"))
+                )
         self._is_null = False
         self._cached_result = None
 
@@ -184,6 +194,21 @@ class _ChatCompletionAccumulator:
                 content = delta.get("content")
                 if content is not None:
                     self._content.append(content)
+
+    def get_status(self) -> trace_api.Status:
+        # The SDK consumes [DONE] internally and treats transport EOF as normal
+        # exhaustion. Only per-choice finish reasons prove model completion.
+        # Usage-only tail chunks must not clear an already completed choice.
+        expected = self._request_parameters.get("n", 1)
+        if not isinstance(expected, int) or expected < 1:
+            expected = 1
+        if (len(self._choice_completion) >= expected
+                and all(self._choice_completion.values())):
+            return trace_api.Status(trace_api.StatusCode.OK)
+        return trace_api.Status(
+            trace_api.StatusCode.ERROR,
+            "Chat stream ended before all choices completed",
+        )
 
     def _result(self) -> Optional[Dict[str, Any]]:
         if self._is_null:
