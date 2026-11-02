@@ -1,8 +1,10 @@
 """Explicit close and task cancellation through the SDK's native HTTP transport."""
 
 import asyncio
+import inspect
 import json
 import os
+import sys
 
 import openai
 import pytest
@@ -42,14 +44,16 @@ def tracing(monkeypatch, request):
     for name in tuple(os.environ):
         if name.startswith(("FI_", "OTEL_", "OPENAI_")):
             monkeypatch.delenv(name)
+    config = TraceConfig()
+    if getattr(request, "param", False):
+        if "hide_error_details" not in inspect.signature(TraceConfig).parameters:
+            pytest.skip("The locked legacy core predates error-detail masking")
+        config = TraceConfig(hide_error_details=True)
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = OpenAIInstrumentor()
-    instrumentor.instrument(
-        tracer_provider=provider,
-        config=TraceConfig(hide_error_details=getattr(request, "param", False)),
-    )
+    instrumentor.instrument(tracer_provider=provider, config=config)
     yield provider, exporter
     instrumentor.uninstrument()
     provider.shutdown()
@@ -68,6 +72,13 @@ def streaming(_):
     return http.Response(
         200, headers={"content-type": "text/event-stream"},
         content=CHUNK_BYTES + b"data: [DONE]\n\n",
+    )
+
+
+def cancelled(message):
+    # Task.cancel(msg) propagates msg to the awaiter only on Python 3.11+.
+    return pytest.raises(
+        asyncio.CancelledError, match=message if sys.version_info >= (3, 11) else None,
     )
 
 
@@ -172,8 +183,9 @@ def test_cancel_pending_request_finishes(tracing, base_url, hide_errors):
             task = asyncio.create_task(sdk.chat.completions.create(**ARGS))
             await asyncio.wait_for(reached_transport.wait(), 2)
             task.cancel("synthetic request cancellation")
-            with pytest.raises(asyncio.CancelledError, match="synthetic request cancellation"):
+            with cancelled("synthetic request cancellation"):
                 await task
+            assert task.cancelled()
             # Finalization must not depend on subsequent client cleanup.
             only_span(tracing, StatusCode.ERROR)
     asyncio.run(run())
@@ -211,8 +223,9 @@ def test_cancel_stream_iteration_finishes_before_close(tracing, base_url, hide_e
             task = asyncio.create_task(stream.__anext__())
             await asyncio.wait_for(waiting_for_chunk.wait(), 2)
             task.cancel("synthetic stream cancellation")
-            with pytest.raises(asyncio.CancelledError, match="synthetic stream cancellation"):
+            with cancelled("synthetic stream cancellation"):
                 await task
+            assert task.cancelled()
             only_span(tracing, StatusCode.ERROR)
             await stream.close()
             await stream.close()
@@ -251,8 +264,9 @@ def test_cancel_async_close_finishes(tracing, base_url):
             task = asyncio.create_task(stream.close())
             await asyncio.wait_for(closing.wait(), 2)
             task.cancel("synthetic close cancellation")
-            with pytest.raises(asyncio.CancelledError, match="synthetic close cancellation"):
+            with cancelled("synthetic close cancellation"):
                 await task
+            assert task.cancelled()
             only_span(tracing, StatusCode.ERROR)
     asyncio.run(run())
     only_span(tracing, StatusCode.ERROR)
