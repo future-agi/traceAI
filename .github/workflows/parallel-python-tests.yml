@@ -57,12 +57,13 @@ jobs:
         run: |
           python -m venv .parallel-test-venv
           .parallel-test-venv/bin/pip install build
+          .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python
           .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/parallel
           .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/openai
           if [ "$DISTRIBUTION" = wheel ]; then
-            packages=(python/frameworks/{parallel,openai}/dist/*.whl)
+            packages=(python/dist/*.whl python/frameworks/{parallel,openai}/dist/*.whl)
           else
-            packages=(python/frameworks/{parallel,openai}/dist/*.tar.gz)
+            packages=(python/dist/*.tar.gz python/frameworks/{parallel,openai}/dist/*.tar.gz)
           fi
           .parallel-test-venv/bin/pip install "${packages[@]}" \
             "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" pytest pytest-asyncio

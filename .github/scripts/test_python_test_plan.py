@@ -642,8 +642,14 @@ class WorkflowText(unittest.TestCase):
         (
             "install_poetry",
             "Install the package and its dev dependencies (poetry)",
-            "if: matrix.package.backend == 'poetry'",
+            "if: matrix.package.backend == 'poetry' && matrix.package.name != 'openai' && matrix.package.name != 'vllm'",
             "poetry install --no-interaction",
+        ),
+        (
+            "install_local_core",
+            "Install privacy-dependent OpenAI packages with the local core",
+            "if: matrix.package.name == 'openai' || matrix.package.name == 'vllm'",
+            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0',
         ),
         (
             "install_hatch",
@@ -676,6 +682,11 @@ class WorkflowText(unittest.TestCase):
             'poetry run pip install "$pin"',
             "fi",
             "done",
+        ],
+        "install_local_core": [
+            "python -m venv .venv",
+            '.venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0',
+            ".venv/bin/pip check",
         ],
         "install_hatch": [
             "python -m venv .venv",
