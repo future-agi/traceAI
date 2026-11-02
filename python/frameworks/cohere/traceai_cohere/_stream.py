@@ -21,6 +21,7 @@ class _Accumulator:
         self.response: Dict[str, Any] = {}
         self.text = []
         self.tools: Dict[int, Dict[str, Any]] = {}
+        self.citations = []
         self.v2 = False
 
     def add(self, event: Any) -> None:
@@ -38,6 +39,7 @@ class _Accumulator:
             "content-delta",
             "tool-call-start",
             "tool-call-delta",
+            "citation-start",
             "message-end",
         ):
             self.v2 = True
@@ -48,6 +50,10 @@ class _Accumulator:
                     self.response["id"] = data["id"]
             elif kind in ("content-start", "content-delta"):
                 self.text.append((message.get("content") or {}).get("text") or "")
+            elif kind == "citation-start":
+                citation = message.get("citations")
+                if isinstance(citation, dict):
+                    self.citations.append(citation)
             elif kind in ("tool-call-start", "tool-call-delta"):
                 incoming = message.get("tool_calls") or {}
                 tool = self.tools.setdefault(
@@ -71,6 +77,8 @@ class _Accumulator:
                 "content": [{"type": "text", "text": "".join(self.text)}],
                 "tool_calls": [self.tools[i] for i in sorted(self.tools)],
             }
+            if self.citations:
+                result["message"]["citations"] = self.citations
         elif "text" not in result:
             result["text"] = "".join(self.text)
         return result
