@@ -29,8 +29,8 @@ license = "Apache-2.0"
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
-chromadb = ">=0.4.0"
+fi-instrumentation-otel = ">=1.2.2"
+chromadb = ">=0.5.1"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]

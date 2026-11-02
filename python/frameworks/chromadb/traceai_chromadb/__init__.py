@@ -9,6 +9,8 @@ import logging
 from importlib import import_module
 from typing import Any, Collection
 
+from fi_instrumentation import FITracer
+from fi_instrumentation.instrumentation import TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
@@ -50,8 +52,10 @@ class ChromaDBInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        tracer = trace_api.get_tracer(
-            __name__, __version__, kwargs.get("tracer_provider")
+        config = kwargs.get("config") or TraceConfig()
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, kwargs.get("tracer_provider")),
+            config=config,
         )
         self._originals = []
         try:
@@ -60,7 +64,7 @@ class ChromaDBInstrumentor(BaseInstrumentor):
                 try:
                     collection_class = getattr(import_module(module_name), class_name)
                 except ModuleNotFoundError as exc:
-                    # AsyncCollection is absent at the supported Chroma 0.4.0 floor.
+                    # Tolerate SDK versions that do not expose AsyncCollection.
                     if class_name == "AsyncCollection" and exc.name == module_name:
                         continue
                     raise
@@ -73,7 +77,7 @@ class ChromaDBInstrumentor(BaseInstrumentor):
                     signature = signature.replace(
                         parameters=list(signature.parameters.values())[1:]
                     )
-                    wrapper = wrapper_type(tracer, signature)
+                    wrapper = wrapper_type(tracer, signature, config)
                     callback = (
                         wrapper.async_call
                         if inspect.iscoroutinefunction(original)

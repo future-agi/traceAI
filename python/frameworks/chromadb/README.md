@@ -4,6 +4,10 @@ Trace ChromaDB collection reads, writes, and retrievals with OpenTelemetry and v
 
 ## Install
 
+Requires ChromaDB 0.5.1 or later and `fi-instrumentation-otel` 1.2.2 or later.
+Upgrade older Chroma installations before upgrading this integration; Chroma
+0.4.0 requires Pydantic 1 and cannot share an environment with the tracing core.
+
 ```bash
 pip install traceAI-chromadb
 ```
@@ -126,10 +130,27 @@ Failures retain the original exception and are recorded as span errors.
 | `db.vector.upsert.dimensions` | Dimensions of explicitly supplied embeddings |
 
 The instrumentor does not attach document bodies, query text or embedding vectors
-to successful spans. Collection names, filters, result IDs and exception messages
-can still contain sensitive information. Review those fields before exporting
-sensitive workloads; this package does not implement its own content-redaction
-configuration. Search rank/filter expressions are not serialized.
+to successful spans. Search rank/filter expressions are not serialized.
+Collection names, filters, result IDs and exception messages can contain sensitive
+information. Set the shared privacy flags **before initialization** to omit them:
+
+```bash
+export FI_HIDE_INPUTS=true
+export FI_HIDE_OUTPUTS=true
+export FI_HIDE_ERROR_DETAILS=true
+```
+
+`FI_HIDE_INPUTS` omits collection names and filters, including requested result
+fields. `FI_HIDE_OUTPUTS` omits result IDs and scores. Counts, dimensions and
+operation names remain available. `FI_HIDE_ERROR_DETAILS` removes exception
+messages, stack traces and error status descriptions while retaining error types
+and error status. If the error flag is unset, hiding inputs or outputs also hides
+error details. These settings affect exported telemetry, not database arguments,
+results or exceptions returned to your application.
+
+You can instead pass a shared `TraceConfig` as `config=` to
+`ChromaDBInstrumentor().instrument(...)`. Configure separately any embedding or
+transport instrumentors used by your application.
 
 To stop tracing collection operations, call:
 

@@ -75,6 +75,11 @@ def make_collection(collection_class, transport):
     if "model" in inspect.signature(collection_class).parameters:
         from chromadb.types import Collection as Model
 
+        if hasattr(Model, "__required_keys__"):
+            # Chroma 0.5.1 uses a TypedDict model rather than Pydantic.
+            return collection_class(
+                client=transport, model=Model(**values), embedding_function=None
+            )
         model = Model(
             **{
                 key: value
@@ -116,3 +121,8 @@ def instrument_chromadb(tracer_provider):
     yield instrumentor
     if instrumentor.is_instrumented_by_opentelemetry:
         instrumentor.uninstrument()
+
+
+@pytest.fixture
+def other_collection(collection):
+    return make_collection(type(collection), type(collection._client)())

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from numbers import Real
 from typing import Any, Optional
 
+from fi_instrumentation.instrumentation import TraceConfig
 from opentelemetry import context
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import SpanKind, StatusCode, Tracer
@@ -50,19 +51,29 @@ def _filters(parameters: dict) -> dict:
     return attributes
 
 
-def _suppressed() -> bool:
-    return bool(
-        context.get_value(_SUPPRESS_INSTRUMENTATION_KEY)
-        or context.get_value(_ACTIVE_COLLECTION_CALL)
-    )
+def _suppressed(instance, operation: str) -> bool:
+    if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+        return True
+    active = context.get_value(_ACTIVE_COLLECTION_CALL)
+    if active is None or active[0] != id(instance):
+        return False
+    # A duplicate wrapper of the same operation, or Chroma's peek -> get alias.
+    # Other operations (including an embedding cache lookup) remain visible.
+    return active[1] == operation or (active[1] == "peek" and operation == "get")
 
 
 class BaseWrapper:
     operation = ""
 
-    def __init__(self, tracer: Tracer, signature: Optional[inspect.Signature] = None):
+    def __init__(
+        self,
+        tracer: Tracer,
+        signature: Optional[inspect.Signature] = None,
+        config: Optional[TraceConfig] = None,
+    ):
         self._tracer = tracer
         self._signature = signature
+        self._config = config or TraceConfig()
 
     def _request_attributes(self, parameters: dict) -> dict:
         return {}
@@ -75,7 +86,7 @@ class BaseWrapper:
         attributes = get_common_attributes("chroma", self.operation)
         try:
             name = getattr(instance, "name", None)
-            if name is not None:
+            if name is not None and not self._config.hide_inputs:
                 attributes.update(get_common_attributes("chroma", self.operation, name))
             signature = self._signature or inspect.signature(wrapped)
             parameters = signature.bind(*args, **kwargs)
@@ -88,8 +99,11 @@ class BaseWrapper:
         with self._tracer.start_as_current_span(
             f"chroma {self.operation}", kind=SpanKind.CLIENT, attributes=attributes
         ) as span:
-            # Suppress only nested collection wrappers, not embedding/transport spans.
-            token = context.attach(context.set_value(_ACTIVE_COLLECTION_CALL, True))
+            token = context.attach(
+                context.set_value(
+                    _ACTIVE_COLLECTION_CALL, (id(instance), self.operation)
+                )
+            )
             try:
                 yield span
             finally:
@@ -103,7 +117,7 @@ class BaseWrapper:
         span.set_status(StatusCode.OK)
 
     def __call__(self, wrapped, instance, args, kwargs):
-        if _suppressed():
+        if _suppressed(instance, self.operation):
             return wrapped(*args, **kwargs)
         with self._span(wrapped, instance, args, kwargs) as span:
             result = wrapped(*args, **kwargs)
@@ -111,7 +125,7 @@ class BaseWrapper:
             return result
 
     async def async_call(self, wrapped, instance, args, kwargs):
-        if _suppressed():
+        if _suppressed(instance, self.operation):
             return await wrapped(*args, **kwargs)
         with self._span(wrapped, instance, args, kwargs) as span:
             result = await wrapped(*args, **kwargs)
@@ -159,7 +173,7 @@ class QueryWrapper(BaseWrapper):
     score_key = "distances"
 
     def _request_attributes(self, parameters):
-        attributes = _filters(parameters)
+        attributes = {} if self._config.hide_inputs else _filters(parameters)
         attributes[Attrs.QUERY_TOP_K] = parameters.get("n_results", 10)
         if parameters.get("query_embeddings") is not None:
             count, _ = _embedding_shape(parameters["query_embeddings"])
@@ -176,10 +190,15 @@ class QueryWrapper(BaseWrapper):
         ids = result.get("ids")
         if ids is not None and len(ids) > 0:
             attributes[Attrs.RESULTS_COUNT] = len(ids[0])
-            if len(ids[0]) > 0:
+            if len(ids[0]) > 0 and not self._config.hide_outputs:
                 attributes[Attrs.RESULTS_IDS] = safe_json_dumps(ids[0][:10])
         scores = result.get(self.score_key)
-        if scores is not None and len(scores) > 0 and scores[0] is not None:
+        if (
+            not self._config.hide_outputs
+            and scores is not None
+            and len(scores) > 0
+            and scores[0] is not None
+        ):
             if len(scores[0]) > 0:
                 attributes[Attrs.RESULTS_SCORES] = safe_json_dumps(scores[0][:10])
         return attributes
@@ -202,7 +221,7 @@ class GetWrapper(BaseWrapper):
     operation = "get"
 
     def _request_attributes(self, parameters):
-        attributes = _filters(parameters)
+        attributes = {} if self._config.hide_inputs else _filters(parameters)
         if parameters.get("ids") is not None:
             attributes["db.vector.get.ids_count"] = _count(parameters["ids"])
         for field in ("limit", "offset"):
@@ -227,7 +246,7 @@ class DeleteWrapper(BaseWrapper):
     operation = "delete"
 
     def _request_attributes(self, parameters):
-        attributes = _filters(parameters)
+        attributes = {} if self._config.hide_inputs else _filters(parameters)
         if parameters.get("ids") is not None:
             attributes[Attrs.DELETE_COUNT] = _count(parameters["ids"])
         return attributes

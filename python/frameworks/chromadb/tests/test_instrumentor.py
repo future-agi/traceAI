@@ -84,9 +84,6 @@ def test_numpy_inputs(
     single,
     use_positional,
 ):
-    # Chroma 0.4.0 itself rejects ndarray inputs. Its list path is covered above.
-    if "query_images" not in inspect.signature(collection.query).parameters:
-        pytest.skip("NumPy input support is absent in Chroma 0.4.0")
     embeddings = np.array(
         [1.0, 0.0, 0.0] if single else [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         dtype=np.float32,
@@ -97,12 +94,36 @@ def test_numpy_inputs(
         values = dict(query_embeddings=embeddings, n_results=1)
     else:
         values = dict(ids="a" if single else ["a", "b"], embeddings=embeddings)
-    if use_positional:
-        result = call(
-            collection, operation, *positional(getattr(collection, operation), **values)
-        )
-    else:
-        result = call(collection, operation, **values)
+
+    def execute():
+        if use_positional:
+            return call(
+                collection,
+                operation,
+                *positional(getattr(collection, operation), **values),
+            )
+        return call(collection, operation, **values)
+
+    # Compare with Chroma itself: 0.5.1 accepts batched arrays but rejects flat
+    # arrays. Instrumentation must preserve either behavior without mutation.
+    token = context.attach(context.set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+    upstream_error = None
+    try:
+        execute()
+    except ValueError as exc:
+        upstream_error = exc
+    finally:
+        context.detach(token)
+    if upstream_error is not None:
+        with pytest.raises(type(upstream_error)) as caught:
+            execute()
+        assert str(caught.value) == str(upstream_error)
+        np.testing.assert_array_equal(embeddings, original)
+        spans = in_memory_span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].status.status_code == StatusCode.ERROR
+        return
+    result = execute()
     if operation == "query":
         assert result["ids"] == [["a", "b"]]
     np.testing.assert_array_equal(embeddings, original)
