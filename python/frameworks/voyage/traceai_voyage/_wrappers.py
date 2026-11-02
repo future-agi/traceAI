@@ -1,4 +1,4 @@
-"""Span wrappers for voyageai ``Client`` / ``AsyncClient`` ``embed`` and ``rerank``.
+"""Span wrappers for voyageai ``Client`` / ``AsyncClient`` embeddings and reranking.
 
 One span per public call. The span is current while the SDK sends HTTP, so an
 HTTP client instrumentation nests under it, and it covers the client's own
@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 from urllib.parse import urlsplit
 
 from fi_instrumentation import TraceConfig
@@ -40,6 +40,8 @@ OUTPUT_DTYPE = "voyage.output_dtype"
 OUTPUT_DIMENSION = "voyage.output_dimension"
 EMBEDDING_COUNT = "voyage.embedding.count"
 EMBEDDING_DIMENSION = "voyage.embedding.dimension"
+CONTEXTUALIZED_DOCUMENT_COUNT = "voyage.contextualized.document_count"
+MEDIA_OMITTED = "[media omitted]"
 RERANK_DOCUMENT_COUNT = "voyage.rerank.document_count"
 RERANK_RESULT_COUNT = "voyage.rerank.result_count"
 SERVER_ADDRESS = "server.address"
@@ -85,6 +87,28 @@ EMBED = Operation(
     span_kind=FiSpanKindValues.EMBEDDING.value,
     operation_name="embeddings",
     parameters=_EMBED_PARAMETERS,
+)
+MULTIMODAL_EMBED = Operation(
+    span_name="voyage.multimodal_embed",
+    span_kind=FiSpanKindValues.EMBEDDING.value,
+    operation_name="embeddings",
+    parameters=("inputs",) + _EMBED_PARAMETERS[1:],
+)
+CONTEXTUALIZED_EMBED = Operation(
+    span_name="voyage.contextualized_embed",
+    span_kind=FiSpanKindValues.EMBEDDING.value,
+    operation_name="embeddings",
+    parameters=(
+        "inputs",
+        "model",
+        "input_type",
+        "output_dtype",
+        "output_dimension",
+        "chunk_fn",
+        "enable_auto_chunking",
+        "chunk_size",
+        "chunk_overlap",
+    ),
 )
 RERANK = Operation(
     span_name="voyage.rerank",
@@ -151,6 +175,37 @@ def _captured_list(values: Any, secrets: Sequence[str]) -> Optional[List[str]]:
     if not isinstance(values, (list, tuple)):
         return None
     return [_captured_text(value, secrets) for value in values[:MAX_CAPTURED_ITEMS]]
+
+
+def _captured_nested_text(
+    values: Any, secrets: Sequence[str], *, multimodal: bool
+) -> Optional[List[List[str]]]:
+    """Keep batch boundaries and text only, never stringify images/video/objects.
+
+    Bound both traversal and capture: at most 64 groups and 64 total segments.
+    Media is represented by a constant, not a URL, path, base64 value or repr.
+    """
+    if not isinstance(values, (list, tuple)):
+        return None
+    captured: List[List[str]] = []
+    remaining = MAX_CAPTURED_ITEMS
+    for group in values[:MAX_CAPTURED_ITEMS]:
+        if remaining == 0:
+            break
+        if multimodal and isinstance(group, Mapping):
+            group = group.get("content")
+        if isinstance(group, str):
+            group = [group]
+        if not isinstance(group, (list, tuple)):
+            continue
+        texts = []
+        for part in group[:remaining]:
+            if multimodal and isinstance(part, Mapping):
+                part = part.get("text") if part.get("type") == "text" else None
+            texts.append(_captured_text(part, secrets) if isinstance(part, str) else MEDIA_OMITTED)
+        captured.append(texts)
+        remaining -= len(texts)
+    return captured
 
 
 def _count(values: Any) -> Optional[int]:
@@ -223,12 +278,20 @@ def _request_attributes(
     model = _model(operation, args, kwargs)
     if model:
         attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] = model
-    if operation is EMBED:
+    if operation is not RERANK:
         if model:
             attributes[SpanAttributes.EMBEDDING_MODEL_NAME] = model
-        count = _count(_argument(operation, args, kwargs, "texts"))
+        input_name = "texts" if operation is EMBED else "inputs"
+        count = _count(_argument(operation, args, kwargs, input_name))
         if count is not None:
-            attributes[EMBEDDING_COUNT] = count
+            # Contextualized inputs are documents, each containing chunks. The
+            # SDK or server can split them further; count returned vectors later.
+            key = (
+                CONTEXTUALIZED_DOCUMENT_COUNT
+                if operation is CONTEXTUALIZED_EMBED
+                else EMBEDDING_COUNT
+            )
+            attributes[key] = count
         for name, key in (("input_type", INPUT_TYPE), ("output_dtype", OUTPUT_DTYPE)):
             value = _argument(operation, args, kwargs, name)
             if isinstance(value, str) and value:
@@ -273,10 +336,18 @@ def _input_content(
     if _hides_inputs(config):
         return {}
     attributes: Dict[str, Any] = {}
-    if operation is EMBED:
+    if operation is not RERANK:
         if not capture_content:
             return attributes
-        texts = _captured_list(_argument(operation, args, kwargs, "texts"), secrets)
+        texts: Optional[Union[List[str], List[List[str]]]]
+        if operation is EMBED:
+            texts = _captured_list(_argument(operation, args, kwargs, "texts"), secrets)
+        else:
+            texts = _captured_nested_text(
+                _argument(operation, args, kwargs, "inputs"),
+                secrets,
+                multimodal=operation is MULTIMODAL_EMBED,
+            )
         if texts is not None:
             attributes[SpanAttributes.INPUT_VALUE] = json.dumps(texts, ensure_ascii=False)
             attributes[SpanAttributes.INPUT_MIME_TYPE] = JSON_MIME_TYPE
@@ -321,8 +392,19 @@ def _response_attributes(
 ) -> Dict[str, Any]:
     """Counts, dimension and usage from the returned object. Never vectors."""
     attributes = _usage(result)
-    if operation is EMBED:
+    if operation is not RERANK:
         embeddings = getattr(result, "embeddings", None)
+        if operation is CONTEXTUALIZED_EMBED:
+            results = getattr(result, "results", None)
+            if isinstance(results, (list, tuple)):
+                count = 0
+                for item in results:
+                    batch = getattr(item, "embeddings", None)
+                    if isinstance(batch, (list, tuple)):
+                        count += len(batch)
+                        if embeddings is None and batch:
+                            embeddings = batch
+                attributes[EMBEDDING_COUNT] = count
         if isinstance(embeddings, (list, tuple)) and embeddings:
             first = embeddings[0]
             if hasattr(first, "__len__") and not isinstance(first, (str, bytes)):
@@ -331,6 +413,13 @@ def _response_attributes(
                     dimension *= 8
                 attributes[EMBEDDING_DIMENSION] = dimension
                 attributes[SpanAttributes.GEN_AI_EMBEDDINGS_DIMENSION_COUNT] = dimension
+        if operation is MULTIMODAL_EMBED:
+            # These are provider-reported units, not additional gen_ai tokens.
+            # In particular pixels must never be added to total_tokens.
+            for name in ("text_tokens", "image_pixels", "video_pixels"):
+                value = getattr(result, name, None)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    attributes["voyage.usage." + name] = value
     else:
         results = getattr(result, "results", None)
         if isinstance(results, (list, tuple)):
@@ -397,10 +486,21 @@ def _redact_pii(value: str, config: TraceConfig) -> str:
 
 
 def _record_error(
-    span: Span, error: BaseException, secrets: Sequence[str], config: TraceConfig
+    span: Span,
+    error: BaseException,
+    secrets: Sequence[str],
+    config: TraceConfig,
+    *,
+    omit_message: bool = False,
 ) -> None:
-    name, message = _describe(error, secrets)
-    message = _redact_pii(message, config)
+    # Multimodal validation and contextualized service errors can echo entire
+    # inputs, including binary data and signed URLs. Do not export that text,
+    # even with capture_content: only explicit text segments are capturable.
+    if omit_message:
+        name, message = type(error).__name__, "Voyage embedding request failed"
+    else:
+        name, message = _describe(error, secrets)
+        message = _redact_pii(message, config)
     # No exception.stacktrace: a Python traceback carries local file paths and
     # the user name, which this package never exports.
     # The SDK's record_exception would copy str(error) verbatim; the key may
@@ -511,7 +611,13 @@ class _Call:
         if span is None:
             return
         try:
-            _record_error(span, error, self._secrets, self._wrapper.config)
+            _record_error(
+                span,
+                error,
+                self._secrets,
+                self._wrapper.config,
+                omit_message=self._wrapper.operation in (MULTIMODAL_EMBED, CONTEXTUALIZED_EMBED),
+            )
         except Exception:
             logger.debug("Could not record the Voyage error", exc_info=True)
         finally:
@@ -551,7 +657,7 @@ class _BaseWrapper:
 
 
 class SyncWrapper(_BaseWrapper):
-    """Trace ``Client.embed`` / ``Client.rerank``."""
+    """Trace synchronous embedding and reranking calls."""
 
     def __call__(
         self,
@@ -580,7 +686,7 @@ class SyncWrapper(_BaseWrapper):
 
 
 class AsyncWrapper(_BaseWrapper):
-    """Trace ``AsyncClient.embed`` / ``AsyncClient.rerank``."""
+    """Trace asynchronous embedding and reranking calls."""
 
     async def __call__(
         self,
