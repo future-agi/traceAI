@@ -460,9 +460,11 @@ test("function-call arguments and tool responses redact nested credentials in sp
   const credentials = {
     authorization: "Bearer OUTPUT_AUTH_SENTINEL",
     password: "OUTPUT_PASSWORD_SENTINEL",
+    auth: "OUTPUT_AUTH_FIELD_SENTINEL",
     nested: {
       proxyAuthorization: "OUTPUT_PROXY_AUTH_SENTINEL",
       passphrase: "OUTPUT_PASSPHRASE_SENTINEL",
+      cookie: "OUTPUT_COOKIE_SENTINEL",
       city: "London",
     },
   };
@@ -478,7 +480,9 @@ test("function-call arguments and tool responses redact nested credentials in sp
         { functionResponse: { name: "weather", response: {
           result: "sunny",
           Authorization: "Bearer INPUT_AUTH_SENTINEL",
+          auth: "INPUT_AUTH_FIELD_SENTINEL",
           credentials: { password: "INPUT_PASSWORD_SENTINEL" },
+          weather: { cookie: "INPUT_COOKIE_SENTINEL", forecast: "clear" },
         } } },
       ] }],
     });
@@ -488,9 +492,11 @@ test("function-call arguments and tool responses redact nested credentials in sp
     const input = attrs["gen_ai.input.messages"];
     const output = attrs["gen_ai.output.messages"];
     assert.match(input, /sunny/);
+    assert.match(input, /clear/);
     assert.match(output, /London/);
-    for (const content of [JSON.stringify(attrs), JSON.stringify(wire.map((w) => w.body))]) {
-      assert.doesNotMatch(content, /INPUT_AUTH_SENTINEL|INPUT_PASSWORD_SENTINEL|OUTPUT_AUTH_SENTINEL|OUTPUT_PASSWORD_SENTINEL|OUTPUT_PROXY_AUTH_SENTINEL|OUTPUT_PASSPHRASE_SENTINEL/);
+    const credentialSentinels = /INPUT_AUTH_SENTINEL|INPUT_AUTH_FIELD_SENTINEL|INPUT_PASSWORD_SENTINEL|INPUT_COOKIE_SENTINEL|OUTPUT_AUTH_SENTINEL|OUTPUT_AUTH_FIELD_SENTINEL|OUTPUT_PASSWORD_SENTINEL|OUTPUT_COOKIE_SENTINEL|OUTPUT_PROXY_AUTH_SENTINEL|OUTPUT_PASSPHRASE_SENTINEL/;
+    for (const content of [input, output, JSON.stringify(wire.map((w) => w.body))]) {
+      assert.doesNotMatch(content, credentialSentinels);
     }
     const exported = wire.flatMap((w) =>
       w.body.resourceSpans.flatMap((r) => r.scopeSpans.flatMap((s) => s.spans))
@@ -500,7 +506,10 @@ test("function-call arguments and tool responses redact nested credentials in sp
     assert.equal(exported.length, 1);
     const otlpAttrs = Object.fromEntries(exported[0].attributes.map((a) => [a.key, a.value.stringValue]));
     assert.match(otlpAttrs["gen_ai.input.messages"], /sunny/);
+    assert.match(otlpAttrs["gen_ai.input.messages"], /clear/);
     assert.match(otlpAttrs["gen_ai.output.messages"], /London/);
+    assert.doesNotMatch(otlpAttrs["gen_ai.input.messages"], credentialSentinels);
+    assert.doesNotMatch(otlpAttrs["gen_ai.output.messages"], credentialSentinels);
   } finally {
     handle.dispose();
   }

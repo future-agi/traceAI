@@ -74,7 +74,7 @@ export class Capture {
     for (const key of keys.slice(0, 32)) {
       // Tool arguments and responses can carry credentials at any nesting level.
       if (
-        /data|bytes|base64|headers|api.?key|secret|token|uri|url|authorization|password|passphrase|passwd|pwd|credential|private.?key|access.?key/i.test(
+        /data|bytes|base64|headers|api.?key|secret|token|uri|url|auth|cookie|password|passphrase|passwd|pwd|credential|private.?key|access.?key/i.test(
           key,
         )
       )
