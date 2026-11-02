@@ -39,8 +39,11 @@ class BedrockAsyncCompletionTest {
         "converse, caller-cancel-true", "invokeModel, caller-cancel-true",
         "converse, caller-cancel-false", "invokeModel, caller-cancel-false",
         "converse, caller-failure", "invokeModel, caller-failure",
-        "converse, caller-timeout", "invokeModel, caller-timeout"
+        "converse, caller-timeout", "invokeModel, caller-timeout",
+        "converse, caller-success", "invokeModel, caller-success",
+        "converse, caller-success-timeout", "invokeModel, caller-success-timeout"
     })
+    @SuppressWarnings("unchecked")
     void endsSpanBeforeApplicationCallbackFlushesAndShutsDown(String operation, String outcome) throws Exception {
         List<ExportTraceServiceRequest> exports = new CopyOnWriteArrayList<>();
         HttpServer collector = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -72,10 +75,12 @@ class BedrockAsyncCompletionTest {
                     throw new UnsupportedOperationException(method.getName());
                 });
             TracedBedrockRuntimeAsyncClient client = new TracedBedrockRuntimeAsyncClient(sdk, tracer);
-            CompletableFuture<? extends SdkResponse> future = operation.equals("converse")
+            CompletableFuture<? extends SdkResponse> typed = operation.equals("converse")
                 ? client.converse(BedrockTracingTest.request())
                 : client.invokeModel(InvokeModelRequest.builder().modelId("amazon.titan-text-express-v1")
                     .body(SdkBytes.fromUtf8String("{\"inputText\":\"question\"}")).build());
+            CompletableFuture<SdkResponse> future = (CompletableFuture<SdkResponse>) typed;
+            boolean successful = outcome.equals("success") || outcome.startsWith("caller-success");
             SdkResponse response = operation.equals("converse") ? BedrockTracingTest.response()
                 : InvokeModelResponse.builder().body(SdkBytes.fromUtf8String("{\"results\":[{\"outputText\":\"answer\"}]}")).build();
             CompletionException failure = new CompletionException(new IllegalStateException("private-error"));
@@ -89,11 +94,12 @@ class BedrockAsyncCompletionTest {
                     .flatMap(resource -> resource.getScopeSpansList().stream())
                     .flatMap(scope -> scope.getSpansList().stream()).toList();
                 assertThat(spans).hasSize(1);
-                assertThat(spans.get(0).getStatus().getCode()).isEqualTo(outcome.equals("success")
+                assertThat(spans.get(0).getStatus().getCode()).isEqualTo(successful
                     ? Status.StatusCode.STATUS_CODE_OK : Status.StatusCode.STATUS_CODE_ERROR);
-                if (outcome.equals("success")) {
+                if (successful) {
                     assertThat(value).isSameAs(response);
                     assertThat(error).isNull();
+                    assertThat(sdkFuture).isCompletedWithValue(response);
                 } else if (outcome.equals("failure") || outcome.equals("caller-failure")) {
                     assertThat(error).isSameAs(failure);
                     assertThat(sdkFuture).isCompletedExceptionally();
@@ -113,6 +119,8 @@ class BedrockAsyncCompletionTest {
                 case "failure" -> sdkFuture.completeExceptionally(failure);
                 case "caller-failure" -> assertThat(future.completeExceptionally(failure)).isTrue();
                 case "caller-timeout" -> future.orTimeout(30, TimeUnit.MILLISECONDS);
+                case "caller-success" -> assertThat(future.complete(response)).isTrue();
+                case "caller-success-timeout" -> future.completeOnTimeout(response, 30, TimeUnit.MILLISECONDS);
                 case "sdk-cancel" -> sdkFuture.cancel(false);
                 case "caller-cancel-true", "caller-cancel-false" -> {
                     boolean mayInterrupt = outcome.endsWith("true");
@@ -125,6 +133,7 @@ class BedrockAsyncCompletionTest {
             appCompletion.get(5, TimeUnit.SECONDS);
             assertThat(exports).hasSize(1);
             assertThat(sdkFuture.complete(response)).isFalse();
+            assertThat(future.complete(response)).isFalse();
             assertThat(future.completeExceptionally(new IllegalStateException("late failure"))).isFalse();
             if (!outcome.contains("cancel")) {
                 assertThat(future.cancel(true)).isFalse();

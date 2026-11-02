@@ -21,8 +21,8 @@ import java.util.function.Supplier;
 /**
  * Traces non-streaming async Converse and InvokeModel through completion,
  * failure or cancellation. The returned future completes after tracing finishes
- * and forwards cancellation and exceptional completion (including caller timeouts)
- * to the SDK future. Streaming operations are not supported.
+ * and forwards cancellation and caller completion (including successful and exceptional
+ * timeouts) to the SDK future. Streaming operations are not supported.
  */
 public final class TracedBedrockRuntimeAsyncClient {
     private final BedrockRuntimeAsyncClient client;
@@ -82,6 +82,13 @@ public final class TracedBedrockRuntimeAsyncClient {
                 // Let the SDK decide which outcome wins. Its single completion callback
                 // ends the span before publishing the outcome to application callbacks.
                 return future.cancel(mayInterruptIfRunning);
+            }
+
+            @Override
+            public boolean complete(T response) {
+                // CompletableFuture.completeOnTimeout uses this method too. The SDK's
+                // completion callback finalizes tracing before publishing the fallback.
+                return future.complete(response);
             }
 
             @Override
