@@ -897,7 +897,12 @@ class _StepWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "close", None):
+                    close()
 
     def arun(
         self,
@@ -1031,7 +1036,12 @@ class _StepWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "aclose", None):
+                    await close()
 
 
 class _ParallelWrapper:
@@ -1165,7 +1175,12 @@ class _ParallelWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "close", None):
+                    close()
 
     def aexecute(
         self,
@@ -1299,7 +1314,12 @@ class _ParallelWrapper:
             raise
 
         finally:
-            span.end()
+            with (
+                finish_span(span),
+                span_scope(span, {_AGNO_PARENT_NODE_CONTEXT_KEY: node_id}),
+            ):
+                if close := getattr(iterator, "aclose", None):
+                    await close()
 
 
 def _setup_node_context(node_id: str) -> Any:
