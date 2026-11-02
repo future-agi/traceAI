@@ -419,6 +419,24 @@ test('current SDK pipeTo preventCancel releases source for resumption on sink fa
   }
 });
 
+test('current SDK pipeThrough preventCancel releases source when output is cancelled', async t => {
+  const f = await modern(t);
+  f.instrumentation.instrumentClient(f.client);
+  f.respond(() => sseResponse([chunk('one'), chunk('two')]));
+  const stream = await f.client.chat.stream(request);
+  const output = stream.pipeThrough(new TransformStream(), { preventCancel: true });
+  const outputReader = output.getReader();
+  assert.equal((await outputReader.read()).done, false);
+  await outputReader.cancel('synthetic output cancellation');
+  for (let i = 0; i < 50 && stream.locked; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(stream.locked, false, 'source iterator lock retained after output cancellation');
+  assert.equal(f.spans().length, 0, 'output cancellation must not cancel the source');
+  const sourceReader = stream.getReader();
+  while (!(await sourceReader.read()).done) {}
+  sourceReader.releaseLock();
+  assert.equal(f.spans().length, 1, 'source completion should export a span');
+});
+
 test('SDK floor direct async generator next and return finalize spans', async t => {
   const { default: Client } = await import('mistral-floor');
   for (const method of ['next', 'return']) {

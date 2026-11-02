@@ -88,15 +88,24 @@ export function observeStream<T>(
       if (["pipeTo", "pipeThrough", "tee"].includes(String(key)) && typeof value === "function") {
         return (...args: unknown[]) => {
           const stream = pipedStream();
-          const result = Reflect.apply(Reflect.get(stream, key), stream, args);
-          if (key !== "pipeTo" || !(args[1] as { preventCancel?: boolean } | undefined)?.preventCancel) return result;
-          return Promise.resolve(result).catch(async error => {
+          const preventCancel = (args[1] as { preventCancel?: boolean } | undefined)?.preventCancel;
+          const releaseOnFailure = (pipe: Promise<void>) => !preventCancel ? pipe : pipe.catch(async error => {
             // The bridge's pipeTo does not cancel on this path, so release its
             // reader explicitly; the original stream remains available to resume.
             try { await bridgeIterator?.return?.(); }
             finally { bridge = undefined; bridgeIterator = undefined; }
             throw error;
           });
+          if (key === "pipeThrough" && preventCancel) {
+            // pipeThrough starts an internal pipeTo but hides its promise. Keep
+            // that promise to release the reader when its output is cancelled.
+            const pair = args[0] as { writable: WritableStream<T>; readable: ReadableStream<unknown> };
+            const pipe = releaseOnFailure(stream.pipeTo(pair.writable, args[1] as Parameters<ReadableStream<T>["pipeTo"]>[1]));
+            void pipe.catch(() => {}); // pipeThrough does not expose pipe failures.
+            return pair.readable;
+          }
+          const result = Reflect.apply(Reflect.get(stream, key), stream, args);
+          return key === "pipeTo" ? releaseOnFailure(result as Promise<void>) : result;
         };
       }
       // Native ReadableStream accessors/methods require their original receiver.
