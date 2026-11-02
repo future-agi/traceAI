@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A separate application that resolves the published Semantic Kernel dependency graph for one
+     version (-Dsk.version) next to the locally installed adapter (-Dtraceai.version). The
+     compatibility job compiles and runs LegacyBinaryCompatibility on exactly this classpath. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.futureagi.compat</groupId>
+    <artifactId>semantic-kernel-binary-consumer</artifactId>
+    <version>0</version>
+    <packaging>pom</packaging>
+
+    <properties>
+        <sk.version>1.5.0</sk.version>
+        <traceai.version>1.0.1</traceai.version>
+        <otel.sdk.version>1.35.0</otel.sdk.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-semantic-kernel</artifactId>
+            <version>${traceai.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-api</artifactId>
+            <version>${sk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-aiservices-openai</artifactId>
+            <version>${sk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <version>${otel.sdk.version}</version>
+        </dependency>
+    </dependencies>
+</project>
