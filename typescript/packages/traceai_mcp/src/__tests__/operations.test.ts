@@ -248,6 +248,52 @@ it("explicit capture rejects binary, credentials, getters, cycles and oversized 
   ).toBeUndefined();
 });
 
+it("redacts nested credential-name variants in opted-in input and output", async () => {
+  operations = setup({ captureContent: { input: true, output: true } });
+  operations.receive(
+    request(1, {
+      safe: "allowed input",
+      nested: {
+        privateKey: "PRIVATE_INPUT_KEY",
+        accessKeyId: "PRIVATE_INPUT_ID",
+        awsSecretAccessKey: "PRIVATE_INPUT_AWS",
+        certificate: "PRIVATE_INPUT_CERT",
+        items: [{ clientSecret: "PRIVATE_INPUT_CLIENT", safe: "allowed item" }],
+      },
+    }),
+    () => {},
+  );
+  operations.send(
+    response(1, {
+      content: [{ type: "text", text: "allowed output" }],
+      structuredContent: {
+        private_key: "PRIVATE_OUTPUT_KEY",
+        access_key_id: "PRIVATE_OUTPUT_ID",
+        nested: [{ signingKey: "PRIVATE_OUTPUT_SIGN", safe: "allowed nested" }],
+      },
+    }),
+    () => undefined,
+  );
+  await tick();
+  const attributes = exporter.getFinishedSpans()[0].attributes;
+  expect(attributes["input.value"]).toContain("allowed item");
+  expect(attributes["output.value"]).toContain("allowed nested");
+  expect(JSON.stringify(attributes)).not.toContain("PRIVATE_");
+});
+
+it("keeps content off by default for nested credential fields", async () => {
+  operations.receive(request(1, { privateKey: "PRIVATE_INPUT_KEY" }), () => {});
+  operations.send(
+    response(1, { structuredContent: { accessKeyId: "PRIVATE_OUTPUT_ID" } }),
+    () => undefined,
+  );
+  await tick();
+  const attributes = exporter.getFinishedSpans()[0].attributes;
+  expect(attributes["input.value"]).toBeUndefined();
+  expect(attributes["output.value"]).toBeUndefined();
+  expect(JSON.stringify(attributes)).not.toContain("PRIVATE_");
+});
+
 it.each([
   "FI_HIDE_INPUTS",
   "FI_HIDE_INPUT_TEXT",
