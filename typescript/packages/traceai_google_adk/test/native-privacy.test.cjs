@@ -76,6 +76,54 @@ test('credentials are always redacted recursively, even without a hide flag', as
   }
 });
 
+test('common token and AWS credential fields are redacted without hiding token counts', async () => {
+  const credentials = {
+    api_token: 'synthetic-api-token', session_token: 'synthetic-session-token',
+    aws_secret_access_key: 'synthetic-aws-secret', AWS_ACCESS_KEY_ID: 'synthetic-aws-id',
+    awsSessionToken: 'synthetic-aws-session', 'X-API-Token': 'synthetic-header-token',
+    security_token: 'synthetic-security-token', bearerToken: 'synthetic-bearer-token',
+  };
+  const counts = {max_tokens: 42, promptTokenCount: 11, total_tokens: 18, token_count: 7};
+  const payload = {credentials, nested: [credentials], encoded: JSON.stringify(credentials), counts};
+  for (const operation of ['generate_content', 'execute_tool']) {
+    const a = await exported(undefined, operation, payload, payload);
+    for (const side of ['input', 'output']) {
+      assert(!a[`${side}.value`].includes('synthetic-'));
+      const safe = JSON.parse(a[`${side}.value`]);
+      assert.deepEqual(safe.counts, counts);
+      for (const key of Object.keys(credentials)) {
+        assert.equal(safe.nested[0][key], '__REDACTED__');
+        assert.equal(JSON.parse(safe.encoded)[key], '__REDACTED__');
+      }
+    }
+  }
+});
+
+test('PII redaction preserves JSON structure for numeric values and encoded payloads', async () => {
+  const data = {timestamp: 1730572800000, accountNumber: 4111111111111111, ordinary: 'ordinary visible text', count: 42, enabled: true, absent: null};
+  const payload = {...data, array: [data.accountNumber, data.count, data.enabled, data.absent], encoded: JSON.stringify(data), 'synthetic.person@example.com': 'email key', text: 'quoted "text" and \\ backslash'};
+  for (const operation of ['generate_content', 'execute_tool']) {
+    const a = await exported('FI_PII_REDACTION', operation, payload, payload);
+    for (const side of ['input', 'output']) {
+      assert.equal(a[`${side}.mime_type`], 'application/json');
+      const safe = JSON.parse(a[`${side}.value`]);
+      assert.equal(safe.timestamp, '<CREDIT_CARD>');
+      assert.equal(safe.accountNumber, '<CREDIT_CARD>');
+      assert.equal(safe.ordinary, data.ordinary);
+      assert.equal(safe.count, 42);
+      assert.equal(safe.enabled, true);
+      assert.equal(safe.absent, null);
+      assert.equal(safe.text, payload.text);
+      assert.deepEqual(safe.array, ['<CREDIT_CARD>', 42, true, null]);
+      assert.equal(JSON.parse(safe.encoded).accountNumber, '<CREDIT_CARD>');
+      assert.equal(safe['<EMAIL_ADDRESS>'], 'email key');
+      for (const pii of ['1730572800000', '4111111111111111', 'synthetic.person@example.com']) {
+        assert(!a[`${side}.value`].includes(pii));
+      }
+    }
+  }
+});
+
 test('FI_HIDE_INPUT_IMAGES removes native inline and file data recursively', async () => {
   const payload = {contents: [{parts: [{inlineData: {mimeType: 'image/png', data: 'PRIVATE_IMAGE'}}, {fileData: {mimeType: 'image/png', fileUri: 'PRIVATE_IMAGE'}}, {text: 'visible'}]}]};
   const a = await exported('FI_HIDE_INPUT_IMAGES', 'generate_content', payload, output);

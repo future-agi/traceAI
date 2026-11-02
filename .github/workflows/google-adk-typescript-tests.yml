@@ -57,7 +57,7 @@ jobs:
             "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs" "$1/typescript/packages/traceai_google_adk/test/native-privacy.test.cjs"
             ADK_RUNTIME="$2" CAPTURE_CONTENT="$3" "$4" "$1/typescript/packages/traceai_google_adk/test/run-adk.cjs"
             if [ "$5" = "2.4.0" ] && [ "$3" = "1" ]; then
-              for mode in default credentials hide-inputs hide-outputs hide-input-text hide-output-text hide-input-messages hide-output-messages pii; do
+              for mode in default credentials credential-variants hide-inputs hide-outputs hide-input-text hide-output-text hide-input-messages hide-output-messages pii numeric-pii; do
                 "$4" "$1/typescript/packages/traceai_google_adk/test/native-privacy-wire.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
               done
             fi
