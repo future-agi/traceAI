@@ -98,9 +98,22 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions): Readabl
   }
   // A new readable view avoids mutating spans seen by other processors. Native
   // error messages/events/links may contain prompts, even without content attrs.
+  // Copy the public ReadableSpan contract explicitly: SDK timing and dropped
+  // counters are prototype getters, which object spread silently discards.
   return {
-    ...span,
+    name: span.name,
+    kind: span.kind,
     spanContext: () => span.spanContext(),
+    parentSpanContext: span.parentSpanContext,
+    startTime: span.startTime,
+    endTime: span.endTime,
+    duration: span.duration,
+    ended: span.ended,
+    resource: span.resource,
+    instrumentationScope: span.instrumentationScope,
+    droppedAttributesCount: span.droppedAttributesCount,
+    droppedEventsCount: span.droppedEventsCount,
+    droppedLinksCount: span.droppedLinksCount,
     attributes,
     status: { code: span.status.code },
     events: span.events.filter(event => event.name === "exception").map(event => ({

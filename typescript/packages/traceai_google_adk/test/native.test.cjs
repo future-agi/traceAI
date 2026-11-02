@@ -4,11 +4,11 @@ const { GoogleADKSpanExporter, configure } = require('../dist/src');
 const { trace } = require('@opentelemetry/api');
 const { BasicTracerProvider, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 
-function collect(options) {
+function collect(options, spanLimits) {
   const spans = [];
   const delegate = {export(batch, done) { spans.push(...batch); done({code: 0}); }, shutdown: async () => {}, forceFlush: async () => {}};
   const exporter = new GoogleADKSpanExporter(delegate, options);
-  const provider = new BasicTracerProvider({spanProcessors: [new SimpleSpanProcessor(exporter)]});
+  const provider = new BasicTracerProvider({spanLimits, spanProcessors: [new SimpleSpanProcessor(exporter)]});
   return {spans, exporter, provider, tracer: provider.getTracer('gcp.vertex.agent')};
 }
 
@@ -43,6 +43,38 @@ test('default privacy removes native payloads, sessions, errors and future attri
   assert.equal(original.status.message, 'PRIVATE_ERROR');
   assert.equal(span.spanContext().spanId, original.spanContext().spanId);
   await c.provider.shutdown();
+});
+
+test('translated spans retain SDK getter-backed timing and dropped counts for downstream exporters', async () => {
+  const c = collect(undefined, {attributeCountLimit: 2, eventCountLimit: 1, linkCountLimit: 1});
+  try {
+    const link = {context: {traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1}};
+    const original = c.tracer.startSpan('call_llm', {
+      startTime: [100, 0],
+      attributes: sensitive,
+      links: [link, link],
+    });
+    original.addEvent('exception', {'exception.type': 'Error'});
+    original.addEvent('exception', {'exception.type': 'Error'});
+    original.end([101, 123]);
+    await c.provider.forceFlush();
+    const span = c.spans[0];
+    assert.deepEqual(span.duration, [1, 123]);
+    assert.equal(span.ended, true);
+    assert(original.droppedAttributesCount > 0);
+    assert(original.droppedEventsCount > 0);
+    for (const key of ['droppedAttributesCount', 'droppedEventsCount', 'droppedLinksCount']) {
+      assert.equal(span[key], original[key], key);
+    }
+    for (const key of ['name', 'kind', 'parentSpanContext', 'startTime', 'endTime', 'resource', 'instrumentationScope']) {
+      assert.deepEqual(span[key], original[key], key);
+    }
+    // ConsoleSpanExporter and other exporters read duration through this API.
+    const { hrTimeToMicroseconds } = require('@opentelemetry/core');
+    assert.equal(hrTimeToMicroseconds(span.duration), hrTimeToMicroseconds(original.duration));
+  } finally {
+    await c.provider.shutdown();
+  }
 });
 
 test('explicit content and session opt-in maps native input, output and conversation', async () => {
