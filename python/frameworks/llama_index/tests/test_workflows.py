@@ -8,10 +8,10 @@ import asyncio
 
 import pytest
 
-# Standalone Workflows (llama-index-workflows) ships with llama-index-core 0.13+;
-# the legacy-core floor has neither package.
-pytest.importorskip("llama_index_instrumentation")
+# Core before 0.12.43 does not install the standalone workflows package; its
+# embedded Workflow class is covered by test_workflow_outcomes.py.
 pytest.importorskip("workflows")
+pytest.importorskip("llama_index_instrumentation")
 
 from fi_instrumentation import TraceConfig
 from llama_index.core.instrumentation import get_dispatcher as core_dispatcher

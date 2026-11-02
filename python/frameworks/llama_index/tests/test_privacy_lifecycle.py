@@ -1,12 +1,12 @@
-"""Offline regressions: hide flags on embedding text, streamed chat at the
-declared core floor, and cancelled workflow steps.
+"""Offline regressions: hide flags on embedding text and RAG content, and
+streamed chat at the declared core floor.
 
 Everything runs on LlamaIndex's real dispatcher with MockLLM, MockEmbedding and
-the real OpenAI LLM over an in-process HTTP transport. Spans go through the instrumentor's FITracer, so TraceConfig masking applies
-exactly as it does on the register() path.
+the real OpenAI LLM over an in-process HTTP transport. Spans go through the
+instrumentor's FITracer, so TraceConfig masking applies exactly as it does on
+the register() path.
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -114,6 +114,33 @@ def test_hide_embedding_vectors_hides_every_vector_copy(trace):
         assert "0.5" not in str(attrs.get("output.value", ""))
         assert "0.5" not in str(attrs.get("embedding.embeddings", ""))
         assert attrs["embedding.embeddings.0.embedding.text"] in (QUERY, DOCUMENT)
+
+
+def test_input_and_output_flags_hide_a_rag_query(trace):
+    # The guide's setting: FI_HIDE_INPUTS and FI_HIDE_OUTPUTS together. The
+    # retrieved document text and the question reach several spans (retrieval
+    # documents, prompt template variables, embedding text); none may export them.
+    from llama_index.core import Document, VectorStoreIndex
+
+    exporter = trace(TraceConfig(hide_inputs=True, hide_outputs=True))
+    embed_model = MockEmbedding(embed_dim=3)
+    index = VectorStoreIndex.from_documents(
+        [Document(text=DOCUMENT)], embed_model=embed_model
+    )
+    engine = index.as_query_engine(llm=MockLLM(max_tokens=2), embed_model=embed_model)
+    assert str(engine.query(QUERY)).strip() == "text text"
+
+    spans = exporter.get_finished_spans()
+    names = {span.name for span in spans}
+    # The spans that carried the text before the core masked these keys.
+    assert any(name.endswith(".retrieve") for name in names), names
+    assert any(name.endswith(".predict") for name in names), names
+    for span in spans:
+        exported = [str(dict(span.attributes))]
+        exported += [str(dict(event.attributes or {})) for event in span.events]
+        for text in exported:
+            assert DOCUMENT not in text, span.name
+            assert QUERY not in text, span.name
 
 
 def _sse(*parts):
@@ -234,74 +261,3 @@ def test_chat_engine_stream_logs_no_handler_errors(trace, caplog):
     assert span.status.status_code == StatusCode.OK
     errors = [r for r in caplog.records if r.name == HANDLER_LOGGER and r.levelno >= logging.ERROR]
     assert not errors, [r.getMessage() for r in errors]
-
-
-def _workflow_classes():
-    from traceai_llamaindex import _handler
-
-    if _handler.SpanCancelledEvent is None:
-        pytest.skip("SpanCancelledEvent is emitted from llama-index-workflows 2.16.0")
-    from workflows import Workflow, step
-    from workflows.events import StartEvent, StopEvent
-
-    class Slow(Workflow):
-        @step
-        async def s(self, ev: StartEvent) -> StopEvent:
-            await asyncio.sleep(5)
-            return StopEvent(result="never")
-
-    return Slow
-
-
-def _by_short_name(exporter):
-    # The class is local to a function, so span names carry "<locals>." prefixes.
-    spans = {}
-    for span in exporter.get_finished_spans():
-        short = ".".join(span.name.split(".")[-2:])
-        assert short not in spans, short
-        spans[short] = span
-    return spans
-
-
-def _cancel_event(span):
-    return [e for e in span.events if e.name == "span.cancelled"]
-
-
-def test_timed_out_step_is_marked_cancelled_not_ok(trace):
-    Slow = _workflow_classes()
-    exporter = trace()
-
-    async def run():
-        await Slow(timeout=0.3).run()
-
-    with pytest.raises(Exception, match="timed out"):
-        asyncio.run(run())
-    spans = _by_short_name(exporter)
-    step_span, run_span = spans["Slow.s"], spans["Slow.run"]
-    assert step_span.parent.span_id == run_span.context.span_id
-    assert run_span.status.status_code == StatusCode.ERROR
-    assert step_span.status.status_code != StatusCode.OK
-    event, = _cancel_event(step_span)
-    assert event.attributes["reason"] == "step cancelled"
-    assert step_span.attributes["gen_ai.span.kind"] == "CHAIN"
-
-
-def test_user_cancelled_run_is_marked_cancelled_not_ok(trace):
-    Slow = _workflow_classes()
-    exporter = trace()
-
-    async def run():
-        handler = Slow(timeout=10).run()
-        await asyncio.sleep(0.2)
-        await handler.cancel_run()
-        try:
-            await handler
-        except Exception:
-            pass
-
-    asyncio.run(run())
-    spans = _by_short_name(exporter)
-    for name in ("Slow.s", "Slow.run"):
-        assert spans[name].status.status_code != StatusCode.OK, name
-        assert spans[name].status.status_code != StatusCode.ERROR, name
-        assert _cancel_event(spans[name]), name

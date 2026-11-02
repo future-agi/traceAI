@@ -137,11 +137,6 @@ except ModuleNotFoundError as exc:
     _workflow_done_exceptions = ()
 else:
     _workflow_done_exceptions = (WorkflowDone,)
-try:
-    # llama-index-workflows 2.16.0 and later emit this when a step or a run is cancelled.
-    from workflows.runtime.types.step_function import SpanCancelledEvent
-except ImportError:
-    SpanCancelledEvent = None
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Span, Status, StatusCode, Tracer, set_span_in_context
@@ -198,7 +193,6 @@ class _Span(BaseSpan):
     _last_updated_at: float = PrivateAttr()
     _stream_chunks: List[str] = PrivateAttr()
     _stream_content: str = PrivateAttr()
-    _cancelled: bool = PrivateAttr()
 
     def __init__(
         self,
@@ -221,7 +215,6 @@ class _Span(BaseSpan):
         self._list_attr_len: DefaultDict[str, int] = defaultdict(int)
         self._stream_chunks = []
         self._stream_content = ""
-        self._cancelled = False
 
     def __setitem__(self, key: str, value: AttributeValue) -> None:
         self._attributes[key] = value
@@ -234,11 +227,7 @@ class _Span(BaseSpan):
             return
         self._active = False
         if exception is None:
-            # A cancelled step or run did not fail, but it did not complete
-            # either: leave the status unset, the span.cancelled event says why.
-            status = Status(
-                status_code=StatusCode.UNSET if self._cancelled else StatusCode.OK
-            )
+            status = Status(status_code=StatusCode.OK)
         else:
             self._otel_span.record_exception(exception)
             # Follow the format in OTEL SDK for description, see:
@@ -428,9 +417,9 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: EmbeddingEndEvent) -> None:
-        # The chunks are the embedded input text. Older fi-instrumentation-otel
-        # releases do not mask the embedding text or every vector copy, so the
-        # hide flags are applied here as well.
+        # The chunks are the embedded input text. fi-instrumentation-otel 1.2.2
+        # and earlier do not mask the embedding text or every vector copy, so
+        # the hide flags are applied here as well.
         hide_text = _hides_embedding_text(self._config)
         hide_vectors = bool(getattr(self._config, "hide_embedding_vectors", False))
         i = self._list_attr_len[EMBEDDING_EMBEDDINGS]
@@ -642,18 +631,6 @@ class _Span(BaseSpan):
         self._process_response_text_type(event.response)
         # Add OUTPUT_VALUE
         self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
-
-    if SpanCancelledEvent is not None:
-
-        @_process_event.register
-        def _(self, event: SpanCancelledEvent) -> None:
-            # Workflows exits a cancelled step or run without an exception
-            # (timeouts and user cancellation). Record why, and keep the span
-            # from reporting OK.
-            self._cancelled = True
-            self._otel_span.add_event(
-                "span.cancelled", attributes={"reason": str(event.reason)}
-            )
 
     def _extract_token_counts(
         self, response: Union[ChatResponse, CompletionResponse]
