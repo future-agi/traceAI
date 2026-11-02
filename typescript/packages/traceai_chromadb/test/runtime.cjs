@@ -247,11 +247,58 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
     }
     assert.ok(collection, 'a real factory-created collection is required');
     for (const op of ['add', 'update', 'upsert']) {
-      await once(op, () => collection[op]({ ids: ['doc1'], embeddings: [[0.1, 0.2]], documents: ['PRIVATE_DOCUMENT'] }));
+      await once(op, () => collection[op]({ ids: ['doc1'], embeddings: [[0.1, 0.2]], documents: ['PRIVATE_DOCUMENT'] }), {
+        'db.vector.upsert.count': 1,
+        ...(op !== 'update' ? { 'db.vector.upsert.dimensions': 2 } : {}),
+        ...(op === 'add' ? { 'db.vector.documents.count': 1 } : {}),
+      });
     }
-    await once('get', () => collection.get({ ids: ['doc1'] }));
-    await once('delete', () => collection.delete({ ids: ['doc1'] }));
+    await once('get', () => collection.get({ ids: ['doc1'] }), { 'db.vector.get.ids_count': 1 });
+    await once('delete', () => collection.delete({ ids: ['doc1'] }), { 'db.vector.delete.count': 1 });
     await once('peek', () => collection.peek({ limit: 2 }));
+    if (major < 3) {
+      // v1/v2 accept scalar records; v3 requires arrays. Use the real SDK's
+      // normalizer and compare its outgoing request to the span metadata.
+      for (const op of ['add', 'update', 'upsert', 'get', 'delete']) {
+        await t.test(`scalar ${op} metadata matches a single SDK record`, async () => {
+          const write = ['add', 'update', 'upsert'].includes(op);
+          const params = write
+            ? { ids: 'single-id', embeddings: [0.1, 0.2, 0.3], documents: 'single document' }
+            : { ids: 'single-id' };
+          const snapshot = structuredClone(params);
+          exporter.reset();
+          await collection[op](params);
+          assert.deepEqual(params, snapshot, 'instrumentation must not mutate SDK arguments');
+          const request = requests.at(-1);
+          assert.ok(request.url.endsWith(`/${op}`));
+          assert.deepEqual(request.body.ids, ['single-id']);
+          if (write) {
+            assert.deepEqual(request.body.embeddings, [[0.1, 0.2, 0.3]]);
+            assert.deepEqual(request.body.documents, ['single document']);
+          }
+          const spans = exporter.getFinishedSpans();
+          assert.equal(spans.length, 1);
+          assert.equal(spans[0].name, `chroma ${op}`);
+          assert.equal(spans[0].status.code, SpanStatusCode.OK);
+          const attrs = spans[0].attributes;
+          const countKey = write ? 'db.vector.upsert.count'
+            : op === 'get' ? 'db.vector.get.ids_count' : 'db.vector.delete.count';
+          assert.equal(attrs[countKey], request.body.ids.length);
+          if (op === 'add' || op === 'upsert') assert.equal(attrs['db.vector.upsert.dimensions'], 3);
+          if (op === 'add') assert.equal(attrs['db.vector.documents.count'], 1);
+        });
+      }
+    }
+    await t.test('object peek defaults the limit and preserves explicit zero', async () => {
+      for (const params of [{}, { limit: undefined }, { limit: 0 }, { limit: 3 }]) {
+        const snapshot = { ...params };
+        await once('peek', () => collection.peek(params), {
+          'db.vector.query.top_k': params.limit ?? 10, 'db.vector.results.count': 2,
+        });
+        assert.deepEqual(params, snapshot, 'instrumentation must not mutate SDK arguments');
+        assert.equal(requests.at(-1).body.limit, params.limit ?? 10);
+      }
+    });
     if (typeof collection.fork === 'function') {
       const fork = await collection.fork({ name: 'fork_collection' });
       await once('count', () => fork.count());
@@ -451,6 +498,32 @@ test('every operation preserves arbitrary rejection identity and error status', 
           assert.equal(JSON.stringify([spans[0].status, spans[0].events]).includes('PRIVATE_ERROR'), false);
         }
       });
+    }
+  } finally { inst.disable(); await provider.shutdown(); }
+});
+
+test('metadata normalization preserves argument and response identity', async () => {
+  class ManualOnlyInstrumentation extends ChromaDBInstrumentation { init() { return []; } }
+  const provider = new NodeTracerProvider();
+  const inst = new ManualOnlyInstrumentation();
+  inst.setTracerProvider(provider);
+  try {
+    for (const op of ['add', 'update', 'upsert', 'get', 'delete', 'peek']) {
+      const params = Object.freeze(op === 'peek' ? {} : {
+        ids: 'single-id', embeddings: Object.freeze([0.1, 0.2, 0.3]), documents: 'single document',
+      });
+      const extra = Object.freeze({ marker: 'unchanged' });
+      const result = { ids: ['single-id'] };
+      class Collection {
+        async [op](...args) {
+          assert.equal(args.length, 2);
+          assert.equal(args[0], params);
+          assert.equal(args[1], extra);
+          return result;
+        }
+      }
+      inst.manuallyInstrument({ Collection });
+      assert.equal(await new Collection()[op](params, extra), result);
     }
   } finally { inst.disable(); await provider.shutdown(); }
 });

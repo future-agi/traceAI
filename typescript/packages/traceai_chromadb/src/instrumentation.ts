@@ -267,10 +267,22 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
   /** Normalize metadata only; the original SDK always receives its exact args. */
   private getOperationParams(operation: string, args: any[]): any {
     const first = args[0];
-    if (operation === "peek" && (first === undefined || typeof first === "number")) {
-      return { limit: first ?? 10 };
+    if (operation === "peek") {
+      return { limit: (typeof first === "number" ? first : first?.limit) ?? 10 };
     }
-    if (first !== undefined && !Array.isArray(first) && typeof first !== "string") return first;
+    if (first !== undefined && !Array.isArray(first) && typeof first !== "string") {
+      if (first && ["add", "update", "upsert", "get", "delete"].includes(operation)) {
+        // Chroma v1/v2 object-style APIs also accept single records. Normalize
+        // a metadata copy, never the parameters passed to the SDK.
+        return {
+          ...first,
+          ids: typeof first.ids === "string" ? [first.ids] : first.ids,
+          embeddings: typeof first.embeddings?.[0] === "number" ? [first.embeddings] : first.embeddings,
+          documents: typeof first.documents === "string" ? [first.documents] : first.documents,
+        };
+      }
+      return first;
+    }
     switch (operation) {
       case "query":
         return { nResults: args[1], where: args[2] };
