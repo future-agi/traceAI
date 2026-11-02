@@ -14,10 +14,11 @@ from fi_instrumentation.fi_types import (
     MessageAttributes,
     SpanAttributes,
 )
-from groq import NOT_GIVEN
+from groq import NOT_GIVEN, APIResponse, AsyncAPIResponse
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
+from traceai_groq._raw_response import _AsyncRawResponse, _RawResponse
 from traceai_groq._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_groq._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_groq._stream import _AsyncStream, _Stream, _StreamState
@@ -162,6 +163,11 @@ class _CompletionsWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
+            if streaming and isinstance(response, APIResponse):
+                return _RawResponse(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters),
+                )
             if streaming and isinstance(response, Iterable):
                 return _Stream(
                     response,
@@ -242,6 +248,11 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
+            if streaming and isinstance(response, AsyncAPIResponse):
+                return _AsyncRawResponse(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters),
+                )
             if streaming and hasattr(response, "__aiter__"):
                 return _AsyncStream(
                     response,

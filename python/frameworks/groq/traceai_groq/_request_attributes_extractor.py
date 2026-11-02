@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _without_transport_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    # Headers and query parameters can carry arbitrary credentials, including
+    # custom names. Omit the entire transport fields regardless of content flags
+    # and never mutate the arguments passed to the SDK.
+    return {
+        key: value
+        for key, value in parameters.items()
+        if key not in ("extra_headers", "extra_query")
+    }
+
+
 class _RequestAttributesExtractor:
     __slots__ = ()
 
@@ -31,6 +42,7 @@ class _RequestAttributesExtractor:
         self,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        request_parameters = _without_transport_parameters(request_parameters)
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         if model := request_parameters.get("model"):
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
@@ -59,7 +71,7 @@ class _RequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if not isinstance(request_parameters, Mapping):
             return
-        invocation_params = dict(request_parameters)
+        invocation_params = _without_transport_parameters(request_parameters)
         invocation_params.pop("messages", None)  # Remove LLM input messages
         invocation_params.pop("functions", None)
 
