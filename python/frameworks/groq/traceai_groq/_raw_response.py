@@ -6,6 +6,9 @@ completion state, so their independent close paths can only export one span.
 
 from typing import Any
 
+import httpx
+from groq import AsyncStream, Stream
+from groq.types.chat import ChatCompletionChunk
 from wrapt import ObjectProxy
 
 from traceai_groq._stream import _AsyncStream, _Stream, _StreamState
@@ -19,6 +22,15 @@ class _ResponseProxy(ObjectProxy):
 
     def _self_read_complete(self) -> bool:
         return self.__wrapped__.is_closed and not self._self_state.finished
+
+    def _self_replay_response(self, body: bytes) -> httpx.Response:
+        native = self.__wrapped__.http_response
+        return httpx.Response(
+            native.status_code,
+            headers=native.headers,
+            content=body,
+            request=native.request,
+        )
 
     def _self_wrap_parsed(self, parsed: Any, proxy_type: type) -> Any:
         # The SDK caches parse() results per target type. Preserve that identity
@@ -43,7 +55,16 @@ class _RawResponse(_ResponseProxy):
             except Exception:
                 # Telemetry cannot change the result of a successful native read.
                 pass
-        self._self_state.finish()
+            self._self_state.finish()
+        else:
+            # A completed HTTPX read retains bytes for the SDK's later parse().
+            # Use an independent parse for telemetry without changing its cache.
+            try:
+                parsed = self.__wrapped__._parse()
+            except Exception:
+                self._self_state.finish()
+            else:
+                self._self_state.finish_response(parsed)
 
     def parse(self, *args: Any, **kwargs: Any) -> Any:
         parsed = self._self_call("parse", *args, **kwargs)
@@ -90,16 +111,36 @@ class _RawResponse(_ResponseProxy):
         return self._self_iterate("iter_lines", *args, **kwargs)
 
     def _self_iterate(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        # Low-level bytes/text are not ChatCompletionChunks; retain lifecycle
-        # and errors, but never pass those values to the chunk extractor.
+        # Collect only what the caller actually consumes; never advance its
+        # iterator or close its response early. The native SDK decodes SSE.
+        parts = []
         try:
-            yield from getattr(self.__wrapped__, method)(*args, **kwargs)
+            for part in getattr(self.__wrapped__, method)(*args, **kwargs):
+                parts.append(
+                    part
+                    if method == "iter_bytes"
+                    else part.encode("utf-8")
+                    + (b"\n" if method == "iter_lines" else b"")
+                )
+                yield part
+            if self._self_state.request_parameters.get("stream"):
+                try:
+                    stream = Stream(
+                        cast_to=ChatCompletionChunk,
+                        response=self._self_replay_response(b"".join(parts)),
+                        client=self.__wrapped__._client,
+                    )
+                    for chunk in stream:
+                        self._self_state.capture(chunk)
+                except Exception:
+                    pass  # Telemetry must not change a successful native read.
         except GeneratorExit:
             raise
         except BaseException as error:
             self._self_state.finish(error)
             raise
         finally:
+            parts.clear()
             self._self_state.finish()
 
 
@@ -113,7 +154,14 @@ class _AsyncRawResponse(_ResponseProxy):
                     self._self_state.capture(chunk)
             except Exception:
                 pass
-        self._self_state.finish()
+            self._self_state.finish()
+        else:
+            try:
+                parsed = self.__wrapped__._parse()
+            except Exception:
+                self._self_state.finish()
+            else:
+                self._self_state.finish_response(parsed)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
         parsed = await self._self_call("parse", *args, **kwargs)
@@ -160,13 +208,32 @@ class _AsyncRawResponse(_ResponseProxy):
         return self._self_iterate("iter_lines", *args, **kwargs)
 
     async def _self_iterate(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        parts = []
         try:
-            async for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
-                yield chunk
+            async for part in getattr(self.__wrapped__, method)(*args, **kwargs):
+                parts.append(
+                    part
+                    if method == "iter_bytes"
+                    else part.encode("utf-8")
+                    + (b"\n" if method == "iter_lines" else b"")
+                )
+                yield part
+            if self._self_state.request_parameters.get("stream"):
+                try:
+                    stream = AsyncStream(
+                        cast_to=ChatCompletionChunk,
+                        response=self._self_replay_response(b"".join(parts)),
+                        client=self.__wrapped__._client,
+                    )
+                    async for chunk in stream:
+                        self._self_state.capture(chunk)
+                except Exception:
+                    pass  # Telemetry must not change a successful native read.
         except GeneratorExit:
             raise
         except BaseException as error:
             self._self_state.finish(error)
             raise
         finally:
+            parts.clear()
             self._self_state.finish()

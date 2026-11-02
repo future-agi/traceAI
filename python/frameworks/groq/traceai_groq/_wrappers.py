@@ -6,6 +6,7 @@ from enum import Enum
 from inspect import Signature, signature
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
 
+import groq
 import opentelemetry.context as context_api
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
@@ -98,9 +99,14 @@ def _parse_args(
     bound_signature.apply_defaults()
     bound_arguments = bound_signature.arguments  # Defaults empty to NOT_GIVEN
     request_data: Dict[str, Any] = {}
+    omit_type = getattr(groq, "Omit", None)
     for key, value in bound_arguments.items():
         try:
-            if value is not None and value is not NOT_GIVEN:
+            if (
+                value is not None
+                and value is not NOT_GIVEN
+                and not (omit_type is not None and isinstance(value, omit_type))
+            ):
                 try:
                     # ensure the value is JSON-serializable
                     safe_json_dumps(value)

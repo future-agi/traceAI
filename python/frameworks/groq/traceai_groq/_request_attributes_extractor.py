@@ -35,7 +35,7 @@ def _without_transport_parameters(parameters: Mapping[str, Any]) -> dict[str, An
         key: value
         for key, value in parameters.items()
         if key not in ("extra_headers", "extra_query")
-        and not (key == "messages" and isinstance(value, OneShotIterator))
+        and not (key in ("messages", "tools") and isinstance(value, OneShotIterator))
     }
 
 
@@ -83,7 +83,9 @@ class _RequestAttributesExtractor:
         invocation_params.pop("messages", None)  # Remove LLM input messages
         invocation_params.pop("functions", None)
 
-        if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
+        if isinstance(
+            (tools := invocation_params.pop("tools", None)), Iterable
+        ) and not isinstance(tools, OneShotIterator):
             for i, tool in enumerate(tools):
                 yield (
                     f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}",
@@ -121,7 +123,9 @@ class _RequestAttributesExtractor:
                     MessageAttributes.MESSAGE_CONTENT,
                     content,
                 )
-            elif isinstance(content, Iterable):
+            elif isinstance(content, Iterable) and not isinstance(
+                content, OneShotIterator
+            ):
                 for index, c in list(enumerate(content)):
                     for key, value in self._get_attributes_from_message_content(c):
                         yield (
@@ -145,8 +149,10 @@ class _RequestAttributesExtractor:
                     function_arguments,
                 )
 
-        if (tool_calls := get_attribute(message, "tool_calls")) and isinstance(
-            tool_calls, Iterable
+        if (
+            (tool_calls := get_attribute(message, "tool_calls"))
+            and isinstance(tool_calls, Iterable)
+            and not isinstance(tool_calls, OneShotIterator)
         ):
             for index, tool_call in enumerate(tool_calls):
                 if (tool_call_id := get_attribute(tool_call, "id")) is not None:
