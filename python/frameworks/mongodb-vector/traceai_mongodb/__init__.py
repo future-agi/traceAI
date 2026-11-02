@@ -1,7 +1,7 @@
 """MongoDB command tracing with metadata-only Atlas Vector Search enrichment."""
 
 import logging
-from threading import Lock
+from threading import RLock
 from typing import Any, Collection
 
 from opentelemetry import trace as trace_api
@@ -27,7 +27,8 @@ class MongoDBInstrumentor(BaseInstrumentor):
     """
 
     _owns_native = False
-    _start_lock = Lock()
+    # SpanProcessor.on_start can synchronously issue another MongoDB command.
+    _start_lock = RLock()
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments

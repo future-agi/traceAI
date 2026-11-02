@@ -3,6 +3,8 @@
 from datetime import timedelta
 from threading import Event, Thread
 import socket
+import subprocess
+import sys
 import time
 
 import pytest
@@ -240,6 +242,53 @@ def test_disable_finishes_inflight_span(tracing):
     assert spans[0].status.status_code is StatusCode.ERROR
     assert not listener()._span_dict
     tracing[0].instrument(tracer_provider=tracing[1])
+
+
+def test_span_processor_can_start_nested_command_without_deadlock():
+    # A separate process makes the failure bounded even when the lock deadlocks.
+    script = """
+from datetime import timedelta
+import socket
+from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pymongo import monitoring
+from traceai_mongodb import MongoDBInstrumentor
+
+socket.socket.connect = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('network forbidden'))
+
+def started(name, request_id):
+    return monitoring.CommandStartedEvent({name: 'rows'}, 'testdb', request_id, ('localhost', 27017), request_id)
+
+def succeeded(name, request_id):
+    return monitoring.CommandSucceededEvent(timedelta(milliseconds=1), {'ok': 1}, name, request_id, ('localhost', 27017), request_id)
+
+class NestedCommand(SpanProcessor):
+    def on_start(self, span, parent_context=None):
+        if span.name == 'testdb.find':
+            listener = PymongoInstrumentor()._commandtracer_instance
+            listener.started(started('ping', 2))
+            listener.succeeded(succeeded('ping', 2))
+
+provider = TracerProvider()
+exporter = InMemorySpanExporter()
+provider.add_span_processor(NestedCommand())
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+instrumentor = MongoDBInstrumentor()
+instrumentor.instrument(tracer_provider=provider)
+listener = PymongoInstrumentor()._commandtracer_instance
+listener.started(started('find', 1))
+listener.succeeded(succeeded('find', 1))
+assert sorted(span.name for span in exporter.get_finished_spans()) == ['testdb.find', 'testdb.ping']
+assert not listener._span_dict
+instrumentor.uninstrument()
+provider.shutdown()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_disable_during_command_start_does_not_retain_a_span(tracing):
