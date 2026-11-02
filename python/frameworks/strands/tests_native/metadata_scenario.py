@@ -11,12 +11,18 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from strands import Agent
 from strands.models.model import Model
-from traceai_strands import StrandsSpanExporter
+from traceai_strands import StrandsCallbackHandler, StrandsSpanExporter
 
 check = sys.argv[1]
 stop_reason = sys.argv[2] if len(sys.argv) > 2 else "end_turn"
 SYSTEM = "SYSTEM-INSTRUCTION-SENTINEL"
 FINISH = "gen_ai.response.finish_reasons"
+PRIVATE = "PRIVATE-GENERATED-OUTPUT-SENTINEL"
+OUTPUT = (
+    json.dumps([{"finish_reason": PRIVATE, "description": "generated user content"}])
+    if check == "completion_privacy"
+    else "OUTPUT-SENTINEL"
+)
 provider = TracerProvider()
 raw = InMemorySpanExporter()
 provider.add_span_processor(SimpleSpanProcessor(raw))
@@ -41,7 +47,7 @@ class OfflineModel(Model):
         yield {"messageStart": {"role": "assistant"}}
         yield {
             "contentBlockDelta": {
-                "delta": {"text": "OUTPUT-SENTINEL"},
+                "delta": {"text": OUTPUT},
                 "contentBlockIndex": 0,
             }
         }
@@ -56,8 +62,14 @@ class OfflineModel(Model):
 
 
 agent = Agent(model=OfflineModel(), callback_handler=None, system_prompt=SYSTEM)
+if check == "completion_privacy":
+    callback = StrandsCallbackHandler(tracer_provider=provider)
+    callback.on_agent_start(agent, "INPUT-SENTINEL")
 try:
-    agent("INPUT-SENTINEL")
+    result = agent("INPUT-SENTINEL")
+    if check == "completion_privacy":
+        assert str(result).strip() == OUTPUT
+        callback.on_agent_end(agent, result)
 except Exception as error:  # noqa: BLE001 - floor lacks MaxTokensReachedException
     # The floor returns a truncated result; newer SDKs raise after ending chat.
     assert (
@@ -138,6 +150,52 @@ if check == "finish":
     )
     assert list(project(native, False).attributes[FINISH]) == ["stop"]
     assert FINISH not in project(synthetic(), False).attributes
+    output_key = "gen_ai.output.messages"
+    details = "gen_ai.client.inference.operation.details"
+    envelope = json.dumps(
+        [
+            {"finish_reason": "end_turn", "parts": [{"text": PRIVATE}]},
+            {"finish_reason": "max_tokens"},
+        ]
+    )
+    for span in (
+        synthetic({output_key: envelope}),
+        synthetic(events=[(details, {output_key: envelope})]),
+    ):
+        converted = project(span, False)
+        assert list(converted.attributes[FINISH]) == ["end_turn", "max_tokens"]
+        assert PRIVATE not in converted.to_json()
+    # Invalid native envelopes must not fall back to arbitrary completion text.
+    for value in ("invalid JSON", json.dumps({"finish_reason": PRIVATE})):
+        span = synthetic(
+            {
+                output_key: value,
+                "gen_ai.completion": json.dumps([{"finish_reason": PRIVATE}]),
+            },
+            [(details, {output_key: envelope})],
+        )
+        assert FINISH not in project(span, False).attributes
+    unrelated = synthetic(events=[("unrelated", {output_key: envelope})])
+    assert FINISH not in project(unrelated, False).attributes
+elif check == "completion_privacy":
+    privacy = sys.argv[3]
+    capture = privacy != "capture_off"
+    flags = {privacy: True} if privacy.startswith("hide_") else {}
+    legacy = next(
+        span for span in raw.get_finished_spans() if span.name == "strands.agent"
+    )
+    assert legacy.attributes["gen_ai.completion"].strip() == OUTPUT
+    legacy_snapshot = legacy.to_json()
+    converted = project(legacy, capture, **flags)
+    assert FINISH not in converted.attributes, converted.to_json()
+    native = project(original, capture, **flags)
+    assert list(native.attributes[FINISH]) == ["end_turn"], native.to_json()
+    for span in (converted, native):
+        if privacy == "visible":
+            assert PRIVATE in span.attributes["output.value"]
+        else:
+            assert PRIVATE not in span.to_json(), span.to_json()
+    assert legacy.to_json() == legacy_snapshot
 elif check == "system":
     key = "gen_ai.system_instructions"
     event = ("gen_ai.client.inference.operation.details", {key: SYSTEM})

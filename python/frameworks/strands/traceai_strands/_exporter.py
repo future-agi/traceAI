@@ -121,18 +121,27 @@ def _finish_reasons(span):
             if event.name == "gen_ai.choice"
         ]
         if not reasons:
-            # Newer native conventions embed the reason in each output message,
-            # either on the details event or directly on the span.
-            messages = _messages(span, "output", require_json=True)
-            reasons = (
-                [
-                    message.get("finish_reason")
-                    for message in messages
-                    if isinstance(message, dict)
+            # Read only the native output envelope, never _messages(): its legacy
+            # completion fallback is arbitrary user content, not public metadata.
+            key = "gen_ai.output.messages"
+            attrs = span.attributes or {}
+            values = (
+                [attrs[key]]
+                if key in attrs
+                else [
+                    (event.attributes or {}).get(key)
+                    for event in span.events
+                    if event.name == "gen_ai.client.inference.operation.details"
                 ]
-                if isinstance(messages, list)
-                else []
             )
+            for value in values:
+                messages = _decode(value, require_json=True)
+                if isinstance(messages, list):
+                    reasons.extend(
+                        message.get("finish_reason")
+                        for message in messages
+                        if isinstance(message, dict)
+                    )
     return [
         reason
         for reason in reasons

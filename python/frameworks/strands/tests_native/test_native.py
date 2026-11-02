@@ -214,3 +214,35 @@ def test_native_metadata_projection(check, stop_reason, conventions):
         conventions=conventions,
         scenario=SCENARIO.with_name("metadata_scenario.py"),
     )
+
+
+@pytest.mark.parametrize(
+    "conventions",
+    [
+        "",
+        "gen_ai_latest_experimental",
+        "gen_ai_latest_experimental,gen_ai_span_attributes_only",
+    ],
+)
+@pytest.mark.parametrize(
+    "privacy",
+    [
+        "capture_off",
+        "hide_outputs",
+        "hide_output_messages",
+        "hide_output_text",
+        "FI_HIDE_OUTPUTS",
+        "FI_HIDE_OUTPUT_MESSAGES",
+        "FI_HIDE_OUTPUT_TEXT",
+        "visible",
+    ],
+)
+def test_legacy_completion_content_is_not_finish_metadata(privacy, conventions):
+    run(
+        "completion_privacy",
+        "end_turn",
+        privacy,
+        conventions=conventions,
+        environment={privacy: "true"} if privacy.startswith("FI_") else None,
+        scenario=SCENARIO.with_name("metadata_scenario.py"),
+    )
