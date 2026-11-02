@@ -1,6 +1,6 @@
 # Trace Agno with Future AGI
 
-Send Agno agent, model, tool, team, and workflow spans to Future AGI using the maintained [OpenInference Agno instrumentor](https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno). Agno's own tracing setup delegates to the same instrumentor; this package configures it rather than adding a second span tree.
+Send Agno agent, model, tool, team, and workflow spans to Future AGI using `traceai-agno`. The package maintains wrappers based on the [OpenInference Agno instrumentor](https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno), with input privacy and stream lifecycle handling, and installs only one span tree.
 
 ## Install
 
@@ -83,7 +83,9 @@ finally:
 
 Use `openinference.instrumentation.TraceConfig` or `OPENINFERENCE_*` environment variables. To include inputs and outputs, pass `TraceConfig(hide_inputs=False, hide_outputs=False)`. Without an explicit config, OpenInference uses its environment settings and defaults, which capture content.
 
-The `FI_HIDE_*` variables do not automatically apply to this upstream instrumentor. Input/output hiding is not a blanket secret scrubber: names, custom metadata, and exception details can still contain sensitive text. Keep secrets out of those fields or apply your application's export filtering policy.
+`hide_inputs=True` also hides tool arguments in tool spans. Model invocation attributes redact authentication parameters and header containers regardless of input/output capture settings.
+
+The `FI_HIDE_*` variables do not automatically apply to this integration. Input/output hiding is not a blanket secret scrubber: names, custom metadata, and exception details can still contain sensitive text. Keep secrets out of those fields or apply your application's export filtering policy.
 
 ## Configuration and helpers
 
