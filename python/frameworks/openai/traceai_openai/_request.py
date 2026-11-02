@@ -143,15 +143,18 @@ class _WithOpenAI(ABC):
             else FiSpanKindValues.LLM.value
         )
 
+    def _provider_for_instance(self, instance: Any) -> str:
+        # Explicit client attribution wins; never guess the vendor of a local server.
+        provider = _get_client_provider(instance)
+        if provider is not None:
+            return provider
+        base_url = getattr(instance, "base_url", None)
+        return provider_from_host(getattr(base_url, "host", None))
+
     def _get_attributes_from_instance(
         self, instance: Any
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        # Explicit client attribution wins; never guess the vendor of a local server.
-        base_url = getattr(instance, "base_url", None)
-        provider = _get_client_provider(instance)
-        if provider is None:
-            provider = provider_from_host(getattr(base_url, "host", None))
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, self._provider_for_instance(instance)
 
     def _get_attributes_from_request(
         self,
@@ -195,12 +198,14 @@ class _WithOpenAI(ABC):
         return isinstance(response, self._stream_types)
 
     def _is_raw_stream(self, response: Any) -> bool:
+        parse = getattr(response, "parse", None)
         return bool(
-            (
+            callable(parse)
+            and (
                 getattr(response, "_stream", False)
                 or getattr(response, "_is_sse_stream", False)
+                or inspect.iscoroutinefunction(parse)
             )
-            and callable(getattr(response, "parse", None))
         )
 
     def _is_async_stream(self, response: Any) -> bool:
@@ -219,9 +224,9 @@ class _WithOpenAI(ABC):
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
         not a stream.
         """
-        # A raw streamed response exposes headers now but yields its parsed stream
-        # later. Keep the raw interface and transfer span ownership to that stream
-        # when the application calls parse(), rather than ending the span here.
+        # Raw streams and asynchronously parsed raw responses expose headers before
+        # their contents are ready. Preserve the raw interface and transfer span
+        # ownership when the application parses the response.
         if self._is_raw_stream(response):
             return _RawStreamResponse(
                 response=response,
@@ -240,10 +245,10 @@ class _WithOpenAI(ABC):
             except Exception:
                 logger.exception(f"Failed to parse response of type {type(response)}")
 
-        provider = provider_from_host(getattr(getattr(instance, "base_url", None), "host", None))
+        provider = self._provider_for_instance(instance)
         extractor = self._response_attributes_extractor
         if provider == "deepseek":
-            # Keep host-specific extraction local to this request: concurrent
+            # Keep provider-specific extraction local to this request: concurrent
             # requests through another provider must not inherit DeepSeek aliases.
             extractor = _ResponseAttributesExtractor(self._openai, self._config, provider=provider)
 
@@ -331,9 +336,9 @@ class _WithOpenAI(ABC):
 
 
 class _RawStreamResponse(ObjectProxy):  # type: ignore
-    """Preserve the SDK's raw headers while tracing its lazily parsed stream."""
+    """Preserve raw headers while tracing the SDK's lazily parsed response."""
 
-    __slots__ = ("_self_finalize", "_self_with_span", "_self_parsed")
+    __slots__ = ("_self_finalize", "_self_with_span", "_self_parsed", "_self_parsed_raw")
 
     def __init__(
         self, response: Any, finalize: Callable[[Any], Any], with_span: _WithSpan
@@ -342,6 +347,7 @@ class _RawStreamResponse(ObjectProxy):  # type: ignore
         self._self_finalize = finalize
         self._self_with_span = with_span
         self._self_parsed = None
+        self._self_parsed_raw = None
 
     def _self_error(self, error: BaseException) -> None:
         if not self._self_with_span.is_finished:
@@ -354,11 +360,11 @@ class _RawStreamResponse(ObjectProxy):  # type: ignore
             )
 
     def _self_wrap(self, parsed: Any) -> Any:
-        if self._self_parsed is not None and parsed is self._self_parsed.__wrapped__:
+        if self._self_parsed is not None and parsed is self._self_parsed_raw:
             return self._self_parsed
         wrapped = self._self_finalize(parsed)
-        if isinstance(wrapped, (_Stream, _AsyncStream)):
-            self._self_parsed = wrapped
+        self._self_parsed_raw = parsed
+        self._self_parsed = wrapped
         return wrapped
 
     def parse(self, *args: Any, **kwargs: Any) -> Any:
@@ -390,7 +396,7 @@ class _RawStreamResponse(ObjectProxy):  # type: ignore
         ):
             return self.aclose()
         try:
-            if self._self_parsed is not None:
+            if isinstance(self._self_parsed, (_Stream, _AsyncStream)):
                 self._self_parsed.close()
             close = getattr(self.__wrapped__, "close", None)
             if close is None:
@@ -407,7 +413,7 @@ class _RawStreamResponse(ObjectProxy):  # type: ignore
 
     async def aclose(self) -> None:
         try:
-            if self._self_parsed is not None:
+            if isinstance(self._self_parsed, (_Stream, _AsyncStream)):
                 closed = self._self_parsed.close()
                 if inspect.isawaitable(closed):
                     await closed
