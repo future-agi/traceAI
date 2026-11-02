@@ -104,6 +104,11 @@
             </dependency>
             <dependency>
                 <groupId>com.futureagi</groupId>
+                <artifactId>traceai-java-azure-search-v12</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-pgvector</artifactId>
                 <version>${project.version}</version>
             </dependency>

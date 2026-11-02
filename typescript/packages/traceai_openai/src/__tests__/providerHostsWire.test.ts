@@ -114,11 +114,7 @@ describe("provider attribution on the OTLP wire", () => {
     expect(spans[0].attributes.find(({ key }) => key === "gen_ai.provider.name")?.value.stringValue).toBe(expected);
     if (error) expect(spans[0].status.code).toBe(2);
     expect(JSON.stringify(spans)).not.toMatch(/synthetic failure|synthetic-unused-key|url-user|url-password|query-secret/);
-    // Embedding text has a separate, pre-existing fi-core masking gap. This
-    // change does not claim hideInputs covers embedding.embeddings.*.text.
-    if (spans[0].name !== "OpenAI Embeddings") {
-      expect(JSON.stringify(spans)).not.toContain("Hello");
-    }
+    expect(JSON.stringify(spans)).not.toContain("Hello");
   }
 
   for (const operation of operations) {

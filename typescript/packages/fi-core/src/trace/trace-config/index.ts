@@ -42,3 +42,4 @@ export {
 } from "./errorDetails";
 export { FITracer } from "./FITracer";
 export { type FISpan } from "./FISpan";
+export { maskAttributes } from "./maskingRules";

@@ -43,7 +43,7 @@ function call(operation = 'responses', stream = false) {
   const args = { model: 'requested-model', ...(stream ? { stream: true } : {}) };
   if (operation === 'chat') return client.chat.completions.create({ ...args, messages: [{ role: 'user', content: bodyMarker }] });
   if (operation === 'completions') return client.completions.create({ ...args, prompt: bodyMarker });
-  if (operation === 'embeddings') return client.embeddings.create({ ...args, input: 'synthetic embedding', encoding_format: 'float' });
+  if (operation === 'embeddings') return client.embeddings.create({ ...args, input: bodyMarker, encoding_format: 'float' });
   return client.responses.create({ ...args, input: bodyMarker });
 }
 async function spans(count = 1, expectedProvider = 'perplexity') {
