@@ -52,7 +52,8 @@ jobs:
       - name: Unit tests with loopback-only networking
         run: |
           sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
-            "$(command -v pnpm)" --filter @traceai/fi-instrumentation-livekit test --runInBand
+            "$(command -v node)" packages/traceai_livekit/node_modules/jest/bin/jest.js \
+            --config packages/traceai_livekit/jest.config.js --runInBand
       - name: Real SDKs and OTLP with loopback-only networking
         run: |
           # The oldest RTC native library leaves background handles open; the runner
