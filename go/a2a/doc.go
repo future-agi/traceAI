@@ -9,7 +9,10 @@
 // gen_ai.a2a.task.state, gen_ai.a2a.agent.url, ...), each written only when
 // a2a-go reports that fact. A stream is one span: every event is a span event
 // on it, and the span ends at the reply message or at a terminal or
-// interrupted task state. The W3C traceparent is written into the request's
+// interrupted task state. Add [WrapClient] and [WrapHandler] to also observe
+// clean EOF and early iterator abandonment, which the SDK's hooks do not report.
+// These wrappers complete the existing span and never create a duplicate.
+// The W3C traceparent is written into the request's
 // service parameters (HTTP headers on the JSON-RPC and REST transports, call
 // metadata on gRPC), so a remote agent that reads it continues the same trace.
 //

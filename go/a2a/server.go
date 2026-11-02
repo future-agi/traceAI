@@ -26,16 +26,16 @@ import (
 // Headers, credentials, baggage and authenticated user details are not recorded.
 // Use [WithTraceConfig] or FI_HIDE_INPUTS / FI_HIDE_OUTPUTS to hide message content.
 //
-// a2asrv calls After for each streamed event, not on iterator close. Streams
-// therefore end at a terminal/interrupted event or when the request context is
-// canceled. Direct in-process callers must cancel their context if they stop
-// reading early; HTTP and gRPC transports cancel it when the request ends.
+// a2asrv calls After for each streamed event, not on iterator close. Use
+// [WrapHandler] around the instrumented handler to complete spans at clean EOF
+// (including persisted nonterminal task snapshots) and on early abandonment.
+// Without it, streams end only at a terminal/interrupted event or cancellation.
 // Detached background task execution can outlive the request span.
 // This interceptor does not wrap transport handlers or create executor spans.
 //
-//	handler := a2asrv.NewHandler(executor,
+//	handler := traceaia2a.WrapHandler(a2asrv.NewHandler(executor,
 //		a2asrv.WithCallInterceptors(traceaia2a.NewServerInterceptor(
-//			traceaia2a.WithTracerProvider(tp))))
+//			traceaia2a.WithTracerProvider(tp)))))
 //
 // Use that handler with a2asrv.NewJSONRPCHandler, a2asrv.NewRESTHandler or
 // a2agrpc/v1.NewHandler.
@@ -115,6 +115,7 @@ func (i *ServerInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallCont
 	st.mu.Lock()
 	st.stopWatch = context.AfterFunc(ctx, func() { st.endWithContextError(spanCtx) })
 	st.mu.Unlock()
+	attachCompletion(ctx, serverCompletionKey, st)
 	return context.WithValue(ctx, serverStateKey{}, st), nil, nil
 }
 

@@ -20,11 +20,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func serverClient(t *testing.T, transport string, executor *agent, tp *sdktrace.TracerProvider, tc traceaia2a.TraceConfig, serverOpts ...a2asrv.RequestHandlerOption) *a2aclient.Client {
+func serverClient(t *testing.T, transport string, executor *agent, tp *sdktrace.TracerProvider, tc traceaia2a.TraceConfig, serverOpts ...a2asrv.RequestHandlerOption) *traceaia2a.Client {
 	t.Helper()
 	serverOpts = append([]a2asrv.RequestHandlerOption{a2asrv.WithCallInterceptors(traceaia2a.NewServerInterceptor(
 		traceaia2a.WithTracerProvider(tp), traceaia2a.WithTraceConfig(tc)))}, serverOpts...)
-	handler := a2asrv.NewHandler(executor, serverOpts...)
+	handler := traceaia2a.WrapHandler(a2asrv.NewHandler(executor, serverOpts...))
 	var c *a2a.AgentCard
 	opts := []a2aclient.FactoryOption{a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(
 		traceaia2a.WithTracerProvider(tp), traceaia2a.WithTraceConfig(tc)))}
@@ -53,7 +53,7 @@ func serverClient(t *testing.T, transport string, executor *agent, tp *sdktrace.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Destroy() })
-	return client
+	return traceaia2a.WrapClient(client)
 }
 
 func TestServerTraceContinuesClient(t *testing.T) {

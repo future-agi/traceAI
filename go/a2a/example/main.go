@@ -135,11 +135,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("resolve agent card: %w", err)
 	}
-	client, err := a2aclient.NewFromCard(ctx, card,
+	sdkClient, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 	if err != nil {
 		return err
 	}
+	client := traceaia2a.WrapClient(sdkClient)
 	defer func() { _ = client.Destroy() }()
 
 	sessionCtx := traceaia2a.ContextWithSessionID(ctx, *session)
@@ -173,7 +174,7 @@ func run() error {
 }
 
 // send makes one A2A call, streamed or not, and prints what came back.
-func send(ctx context.Context, client *a2aclient.Client, req *a2a.SendMessageRequest) error {
+func send(ctx context.Context, client *traceaia2a.Client, req *a2a.SendMessageRequest) error {
 	if *stream {
 		for ev, err := range client.SendStreamingMessage(ctx, req) {
 			if err != nil {
@@ -228,8 +229,8 @@ func startDemoAgent(tp *sdktrace.TracerProvider) (string, func(), error) {
 	}
 	agent := &demoAgent{tracer: tp.Tracer("demo-remote-agent"), tc: traceaia2a.TraceConfigFromEnv()}
 	mux := http.NewServeMux()
-	handler := a2asrv.NewHandler(agent, a2asrv.WithCallInterceptors(
-		traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp))))
+	handler := traceaia2a.WrapHandler(a2asrv.NewHandler(agent, a2asrv.WithCallInterceptors(
+		traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp)))))
 	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(handler))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}

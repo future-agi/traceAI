@@ -67,6 +67,8 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
+// Use [WrapClient] around the created client for clean-EOF and early-abandonment
+// completion; the SDK's interceptor hooks alone do not observe iterator close.
 type Interceptor struct {
 	tracer trace.Tracer
 	tc     TraceConfig
@@ -91,6 +93,11 @@ func NewInterceptor(opts ...Option) *Interceptor {
 	tc := TraceConfigFromEnv()
 	if s.tc != nil {
 		tc = *s.tc
+	}
+	// Freeze the optional override just like the other value-type switches.
+	if tc.HideErrorDetails != nil {
+		hide := *tc.HideErrorDetails
+		tc.HideErrorDetails = &hide
 	}
 	prop := s.prop
 	if prop == nil && !s.noProp {
@@ -186,6 +193,7 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 		st.stopWatch = context.AfterFunc(ctx, func() { st.endWithContextError(spanCtx) })
 		st.mu.Unlock()
 	}
+	attachCompletion(ctx, clientCompletionKey, st)
 	return context.WithValue(ctx, stateKey{}, st), nil, nil
 }
 
@@ -344,9 +352,10 @@ func (s *callState) applyTask(t *a2a.Task) {
 	for _, a := range t.Artifacts {
 		s.addArtifact(a)
 	}
-	// A unary snapshot returns its current status message, including an auth
-	// prompt. Only streaming calls wait for a stream-ending state.
-	if t.Status.Message != nil && (!s.streaming || endsStream(t.Status.State)) {
+	// Keep the latest snapshot's status text, including an auth prompt at EOF.
+	// A later status replaces it so an active stream never retains a stale prompt.
+	s.final = ""
+	if t.Status.Message != nil {
 		s.final = partsText(t.Status.Message.Parts)
 	}
 }
@@ -402,12 +411,11 @@ func (s *callState) applyEvent(payload any) bool {
 			if v.Status.State != a2a.TaskStateUnspecified {
 				ev = append(ev, attribute.String(A2ATaskState, string(v.Status.State)))
 			}
-			if endsStream(v.Status.State) {
-				done = true
-				if v.Status.Message != nil {
-					s.final = partsText(v.Status.Message.Parts)
-				}
+			s.final = ""
+			if v.Status.Message != nil {
+				s.final = partsText(v.Status.Message.Parts)
 			}
+			done = endsStream(v.Status.State)
 		}
 	case *a2a.TaskArtifactUpdateEvent:
 		ev = append(ev, attribute.String(A2AEventType, "artifact-update"))
@@ -461,7 +469,7 @@ func (s *callState) finish() {
 	s.output()
 	if s.state == a2a.TaskStateFailed || s.state == a2a.TaskStateRejected {
 		s.span.SetAttributes(attribute.String(ErrorType, string(s.state)))
-		s.span.SetStatus(codes.Error, string(s.state))
+		s.setErrorStatus(string(s.state))
 	} else {
 		s.span.SetStatus(codes.Ok, "")
 	}
@@ -482,7 +490,7 @@ func (s *callState) fail(err error) {
 	if agentMsg != "" && s.tc.errorMessageAllowed() {
 		s.tc.SetAttributes(s.span, attribute.String(ErrorMessage, truncate(agentMsg)))
 	}
-	s.span.SetStatus(codes.Error, errType)
+	s.setErrorStatus(errType)
 	s.span.End()
 }
 
@@ -499,4 +507,12 @@ func (s *callState) endWithContextError(ctx context.Context) {
 		err = context.Canceled
 	}
 	s.fail(err)
+}
+
+// Error class attributes remain useful even when descriptions are hidden.
+func (s *callState) setErrorStatus(description string) {
+	if !s.tc.errorMessageAllowed() {
+		description = ""
+	}
+	s.span.SetStatus(codes.Error, description)
 }
