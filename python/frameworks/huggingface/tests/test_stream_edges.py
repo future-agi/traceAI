@@ -149,3 +149,123 @@ def test_private_partial_output_and_exception_do_not_reach_otlp(
     assert b"private partial output" not in wire
     assert b"private provider error body" not in wire
     assert b"RuntimeError" in wire
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_full_text_stream_hides_original_prompt(telemetry, asynchronous):
+    from fi_instrumentation import FITracer
+    from traceai_huggingface._wrappers import (
+        _AsyncTextGenerationWrapper, _TextGenerationWrapper,
+    )
+    from types import SimpleNamespace
+
+    provider, exporter = telemetry
+    tracer = FITracer(provider.get_tracer("privacy"), config=TraceConfig(hide_inputs=True))
+    chunks = [
+        {"token": {"text": "answer", "special": False}},
+        {"generated_text": "synthetic-secret-prompt answer"},
+    ]
+    if asynchronous:
+        async def source():
+            for chunk in chunks:
+                yield chunk
+        async def run():
+            async def call(**kw):
+                return source()
+            stream = await _AsyncTextGenerationWrapper(tracer=tracer)(
+                call, SimpleNamespace(model="offline"), (),
+                {"prompt": "synthetic-secret-prompt", "stream": True, "return_full_text": True},
+            )
+            return [chunk async for chunk in stream]
+        asyncio.run(run())
+    else:
+        list(_TextGenerationWrapper(tracer=tracer)(
+            lambda **kw: iter(chunks), SimpleNamespace(model="offline"), (),
+            {"prompt": "synthetic-secret-prompt", "stream": True, "return_full_text": True},
+        ))
+    attrs = exporter.get_finished_spans()[0].attributes
+    assert attrs["input.value"] == "__REDACTED__"
+    assert "synthetic-secret-prompt" not in encode_spans(exporter.get_finished_spans()).SerializeToString().decode(errors="ignore")
+    assert json.loads(attrs["output.value"])["generated_text"] == "answer"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("flag", ["hide_output_messages", "hide_output_text"])
+def test_stream_chat_privacy_flags_do_not_leak_raw_choice(telemetry, asynchronous, flag):
+    config = TraceConfig(**{flag: True})
+    chunk = {"choices": [{"index": 0, "delta": {
+        "content": "synthetic-private-content", "tool_calls": [{"index": 0,
+        "function": {"name": "query", "arguments": '{"secret":"synthetic-private-argument"}'}}],
+    }}]}
+    async def source():
+        yield chunk
+    async def run():
+        stream = await wrapped_stream(telemetry, source(), True, chat=True, config=config)
+        return [item async for item in stream]
+    if asynchronous:
+        asyncio.run(run())
+    else:
+        list(wrapped_stream(telemetry, iter([chunk]), False, chat=True, config=config))
+    attrs = telemetry[1].get_finished_spans()[0].attributes
+    assert "output.value" not in attrs or "synthetic-private-content" not in attrs["output.value"]
+    assert "output.value" not in attrs or "synthetic-private-argument" not in attrs["output.value"]
+    wire = encode_spans(telemetry[1].get_finished_spans()).SerializeToString()
+    assert b"synthetic-private-content" not in wire
+    if flag == "hide_output_messages":
+        assert b"synthetic-private-argument" not in wire
+
+
+def test_abandoned_async_stream_finalizes_once(telemetry):
+    import gc
+    async def source():
+        yield "partial response"
+        yield "unread"
+    async def run():
+        stream = await wrapped_stream(telemetry, source(), True)
+        assert await stream.__anext__() == "partial response"
+        del stream
+        gc.collect()
+        assert len(telemetry[1].get_finished_spans()) == 1
+        assert telemetry[1].get_finished_spans()[0].attributes["huggingface.stream.status"] == "abandoned"
+    asyncio.run(run())
+    telemetry[0].shutdown()
+    assert len(telemetry[1].get_finished_spans()) == 1
+
+
+def test_declared_core_floor_supports_required_span_keys():
+    from pathlib import Path
+    from fi_instrumentation.fi_types import SpanAttributes
+    spec = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert 'fi-instrumentation-otel = ">=1.2.2"' in spec
+    assert SpanAttributes.GEN_AI_SPAN_KIND
+    assert SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+
+
+def test_documented_alternate_token_matches_sdk():
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    assert "`HUGGING_FACE_HUB_TOKEN`" in readme
+    assert "`HUGGINGFACE_HUB_TOKEN`" not in readme
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("flag", ["hide_output_messages", "hide_output_text"])
+def test_text_stream_privacy_does_not_leak_raw_output(telemetry, asynchronous, flag):
+    config = TraceConfig(**{flag: True})
+    async def source():
+        yield "synthetic-private-text"
+    async def run():
+        stream = await wrapped_stream(telemetry, source(), True, config=config)
+        return [part async for part in stream]
+    if asynchronous:
+        asyncio.run(run())
+    else:
+        list(wrapped_stream(telemetry, iter(["synthetic-private-text"]), False, config=config))
+    spans = telemetry[1].get_finished_spans()
+    assert b"synthetic-private-text" not in encode_spans(spans).SerializeToString()
+
+
+def test_documented_client_lifetime_for_early_stream_close():
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    assert "client.close()" in readme
+    assert "await client.close()" in readme

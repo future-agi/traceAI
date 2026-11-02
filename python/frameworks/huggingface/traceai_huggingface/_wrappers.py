@@ -130,7 +130,10 @@ class _TextGenerationWrapper(_WithTracer):
     ):
         return _Stream(
             response,
-            _StreamState(span, self._response_extractor, request_parameters, chat=False),
+            _StreamState(
+                span, self._response_extractor, request_parameters,
+                chat=False, config=self._tracer._self_config,
+            ),
         )
 
 
@@ -181,7 +184,10 @@ class _AsyncTextGenerationWrapper(_WithTracer):
             if kwargs.get("stream", False):
                 return _AsyncStream(
                     response,
-                    _StreamState(span, self._response_extractor, request_parameters, chat=False),
+                    _StreamState(
+                span, self._response_extractor, request_parameters,
+                chat=False, config=self._tracer._self_config,
+            ),
                 )
 
             try:
@@ -266,7 +272,10 @@ class _ChatCompletionWrapper(_WithTracer):
     ):
         return _Stream(
             response,
-            _StreamState(span, self._response_extractor, request_parameters, chat=True),
+            _StreamState(
+                span, self._response_extractor, request_parameters,
+                chat=True, config=self._tracer._self_config,
+            ),
         )
 
 
@@ -317,7 +326,10 @@ class _AsyncChatCompletionWrapper(_WithTracer):
             if kwargs.get("stream", False):
                 return _AsyncStream(
                     response,
-                    _StreamState(span, self._response_extractor, request_parameters, chat=True),
+                    _StreamState(
+                span, self._response_extractor, request_parameters,
+                chat=True, config=self._tracer._self_config,
+            ),
                 )
 
             try:

@@ -34,7 +34,7 @@ jobs:
       - name: Install package and SDK
         run: >-
           python -m pip install ./python/frameworks/huggingface
-          "huggingface-hub==${{ matrix.hub }}" "pytest==8.4.2" aiohttp
+          "huggingface-hub==${{ matrix.hub }}" "fi-instrumentation-otel==1.2.2" "pytest==8.4.2" aiohttp
       - name: Run without external network access
         run: >-
           sudo unshare --net --

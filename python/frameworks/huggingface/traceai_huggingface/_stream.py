@@ -1,5 +1,6 @@
 """Lazy stream tracing. Only the producer runs with the inference span current."""
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -30,11 +31,13 @@ class _TextAccumulator:
         if data.get("details") is not None:
             self._details.update(_to_dict(data["details"]))
 
-    def response(self) -> Dict[str, Any]:
+    def response(self, tokens_only: bool = False) -> Dict[str, Any]:
         return {
-            "generated_text": self._final_text
-            if self._final_text is not None
-            else "".join(self._parts),
+            "generated_text": (
+                "".join(self._parts)
+                if tokens_only or self._final_text is None
+                else self._final_text
+            ),
             "details": self._details,
         }
 
@@ -111,12 +114,14 @@ class _StreamState:
         extractor: Any,
         request: Mapping[str, Any],
         chat: bool,
+        config: Any = None,
     ) -> None:
         self.span = span
         self.extractor = extractor
         self.request = request
         self.accumulator = _ChatAccumulator() if chat else _TextAccumulator()
         self.finished = False
+        self.config = config
 
     def current(self):
         return trace_api.use_span(
@@ -148,14 +153,35 @@ class _StreamState:
             self.span._span.set_attribute("huggingface.stream.status", outcome)
             if error is not None:
                 self.span.record_exception(error)
-            response = self.accumulator.response()
+            # A full-text final chunk may prepend the private input prompt.
+            # Tokens are the only safe output when input capture is disabled.
+            tokens_only = bool(
+                not isinstance(self.accumulator, _ChatAccumulator)
+                and self.config
+                and self.config.hide_inputs
+                and self.request.get("return_full_text")
+            )
+            response = self.accumulator.response(tokens_only=tokens_only)
+            if tokens_only:
+                # Prefill tokens are input-origin text, too.
+                response["details"].pop("prefill", None)
+            extra_attributes = self.extractor.get_extra_attributes(
+                response, self.request
+            )
+            if self.config and (
+                self.config.hide_output_messages or self.config.hide_output_text
+            ):
+                # Raw output bypasses FITracer's typed-message privacy mask.
+                extra_attributes = (
+                    (key, value)
+                    for key, value in extra_attributes
+                    if key != "output.value"
+                )
             _finish_tracing(
                 status=status,
                 with_span=self.span,
                 attributes=self.extractor.get_attributes(response),
-                extra_attributes=self.extractor.get_extra_attributes(
-                    response, self.request
-                ),
+                extra_attributes=extra_attributes,
             )
         except Exception:
             logger.debug("Could not finalize Hugging Face stream", exc_info=True)
@@ -254,3 +280,30 @@ class _AsyncStream:
                 raise
             finally:
                 self._state.finish("closed")
+
+    def __del__(self) -> None:
+        # Awaiting cannot be done from a destructor. End the trace immediately;
+        # close the producer asynchronously if its event loop is still running.
+        try:
+            if not hasattr(self, "_state") or self._state.finished:
+                return
+            with self._state.current():
+                self._state.finish("abandoned")
+            close = getattr(self._iterator, "aclose", None)
+            if close is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+
+                async def release():
+                    try:
+                        await close()
+                    except BaseException:
+                        logger.debug(
+                            "Could not close abandoned Hugging Face stream", exc_info=True
+                        )
+
+                loop.create_task(release())
+        except BaseException:
+            pass

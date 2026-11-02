@@ -112,6 +112,8 @@ print(response.choices[0].message.content)
 A streaming span stays open until you exhaust or explicitly close the stream.
 If you stop reading early, call `stream.close()` for a sync stream or
 `await stream.aclose()` for an async stream, preferably in a `finally` block.
+For Hub SDK versions that keep HTTP streaming responses on the client, also close
+the client with `client.close()` or `await client.close()` when you are done using it.
 Closing early retains the output received so far and sets
 `huggingface.stream.status` to `closed`, without marking the request successful.
 Stream errors and task cancellation propagate to your application and end the span
@@ -419,7 +421,7 @@ for text, result in zip(texts, results):
 | Variable | Description |
 |----------|-------------|
 | `HF_TOKEN` | HuggingFace API token |
-| `HUGGINGFACE_HUB_TOKEN` | Alternative token variable |
+| `HUGGING_FACE_HUB_TOKEN` | Alternative token variable |
 
 ## License
 
