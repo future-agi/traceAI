@@ -112,14 +112,16 @@ describe('OpenAI Instrumentation', () => {
       instrumentation.enable();
       expect(() => {
         instrumentation.manuallyInstrument(undefined as any);
-      }).toThrow();
+      }).not.toThrow();
+      expect(isPatched()).toBe(false);
     });
 
     it('should handle null module gracefully', () => {
       instrumentation.enable();
       expect(() => {
         instrumentation.manuallyInstrument(null as any);
-      }).toThrow();
+      }).not.toThrow();
+      expect(isPatched()).toBe(false);
     });
 
     it('should handle already patched module', () => {
@@ -376,8 +378,8 @@ describe('OpenAI Instrumentation', () => {
     });
   });
 
-  describe('OpenAI Version Support', () => {
-    it('should support OpenAI v4', () => {
+  describe('Incomplete module rejection', () => {
+    it('rejects an incomplete module even when it advertises v4', () => {
       const mockModuleV4 = {
         version: '4.52.7',
         OpenAI: {
@@ -395,9 +397,10 @@ describe('OpenAI Instrumentation', () => {
       expect(() => {
         instrumentation.manuallyInstrument(mockModuleV4 as any);
       }).not.toThrow();
+      expect(isPatched()).toBe(false);
     });
 
-    it('should support OpenAI v5', () => {
+    it('rejects an incomplete module even when it advertises v5', () => {
       const mockModuleV5 = {
         version: '5.0.0',
         OpenAI: {
@@ -415,6 +418,7 @@ describe('OpenAI Instrumentation', () => {
       expect(() => {
         instrumentation.manuallyInstrument(mockModuleV5 as any);
       }).not.toThrow();
+      expect(isPatched()).toBe(false);
     });
   });
 }); 

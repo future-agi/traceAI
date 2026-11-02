@@ -18,6 +18,7 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
+    "test:provider": "node --test test/provider-lifecycle.test.cjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
