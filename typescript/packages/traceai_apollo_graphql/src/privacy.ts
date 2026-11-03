@@ -88,8 +88,20 @@ export class FiSanitizingExporter implements SpanExporter {
       callback({ code: ExportResultCode.FAILED, error: new Error('Apollo telemetry export failed') });
     }
   }
+  private async waitForPending(): Promise<void> {
+    if (this.pending.size === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([...this.pending]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Apollo telemetry export timed out')), 4000);
+        }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
   async forceFlush(): Promise<void> {
-    await Promise.all([...this.pending]);
+    await this.waitForPending();
     await this.inner.forceFlush?.();
     if (this.failed) {
       this.failed = false;
@@ -98,7 +110,7 @@ export class FiSanitizingExporter implements SpanExporter {
   }
   async shutdown(): Promise<void> {
     try {
-      await Promise.all([...this.pending]);
+      await this.waitForPending();
       if (this.failed) throw new Error('Apollo telemetry export failed');
     } finally { await this.inner.shutdown(); }
   }

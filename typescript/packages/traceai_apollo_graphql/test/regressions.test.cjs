@@ -62,6 +62,21 @@ test('background exporter failure contains no response body in diagnostics or ca
   } finally { diag.disable(); }
 });
 
+test('a silent exporter cannot hold shutdown open indefinitely', async () => {
+  let stopped = false;
+  const exporter = new FiSanitizingExporter({
+    export() { /* transport never calls back */ },
+    shutdown: async () => { stopped = true; },
+  });
+  exporter.export([], () => {});
+  const outcome = await Promise.race([
+    exporter.shutdown().then(() => 'success', () => 'failed'),
+    new Promise(resolve => setTimeout(() => resolve('unbounded'), 4500)),
+  ]);
+  assert.equal(outcome, 'failed');
+  assert.equal(stopped, true);
+});
+
 test('forceFlush awaits already-started background exports and reports their failure', async () => {
   let finish;
   const exporter = new FiSanitizingExporter({
