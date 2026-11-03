@@ -7,11 +7,13 @@ leave this module. Unknown queries still get their driver's database span.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Callable
+from typing import Any
 
 VECTOR_OPERATORS = {
     "<->": "l2_distance",
@@ -117,6 +119,23 @@ def enrich_cursor_factory(
 ) -> type:
     """Add context to a maintained driver cursor, without creating a span."""
 
+    # Each maintained driver factory closes over a per-connection CursorTracer.
+    # OTel's instrument() ignores meter_provider and its new database semconv
+    # metrics carry unfiltered SQL/connection identifiers. Disable only this
+    # connection's metric recording; never change the application's meters.
+    tracer = inspect.getclosurevars(base.execute).nonlocals.get("_cursor_tracer")
+    if tracer is None:
+        raise RuntimeError("Unsupported OpenTelemetry PostgreSQL cursor factory")
+    if hasattr(tracer, "_record_metrics"):
+        tracer._record_metrics = lambda *args, **kwargs: None
+
+    def tokenless(args, kwargs):
+        query = args[0] if args else kwargs.get("query")
+        # Older OTel drivers index split()[0] before entering our filtered
+        # tracer. Pass these statements straight to the underlying driver,
+        # preserving its result or exception (including psycopg2 errors).
+        return isinstance(query, str) and not _structure(query).strip()
+
     @contextmanager
     def query_context(cursor, args, kwargs):
         if not enabled():
@@ -132,6 +151,8 @@ def enrich_cursor_factory(
 
     class Cursor(base):
         def execute(self, *args, **kwargs):
+            if tokenless(args, kwargs):
+                return super(base, self).execute(*args, **kwargs)
             with query_context(self, args, kwargs):
                 return super().execute(*args, **kwargs)
 
@@ -141,6 +162,8 @@ def enrich_cursor_factory(
 
     class AsyncCursor(base):
         async def execute(self, *args, **kwargs):
+            if tokenless(args, kwargs):
+                return await super(base, self).execute(*args, **kwargs)
             with query_context(self, args, kwargs):
                 return await super().execute(*args, **kwargs)
 

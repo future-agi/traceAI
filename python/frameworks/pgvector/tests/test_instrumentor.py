@@ -326,6 +326,93 @@ def test_failed_metadata_conversion_logs_without_private_error(caplog):
     assert "secret" not in caplog.text
 
 
+@pytest.mark.parametrize("driver,factory", [(psycopg2, Cursor2), (psycopg, Cursor3)])
+@pytest.mark.parametrize("query", ["   ", "/* comment only */", "-- comment only\n"])
+def test_tokenless_queries_preserve_driver_contract(telemetry, driver, factory, query):
+    _, exporter, _ = telemetry
+    cursor = driver.connect(cursor_factory=factory).cursor()
+    assert cursor.execute(query) is cursor
+    assert cursor.calls == [(query, None, {})]
+    assert not exporter.get_finished_spans()
+
+
+def test_async_tokenless_queries_preserve_driver_contract(telemetry):
+    _, exporter, _ = telemetry
+
+    async def run():
+        cursor = (
+            await psycopg.AsyncConnection.connect(cursor_factory=AsyncCursor3)
+        ).cursor()
+        for query in ("   ", "/* comment only */", "-- comment only\n"):
+            assert await cursor.execute(query) is cursor
+        assert len(cursor.calls) == 3
+
+    asyncio.run(run())
+    assert not exporter.get_finished_spans()
+
+
+def test_database_opt_in_emits_no_native_metrics(monkeypatch):
+    from opentelemetry import metrics
+    from opentelemetry.instrumentation import _semconv
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    stability = _semconv._OpenTelemetrySemanticConventionStability
+    monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "database")
+    monkeypatch.setattr(
+        stability,
+        "_OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING",
+        stability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING.copy(),
+    )
+    monkeypatch.setattr(stability, "_initialized", False)
+    reader = InMemoryMetricReader()
+    meter_provider = MeterProvider(metric_readers=[reader])
+    metrics.set_meter_provider(meter_provider)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        psycopg2, "connect", lambda **kw: Connection(kw["cursor_factory"])
+    )
+    monkeypatch.setattr(
+        psycopg, "connect", lambda **kw: Connection(kw["cursor_factory"])
+    )
+
+    async def connect_async(cls, **kwargs):
+        return Connection(kwargs["cursor_factory"])
+
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", classmethod(connect_async))
+    instrumentor = PgVectorInstrumentor()
+    try:
+        instrumentor.instrument(tracer_provider=provider)
+        cursor = psycopg.connect(cursor_factory=Cursor3).cursor()
+        cursor2 = psycopg2.connect(cursor_factory=Cursor2).cursor()
+        sql = "-- private comment\nSELECT embedding <-> %s"
+        cursor.execute(sql, ("private-value",))
+        cursor2.execute(sql, ("private-value",))
+
+        async def run():
+            async_cursor = (
+                await psycopg.AsyncConnection.connect(cursor_factory=AsyncCursor3)
+            ).cursor()
+            await async_cursor.execute(sql, ("private-value",))
+            return async_cursor
+
+        async_cursor = asyncio.run(run())
+        assert len(exporter.get_finished_spans()) == 3
+        assert reader.get_metrics_data() is None
+        instrumentor.uninstrument()
+        cursor.execute("SELECT 1")
+        cursor2.execute("SELECT 1")
+        asyncio.run(async_cursor.execute("SELECT 1"))
+        assert reader.get_metrics_data() is None
+    finally:
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        provider.shutdown()
+        meter_provider.shutdown()
+
+
 def test_partial_install_rolls_back(telemetry, monkeypatch):
     import traceai_pgvector
 

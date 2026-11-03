@@ -71,6 +71,30 @@ def test_real_sync_driver_and_type_registration(database, driver):
         connection.close()
 
 
+@pytest.mark.parametrize("query", ["   ", "/* comment only */"])
+def test_real_driver_tokenless_query_contract(database, query):
+    dsn, exporter = database
+    with (
+        psycopg2.connect(dsn) as connection,
+        connection.cursor() as cursor,
+        pytest.raises(psycopg2.ProgrammingError),
+    ):
+        cursor.execute(query)
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(query)
+    assert not exporter.get_finished_spans()
+
+    async def run():
+        async with (
+            await psycopg.AsyncConnection.connect(dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(query)
+
+    asyncio.run(run())
+    assert not exporter.get_finished_spans()
+
+
 def test_real_async_driver_and_type_registration(database):
     dsn, exporter = database
     from pgvector.psycopg import register_vector_async
