@@ -9,7 +9,7 @@ from fi_instrumentation.fi_types import (
     EvalTagType,
     ProjectType,
 )
-from mistralai import Mistral
+from mistralai.client import Mistral
 from traceai_mistralai import MistralAIInstrumentor
 
 # Configure trace provider with custom evaluation tags
