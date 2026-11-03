@@ -193,6 +193,9 @@ jobs:
       - name: Install matching Java core for Arconia privacy
         if: matrix.package.name == 'arconia'
         run: mvn -B -ntp -f java/pom.xml -pl traceai-java-core -am install
+      - name: Install the Quarkus native tracing adapter
+        if: matrix.package.name == 'quarkus-langchain4j'
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-quarkus-langchain4j -am -DskipTests install
       - name: Build packaged application and run OTLP integration tests
         working-directory: ${{ matrix.package.dir }}
         run: |

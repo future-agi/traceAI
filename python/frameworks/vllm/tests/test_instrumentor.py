@@ -7,6 +7,18 @@ import sys
 from traceai_vllm import VLLMInstrumentor, __version__
 
 
+@pytest.fixture(autouse=True)
+def isolate_mock_instrumentor(monkeypatch):
+    """Do not leak mocked singleton state or methods into real SDK contracts."""
+    from openai.resources.chat import AsyncCompletions, Completions
+
+    monkeypatch.setattr(VLLMInstrumentor, "_instance", None)
+    # Register the real methods for restoration even when a test replaces them
+    # through _uninstrument() while mocking the import machinery.
+    monkeypatch.setattr(Completions, "create", Completions.create)
+    monkeypatch.setattr(AsyncCompletions, "create", AsyncCompletions.create)
+
+
 class TestVLLMInstrumentor:
     """Tests for VLLMInstrumentor class."""
 

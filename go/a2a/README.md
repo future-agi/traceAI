@@ -1,20 +1,21 @@
 # traceAI A2A Go
 
-OpenTelemetry tracing for A2A (Agent2Agent) protocol clients built with the official Go SDK,
+OpenTelemetry tracing for A2A (Agent2Agent) protocol clients and servers built with the official Go SDK,
 [`github.com/a2aproject/a2a-go/v2`](https://github.com/a2aproject/a2a-go), sending spans to
 [Future AGI](https://futureagi.com).
 
-It is an `a2aclient.CallInterceptor`, the SDK's own extension point: you pass it with
+The client uses `a2aclient.CallInterceptor`, the SDK's own extension point: you pass it with
 `a2aclient.WithCallInterceptors` when you create the client. Each call to a remote agent becomes
 one client span with `gen_ai.span.kind=AGENT` and the A2A attribute names that the Python
 `traceai-a2a` package uses (`gen_ai.a2a.task.id`, `gen_ai.a2a.task.state`, `gen_ai.a2a.agent.url`,
 ...). The interceptor also sends the W3C `traceparent` (as an HTTP header on JSON-RPC and REST, as call
-metadata on gRPC), so a remote agent that reads it continues the same trace.
+metadata on gRPC). Add `NewServerInterceptor` to the receiving agent to continue the trace
+with one server span per call, without copying context extraction into your application.
 
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/a2a` (package `traceaia2a`) |
-| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.5.0 or later (the `go.mod` minimum) |
+| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.7.0 or later (the `go.mod` minimum) |
 | Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Transports | JSON-RPC, HTTP+JSON (REST) and gRPC (`a2agrpc/v1`), each tested against a2a-go's own server |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and a2a-go. No exporter is built in. |
@@ -31,14 +32,24 @@ differences.
 
 ```sh
 go get github.com/future-agi/traceAI/go/a2a@latest
+go get go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.47.0 go.opentelemetry.io/otel/sdk@v1.47.0
 ```
+
+The second command installs the exporter and SDK used by the setup below and resolves their
+`go.sum` entries. The integration itself does not create an exporter.
 
 ## Use
 
 ```go
 // tp is an *sdktrace.TracerProvider that exports to Future AGI (see below).
-client, err := a2aclient.NewFromCard(ctx, card,
+sdkClient, err := a2aclient.NewFromCard(ctx, card,
 	a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
+
+if err != nil {
+	return err
+}
+client := traceaia2a.WrapClient(sdkClient)
+defer client.Destroy()
 
 ctx = traceaia2a.ContextWithSessionID(ctx, "session-123") // optional
 resp, err := client.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg})
@@ -72,7 +83,7 @@ remote agent; that request gets `traceparent` (and `tracestate` when set) only.
 
 [`example/main.go`](example/main.go) is a complete program: an agent span, A2A calls (streamed
 with `-stream`), a failing task (`-fail`), and a demo remote agent built with a2a-go's server
-package whose own spans join the trace. When it calls `api.openai.com`, the demo marks its own LLM
+package whose maintained server interceptor joins the trace. When it calls `api.openai.com`, the demo marks its own LLM
 span with `gen_ai.provider.name=openai`; other OpenAI-compatible hosts remain unlabelled rather than
 guessing a vendor. The A2A interceptor itself still never creates an LLM span or invents a provider.
 
@@ -81,9 +92,67 @@ export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service
 go run ./example -stream -fail
 ```
 
+## Trace the receiving agent
+
+Use the same tracer provider and content settings with the official server hook.
+Keep a2a-go at v2.7.0 or later: earlier versions skip the completion hook on required-extension
+rejections, leaving unary server spans open or incorrectly marked as canceled.
+The module's dependency minimum selects the fixed SDK automatically.
+
+Attach the interceptor when creating your handler:
+
+```go
+handler := traceaia2a.WrapHandler(a2asrv.NewHandler(executor,
+	a2asrv.WithCallInterceptors(traceaia2a.NewServerInterceptor(
+		traceaia2a.WithTracerProvider(tp)))))
+httpHandler := a2asrv.NewJSONRPCHandler(handler)
+```
+
+Here `executor` is your `a2asrv.AgentExecutor`. Serve `httpHandler` using `net/http`.
+For REST use `a2asrv.NewRESTHandler(handler)`; for gRPC use
+`a2agrpc.NewHandler(handler).RegisterWith(grpcServer)` from `a2agrpc/v1`.
+Attach the interceptor once, first in the list. It traces protocol calls, not agent-card
+requests, transport parsing/authentication failures that occur before the hook, or separate
+executor lifetimes. A background task may outlive a nonblocking request's span.
+
+When you add middleware that can reject a response by returning an error from `After`,
+wrap each such interceptor with `tracing.Wrap`. For example, with your existing `outputPolicy`:
+
+```go
+tracing := traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp))
+handler := traceaia2a.WrapHandler(a2asrv.NewHandler(executor,
+	a2asrv.WithCallInterceptors(tracing, tracing.Wrap(outputPolicy))))
+```
+
+The SDK stops the remaining `After` callbacks on rejection. The wrapper records the error
+and ends the server span before returning the same error; it does not change the response,
+run skipped policy callbacks or add another span. Without the wrapper, a rejected call can
+leave its server span open until cancellation, which cannot recover the policy error.
+Middleware that instead sets `resp.Err`, clears `resp.Payload` and returns `nil` does not
+short-circuit the callbacks and needs no wrapper.
+
+The executor receives a context containing the server span. Start any application/model
+spans from that context; do not re-extract `traceparent` or add a second A2A server span.
+An existing local transport span is kept as the parent. `WithPropagator(nil)` disables incoming
+extraction; the default extracts W3C trace context only, not baggage. Session/user context helpers
+are process-local: the A2A context ID becomes the server's `session.id` unless set on its context.
+Headers, authenticated user details and request metadata are never copied to spans.
+
+Use `WrapClient` and `WrapHandler` for streaming calls. They observe normal iterator exhaustion
+and early abandonment because the SDK does not call `After` on iterator close. A persisted
+nonterminal task snapshot can reach clean EOF without a final event; its span completes as OK,
+not canceled. Breaking out early completes an unfinished span as ERROR/canceled and cancels only
+the wrapper's child context. The caller's context is not canceled. Continue passing a deadline
+or cancellable context for blocked reads and remote disconnects.
+
+The wrappers complete the interceptor's existing span, without adding spans or changing events.
+Wrap the outermost server handler (after any `a2asrv.InterceptedHandler` layers). The bare
+interceptor APIs remain available, but without the completion wrappers they can only finish
+streams on a terminal event or context cancellation, not on clean EOF.
+
 ## What is traced
 
-| Client method | Span | `gen_ai.operation.name` |
+| Client and server method | Span | `gen_ai.operation.name` |
 |---|---|---|
 | `SendMessage` | `a2a.SendMessage` | `a2a.send` |
 | `SendStreamingMessage` | `a2a.SendStreamingMessage` | `a2a.send` |
@@ -97,8 +166,17 @@ a span.
 A stream is one span. Every streamed event is a span event named `a2a.event` (with
 `gen_ai.a2a.event.type`, and the task state or artifact type when the event has one), and the span
 ends at the agent's reply message or when the task reaches a terminal state (`completed`,
-`failed`, `canceled`, `rejected`) or an interrupted one (`input-required`, `auth-required`), which
-is when a2a-go closes the stream.
+`failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream.
+With `WrapClient` and `WrapHandler`, `auth-required` keeps an active stream's span open for later
+events and its final result. Clean EOF also ends the span, including a persisted snapshot with no
+active executor. The latest snapshot/status message is included in `output.value`, including an
+authorization prompt at EOF; a later status replaces it.
+
+Existing clients using only `WithCallInterceptors(NewInterceptor(...))` retain their previous
+behavior: an `auth-required` task or status event ends the client span successfully. This keeps
+persisted authorization snapshots complete without requiring a client migration, but misses later
+events if the same stream continues. Use `WrapClient` to capture those events and to observe clean
+EOF and early iterator abandonment.
 
 ## Attributes
 
@@ -116,7 +194,7 @@ is when a2a-go closes the stream.
 | `user.id` | the id from `ContextWithUserID` |
 | `gen_ai.a2a.stream.event_count` (Go only) | streamed calls |
 | `input.value` | the text and data parts you send (content) |
-| `output.value` | artifact text, then the reply message or the final status message (content) |
+| `output.value` | artifact text, then the reply or status message (current snapshot for unary calls, final status for streams; content) |
 | `error.type`, `error.message` | on errors, see below |
 
 Python `traceai-a2a` writes `gen_ai.span.kind=A2A_CLIENT` and lower-case v0.3 state names
@@ -129,13 +207,15 @@ here, and no token or cost attribute is invented.
 - An error a2a-go returns ends the span with status ERROR and `error.type`: the A2A reason for
   protocol errors (`TASK_NOT_FOUND`, `UNSUPPORTED_OPERATION`, ...), `canceled` or `timeout` for the
   context, and `transport` for everything else (connection, HTTP status, decoding). The remote
-  agent's own error message is added as `error.message` unless inputs or outputs are hidden.
-  Transport error text (URLs, host names) is never recorded.
+  agent's own error message is added as `error.message` unless the explicit or derived
+  error-details policy hides it. Hidden errors retain ERROR status and `error.type`, with an
+  empty status description. Transport error text (URLs, host names) is never recorded.
 - A task the agent reports as `failed` or `rejected` is ERROR with `error.type` set to the state.
   `canceled`, `input-required` and `auth-required` are recorded in `gen_ai.a2a.task.state` and
   are not errors.
-- A stream ends without a callback when you stop reading early. The span then ends, as ERROR
-  `canceled`, when the context you passed is cancelled, so pass one you cancel (`defer cancel()`).
+- With `WrapClient` / `WrapHandler`, normal EOF completes an unfinished span successfully;
+  stopping iteration early ends it as ERROR `canceled`. Without them, early abandonment requires
+  caller context cancellation to finish the span, and clean EOF cannot be distinguished.
 - The interceptor never changes a request, a response or an error, and never fails a call.
 
 ## Privacy
@@ -145,13 +225,18 @@ switches, with the same names and defaults as Python, turn it off:
 
 | Variable | Effect |
 |---|---|
-| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; `error.message` is dropped |
-| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; `error.message` is dropped |
-| `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`, `FI_HIDE_INPUT_IMAGES`, `FI_HIDE_LLM_INVOCATION_PARAMETERS`, `FI_BASE64_IMAGE_MAX_LENGTH` | read for parity; they act on attributes this module does not write (and on spans you start yourself through `TraceConfig.SetAttributes`) |
+| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; derives error-detail hiding |
+| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; derives error-detail hiding |
+| `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` | hide matching message attributes on your own spans through `TraceConfig.SetAttributes`; also derive error-detail hiding |
+| `FI_HIDE_ERROR_DETAILS` | `true` drops `error.message`, `exception.message`, `exception.stacktrace` and the ERROR status description; `false` explicitly allows error details, even when content is hidden |
+| `FI_HIDE_INPUT_IMAGES`, `FI_HIDE_LLM_INVOCATION_PARAMETERS`, `FI_BASE64_IMAGE_MAX_LENGTH` | act on matching attributes you set through `TraceConfig.SetAttributes`; do not derive error-detail hiding |
 
-A value counts only when it is `true` (any case). `WithTraceConfig(traceaia2a.TraceConfig{...})`
+Content-hiding switches enable only for `true` (any case). `WithTraceConfig(traceaia2a.TraceConfig{...})`
 sets them in code instead. Task ids, states, the agent URL, the session id and the error class are
-kept in every mode.
+kept in every mode. When `FI_HIDE_ERROR_DETAILS` is unset, empty or invalid, error details
+are hidden if any of the six input/output, message or text switches is true. In code,
+`TraceConfig.HideErrorDetails` is a `*bool`: nil derives that policy; a pointer to true/false
+overrides it. `WithTraceConfig` replaces environment settings for that interceptor.
 
 In every mode: file parts (raw bytes or file URLs) are never copied, credentials and query strings
 in the agent URL are stripped, request headers are never copied, transport error text is never
@@ -159,9 +244,6 @@ recorded, values are cut at 32 000 bytes, and the module adds no resource attrib
 
 ## Not supported
 
-- Server-side tracing (`a2asrv`). The server interceptor is a different interface and is not part
-  of this module; a remote agent joins the trace only if it reads `traceparent` itself (the
-  example's demo agent shows how).
 - Push notifications and the a2a CLI.
 
 ## Test

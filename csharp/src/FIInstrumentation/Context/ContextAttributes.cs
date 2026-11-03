@@ -68,7 +68,22 @@ public static class ContextAttributes
     /// <summary>
     /// Returns all context attributes currently set, as key-value pairs.
     /// </summary>
-    public static IEnumerable<KeyValuePair<string, string>> GetAttributesFromContext()
+    public static IEnumerable<KeyValuePair<string, string>> GetAttributesFromContext() =>
+        GetAttributesFromContext(new TraceConfig());
+
+    internal static IEnumerable<KeyValuePair<string, string>> GetAttributesFromContext(TraceConfig config)
+    {
+        foreach (var (key, value) in GetContextValues())
+        {
+            // The tracer's policy must run before serialization, not just before
+            // writing the activity tag. Hidden objects must never be inspected.
+            var masked = config.Mask(key, () => value is string text ? text : FISpan.SafeJsonSerialize(value));
+            if (masked != null)
+                yield return new(key, masked);
+        }
+    }
+
+    private static IEnumerable<KeyValuePair<string, object>> GetContextValues()
     {
         if (!string.IsNullOrEmpty(s_sessionId.Value))
             yield return new(SemanticConventions.SessionId, s_sessionId.Value);
@@ -77,10 +92,10 @@ public static class ContextAttributes
             yield return new(SemanticConventions.UserId, s_userId.Value);
 
         if (s_metadata.Value != null)
-            yield return new(SemanticConventions.Metadata, FISpan.SafeJsonSerialize(s_metadata.Value));
+            yield return new(SemanticConventions.Metadata, s_metadata.Value);
 
         if (s_tags.Value != null)
-            yield return new(SemanticConventions.TagTags, FISpan.SafeJsonSerialize(s_tags.Value));
+            yield return new(SemanticConventions.TagTags, s_tags.Value);
 
         if (!string.IsNullOrEmpty(s_promptTemplate.Value))
             yield return new(SemanticConventions.GenAiPromptTemplateName, s_promptTemplate.Value);
@@ -92,8 +107,7 @@ public static class ContextAttributes
             yield return new(SemanticConventions.GenAiPromptTemplateVersion, s_promptTemplateVersion.Value);
 
         if (s_promptTemplateVariables.Value != null)
-            yield return new(SemanticConventions.GenAiPromptTemplateVariables,
-                FISpan.SafeJsonSerialize(s_promptTemplateVariables.Value));
+            yield return new(SemanticConventions.GenAiPromptTemplateVariables, s_promptTemplateVariables.Value);
     }
 }
 
