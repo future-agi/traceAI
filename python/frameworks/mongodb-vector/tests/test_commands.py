@@ -344,3 +344,89 @@ def test_external_native_instrumentation_is_not_duplicated_or_disabled(tracing):
     finally:
         native.uninstrument()
         instrumentor.instrument(tracer_provider=provider)
+
+
+def test_span_processor_disable_during_start_drains_unpublished_span():
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    instrumentor = MongoDBInstrumentor()
+
+    class DisableOnStart(SpanProcessor):
+        def on_start(self, span, parent_context=None):
+            if span.name == "testdb.find":
+                instrumentor.uninstrument()
+
+    provider.add_span_processor(DisableOnStart())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor.instrument(tracer_provider=provider)
+    command_listener = listener()
+    try:
+        command_listener.started(started({"find": "rows"}))
+        assert not command_listener.is_enabled
+        assert not command_listener._span_dict
+        assert len(exporter.get_finished_spans()) == 1
+        assert exporter.get_finished_spans()[0].status.status_code is StatusCode.ERROR
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+
+
+def test_rebound_tracer_preserves_native_database_schema_url():
+    # Fresh process: upstream caches the opt-in mode at first instrumentation.
+    script = """
+import os
+import socket
+os.environ['OTEL_SEMCONV_STABILITY_OPT_IN'] = 'database'
+socket.socket.connect = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('network forbidden'))
+from datetime import timedelta
+from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pymongo import monitoring
+from traceai_mongodb import MongoDBInstrumentor
+provider = TracerProvider()
+exporter = InMemorySpanExporter()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+native = PymongoInstrumentor()
+native.instrument(tracer_provider=provider)
+command_listener = native._commandtracer_instance
+schema_url = command_listener._tracer._instrumentation_scope.schema_url
+assert schema_url and schema_url.startswith('https://opentelemetry.io/schemas/'), schema_url
+native.uninstrument()
+adapter = MongoDBInstrumentor()
+for _ in range(2):
+    adapter.instrument(tracer_provider=provider)
+    command_listener.started(monitoring.CommandStartedEvent({'find': 'rows'}, 'testdb', 1, ('localhost', 27017), 1))
+    command_listener.succeeded(monitoring.CommandSucceededEvent(timedelta(milliseconds=1), {'ok': 1}, 'find', 1, ('localhost', 27017), 1))
+    assert exporter.get_finished_spans()[-1].instrumentation_scope.schema_url == schema_url
+    adapter.uninstrument()
+assert not command_listener._span_dict
+provider.shutdown()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_rebound_tracer_preserves_native_schema_without_explicit_provider():
+    script = """
+import socket
+socket.socket.connect = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('network forbidden'))
+from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+from traceai_mongodb import MongoDBInstrumentor
+native = PymongoInstrumentor()
+native.instrument()
+schema_url = native._commandtracer_instance._tracer._schema_url
+assert schema_url
+native.uninstrument()
+adapter = MongoDBInstrumentor()
+adapter.instrument()
+assert native._commandtracer_instance._tracer._schema_url == schema_url
+adapter.uninstrument()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == 0, result.stderr

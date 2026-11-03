@@ -59,7 +59,14 @@ class MongoDBInstrumentor(BaseInstrumentor):
         listener = native._commandtracer_instance
         if listener is None or not native.is_instrumented_by_opentelemetry:
             raise RuntimeError("OpenTelemetry PyMongo instrumentation could not be enabled")
-        listener._tracer = trace_api.get_tracer(__name__, __version__, provider)
+        # SDK Tracer exposes its scope here; the default-provider ProxyTracer
+        # keeps the same schema as _schema_url until a provider is installed.
+        schema_url = getattr(
+            getattr(listener._tracer, "_instrumentation_scope", None), "schema_url", None
+        ) or getattr(listener._tracer, "_schema_url", None)
+        listener._tracer = trace_api.get_tracer(
+            __name__, __version__, provider, schema_url=schema_url
+        )
         listener.start_hook = request_hook
         listener.success_hook = response_hook
         listener.failed_hook = failed_hook
@@ -70,7 +77,13 @@ class MongoDBInstrumentor(BaseInstrumentor):
 
         def locked_start(event: Any) -> None:
             with self._start_lock:
-                original_start(event)
+                try:
+                    original_start(event)
+                finally:
+                    # on_start may synchronously disable instrumentation before
+                    # upstream publishes this span to its pending dictionary.
+                    if not listener.is_enabled:
+                        self._finish_pending(listener)
 
         setattr(listener, "started", locked_start)
         self._original_start = original_start
@@ -86,13 +99,17 @@ class MongoDBInstrumentor(BaseInstrumentor):
         # commands once rather than retaining spans across a later enable cycle.
         if listener is not None:
             with self._start_lock:
-                pending = list(listener._span_dict.values())
-                listener._span_dict.clear()
+                self._finish_pending(listener)
                 setattr(listener, "started", self._original_start)
-                for span in pending:
-                    span.set_status(Status(StatusCode.ERROR, "Instrumentation disabled before command completed"))
-                    span.end()
         self._owns_native = False
+
+    @staticmethod
+    def _finish_pending(listener: Any) -> None:
+        pending = list(listener._span_dict.values())
+        listener._span_dict.clear()
+        for span in pending:
+            span.set_status(Status(StatusCode.ERROR, "Instrumentation disabled before command completed"))
+            span.end()
 
 
 __all__ = ["MongoDBInstrumentor", "__version__"]
