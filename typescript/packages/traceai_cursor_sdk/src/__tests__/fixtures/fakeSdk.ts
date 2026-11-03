@@ -205,6 +205,14 @@ export class FakeAgent {
     return new FakeRun(this.agentId, `run-${this.sends}`, this.model, steps, this.script.runOptions);
   }
 
+  /** Available since @cursor/sdk 1.2; summary text is returned by wait(). */
+  async summarize(): Promise<FakeRun> {
+    if (this.script.sendError) throw this.script.sendError;
+    const steps = this.script.runs[this.sends] ?? this.script.runs[this.script.runs.length - 1] ?? [];
+    this.sends += 1;
+    return new FakeRun(this.agentId, `run-${this.sends}`, this.model, steps, this.script.runOptions);
+  }
+
   close(): void {
     this.disposed = true;
   }
