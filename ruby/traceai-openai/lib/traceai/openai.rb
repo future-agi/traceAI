@@ -34,6 +34,10 @@ module TraceAI
       id = value(response, :id)
       span.set_attribute('gen_ai.response.model', model) if model.is_a?(String)
       span.set_attribute('gen_ai.response.id', id) if id.is_a?(String)
+      if operation == 'responses' && value(response, :status).to_s == 'failed'
+        span.set_attribute('error.type', 'response.failed')
+        span.status = OpenTelemetry::Trace::Status.error('response.failed')
+      end
       usage = value(response, :usage)
       input = value(usage, operation == 'chat' ? :prompt_tokens : :input_tokens)
       output = value(usage, operation == 'chat' ? :completion_tokens : :output_tokens)
@@ -56,12 +60,23 @@ module TraceAI
 
         body = req[:body]
         model = TraceAI::OpenAI.value(body, :model)
-        attributes = {'gen_ai.operation.name' => operation, 'gen_ai.provider.name' => 'openai'}
+        attributes = {'gen_ai.operation.name' => operation, 'gen_ai.provider.name' => 'openai',
+                      'gen_ai.span.kind' => 'LLM', 'fi.span.kind' => 'LLM'}
         attributes['gen_ai.request.model'] = model if model.is_a?(String)
+        if operation == 'chat' && req[:stream] && body.is_a?(Hash)
+          # A final aggregate usage chunk is only sent when include_usage is true.
+          # Do not override an explicit caller choice (including false).
+          options = TraceAI::OpenAI.value(body, :stream_options)
+          if options.nil?
+            req[:body] = body.merge(stream_options: {include_usage: true})
+          elsif options.is_a?(Hash) && !options.key?(:include_usage) && !options.key?('include_usage')
+            req[:body] = body.merge(stream_options: options.merge(include_usage: true))
+          end
+        end
         tracer = OpenTelemetry.tracer_provider.tracer('traceai-openai', TraceAI::OpenAI::VERSION)
         span = tracer.start_span([operation, model].compact.join(' '), kind: :client, attributes: attributes)
         begin
-          result = super
+          result = OpenTelemetry::Trace.with_span(span) { super(req) }
           if req[:stream]
             return Stream.new(result, span, operation)
           end
@@ -143,10 +158,11 @@ module TraceAI
 
       def observe(event)
         if @operation == 'responses'
-          type = TraceAI::OpenAI.value(event, :type)
+          type = TraceAI::OpenAI.value(event, :type).to_s
           TraceAI::OpenAI.decorate(@span, event, @operation) if %w[response.completed response.incomplete response.failed].include?(type)
-          if type == 'response.failed'
-            @span.status = OpenTelemetry::Trace::Status.error('response.failed')
+          if type == 'response.failed' || type == 'error'
+            @span.set_attribute('error.type', type)
+            @span.status = OpenTelemetry::Trace::Status.error(type)
           end
         else
           TraceAI::OpenAI.decorate(@span, event, @operation)

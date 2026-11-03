@@ -145,4 +145,59 @@ class InstrumentationTest < Minitest::Test
     refute_equal OpenTelemetry::Trace::Status::ERROR, @spans.first.status.code
   end
 
+  def test_symbol_response_events_and_error_event
+    usage = OpenStruct.new(input_tokens: 8, output_tokens: 3)
+    completed = OpenStruct.new(type: :'response.completed', response: OpenStruct.new(id: 'id', model: 'gpt', usage: usage))
+    with_request_result(FakeStream.new([completed])) do
+      @client.responses.stream_raw(model: 'gpt', input: 'secret').each { |_| }
+    end
+    assert_equal 8, @spans.last.attributes['gen_ai.usage.input_tokens']
+    assert_equal 'id', @spans.last.attributes['gen_ai.response.id']
+    @spans.clear
+    [:'response.failed', :error].each do |type|
+      with_request_result(FakeStream.new([OpenStruct.new(type: type, response: OpenStruct.new(usage: usage))])) do
+        @client.responses.stream_raw(model: 'gpt', input: 'secret').each { |_| }
+      end
+      assert_equal OpenTelemetry::Trace::Status::ERROR, @spans.last.status.code
+    end
+  end
+
+  def test_model_span_classification_and_synchronous_failure
+    with_request_result(OpenStruct.new(status: :failed, model: 'gpt')) do
+      @client.responses.create(model: 'gpt', input: 'secret')
+    end
+    assert_equal 'LLM', @spans.last.attributes['gen_ai.span.kind']
+    assert_equal 'LLM', @spans.last.attributes['fi.span.kind']
+    assert_equal OpenTelemetry::Trace::Status::ERROR, @spans.last.status.code
+  end
+
+  def test_nested_sdk_spans_are_children_of_model_span
+    original = ::OpenAI::Internal::Transport::BaseClient.instance_method(:request)
+    tracer = OpenTelemetry.tracer_provider.tracer('synthetic-test')
+    ::OpenAI::Internal::Transport::BaseClient.define_method(:request) do |_req|
+      tracer.in_span('nested-http') { OpenStruct.new(model: 'gpt') }
+    end
+    @client.responses.create(model: 'gpt', input: 'secret')
+    model = @spans.find { |span| span.name.start_with?('responses') }
+    http = @spans.find { |span| span.name == 'nested-http' }
+    assert_equal model.hex_span_id, http.parent_span_id.unpack1('H*')
+  ensure
+    ::OpenAI::Internal::Transport::BaseClient.define_method(:request, original) if original
+  end
+
+  def test_chat_stream_automatically_requests_usage_without_overriding_false
+    original = ::OpenAI::Internal::Transport::BaseClient.instance_method(:request)
+    bodies = []
+    ::OpenAI::Internal::Transport::BaseClient.define_method(:request) do |req|
+      bodies << req[:body]
+      FakeStream.new([])
+    end
+    @client.chat.completions.stream_raw(model: 'gpt', messages: [{role: 'user', content: 'secret'}]).close
+    assert_equal true, bodies.last[:stream_options][:include_usage]
+    @client.chat.completions.stream_raw(model: 'gpt', messages: [{role: 'user', content: 'secret'}], stream_options: {include_usage: false}).close
+    assert_equal false, bodies.last[:stream_options][:include_usage]
+  ensure
+    ::OpenAI::Internal::Transport::BaseClient.define_method(:request, original) if original
+  end
+
 end

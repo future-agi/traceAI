@@ -2,7 +2,7 @@
 """Read-only release inventory and registry plan for all SDK ecosystems.
 
 --check validates Python and npm runtime versions and release-please coverage without network.
---offline inventories packages without registry calls (Ruby is explicitly deferred). --only NAME ...
+--offline inventories packages without registry calls. --only NAME ...
 limits the plan. --root allows a separate source tree. No command publishes anything.
 The release publisher, not release-please, owns tags and GitHub releases.
 """
@@ -162,8 +162,6 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
                     "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
                     "tag": f"nuget-{name}-v{version}", "core": False,
                     "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
-    # Ruby is tracked for release-please/version consistency, but the publishing
-    # workflow has no RubyGems lane yet. Keep it explicitly skipped in config.json.
     for f in sorted((root / "ruby").glob("*/*.gemspec")):
         text = f.read_text()
         name_match = re.search(r"^\s*spec\.name\s*=\s*['\"]([^'\"]+)['\"]", text, re.M)
@@ -244,6 +242,9 @@ def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     if eco == "typescript":
         d = _get_json("https://registry.npmjs.org/" + p["name"].replace("/", "%2F"))
         return set(d.get("versions", {})) if d else None
+    if eco == "ruby":
+        versions = _get_json(f"https://rubygems.org/api/v1/versions/{urllib.parse.quote(p['name'])}.json")
+        return {item["number"] for item in versions} if versions is not None else None
     if eco == "nuget":
         d = _get_json(f"https://api.nuget.org/v3-flatcontainer/{p['name'].lower()}/index.json")
         return set(d["versions"]) if d else None

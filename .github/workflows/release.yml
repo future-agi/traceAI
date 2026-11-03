@@ -13,6 +13,7 @@ on:
       - typescript/packages/*/package.json
       - java/**/pom.xml
       - go/**
+      - ruby/*/**
       - csharp/**/*.csproj
       - .github/release/**
       - .github/workflows/release*.yml
@@ -48,11 +49,13 @@ jobs:
       java: ${{ steps.plan.outputs.java }}
       go: ${{ steps.plan.outputs.go }}
       nuget: ${{ steps.plan.outputs.nuget }}
+      ruby: ${{ steps.plan.outputs.ruby }}
       publish_python: ${{ steps.gates.outputs.python }}
       publish_typescript: ${{ steps.gates.outputs.typescript }}
       publish_java: ${{ steps.gates.outputs.java }}
       publish_go: ${{ steps.gates.outputs.go }}
       publish_nuget: ${{ steps.gates.outputs.nuget }}
+      publish_ruby: ${{ steps.gates.outputs.ruby }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -97,6 +100,8 @@ jobs:
           TYPESCRIPT_PENDING: ${{ steps.plan.outputs.typescript != '[]' }}
           MAVEN: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.MAVEN_GPG_PRIVATE_KEY != '' && secrets.MAVEN_GPG_PASSPHRASE != '' }}
           NUGET: ${{ secrets.NUGET_API_KEY != '' }}
+          RUBYGEMS: ${{ secrets.RUBYGEMS_API_KEY != '' }}
+          RUBY_PENDING: ${{ steps.plan.outputs.ruby != '[]' }}
         run: |
           NPM=false
           if [ "$NPM_TOKEN_AVAILABLE" = true ] || [ "$NPM_TRUSTED_PUBLISHING" = true ]; then NPM=true; fi
@@ -104,15 +109,15 @@ jobs:
             echo "::error::npm releases are pending but neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING is configured. Complete the RELEASING.md checklist."
             exit 1
           fi
-          for eco in python typescript java go nuget; do
+          for eco in python typescript java go nuget ruby; do
             enabled=false
             case "$eco" in
-              python) available=$PYPI;; typescript) available=$NPM;; java) available=$MAVEN;; go) available=true;; nuget) available=$NUGET;;
+              python) available=$PYPI;; typescript) available=$NPM;; java) available=$MAVEN;; go) available=true;; nuget) available=$NUGET;; ruby) available=$RUBYGEMS;;
             esac
             if [ "$RELEASE_EVENT" = true ] && [ "$available" = true ]; then enabled=true; fi
             echo "$eco=$enabled" >> "$GITHUB_OUTPUT"
             echo "- $eco publishing: $enabled" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$RELEASE_EVENT" = true ] && [ "$available" != true ]; then
+            if [ "$RELEASE_EVENT" = true ] && [ "$available" != true ] && { [ "$eco" != ruby ] || [ "${RUBY_PENDING:-false}" = true ]; }; then
               echo "::warning::$eco publishing disabled: complete the RELEASING.md checklist. Builds still run."
             fi
           done
@@ -288,9 +293,20 @@ jobs:
       packages: ${{ needs.plan.outputs.nuget }}
       publish: ${{ needs.plan.outputs.publish_nuget == 'true' }}
     secrets: inherit
+  ruby:
+    name: RubyGems
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.ruby != '[]'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-ruby.yml
+    with:
+      packages: ${{ needs.plan.outputs.ruby }}
+      publish: ${{ needs.plan.outputs.publish_ruby == 'true' }}
+    secrets: inherit
   release:
     name: Release
-    needs: [plan, python-core-build, python-core, python-build, python, typescript, java, go, nuget]
+    needs: [plan, python-core-build, python-core, python-build, python, typescript, java, go, nuget, ruby]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

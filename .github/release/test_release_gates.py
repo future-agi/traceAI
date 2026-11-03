@@ -11,7 +11,7 @@ WORKFLOW = Path(__file__).resolve().parents[1] / 'workflows/release.yml'
 
 
 class CredentialGateTests(unittest.TestCase):
-    def run_gate(self, *, token=False, trusted=False, release=True, pending=True):
+    def run_gate(self, *, token=False, trusted=False, release=True, pending=True, rubygems=False, ruby_pending=False):
         workflow = WORKFLOW.read_text()
         step = workflow.split('      - name: Credential and event gates\n', 1)[1].split('\n  python-core-build:', 1)[0]
         # Bind the exercised booleans to the real workflow inputs. Never expose a token.
@@ -30,6 +30,7 @@ class CredentialGateTests(unittest.TestCase):
                 'NPM_TRUSTED_PUBLISHING': str(trusted).lower(),
                 'TYPESCRIPT_PENDING': str(pending).lower(),
                 'PYPI': 'true', 'MAVEN': 'true', 'NUGET': 'true',
+                'RUBYGEMS': str(rubygems).lower(), 'RUBY_PENDING': str(ruby_pending).lower(),
                 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary),
             }
             result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script],
@@ -68,6 +69,16 @@ class CredentialGateTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(all(value == 'false' for value in outputs.values()))
                 self.assertNotIn('::error::', result.stdout)
+
+    def test_ruby_publishing_requires_its_own_credential(self):
+        result, outputs = self.run_gate(token=True, ruby_pending=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs['ruby'], 'false')
+        self.assertIn('ruby publishing disabled', result.stdout)
+        result, outputs = self.run_gate(token=True, ruby_pending=True, rubygems=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs['ruby'], 'true')
+        self.assertNotIn('ruby publishing disabled', result.stdout)
 
     def test_non_npm_selection_does_not_require_npm_credentials(self):
         result, outputs = self.run_gate(pending=False)
