@@ -10,7 +10,8 @@ import os
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from traceai_strands import configure_strands_tracing
+from fi_instrumentation.otel import HTTPSpanExporter
+from traceai_strands import StrandsSpanExporter
 
 # Setup TraceAI
 trace_provider = register(
@@ -20,10 +21,10 @@ trace_provider = register(
     # OpenTelemetry's global tracer provider, so without it no Strands span reaches
     # this provider and nothing is sent to Future AGI.
     set_global_tracer_provider=True,
+    span_exporter=StrandsSpanExporter(HTTPSpanExporter(), capture_content=True),
 )
 
-# Configure Strands to use TraceAI
-configure_strands_tracing(tracer_provider=trace_provider)
+# Strands emits native spans; no additional telemetry exporter is needed.
 
 # Import Strands (after configuration)
 from strands import Agent
@@ -64,4 +65,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        trace_provider.force_flush()
+        trace_provider.shutdown()

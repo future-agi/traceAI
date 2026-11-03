@@ -1,6 +1,6 @@
 /**
  * Structural copies of the `@cursor/sdk` types this package reads
- * (dist/esm/*.d.ts of 1.0.37 and 1.0.38). The SDK is a peer dependency, so nothing here
+ * (dist/esm/*.d.ts of 1.0.38 through 1.2.0). The SDK is a peer dependency, so nothing here
  * imports it: the package type-checks and runs whether or not it is installed.
  * `contract/sdk_types.ts` checks that the real SDK types fit these shapes.
  *
@@ -86,6 +86,8 @@ export interface SDKMessageLike {
   args?: unknown;
   result?: unknown;
   truncated?: { args?: boolean; result?: boolean };
+  /** summary (since 1.2): structural only, never the conversation text. */
+  fallback?: boolean;
   /** thinking, task */
   text?: string;
   thinking_duration_ms?: number;
@@ -131,6 +133,8 @@ export interface AgentLike {
   readonly agentId?: string;
   readonly model?: ModelSelectionLike;
   send?(message: string | UserMessageLike, options?: SendOptionsLike): Promise<RunLike>;
+  /** Introduced in 1.2; older agents have no summarize method. */
+  summarize?(): Promise<RunLike>;
 }
 
 /**

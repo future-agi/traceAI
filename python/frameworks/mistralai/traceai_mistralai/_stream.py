@@ -1,7 +1,10 @@
-import logging
-from typing import Any, AsyncIterator, Generator, Iterator, Optional, Protocol, Tuple
+from __future__ import annotations
 
-from mistralai.models import CompletionEvent
+import logging
+from typing import TYPE_CHECKING, Any, AsyncIterator, Generator, Iterator, Optional, Protocol, Tuple
+
+if TYPE_CHECKING:
+    from mistralai.models import CompletionEvent
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 from traceai_mistralai._utils import _finish_tracing
@@ -48,6 +51,28 @@ class _Stream(ObjectProxy):  # type: ignore
     def __iter__(self) -> Iterator[Any]:
         return self
 
+    def __enter__(self):
+        if hasattr(self.__wrapped__, "__enter__"):
+            self.__wrapped__.__enter__()
+        return self
+
+    def close(self):
+        try:
+            closer = getattr(self.__wrapped__, "close", None)
+            if closer is not None:
+                return closer()
+            return self.__wrapped__.__exit__(None, None, None)
+        finally:
+            if not self._self_is_finished:
+                self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_val is not None:
+            self._self_with_span.record_exception(exc_val)
+            self._finish_tracing(trace_api.Status(trace_api.StatusCode.ERROR))
+        self.close()
+        return False
+
     def __next__(self) -> Any:
         try:
             chunk = self.__wrapped__.__next__()
@@ -56,7 +81,7 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -125,6 +150,31 @@ class _AsyncStream(ObjectProxy):  # type: ignore
     def __aiter__(self) -> AsyncIterator[Any]:
         return self
 
+    async def __aenter__(self):
+        if hasattr(self.__wrapped__, "__aenter__"):
+            await self.__wrapped__.__aenter__()
+        return self
+
+    async def close(self):
+        try:
+            closer = getattr(self.__wrapped__, "aclose", None) or getattr(self.__wrapped__, "close", None)
+            if closer is not None:
+                return await closer()
+            return await self.__wrapped__.__aexit__(None, None, None)
+        finally:
+            if not self._self_is_finished:
+                self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+
+    async def aclose(self):
+        return await self.close()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if exc_val is not None:
+            self._self_with_span.record_exception(exc_val)
+            self._finish_tracing(trace_api.Status(trace_api.StatusCode.ERROR))
+        await self.close()
+        return False
+
     async def __anext__(self) -> Any:
         # Pass through mistaken calls
         if not hasattr(self.__wrapped__, "__anext__"):
@@ -137,7 +187,7 @@ class _AsyncStream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
