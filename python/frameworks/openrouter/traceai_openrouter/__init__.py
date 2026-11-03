@@ -76,8 +76,8 @@ def _result(span: Any, value: Any, content: bool) -> None:
     if isinstance(model, str):
         span.set_attribute(A.GEN_AI_RESPONSE_MODEL, model)
     _usage(span, value)
-    if _field(value, "status") in ("failed", "incomplete"):
-        # A 200 Responses body can still represent a failed/incomplete generation.
+    if _field(value, "status") in ("failed", "incomplete", "cancelled"):
+        # A 200 Responses body can still represent an aborted generation.
         # Never export its error message or partial output.
         span.set_status(Status(StatusCode.ERROR))
         return
@@ -137,12 +137,15 @@ class _Stream:
         # the event itself. The final response supersedes individual deltas.
         event_type = _field(chunk, "type")
         completed = _field(chunk, "response")
-        if _field(chunk, "error") is not None or event_type in ("response.failed", "response.incomplete"):
+        if _field(chunk, "error") is not None or event_type in ("error", "response.failed", "response.incomplete"):
             self._failed = True
             self._pieces.clear()
             self._span.set_status(Status(StatusCode.ERROR))
         if event_type in ("response.completed", "response.failed", "response.incomplete") and completed:
             _result(self._span, completed, False)
+            if _field(completed, "status") in ("failed", "incomplete", "cancelled"):
+                self._failed = True
+                self._pieces.clear()
             if not self._failed and self._content:
                 text = _text(completed)
                 if text:

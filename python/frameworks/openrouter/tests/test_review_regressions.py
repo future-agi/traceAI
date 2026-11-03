@@ -103,6 +103,59 @@ def test_responses_failure_drops_partial_answer(instrument, state):
 
 
 @pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("beta", [False, True])
+def test_responses_stream_error_event_drops_partial_answer(instrument, async_call, beta):
+    _, exporter = instrument()
+    events = [
+        {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "item_1",
+         "output_index": 0, "content_index": 0, "logprobs": [], "delta": "partial"},
+        {"type": "error", "sequence_number": 2, "code": "server_error",
+         "message": "SYNTHETIC_PRIVATE_ERROR", "param": None},
+    ]
+    payload = "".join("data: " + json.dumps(event) + "\n\n" for event in events) + "data: [DONE]\n\n"
+    client = sdk(lambda req: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=payload.encode()))
+    responses = client.beta.responses if beta else client.responses
+    if async_call:
+        async def run():
+            stream = await responses.send_async(model="vendor/request", input="hi", stream=True)
+            return [event async for event in stream]
+        chunks = asyncio.run(run())
+    else:
+        chunks = list(responses.send(model="vendor/request", input="hi", stream=True))
+    assert [chunk.type for chunk in chunks] == ["response.output_text.delta", "error"]
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert "output.value" not in span.attributes
+    assert "SYNTHETIC_PRIVATE_ERROR" not in str(dict(span.attributes))
+
+
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize("beta", [False, True])
+def test_cancelled_responses_drops_partial_answer(instrument, async_call, beta):
+    _, exporter = instrument()
+    body = {"id": "resp_1", "object": "response", "created_at": 1, "completed_at": None,
+            "error": None, "frequency_penalty": None, "incomplete_details": None,
+            "instructions": None, "metadata": None, "model": "vendor/served", "output": [],
+            "output_text": "partial", "parallel_tool_calls": False, "presence_penalty": None,
+            "status": "cancelled", "temperature": None, "tool_choice": "auto", "tools": [],
+            "top_p": None, "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+                                   "input_tokens_details": {"cached_tokens": 0},
+                                   "output_tokens_details": {"reasoning_tokens": 0}}}
+    client = sdk(lambda req: httpx.Response(200, json=body))
+    responses = client.beta.responses if beta else client.responses
+    if async_call:
+        result = asyncio.run(responses.send_async(model="vendor/request", input="hi"))
+    else:
+        result = responses.send(model="vendor/request", input="hi")
+    assert result.status == "cancelled"
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["gen_ai.response.model"] == "vendor/served"
+    assert span.attributes["gen_ai.usage.input_tokens"] == 3
+    assert "output.value" not in span.attributes
+
+
+@pytest.mark.parametrize("async_call", [False, True])
 def test_http_child_nested_under_llm(instrument, async_call):
     provider, exporter = instrument()
     tracer = provider.get_tracer("test")
