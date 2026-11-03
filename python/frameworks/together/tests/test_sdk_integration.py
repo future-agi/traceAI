@@ -3,6 +3,7 @@
 import asyncio
 import json
 import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import version
 
@@ -349,3 +350,69 @@ def test_otlp_wire_privacy(server, hidden):
         assert attributes["gen_ai.usage.output_tokens"].int_value == 3
         assert (INPUT.encode() in payload) is not hidden
         assert (OUTPUT.encode() in payload) is not hidden
+
+
+@pytest.mark.skipif(LEGACY, reason="Together 1.x has no raw-response API or extra_headers")
+@pytest.mark.parametrize("surface", ["chat", "completions", "embeddings"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_otlp_wire_never_exports_transport_credentials(server, surface, asynchronous):
+    """SDK transport options reach the API but must not enter exported inputs."""
+    credential = "Bearer synthetic-transport-secret"
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint=server[0] + "/traces")))
+    instrumentor = TogetherInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    client = make_client(server, asynchronous=asynchronous)
+    options = {
+        "extra_headers": {"Authorization": credential, "X-Trace-Secret": credential},
+        "extra_query": {"access_token": credential},
+        "extra_body": {"private_token": credential},
+    }
+    try:
+        if asynchronous:
+            asyncio.run(call(client, surface, **options))
+        else:
+            call(client, surface, **options)
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+        if asynchronous:
+            asyncio.run(client.close())
+        else:
+            client.close()
+    assert len(server[1]) == 1
+    payload = server[1][0]
+    assert credential.encode() not in payload
+    span = ExportTraceServiceRequest.FromString(payload).resource_spans[0].scope_spans[0].spans[0]
+    attributes = {kv.key: kv.value for kv in span.attributes}
+    assert INPUT in attributes["input.value"].string_value
+    assert "extra_headers" not in attributes["input.value"].string_value
+    assert "extra_query" not in attributes["input.value"].string_value
+    assert "extra_body" not in attributes["input.value"].string_value
+
+
+@pytest.mark.skipif(LEGACY, reason="Together 1.x has no raw-response API")
+@pytest.mark.parametrize("response_kind", ["with_raw_response", "with_streaming_response"])
+def test_cached_raw_response_requires_instrumentation_first(server, response_kind):
+    """A raw wrapper cached before instrumentation keeps its original bound method."""
+    client = make_client(server)
+    cached = getattr(client.chat.completions, response_kind)
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = TogetherInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        response = cached.create(model="synthetic-model", messages=[{"role": "user", "content": INPUT}])
+        if response_kind == "with_streaming_response":
+            with response as raw:
+                assert raw.parse().choices[0].message.content == OUTPUT
+        else:
+            assert response.parse().choices[0].message.content == OUTPUT
+        assert exporter.get_finished_spans() == ()
+        readme = Path(__file__).resolve().parents[1].joinpath("README.md").read_text()
+        assert "Instrument before accessing" in readme
+    finally:
+        instrumentor.uninstrument()
+        provider.shutdown()
+        client.close()

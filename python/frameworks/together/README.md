@@ -18,7 +18,7 @@ pip install traceai-together
 
 If an SDK release no longer exposes one of these methods, the instrumentor logs a warning that names the calls it cannot trace. If it finds none of them, it logs an error and leaves `is_instrumented_by_opentelemetry` as `False`.
 
-Calls made through `with_raw_response` or `with_streaming_response` produce a span with request details only, so the instrumentor never reads a response body before your code does.
+Instrument before accessing `with_raw_response` or `with_streaming_response` on a client. The SDK caches these wrappers with a reference to the method available at first access; wrappers accessed before instrumentation will not be traced. Once instrumented, calls through either wrapper produce a span with request details only, without reading the response body before your code does.
 
 If you call Together through the OpenAI client (`base_url="https://api.together.ai/v1"`), use `traceai-openai` instead of this package.
 

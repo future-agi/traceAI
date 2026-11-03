@@ -29,6 +29,15 @@ from traceai_together._with_span import _WithSpan
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# These Together 2+/3.x kwargs configure the HTTP request, not the model input.
+# They can contain bearer tokens, query credentials, and arbitrary private data.
+_TRANSPORT_OPTIONS = frozenset(("extra_headers", "extra_query", "extra_body", "timeout"))
+
+
+def _captured_request_parameters(kwargs: Mapping[str, Any]) -> Dict[str, Any]:
+    """Exclude transport overrides from all recorded request attributes."""
+    return {key: value for key, value in kwargs.items() if key not in _TRANSPORT_OPTIONS}
+
 
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
@@ -88,7 +97,7 @@ class _ChatCompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.chat.completions"
         is_streaming = request_parameters.get("stream", False)
 
@@ -158,7 +167,7 @@ class _AsyncChatCompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.chat.completions"
         is_streaming = request_parameters.get("stream", False)
 
@@ -233,7 +242,7 @@ class _CompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.completions"
         is_streaming = request_parameters.get("stream", False)
 
@@ -303,7 +312,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.completions"
         is_streaming = request_parameters.get("stream", False)
 
@@ -378,7 +387,7 @@ class _EmbeddingsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.embeddings"
 
         with self._start_as_current_span(
@@ -435,7 +444,7 @@ class _AsyncEmbeddingsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
-        request_parameters = dict(kwargs)
+        request_parameters = _captured_request_parameters(kwargs)
         span_name = "together.embeddings"
 
         with self._start_as_current_span(
