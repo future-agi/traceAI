@@ -16,10 +16,14 @@ module TraceAI
       end
       # Both adapters patch Client#request. Installing them together creates
       # duplicate model spans and can change streaming behavior.
-      if ::OpenAI::Client.ancestors.any? { |ancestor| ancestor.name == 'OpenTelemetry::Instrumentation::OpenAI::Patches::Client' }
+      if standard_adapter_installed?
         raise ArgumentError, 'Remove opentelemetry-instrumentation-openai before installing traceai-openai'
       end
       ::OpenAI::Client.prepend(ClientPatch) unless ::OpenAI::Client.ancestors.include?(ClientPatch)
+    end
+
+    def self.standard_adapter_installed?
+      ::OpenAI::Client.ancestors.any? { |ancestor| ancestor.name == 'OpenTelemetry::Instrumentation::OpenAI::Patches::Client' }
     end
 
     def self.value(object, key)
@@ -57,6 +61,9 @@ module TraceAI
                     when 'responses' then 'responses'
                     end
         return super unless operation && req[:method] == :post
+        # Auto-instrumentation can be installed after us. Its Chat patch then
+        # owns the Chat span; Responses is not covered by that adapter.
+        return super if operation == 'chat' && TraceAI::OpenAI.standard_adapter_installed?
 
         body = req[:body]
         model = TraceAI::OpenAI.value(body, :model)
@@ -143,7 +150,14 @@ module TraceAI
       private
 
       def next_event
-        @iterator ||= __getobj__.to_enum
+        # Enumerator#next runs its body in a separate fiber. Activate the model
+        # span inside that fiber, where the SDK reads and decodes the stream;
+        # never make it current in the caller's event-processing fiber.
+        @iterator ||= Enumerator.new do |yielder|
+          OpenTelemetry::Trace.with_span(@span) do
+            __getobj__.each { |event| yielder << event }
+          end
+        end
         event = @iterator.next
         observe(event)
         event

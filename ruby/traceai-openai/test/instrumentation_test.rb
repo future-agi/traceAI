@@ -185,6 +185,54 @@ class InstrumentationTest < Minitest::Test
     ::OpenAI::Internal::Transport::BaseClient.define_method(:request, original) if original
   end
 
+  def test_stream_reads_run_under_model_span_but_user_iteration_keeps_caller_context
+    tracer = OpenTelemetry.tracer_provider.tracer('synthetic-test')
+    raw = Object.new
+    raw.define_singleton_method(:each) do |&block|
+      tracer.in_span('stream-http-read', kind: :client) do
+        block.call(OpenStruct.new(type: :'response.completed', response: OpenStruct.new(model: 'gpt')))
+      end
+    end
+    raw.define_singleton_method(:close) { nil }
+    with_request_result(raw) do
+      tracer.in_span('app-root') do
+        app_span = OpenTelemetry::Trace.current_span
+        stream = @client.responses.stream_raw(model: 'gpt', input: 'secret')
+        assert_same app_span, OpenTelemetry::Trace.current_span
+        stream.each do |_event|
+          assert_same app_span, OpenTelemetry::Trace.current_span
+        end
+      end
+    end
+    model = @spans.find { |span| span.name.start_with?('responses ') }
+    read = @spans.find { |span| span.name == 'stream-http-read' }
+    root = @spans.find { |span| span.name == 'app-root' }
+    assert_equal root.hex_span_id, model.parent_span_id.unpack1('H*')
+    assert_equal model.hex_span_id, read.parent_span_id.unpack1('H*')
+  end
+
+  def test_next_reads_stream_under_model_span_without_changing_caller_context
+    tracer = OpenTelemetry.tracer_provider.tracer('synthetic-test')
+    raw = Object.new
+    raw.define_singleton_method(:each) do |&block|
+      tracer.in_span('next-http-read') { nil }
+      block.call(OpenStruct.new(type: :'response.completed'))
+    end
+    raw.define_singleton_method(:close) { nil }
+    with_request_result(raw) do
+      tracer.in_span('app-root') do
+        app_span = OpenTelemetry::Trace.current_span
+        stream = @client.responses.stream_raw(model: 'gpt', input: 'secret')
+        stream.next
+        assert_same app_span, OpenTelemetry::Trace.current_span
+        stream.close
+      end
+    end
+    model = @spans.find { |span| span.name.start_with?('responses ') }
+    read = @spans.find { |span| span.name == 'next-http-read' }
+    assert_equal model.hex_span_id, read.parent_span_id.unpack1('H*')
+  end
+
   def test_chat_stream_automatically_requests_usage_without_overriding_false
     original = ::OpenAI::Internal::Transport::BaseClient.instance_method(:request)
     bodies = []

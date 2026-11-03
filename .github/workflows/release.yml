@@ -109,6 +109,10 @@ jobs:
             echo "::error::npm releases are pending but neither NPM_TOKEN nor NPM_TRUSTED_PUBLISHING is configured. Complete the RELEASING.md checklist."
             exit 1
           fi
+          if [ "$RELEASE_EVENT" = true ] && [ "$RUBY_PENDING" = true ] && [ "$RUBYGEMS" != true ]; then
+            echo "::error::RubyGems releases are pending but RUBYGEMS_API_KEY is not configured. Complete the RELEASING.md checklist."
+            exit 1
+          fi
           for eco in python typescript java go nuget ruby; do
             enabled=false
             case "$eco" in

@@ -72,9 +72,9 @@ class CredentialGateTests(unittest.TestCase):
 
     def test_ruby_publishing_requires_its_own_credential(self):
         result, outputs = self.run_gate(token=True, ruby_pending=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(outputs['ruby'], 'false')
-        self.assertIn('ruby publishing disabled', result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(outputs, {})
+        self.assertIn('RubyGems releases are pending', result.stdout)
         result, outputs = self.run_gate(token=True, ruby_pending=True, rubygems=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(outputs['ruby'], 'true')
