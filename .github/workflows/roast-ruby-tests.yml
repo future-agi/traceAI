@@ -26,12 +26,12 @@ jobs:
       - name: Install public dependencies
         working-directory: ruby/roast
         env:
-          ROAST_VERSION: ${{ matrix.roast == 'latest' && '' || matrix.roast }}
+          ROAST_VERSION: ${{ matrix.roast }}
         run: bundle install
       - name: Test instrumentation
         working-directory: ruby/roast
         env:
-          ROAST_VERSION: ${{ matrix.roast == 'latest' && '' || matrix.roast }}
+          ROAST_VERSION: ${{ matrix.roast }}
         run: bundle exec ruby -Ilib test/instrumentation_test.rb
       - name: Build RubyGem
         working-directory: ruby/roast

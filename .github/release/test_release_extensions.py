@@ -44,6 +44,14 @@ class ExtensionTests(unittest.TestCase):
             p = release_plan.other_packages(root)[0]
             self.assertEqual((p['version'], p['tag']), ('0.1.7', 'go/openai/v0.1.7'))
 
+    def test_ruby_gem_is_inventoried_but_held_until_publisher_exists(self):
+        root = release_plan.REPO_ROOT
+        gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
+        self.assertEqual([(p['name'], p['version']) for p in gems], [('traceai-roast', '0.1.0')])
+        plan = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
+        self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
+
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:
             p = {'ecosystem': 'go', 'name': 'github.com/future-agi/traceAI/go/openai', 'version': '0.1.0'}
