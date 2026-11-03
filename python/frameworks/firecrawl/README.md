@@ -1,26 +1,28 @@
 # traceAI-firecrawl
 
-OpenTelemetry instrumentation for the Firecrawl v2 client.
+Trace Firecrawl v2 scraping, extraction, agent and browser operations in Future AGI without exporting page bodies, prompts or browser code.
 
-## v1 and v2 are different clients
-
-`firecrawl-py` 4.x ships two clients. The v2 client is `from firecrawl import Firecrawl` (and `AsyncFirecrawl`), and it delegates `scrape`, `search`, `map`, and the crawl methods to `firecrawl.v2.client.FirecrawlClient` (and `firecrawl.v2.client_async.AsyncFirecrawlClient`). The v1 client is `FirecrawlApp`, and it is feature-frozen.
-
-This package wraps the v2 client only. It does not wrap `FirecrawlApp`, and it does not import or disable OpenLIT. OpenLIT's `FireCrawlInstrumentor` wraps `FirecrawlApp.scrape_url` on the v1 client. A user who constructs both clients and enables both instrumentors gets two spans. Pick one.
-
-## Installation
+## Install
 
 ```bash
 pip install traceAI-firecrawl
 ```
 
-## Supported versions
+Supports `firecrawl-py >=4.46.2,<5` on Python 3.10–3.13. Use `Firecrawl` or `AsyncFirecrawl`, not the feature-frozen v1 `FirecrawlApp`. Outside the supported SDK range, `instrument()` logs an error and wraps nothing.
 
-`firecrawl-py >=4.46.2,<5` on Python 3.10, 3.11, 3.12 and 3.13. The tests run on `firecrawl-py==4.46.2`. Outside that range `instrument()` logs an error and wraps nothing.
+## Configure and run
 
-## Usage
+Set your Future AGI credentials and Firecrawl API key in your environment:
+
+```bash
+export FI_API_KEY="your-futureagi-api-key"
+export FI_SECRET_KEY="your-futureagi-secret-key"
+export FIRECRAWL_API_KEY="your-firecrawl-api-key"
+```
 
 ```python
+import os
+
 from firecrawl import Firecrawl
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
@@ -29,63 +31,86 @@ from traceai_firecrawl import FirecrawlInstrumentor
 tracer_provider = register(project_name="firecrawl", project_type=ProjectType.OBSERVE)
 FirecrawlInstrumentor().instrument(tracer_provider=tracer_provider)
 
-# Construct the client after instrument(); see "Client construction order".
-client = Firecrawl(api_key="your-firecrawl-api-key")
+# Construct facade clients after instrumentation.
+client = Firecrawl(api_key=os.environ["FIRECRAWL_API_KEY"])
 client.scrape("https://example.com")
+client.batch_scrape(["https://example.com"], formats=["markdown"])
+
+# Flush before a short-lived script exits.
+tracer_provider.force_flush()
 ```
 
-## What it records
+Open the `firecrawl` project in Future AGI's **Observe** view. You will see `firecrawl.scrape` and `firecrawl.batch_scrape` spans with duration, status and available job metadata. Use the same instrumentation setup with `AsyncFirecrawl` and await its operations.
 
-Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_status` or `cancel_crawl`, sync or async, emits one span named `firecrawl.<method>`. `gen_ai.span.kind` is `RETRIEVER` for `search` and `TOOL` for the others, which fetch the pages they are given. A blocking `crawl()` is one span for the whole call: not one per page and not one per status poll. When the async `crawl()` calls `start_crawl()` internally, that inner call adds no span. The span is current while the SDK runs, so HTTP client spans nest under it.
+## Supported operations
 
-| Attribute | Methods | Value |
-|---|---|---|
-| `server.address` | `scrape`, `map`, `crawl`, `start_crawl` | Host of the target URL. Never the path or query. |
-| `gen_ai.retrieval.query`, `input.value` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
-| `firecrawl.result_count` | `search` | Total returned records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown or malformed shapes omit the attribute. |
-| `firecrawl.formats` | `scrape`, `search`, `crawl`, `start_crawl` | Bounded, deduplicated canonical SDK format names from `formats=` or `scrape_options.formats`. Unknown names, prompts and schemas are omitted. Snake-case aliases use the SDK's API spelling. |
-| `firecrawl.job_id` | `crawl`, `start_crawl`, `get_crawl_status`, `cancel_crawl` | The crawl job id, positional or keyword. The start, status and cancel spans of one job share it. |
-| `firecrawl.limit` | `crawl`, `start_crawl` | The `limit` argument, when passed. |
-| `firecrawl.page_count` | `crawl` | Pages the job completed. |
-| `firecrawl.status` | `crawl`, `get_crawl_status` | Job status from the response (`scraping`, `completed`, `failed`, `cancelled`). |
-| `firecrawl.cancelled` | see "Status" | `true` when the job or the call was cancelled. |
-| `firecrawl.credits_used` | any method whose result carries it | Credits the response reports. Not converted to dollars. |
-| `firecrawl.error.status_code`, `firecrawl.error.code` | any, on a Firecrawl API error | HTTP status and the vendor's machine-readable error code, when present. |
+| API | Methods |
+|---|---|
+| Scrape, search and map | `scrape`, `search`, `map` |
+| Crawl | `crawl`, `start_crawl`, `get_crawl_status`, `cancel_crawl` |
+| Extract | `extract`, `start_extract`, `get_extract_status` |
+| Batch scrape | `batch_scrape`, `start_batch_scrape`, `get_batch_scrape_status`, `get_batch_scrape_status_page`, `get_batch_scrape_errors`, `cancel_batch_scrape` |
+| Agent | `agent`, `start_agent`, `get_agent_status`, `cancel_agent` |
+| Browser | `browser`, `browser_execute`, `delete_browser`, `list_browsers` |
 
-`firecrawl.credits_used` caveat: for crawl jobs, firecrawl-py fills `credits_used` with `0` when the API response omits `creditsUsed`, so a recorded `0` on `crawl` or `get_crawl_status` can mean either "no credits" or "not reported".
+These methods are covered on both sync and async clients. The direct `AsyncFirecrawlClient.wait_batch_scrape` method is also covered. Firecrawl marks its extract endpoint as maintenance-only; existing extract calls remain traceable. For new applications, follow [Firecrawl's extractor selection guide](https://docs.firecrawl.dev/developer-guides/usage-guides/choosing-the-data-extractor).
 
-Format metadata follows SDK 4.46.2's payload: `scrape_options` takes precedence over convenience `formats`. A `ScrapeFormats` container contributes its explicit list and serialized enabled flags, including its default `markdown=true`. The SDK does not serialize its `images` or `json` boolean flags, so those flags add no metadata; explicit format entries still do.
+Each user call emits one span named `firecrawl.<method>`. Blocking calls include the whole wait, not a span per page or internal poll. The span is current while the SDK runs, so separately enabled HTTP client instrumentation nests beneath it. The package does not trace remote agent steps, browser activity between API calls, or other SDK APIs outside this table.
 
-Search counts include `tools` because SDK 4.46.2 returns a list of `DiscoveredTool` discovery records, alongside web/news/image records. The count includes those records, not pages fetched by a tool. The prior generic `data`/`results`/`web` list fallback remains supported; no result contents are exported.
+## Span metadata
 
-### Status
+`gen_ai.span.kind` is `RETRIEVER` for `search` and `TOOL` for the other operations.
 
-- The SDK returns a failed or cancelled crawl job without raising. On a blocking `crawl()`, a job with status `failed` sets the span to ERROR `failed`, and a job with status `cancelled` sets ERROR `cancelled` and `firecrawl.cancelled=true`. A `get_crawl_status` poll that gets an answer stays OK and records the job's state in `firecrawl.status`.
-- `cancel_crawl` sets `firecrawl.cancelled` to the API's answer; the span itself is OK.
-- Cancelling an asyncio task that is awaiting a Firecrawl call ends the span ERROR `cancelled` with `firecrawl.cancelled=true`.
-- Any exception the SDK raises adds one safe exception event and sets ERROR with a recognized exception type (otherwise `Exception`). Exception free text and serialized tracebacks are omitted; the original exception is re-raised unchanged.
+| Attribute | Value |
+|---|---|
+| `server.address` | Target URL host for `scrape`, `map`, `crawl` and `start_crawl`. No path or query. URL lists are not exported. |
+| `gen_ai.retrieval.query`, `input.value` | Search query, API-key redacted and capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`. |
+| `firecrawl.result_count` | Search records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown shapes omit the attribute. |
+| `firecrawl.formats` | Bounded, deduplicated format names for scrape, search, crawl, batch and extract inputs. No prompts or schemas. |
+| `firecrawl.job_id` | Job ID supplied to a lifecycle call or returned by the SDK. Start, status and cancel calls can be correlated using this value. |
+| `firecrawl.session_id` | Browser session ID returned by `browser` or supplied to `browser_execute` and `delete_browser`. Separate from the application tracing `session.id`. |
+| `firecrawl.limit` | Crawl `limit`, when passed. |
+| `firecrawl.page_count` | Completed pages for `crawl`, `batch_scrape` and `wait_batch_scrape`. |
+| `firecrawl.status` | Recognized job state: `scraping`, `processing`, `completed`, `failed` or `cancelled`. |
+| `firecrawl.cancelled` | Cancellation result for cancel APIs, or `true` for a cancelled blocking job or asyncio call. |
+| `firecrawl.credits_used` | Credits reported by the SDK, including `credits_billed` on browser deletion. Not converted to dollars. |
+| `firecrawl.error.status_code`, `firecrawl.error.code` | HTTP status and recognized machine-readable API error code, when present. |
 
-## What it never records
+Job IDs are omitted when neither the caller nor the SDK result provides one. In particular, the SDK's blocking batch result and pagination-page result do not contain an ID. To correlate separate batch operations, use `start_batch_scrape` followed by status and cancel calls with its ID.
 
-This package has no content-capture setting. It never records page content (markdown, HTML, screenshots, links, titles, descriptions), URL paths or query strings, JSON-format prompts or schemas, or the Firecrawl API key. The key is redacted from every attribute the package sets, including a key taken from `FIRECRAWL_API_KEY`. The search query is recorded by design. Error events contain a safe type and generic message; status descriptions contain that type or `cancelled`. Only HTTP status and recognized machine codes are retained from API errors; unknown codes are omitted.
+Credits are recorded only when available on the SDK result. The SDK defaults some crawl/batch credit fields to zero, so zero may mean unreported usage. Its async extract implementation can omit the API's `creditsUsed` field; this integration does not infer missing credits.
 
-Instrumentation errors never reach your code: if reading an argument or a result fails, the call still returns the SDK's result or raises the SDK's exception, and the span still ends.
+Format metadata follows SDK serialization: `scrape_options` takes precedence over convenience `formats`. A `ScrapeFormats` container contributes its explicit list and serialized enabled flags, including its default `markdown=true`. The SDK does not serialize its `images` or `json` boolean flags; explicit format entries still contribute metadata. Search counts include tool discovery records, not pages fetched by those tools.
 
-Pass `config=TraceConfig(...)` from `fi_instrumentation.instrumentation` to `instrument()` to use shared privacy controls. `None` creates `TraceConfig()` using its `FI_*` environment settings; other objects raise `TypeError`. `hide_inputs` or `hide_input_text` omits the search query. `pii_redaction` (or `FI_PII_REDACTION=true`) applies the shared regex redactor to query text before truncation, followed by FITracer attribute masking. Other message, image and output hide flags are not applicable because no messages or page bodies are exported. Shared `suppress_tracing()` emits no Firecrawl spans, and `using_session()` supplies the shared session attribute. If API-key discovery fails, free-text attributes are omitted while safe format/count metadata remains. Error events and status use the separate safe metadata policy described above.
+### Status and errors
+
+- Blocking crawl, batch, extract and agent calls that return a failed or cancelled job end with ERROR. A successful status poll stays OK and records the job state; a rejected request is an error.
+- Cancel APIs record their Boolean result in `firecrawl.cancelled`; the API call itself stays OK.
+- Extract, agent and browser responses with `success=false` end with ERROR `failed`. A browser execution with a nonzero exit code ends with ERROR `execution_failed`.
+- Cancelling an asyncio task ends its span with ERROR `cancelled` and `firecrawl.cancelled=true`.
+- SDK exceptions add one safe exception event and end with ERROR. Exception text and tracebacks are omitted; your code receives the original exception unchanged.
+
+## Privacy
+
+This package has no content-capture setting. It does not export page bodies, screenshots, titles, descriptions, extracted data, agent prompts or results, schemas, browser code or output, CDP/live-view URLs, request URL paths or query strings, or the Firecrawl API key. Search query text is the deliberate exception. The API key is redacted from free-text metadata, including keys resolved from `FIRECRAWL_API_KEY`.
+
+Pass `config=TraceConfig(...)` from `fi_instrumentation.instrumentation` to `instrument()` for shared privacy controls:
+
+- `hide_inputs` or `hide_input_text` omits search query text.
+- `pii_redaction` (or `FI_PII_REDACTION=true`) redacts PII in query text before truncation.
+- `None` uses the shared `FI_*` environment settings. Other config types raise `TypeError`.
+
+Message, image and output hide flags do not add content capture. Shared `suppress_tracing()` suppresses Firecrawl spans; `using_session()` supplies the application session attribute. If API-key discovery fails, free-text metadata is omitted. Instrumentation metadata errors do not replace the SDK's result or exception.
 
 ## Client construction order
 
-`Firecrawl` and `AsyncFirecrawl` copy the v2 client's methods when they are constructed. Call `instrument()` before you construct them:
+`Firecrawl` and `AsyncFirecrawl` copy the v2 client's bound methods during construction. Call `instrument()` first:
 
-- A client constructed before `instrument()` is not traced.
-- A client constructed while instrumented stops tracing at `uninstrument()`.
+- A facade client constructed before instrumentation is not traced; construct a new one afterward.
+- A facade client constructed while instrumented stops tracing at `uninstrument()`.
 
-`FirecrawlClient` and `AsyncFirecrawlClient` used directly look the methods up on every call, so they follow `instrument()` and `uninstrument()` immediately.
+Direct `FirecrawlClient` and `AsyncFirecrawlClient` instances look methods up on each call and follow instrumentation changes immediately. This package does not instrument v1 `FirecrawlApp` or enable or disable other vendors' instrumentors.
 
 ## Watchers
 
-`Firecrawl.watcher()` returns a `Watcher` that polls `get_crawl_status` from its own thread. Each poll is a separate root `firecrawl.get_crawl_status` span with no parent, and a poll error the watcher swallows still shows as an ERROR span. `AsyncFirecrawl.watcher()` polls in the task that iterates it, so its poll spans are children of the span current there.
-
-## Live vendor verification (2026-10-17)
-
-Run as documented above against the real `api.firecrawl.dev` with `firecrawl-py` 4.50.0 and `fi-instrumentation-otel` 1.1.0 on Python 3.12, exporting to Future AGI. `scrape`, `search`, `map`, `start_crawl`, `get_crawl_status`, `cancel_crawl` and a blocking `crawl` each produced one span under an AGENT parent (`fi_verify` PASS, trace `fc0dbe7b-cf70-494e-a5ed-d3b06b91e4df`). A wrong key ended the span ERROR `UnauthorizedError` (HTTP 401), and a free-plan HTTP 429 ended `start_crawl` ERROR `RateLimitError` (trace `0e189c43-63d1-4420-b7c1-42bdb92dbca5`). A scan of every stored column found no page content, URL path or query string, or API key; `FI_HIDE_INPUTS=true` removed the search query. The async client, `watcher()` and failed or cancelled job statuses were not run live and are covered by the test suite only.
+`Firecrawl.watcher()` polls `get_crawl_status` from its own thread. Each poll produces a separate root span; a swallowed poll error still appears as ERROR. `AsyncFirecrawl.watcher()` polls in the iterating task, so its spans inherit that task's current parent.

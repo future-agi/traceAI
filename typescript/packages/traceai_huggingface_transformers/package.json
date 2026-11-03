@@ -1,0 +1,62 @@
+{
+  "name": "@traceai/huggingface-transformers",
+  "version": "0.1.0",
+  "description": "Node.js Transformers.js local pipeline tracing for Future AGI",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "examples"
+  ],
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc -p tsconfig.json",
+    "build:esm": "tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({type: 'module'}))\"",
+    "test": "node --test test/unit.cjs",
+    "test:contract": "node test/contract.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_huggingface_transformers"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.1",
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
+  },
+  "peerDependencies": {
+    "@huggingface/transformers": ">=3.0.0 <5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3",
+    "tsc-alias": "^1.8.16",
+    "@opentelemetry/sdk-trace-node": "^2.0.1",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.202.0"
+  },
+  "engines": {
+    "node": ">=22.13.1"
+  }
+}

@@ -21,6 +21,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 PROMPT_TOKENS = 11
 COMPLETION_TOKENS = 7
@@ -50,7 +51,7 @@ class FakeOpenAI:
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length)
-                if not self.path.rstrip("/").endswith("/chat/completions"):
+                if not urlsplit(self.path).path.rstrip("/").endswith("/chat/completions"):
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 body = json.loads(raw.decode("utf-8") or "{}")

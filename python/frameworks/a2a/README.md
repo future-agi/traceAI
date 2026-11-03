@@ -1,123 +1,110 @@
 # traceAI-a2a
 
-**OpenTelemetry instrumentation for the [Google Agent-to-Agent (A2A) Protocol](https://google.github.io/A2A/) — distributed tracing across multi-agent boundaries.**
-
-[![PyPI](https://img.shields.io/pypi/v/traceAI-a2a)](https://pypi.org/project/traceAI-a2a/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
-[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-1.0+-purple)](https://opentelemetry.io/)
-
----
-
-## The Problem
-
-When an orchestrator agent calls a remote specialist agent over A2A, the trace breaks. The child agent starts a fresh trace. There is no parent-child link, no distributed context propagation, no visibility into what the remote agent did.
-
-`traceai-a2a` fixes this.
-
----
-
-## What Gets Captured
-
-| Data | Attribute |
-|------|-----------|
-| Task ID | `gen_ai.a2a.task.id` |
-| Task State | `gen_ai.a2a.task.state` |
-| Remote Agent URL | `gen_ai.a2a.agent.url` |
-| AgentCard Name | `gen_ai.a2a.agent.card.name` |
-| AgentCard Version | `gen_ai.a2a.agent.card.version` |
-| Message Role | `gen_ai.a2a.message.role` |
-| Message Parts Count | `gen_ai.a2a.message.parts.count` |
-| SSE Streaming | `gen_ai.a2a.streaming` |
-| Artifact Type | `gen_ai.a2a.artifact.type` |
-| Propagated Trace ID | `gen_ai.a2a.propagated_trace_id` |
-
----
+Trace A2A requests across agents in Future AGI using the A2A SDK's native OpenTelemetry spans.
 
 ## Install
 
+Use Python 3.10 or later. This example uses the A2A SDK 1.3 API.
+
 ```bash
-pip install traceAI-a2a
+pip install "traceAI-a2a[a2a]" "a2a-sdk==1.3.0"
 ```
 
-For A2A SDK support:
-```bash
-pip install "traceAI-a2a[a2a]"
-```
+The adapter supports the older `A2AClient` API in SDK 0.2.x and the transport-based clients in SDK 0.3.x and 1.x. Keep your existing `A2AInstrumentor().instrument(tracer_provider=provider)` setup; you do not need a second client instrumentor.
 
----
+## Configure tracing
 
-## Quickstart
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your environment, then configure tracing before creating clients:
 
 ```python
-import os
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_a2a import A2AInstrumentor
 
-os.environ["FI_API_KEY"] = "<your-api-key>"
-os.environ["FI_SECRET_KEY"] = "<your-secret-key>"
-
-# Register tracer provider
-trace_provider = register(
+provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="my_multi_agent_app"
+    project_name="agent-workflows",
 )
-
-# Instrument A2A — tracing propagates across agent boundaries automatically
-A2AInstrumentor().instrument(tracer_provider=trace_provider)
-
-# Now use A2AClient as normal — both agents appear in the same trace!
-from a2a.client import A2AClient
-import httpx
-
-async with httpx.AsyncClient() as http_client:
-    client = A2AClient(httpx_client=http_client, url="http://specialist-agent:8080")
-    task_id = await client.send_task(
-        payload={
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": "Summarize the Q3 report"}]
-            }
-        }
-    )
+A2AInstrumentor().instrument(tracer_provider=provider)
 ```
 
----
+The adapter routes A2A's native tracers to this provider without replacing the global OpenTelemetry provider. It enriches the native client operation rather than creating a second client span. Private transport-helper spans are suppressed within that operation.
 
-## How It Works
+## Send a message
 
-```
-Orchestrator Agent                      Specialist Agent
-─────────────────                       ────────────────
-[span: A2A_CLIENT]                      [span: A2A_SERVER]  ← child of A2A_CLIENT span
-  task_id: abc123          ────────────→   task_id: abc123
-  agent_url: http://...    traceparent     message_role: user
-  streaming: false         header injected  [span: LLM]
-  task_state: completed ←────────────       model: gpt-4
-```
-
-Both spans share **the same trace ID** — giving you end-to-end visibility across agent boundaries in a single FutureAGI trace view.
-
----
-
-## ASGI Server Middleware
-
-For the receiving agent (Starlette/FastAPI):
+Point `A2A_AGENT_URL` at your agent's base URL. The SDK discovers its agent card and selects a supported transport.
 
 ```python
-from starlette.applications import Starlette
-from traceai_a2a import A2ATracingMiddleware
+import asyncio
+import os
+from uuid import uuid4
 
-app = Starlette()
-app.add_middleware(A2ATracingMiddleware, tracer_provider=trace_provider)
+import httpx
+from a2a.client import ClientConfig, create_client
+from a2a.types import SendMessageRequest
+
+
+async def main():
+    async with httpx.AsyncClient() as http:
+        client = await create_client(
+            os.environ["A2A_AGENT_URL"],
+            client_config=ClientConfig(httpx_client=http, streaming=False),
+        )
+        try:
+            request = SendMessageRequest(
+                message={
+                    "message_id": str(uuid4()),
+                    "role": 1,  # ROLE_USER
+                    "parts": [{"text": "Summarize the latest release notes."}],
+                }
+            )
+            async for event in client.send_message(request):
+                print(event)
+        finally:
+            await client.close()
+
+
+try:
+    asyncio.run(main())
+finally:
+    provider.force_flush()
 ```
 
-The middleware automatically extracts the incoming `traceparent` header and creates child spans in the distributed trace.
+In Future AGI, open **Observe**, select `agent-workflows`, and open the latest trace. The native `a2a-python-sdk` client span includes the operation, message role and part count, endpoint origin, streaming flag, and task ID/state when the response contains them. A2A does not itself perform a model call, so these spans do not include token usage or model costs.
 
----
+## Receive requests
 
-## See Also
+The receiving service must extract incoming trace context. If your ASGI application does not already have OpenTelemetry HTTP server middleware, wrap the A2A application:
 
-- [traceAI Documentation](https://docs.futureagi.com)
-- [A2A Protocol Specification](https://google.github.io/A2A/)
-- [Examples](./examples/multi_agent_demo.py)
+```python
+from traceai_a2a import A2ATracingMiddleware
+
+# a2a_app is your existing A2A ASGI application.
+app = A2ATracingMiddleware(a2a_app, tracer_provider=provider)
+```
+
+An existing outer OpenTelemetry `SERVER` span is reused. Configure your model/framework instrumentation separately to see the receiving agent's internal work beneath it. For gRPC servers, use an OpenTelemetry gRPC server interceptor to extract the propagated metadata; the ASGI middleware only handles HTTP.
+
+## Close streams when stopping early
+
+Use `ClientConfig(streaming=True)` for an agent that supports streaming. A client span stays open until the stream is exhausted or explicitly closed. Use `aclosing` if you may stop early:
+
+```python
+from contextlib import aclosing
+
+async with aclosing(client.send_message(request)) as events:
+    async for event in events:
+        print(event)
+        break
+```
+
+The adapter also supports direct transport `send_message_streaming()` calls. Span context is active while the SDK advances the stream, not while your application handles a yielded event.
+
+## Privacy and troubleshooting
+
+- Message bodies, artifacts, authentication headers, URL credentials/paths/queries, and exception messages/stack traces are not captured by this adapter. Task IDs and endpoint origins are recorded. Other instrumentors and application spans have their own privacy settings.
+- Preserve `OTEL_INSTRUMENTATION_A2A_SDK_ENABLED=true` when using the adapter. If native tracing is disabled, installation raises an error rather than reporting success without instrumenting clients.
+- Configure tracing once at startup. To restore the original SDK methods, call `A2AInstrumentor().uninstrument()` after active requests and streams finish.
+- A bare `break` does not close an async iterator. Use `aclosing` to finish the span deterministically.
+
+See the [A2A Python SDK](https://github.com/a2aproject/a2a-python) and the [complete example](examples/multi_agent_demo.py).
