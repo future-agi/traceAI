@@ -4,7 +4,7 @@
 exporter with your Future AGI endpoint, both authentication headers and a `project_name` resource
 attribute. There is no `traceai-arconia` module and no second tracing SDK to initialize.
 
-The example uses Java 21, Spring Boot 4.1.1 and Arconia 0.31.0. It also supports Arconia 0.30.0.
+The example uses Java 21, Spring Boot 4.1.1 and Arconia 0.32.0. It also supports Arconia 0.30.0 and 0.31.0.
 
 ## Error-detail privacy
 
@@ -49,8 +49,8 @@ curl localhost:8080/hello
 ```
 
 `application.yaml` disables metrics and logs, uses HTTP/protobuf, and reads authentication values
-from environment placeholders. Leave the protocol unset: on Arconia 0.30.0 and 0.31.0, the spelling
-`http-protobuf` prevents exporter registration. Stop normally to flush the final batch.
+from environment placeholders. Leave the protocol unset for compatibility: on Arconia 0.30.0 and 0.31.0, the spelling
+`http-protobuf` prevents exporter registration. Arconia 0.32.0 accepts it. Stop normally to flush the final batch.
 
 ## Offline tests
 

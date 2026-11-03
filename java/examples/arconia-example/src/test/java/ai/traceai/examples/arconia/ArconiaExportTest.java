@@ -126,10 +126,12 @@ class ArconiaExportTest {
     }
 
     @Test
-    void documentedProtocolValueHttpProtobufSilentlyDisablesTheExporterOnThisArconiaVersion() throws Exception {
-        // Arconia 0.30.0 and 0.31.0 document "http-protobuf" but only register the HTTP exporter for "http_protobuf".
-        // If this test starts failing, upstream fixed it and the page can drop the warning.
-        assertTrue(run(Map.of("arconia.otel.traces.exporter.otlp.protocol", "http-protobuf"), "/hello").isEmpty());
+    void protocolSpellingsMatchTheConfiguredArconiaRelease() throws Exception {
+        // 0.32.0 fixed the documented spelling; the older releases still need the protocol unset.
+        String version = System.getProperty("arconia.version", "0.32.0");
+        boolean oldRelease = Set.of("0.30.0", "0.31.0").contains(version);
+        assertEquals(oldRelease,
+                run(Map.of("arconia.otel.traces.exporter.otlp.protocol", "http-protobuf"), "/hello").isEmpty());
         assertFalse(run(Map.of("arconia.otel.traces.exporter.otlp.protocol", "http_protobuf"), "/hello").isEmpty());
     }
 

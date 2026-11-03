@@ -18,8 +18,8 @@
     <properties>
         <java.version>21</java.version>
         <traceai.version>${project.version}</traceai.version>
-        <!-- Pre-GA, roughly monthly releases. 0.31.0 is the tested version. 0.30.0 was also run (-Darconia.version=0.30.0). -->
-        <arconia.version>0.31.0</arconia.version>
+        <!-- Pre-GA, roughly monthly releases. 0.32.0 is the tested version. 0.30.0 was also run (-Darconia.version=0.30.0). -->
+        <arconia.version>0.32.0</arconia.version>
         <opentelemetry-proto.version>1.11.1-alpha</opentelemetry-proto.version>
         <!-- opentelemetry-proto 1.11.1-alpha is generated with protobuf 4.36.2; Spring Boot manages an older runtime. -->
         <protobuf-java.version>4.36.2</protobuf-java.version>
