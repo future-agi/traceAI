@@ -208,6 +208,8 @@ public final class TracingHttpClient implements HttpClient {
         private final OpenAITrace trace;
         private final AtomicBoolean closed = new AtomicBoolean();
         private InputStream body;
+        private OpenAITrace.Capture responseCapture;
+        private boolean exhausted;
 
         Response(HttpResponse delegate, OpenAITrace trace) {
             this.delegate = delegate;
@@ -232,12 +234,12 @@ public final class TracingHttpClient implements HttpClient {
             try (Scope scope = trace.makeCurrent()) {
                 boolean streaming = headers().values("content-type").stream()
                     .anyMatch(value -> value.toLowerCase(java.util.Locale.ROOT).startsWith("text/event-stream"));
-                body = new FilterInputStream(delegate.body()) {
-                    private final OpenAITrace.Capture captured = new OpenAITrace.Capture();
+                InputStream stream = delegate.body();
+                responseCapture = streaming ? null : new OpenAITrace.Capture();
+                body = new FilterInputStream(stream) {
                     private final OpenAITrace.Capture line = new OpenAITrace.Capture();
                     private final StringBuilder event = new StringBuilder();
                     private boolean eventOverflow;
-                    private boolean exhausted;
 
                     @Override public int read() throws IOException {
                         byte[] one = new byte[1];
@@ -248,16 +250,12 @@ public final class TracingHttpClient implements HttpClient {
                             int count = in.read(b, off, len);
                             if (count < 0 && !exhausted) {
                                 exhausted = true;
-                                if (!streaming) {
-                                    byte[] bytes = captured.completeBytes();
-                                    if (bytes != null) trace.response(bytes);
-                                }
                                 // EOF without the SSE completion marker is not a successful generation.
-                                trace.end(!streaming);
+                                trace.end(!streaming && trace.response(responseCapture.completeBytes()));
                             } else if (count > 0) {
                                 if (streaming) {
                                     for (int i = off; i < off + count; i++) accept(b[i]);
-                                } else captured.write(b, off, count);
+                                } else responseCapture.write(b, off, count);
                             }
                             return count;
                         } catch (IOException | RuntimeException | Error error) {
@@ -322,7 +320,11 @@ public final class TracingHttpClient implements HttpClient {
                 throw OpenAITrace.propagate(error);
             } finally {
                 responses.remove(this);
-                trace.end(false);
+                // The SDK parses one JSON object and closes without reading EOF. Parse only bytes
+                // already observed; a partial or oversized capture must remain closed-early.
+                boolean complete = !exhausted && responseCapture != null
+                    && trace.response(responseCapture.completeBytes());
+                trace.end(complete);
             }
         }
     }

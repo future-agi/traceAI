@@ -7,7 +7,7 @@ async futures, and closeable streams.
 ## Configure the transport
 
 Initialize TraceAI once using your application's Future AGI configuration, or supply
-an existing `FITracer` as the second argument to `wrap`. With OpenAI Java 4.95.0:
+an existing `FITracer` as the second argument to `wrap`. With OpenAI Java 4.96.0:
 
 ```java
 import ai.traceai.TraceAI;
@@ -42,7 +42,7 @@ try {
 ```
 
 The OpenAI SDK is a **provided** dependency: your application supplies its version.
-The adapter uses the HTTP interfaces shared by 0.8.0 and 4.95.0, not generated model
+The adapter uses the HTTP interfaces shared by 0.8.0 and 4.96.0, not generated model
 classes. The legacy facade below still uses the 0.8 model packages.
 
 ## Streaming and asynchronous calls

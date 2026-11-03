@@ -49,6 +49,39 @@ class TracingHttpClientTest {
         assertThat(spans().get(0).getAttributes().get(AttributeKey.booleanKey("traceai.response.closed_early"))).isTrue();
     }
 
+    @Test void closeAfterCompleteJsonWithoutEofRecordsMetadataButIncompleteCaptureDoesNot() throws Exception {
+        String json = "{\"id\":\"r1\",\"model\":\"served\",\"output\":\"hello\",\"usage\":{\"total_tokens\":5}}";
+        var raw = new FakeResponse("application/json", json);
+        int readsBeforeClose;
+        try (var response = TracingHttpClient.wrap(new FakeTransport(raw), tracer).execute(request("responses", "{}"))) {
+            assertThat(response.body().readNBytes(json.getBytes(StandardCharsets.UTF_8).length))
+                .isEqualTo(json.getBytes(StandardCharsets.UTF_8));
+            readsBeforeClose = raw.reads.get();
+        }
+        assertThat(raw.reads.get()).isEqualTo(readsBeforeClose); // Closing must never drain the HTTP stream.
+        assertThat(attr(spans().get(0), "gen_ai.response.id")).isEqualTo("r1");
+        assertThat(spans().get(0).getAttributes().get(AttributeKey.longKey("gen_ai.usage.total_tokens"))).isEqualTo(5);
+        assertThat(spans().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+        assertThat(spans().get(0).getAttributes().get(AttributeKey.booleanKey("traceai.response.closed_early"))).isNull();
+
+        for (String partial : List.of(json.substring(0, json.length() - 1),
+                "{\"output\":\"" + "x".repeat(OpenAITrace.LIMIT + 1) + "\"}")) {
+            var incomplete = new FakeResponse("application/json", partial);
+            int readCount;
+            try (var response = TracingHttpClient.wrap(new FakeTransport(incomplete), tracer)
+                    .execute(request("responses", "{}"))) {
+                response.body().readNBytes(partial.getBytes(StandardCharsets.UTF_8).length);
+                readCount = incomplete.reads.get();
+            }
+            assertThat(incomplete.reads.get()).isEqualTo(readCount);
+        }
+        for (var span : spans().subList(1, 3)) {
+            assertThat(span.getAttributes().get(AttributeKey.booleanKey("traceai.response.closed_early"))).isTrue();
+            assertThat(attr(span, "output.value")).isNull();
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.UNSET);
+        }
+    }
+
     @Test void eofRecordsModelsUsageRolesAndTheOriginalParent() throws Exception {
         String json = "{\"id\":\"r1\",\"model\":\"served\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}";
         var raw = new FakeResponse("application/json", json);

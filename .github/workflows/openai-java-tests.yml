@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   compatibility:
-    name: Offline OpenAI 0.8.0 and 4.95.0 / Java ${{ matrix.java }}
+    name: Offline OpenAI 0.8.0 and 4.96.0 / Java ${{ matrix.java }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

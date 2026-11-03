@@ -59,8 +59,16 @@ final class OpenAITrace {
         });
     }
 
-    synchronized void response(byte[] bytes) {
-        safely(() -> json(JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject()));
+    synchronized boolean response(byte[] bytes) {
+        if (bytes == null || ended.get()) return false;
+        try {
+            json(JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject());
+            return true;
+        } catch (RuntimeException ignored) {
+            // A partial or invalid capture cannot establish a successful response.
+            span.setAttribute("traceai.capture.skipped", true);
+            return false;
+        }
     }
 
     synchronized void event(String data) {

@@ -13,6 +13,10 @@ import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.embeddings.EmbeddingCreateParams;
 import com.openai.models.responses.ResponseCreateParams;
 import com.sun.net.httpserver.HttpServer;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
+import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
@@ -69,6 +73,14 @@ class ModernOpenAIClientTest {
         }
         assertThat(exporter.getFinishedSpanItems()).hasSize(2);
         assertThat(attr(exporter.getFinishedSpanItems().get(0), "gen_ai.request.model")).isEqualTo("model");
+        for (var span : exporter.getFinishedSpanItems()) {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+            assertThat(attr(span, "gen_ai.response.id")).isEqualTo("c1");
+            assertThat(attr(span, "gen_ai.response.model")).isEqualTo("model");
+            assertThat(attr(span, "output.value")).isEqualTo("hello");
+            assertThat(span.getAttributes().get(AttributeKey.longKey("gen_ai.usage.total_tokens"))).isEqualTo(5);
+            assertThat(span.getAttributes().get(AttributeKey.booleanKey("traceai.response.closed_early"))).isNull();
+        }
     }
 
     @Test void nativeResponsesSyncAndAsyncRemainAvailable() throws Exception {
@@ -85,6 +97,47 @@ class ModernOpenAIClientTest {
         }
         assertThat(exporter.getFinishedSpanItems()).hasSize(2);
         assertThat(attr(exporter.getFinishedSpanItems().get(0), "gen_ai.operation.name")).isEqualTo("responses");
+        for (var span : exporter.getFinishedSpanItems()) {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+            assertThat(attr(span, "gen_ai.response.id")).isEqualTo("r1");
+            assertThat(attr(span, "gen_ai.response.model")).isEqualTo("model");
+            assertThat(attr(span, "output.value")).contains("hello");
+            assertThat(span.getAttributes().get(AttributeKey.longKey("gen_ai.usage.total_tokens"))).isEqualTo(5);
+            assertThat(span.getAttributes().get(AttributeKey.booleanKey("traceai.response.closed_early"))).isNull();
+        }
+    }
+
+    @Test void nativeResponsesCloseProducesCompleteOtlpMetadata() throws Exception {
+        var received = new LinkedBlockingQueue<byte[]>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/traces", exchange -> {
+            received.add(exchange.getRequestBody().readAllBytes());
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        server.start();
+        try (var otlp = OtlpHttpSpanExporter.builder()
+                .setEndpoint("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/traces").build();
+             var sdk = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(otlp)).build()) {
+            var wireTracer = new FITracer(sdk.get("native-wire"), TraceConfig.builder().build());
+            var client = new OpenAIClientImpl(ClientOptions.builder()
+                .httpClient(TracingHttpClient.wrap(new FakeTransport(new FakeResponse("application/json", RESPONSE)), wireTracer))
+                .apiKey("offline-not-a-key").maxRetries(0).build());
+            try (AutoCloseable close = client::close) { assertThat(client.responses().create(response()).id()).isEqualTo("r1"); }
+            byte[] bytes = received.poll(5, TimeUnit.SECONDS);
+            assertThat(bytes).isNotNull();
+            var spans = ExportTraceServiceRequest.parseFrom(bytes).getResourceSpans(0).getScopeSpans(0).getSpansList();
+            assertThat(spans).hasSize(1);
+            var span = spans.get(0);
+            assertThat(span.getStatus().getCode().name()).isEqualTo("STATUS_CODE_OK");
+            var attributes = span.getAttributesList().stream().collect(java.util.stream.Collectors.toMap(
+                attribute -> attribute.getKey(), attribute -> attribute.getValue()));
+            assertThat(attributes.get("gen_ai.response.id").getStringValue()).isEqualTo("r1");
+            assertThat(attributes.get("output.value").getStringValue()).contains("hello");
+            assertThat(attributes.get("gen_ai.usage.total_tokens").getIntValue()).isEqualTo(5);
+            assertThat(attributes).doesNotContainKey("traceai.response.closed_early");
+            assertThat(span.toString()).doesNotContain("offline-not-a-key");
+        } finally { server.stop(0); }
     }
 
     @Test void nativeEmbeddingsRemainAvailable() throws Exception {
