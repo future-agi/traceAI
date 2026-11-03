@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-weaviate"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for Weaviate vector database"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -26,7 +26,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.2.2"
 weaviate-client = ">=4.0.0"
 wrapt = ">=1.0.0"
 
