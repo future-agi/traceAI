@@ -76,6 +76,11 @@ def _result(span: Any, value: Any, content: bool) -> None:
     if isinstance(model, str):
         span.set_attribute(A.GEN_AI_RESPONSE_MODEL, model)
     _usage(span, value)
+    if _field(value, "status") in ("failed", "incomplete"):
+        # A 200 Responses body can still represent a failed/incomplete generation.
+        # Never export its error message or partial output.
+        span.set_status(Status(StatusCode.ERROR))
+        return
     if content:
         text = _text(value)
         if text:
@@ -88,10 +93,21 @@ def _input(span: Any, operation: str, kwargs: dict[str, Any], content: bool) -> 
     value = kwargs.get("messages") if operation == "chat" else kwargs.get("input")
     if value is None or operation == "embeddings":
         return  # Embedding input can contain arbitrary binary/image payloads.
-    try:
-        serialized = json.dumps(value, default=lambda obj: obj.model_dump(exclude_none=True))
-    except (TypeError, ValueError, AttributeError):
+    # Never serialize multimodal objects wholesale into input.value: the generic
+    # attribute cannot distinguish text from an inline image, URL or tool data.
+    # Keep only plain chat messages and plain text Responses inputs.
+    if operation == "chat":
+        if not isinstance(value, (list, tuple)) or any(
+            not isinstance(msg, dict) or not isinstance(msg.get("content"), str)
+            for msg in value
+        ):
+            return
+        value = [{"role": msg.get("role"), "content": msg["content"]} for msg in value]
+    elif not isinstance(value, str):
         return
+    if "data:image/" in str(value).lower():
+        return
+    serialized = json.dumps(value)
     span.set_attribute(A.INPUT_VALUE, serialized[:_LIMIT])
     span.set_attribute(A.INPUT_MIME_TYPE, "application/json")
 
@@ -107,6 +123,7 @@ class _Stream:
     def __init__(self, source: Any, span: Any, content: bool):
         self._source, self._span, self._content = source, span, content
         self._ended = False
+        self._failed = False
         self._pieces: list[str] = []
         self._length = 0
 
@@ -118,18 +135,20 @@ class _Stream:
         # the event itself. The final response supersedes individual deltas.
         event_type = _field(chunk, "type")
         completed = _field(chunk, "response")
-        if event_type in ("response.completed", "response.failed") and completed:
+        if _field(chunk, "error") is not None or event_type in ("response.failed", "response.incomplete"):
+            self._failed = True
+            self._pieces.clear()
+            self._span.set_status(Status(StatusCode.ERROR))
+        if event_type in ("response.completed", "response.failed", "response.incomplete") and completed:
             _result(self._span, completed, False)
-            if event_type == "response.failed":
-                self._span.set_status(Status(StatusCode.ERROR))
-            if self._content:
+            if not self._failed and self._content:
                 text = _text(completed)
                 if text:
                     self._pieces = [text[:_LIMIT]]
                     self._length = len(self._pieces[0])
             return
         _result(self._span, chunk, False)
-        if self._content and self._length < _LIMIT:
+        if not self._failed and self._content and self._length < _LIMIT:
             text = _field(chunk, "delta") if event_type == "response.output_text.delta" else _text(chunk)
             if isinstance(text, str):
                 text = text[: _LIMIT - self._length]
@@ -141,7 +160,7 @@ class _Stream:
             self._ended = True
             if not complete:
                 self._span.set_attribute("openrouter.stream.incomplete", True)
-            if self._pieces and complete:
+            if self._pieces and complete and not self._failed:
                 self._span.set_attribute(A.OUTPUT_VALUE, "".join(self._pieces))
             self._span.end()
 
@@ -150,7 +169,8 @@ class _Stream:
 
     def __next__(self):
         try:
-            chunk = next(self._source)
+            with trace.use_span(self._span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
+                chunk = next(self._source)
         except StopIteration:
             self._finish()
             raise
@@ -166,7 +186,8 @@ class _Stream:
 
     async def __anext__(self):
         try:
-            chunk = await self._source.__anext__()
+            with trace.use_span(self._span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
+                chunk = await self._source.__anext__()
         except StopAsyncIteration:
             self._finish()
             raise
@@ -219,17 +240,23 @@ def _start(tracer: Any, operation: str, kwargs: dict[str, Any], config: TraceCon
     if isinstance(model, str):
         attrs[A.GEN_AI_REQUEST_MODEL] = model
     span = tracer.start_span("openrouter." + operation, attributes=attrs, fi_span_kind=kind)
-    _input(span, operation, kwargs, not (config.hide_inputs or config.hide_input_text))
+    # Generic input.value bypasses message/image redaction, so omit it for
+    # every directional privacy setting (including images embedded in strings).
+    capture_input = not (
+        config.hide_inputs or config.hide_input_text or config.hide_input_messages or config.hide_input_images
+    )
+    _input(span, operation, kwargs, capture_input)
     return span
 
 
 def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
     def complete(span, result):
+        capture_output = not (config.hide_outputs or config.hide_output_text or config.hide_output_messages)
         if hasattr(result, "__anext__"):
-            return _AsyncStream(result, span, not (config.hide_outputs or config.hide_output_text))
+            return _AsyncStream(result, span, capture_output)
         if hasattr(result, "__next__"):
-            return _Stream(result, span, not (config.hide_outputs or config.hide_output_text))
-        _result(span, result, not (config.hide_outputs or config.hide_output_text))
+            return _Stream(result, span, capture_output)
+        _result(span, result, capture_output)
         span.end()
         return result
 
@@ -237,7 +264,9 @@ def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
         async def wrapped(wrapped, instance, args, kwargs):
             span = _start(tracer, operation, kwargs, config)
             try:
-                return complete(span, await wrapped(*args, **kwargs))
+                with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
+                    result = await wrapped(*args, **kwargs)
+                return complete(span, result)
             except BaseException as exc:
                 _failure(span, exc)
                 raise
@@ -245,7 +274,9 @@ def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
         def wrapped(wrapped, instance, args, kwargs):
             span = _start(tracer, operation, kwargs, config)
             try:
-                return complete(span, wrapped(*args, **kwargs))
+                with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
+                    result = wrapped(*args, **kwargs)
+                return complete(span, result)
             except BaseException as exc:
                 _failure(span, exc)
                 raise
