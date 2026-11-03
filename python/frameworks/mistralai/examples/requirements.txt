@@ -1,1 +1,2 @@
-mistralai
+traceAI-mistralai
+mistralai>=3.6,<4

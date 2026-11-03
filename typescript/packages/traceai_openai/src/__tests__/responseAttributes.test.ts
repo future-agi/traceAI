@@ -178,7 +178,7 @@ describe('Response Attributes Functions', () => {
           {
             type: 'computer_call_output',
             call_id: 'computer_123',
-            output: { screenshot: 'base64_data...' },
+            output: { type: 'computer_screenshot', image_url: 'data:image/png;base64,synthetic' },
           },
         ],
       };
@@ -189,7 +189,9 @@ describe('Response Attributes Functions', () => {
       expect(messages).toHaveLength(1);
       expect(messages[0].role).toBe('tool');
       expect(messages[0].tool_call_id).toBe('computer_123');
-      expect(messages[0].content).toBe('{"screenshot":"base64_data..."}');
+      expect(messages[0].content).toEqual([
+        { type: 'input_image', image_url: 'data:image/png;base64,synthetic' },
+      ]);
     });
 
     it('should handle file search call items without results', () => {
@@ -249,7 +251,9 @@ describe('Response Attributes Functions', () => {
     it('should handle missing input field', () => {
       const body = {};
 
-      expect(() => getResponsesInputMessagesAttributes(body as any)).toThrow();
+      expect(getResponsesInputMessagesAttributes(body as any)).toEqual({
+        [SemanticConventions.LLM_INPUT_MESSAGES]: "[]",
+      });
     });
   });
 

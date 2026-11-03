@@ -2,7 +2,6 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
   diag,
@@ -11,14 +10,13 @@ import {
   SpanKind,
   Attributes,
   SpanStatusCode,
-  Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
@@ -26,35 +24,41 @@ import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  generateTraceConfig,
 } from "@traceai/fi-core";
 
-const MODULE_NAME = "openai";
+import {
+  observeResponse,
+  observeStream,
+  spanEnder,
+  StreamChunk,
+} from "./response";
+
+type Create = (
+  this: unknown,
+  body: ChatCompletionRequest | CompletionRequest,
+  options?: Record<string, unknown>,
+) => Promise<unknown>;
+interface ResourcePrototype {
+  create: Create & { __wrapped?: boolean };
+}
+interface OpenAIModule {
+  OpenAI?: OpenAIModule;
+  default?: OpenAIModule;
+  Chat?: { Completions?: { prototype: ResourcePrototype } };
+  Completions?: { prototype: ResourcePrototype };
+}
 
 /**
  * Flag to check if the vLLM module has been patched
  */
-let _isFIPatched = false;
+let patchedTargets = 0;
 
 /**
  * Function to check if instrumentation is enabled / disabled
  */
 export function isPatched() {
-  return _isFIPatched;
-}
-
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
+  return patchedTargets > 0;
 }
 
 // Type definitions for OpenAI-compatible API
@@ -171,382 +175,278 @@ export class VLLMInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
   private _baseUrlPattern?: string | RegExp;
+  private readonly modules = new Set<OpenAIModule>();
+  private readonly patches = new Map<ResourcePrototype, Create>();
+  private hideInputPayload = false;
+  private hideOutputPayload = false;
 
   constructor(config: VLLMInstrumentationConfig = {}) {
-    super(
-      "@traceai/vllm",
-      VERSION,
-      Object.assign({}, config.instrumentationConfig),
-    );
+    // InstrumentationBase can call enable() before subclass fields/configuration exist.
+    super("@traceai/vllm", VERSION, {
+      ...config.instrumentationConfig,
+      enabled: false,
+    });
     this._traceConfig = config.traceConfig;
     this._baseUrlPattern = config.baseUrlPattern;
+    this.setConfig(config.instrumentationConfig ?? {});
+    this.refreshTracer();
+    if (config.instrumentationConfig?.enabled !== false) this.enable();
+  }
+
+  private refreshTracer() {
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this._traceConfig,
+    });
+    const privacy = generateTraceConfig(this._traceConfig);
+    // The raw body, invocation extras and tool definitions duplicate message content.
+    // Fine-grained core masking cannot safely redact arbitrary nested payloads, so
+    // omit content-bearing aliases whenever any corresponding privacy flag is set.
+    this.hideInputPayload =
+      privacy.hideInputs ||
+      privacy.hideInputMessages ||
+      privacy.hideInputText ||
+      privacy.hideInputImages;
+    this.hideOutputPayload =
+      privacy.hideOutputs || privacy.hideOutputMessages || privacy.hideOutputText;
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   public override enable(): void {
+    this.refreshTracer();
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    for (const module of this.modules) this.patch(module);
+  }
+
+  public override disable(): void {
+    super.disable();
+    for (const target of [...this.patches.keys()]) this.restore(target);
   }
 
   public readonly instrumentationName = "@traceai/vllm";
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
+    return new InstrumentationNodeModuleDefinition(
       "openai",
       [">=4.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
-    return module;
   }
 
-  /**
-   * Manually instruments the OpenAI module for vLLM
-   */
+  /** Manually instrument a loaded CJS export or an immutable ESM namespace. */
   manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
+    this.modules.add(module as OpenAIModule);
+    if (this.isEnabled()) this.patch(module as OpenAIModule);
   }
 
-  /**
-   * Checks if a request is targeting a vLLM server
-   */
-  private isVLLMRequest(client: unknown): boolean {
-    if (!this._baseUrlPattern) {
-      return true; // Instrument all requests if no pattern specified
-    }
-    const baseURL = (client as { baseURL?: string })?.baseURL;
-    if (!baseURL) return false;
-
-    if (typeof this._baseUrlPattern === "string") {
+  private isVLLMRequest(resource: unknown): boolean {
+    if (!this._baseUrlPattern) return true;
+    const value = resource as
+      | {
+          _client?: { baseURL?: string };
+          client?: { baseURL?: string };
+          baseURL?: string;
+        }
+      | undefined;
+    const baseURL =
+      value?._client?.baseURL ?? value?.client?.baseURL ?? value?.baseURL;
+    if (typeof baseURL !== "string") return false;
+    if (typeof this._baseUrlPattern === "string")
       return baseURL.includes(this._baseUrlPattern);
-    }
-    return this._baseUrlPattern.test(baseURL);
+    // RegExp g/y flags must not make identical calls alternate between traced/untraced.
+    return new RegExp(
+      this._baseUrlPattern.source,
+      this._baseUrlPattern.flags,
+    ).test(baseURL);
   }
 
-  /**
-   * Patches the OpenAI module for vLLM
-   */
-  private patch(
-    module: Record<string, unknown> & { fiVLLMPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiVLLMPatched || _isFIPatched) {
-      return module;
-    }
+  private targets(module: OpenAIModule) {
+    const sdk = module.OpenAI ?? module.default ?? module;
+    return [sdk.Chat?.Completions?.prototype, sdk.Completions?.prototype];
+  }
 
-    const instrumentation: VLLMInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the OpenAI class
-    const OpenAI = module.OpenAI as {
-      prototype: {
-        chat?: { completions?: { create?: unknown } };
-        completions?: { create?: unknown };
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      // Patch chat.completions.create
-      if (OpenAI.prototype.chat?.completions && typeof (OpenAI.prototype.chat.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.chat.completions as Record<string, unknown>,
-          "create",
-          this.createChatCompletionWrapper(instrumentation),
+  private patch(module: OpenAIModule) {
+    this.refreshTracer();
+    let found = false;
+    this.targets(module).forEach((target, index) => {
+      if (!target || typeof target.create !== "function") return;
+      found = true;
+      if (this.patches.has(target)) return;
+      // Do not replace another owner (including @traceai/openai) or stack duplicate spans.
+      if (target.create.__wrapped) {
+        diag.warn(
+          "@traceai/vllm: resource already instrumented; use only one OpenAI client instrumentor",
         );
+        return;
       }
-
-      // Patch completions.create
-      if (OpenAI.prototype.completions && typeof (OpenAI.prototype.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          OpenAI.prototype.completions as Record<string, unknown>,
-          "create",
-          this.createCompletionWrapper(instrumentation),
-        );
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiVLLMPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiVLLMPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
+      this._wrap(
+        target,
+        "create",
+        index === 0
+          ? this.createChatCompletionWrapper(this)
+          : this.createCompletionWrapper(this),
+      );
+      this.patches.set(target, target.create);
+      patchedTargets++;
+    });
+    if (!found)
+      diag.warn(
+        "@traceai/vllm: no supported OpenAI resource prototypes found; nothing patched",
+      );
     return module;
   }
 
-  /**
-   * Creates a wrapper for chat.completions.create
-   */
+  private restore(target: ResourcePrototype) {
+    const owned = this.patches.get(target);
+    if (!owned) return;
+    // Never unwrap a replacement installed by another owner after this instrumentor.
+    if (target.create === owned) this._unwrap(target, "create");
+    this.patches.delete(target);
+    patchedTargets--;
+  }
+
+  private unpatch(module: OpenAIModule) {
+    for (const target of this.targets(module)) if (target) this.restore(target);
+  }
+
   private createChatCompletionWrapper(instrumentation: VLLMInstrumentation) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (original: any): any => {
-      return function patchedChatCreate(
-        this: unknown,
-        body: ChatCompletionRequest,
-        options?: Record<string, unknown>,
-      ) {
-        if (!instrumentation.isVLLMRequest(this)) {
-          return original.apply(this, [body, options]);
-        }
-
-        const { messages: _messages, ...invocationParameters } = body;
-
-        const span = instrumentation.fiTracer.startSpan(
-          `vLLM Chat Completions`,
-          {
-            kind: SpanKind.INTERNAL,
-            attributes: {
-              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-              [SemanticConventions.LLM_MODEL_NAME]: body.model,
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
-              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(invocationParameters),
-              [SemanticConventions.LLM_PROVIDER]: LLMProvider.VLLM,
-              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-              ...getChatInputMessagesAttributes(body),
-              ...getToolsJSONSchema(body),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
-            },
-          },
-        );
-
-        const execContext = getExecContext(span);
-        const execPromise = safeExecuteInTheMiddle(
-          () => {
-            return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [body, options]);
-            });
-          },
-          (error) => {
-            if (error) {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-            }
-          },
-        );
-
-        const wrappedPromise = (execPromise as Promise<ChatCompletion | StreamResponse<ChatCompletion>>).then((result) => {
-          if (isChatCompletionResponse(result)) {
-            span.setAttributes({
-              [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
-              [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_MODEL_NAME]: result.model,
-              [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
-              [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
-              [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
-              ...getChatOutputMessagesAttributes(result),
-              ...getUsageAttributes(result),
-              [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-            });
-            span.setStatus({ code: SpanStatusCode.OK });
-            span.end();
-          } else if (isStreamResponse(result)) {
-            return wrapChatStream(result, span);
-          }
-          return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
-        });
-
-        return context.bind(execContext, wrappedPromise) as Promise<ChatCompletion | StreamResponse<ChatCompletion>>;
-      };
-    };
+    return instrumentation.createWrapper(true);
   }
 
-  /**
-   * Creates a wrapper for completions.create
-   */
   private createCompletionWrapper(instrumentation: VLLMInstrumentation) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (original: any): any => {
-      return function patchedCompletionCreate(
-        this: unknown,
-        body: CompletionRequest,
-        options?: Record<string, unknown>,
-      ) {
-        if (!instrumentation.isVLLMRequest(this)) {
-          return original.apply(this, [body, options]);
+    return instrumentation.createWrapper(false);
+  }
+
+  private createWrapper(chat: boolean) {
+    const instrumentation = this;
+    return (original: Create): Create =>
+      function (body, options) {
+        if (
+          !body ||
+          !instrumentation.isEnabled() ||
+          isTracingSuppressed(context.active()) ||
+          !instrumentation.isVLLMRequest(this)
+        ) {
+          return original.call(this, body, options);
         }
-
-        const { prompt: _prompt, ...invocationParameters } = body;
-        const prompts = Array.isArray(body.prompt) ? body.prompt : [body.prompt];
-
+        const { messages: _messages, prompt: _prompt, ...parameters } = body;
+        const hideInputPayload = instrumentation.hideInputPayload;
+        const hideOutputPayload = instrumentation.hideOutputPayload;
         const span = instrumentation.fiTracer.startSpan(
-          `vLLM Completions`,
+          chat ? "vLLM Chat Completions" : "vLLM Completions",
           {
-            kind: SpanKind.INTERNAL,
+            kind: SpanKind.CLIENT,
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
               [SemanticConventions.LLM_MODEL_NAME]: body.model,
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
-              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(invocationParameters),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.VLLM,
-              [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
-              ...getPromptAttributes(prompts),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: chat
+                ? "chat"
+                : "text_completion",
+              ...(!hideInputPayload
+                ? {
+                    [SemanticConventions.INPUT_VALUE]:
+                      safelyJSONStringify(body) ?? "",
+                    [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+                    [SemanticConventions.RAW_INPUT]:
+                      safelyJSONStringify(body) ?? "",
+                    [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
+                      safelyJSONStringify(parameters) ?? "",
+                    ...(chat
+                      ? {
+                          ...getChatInputMessagesAttributes(
+                            body as ChatCompletionRequest,
+                          ),
+                          ...getToolsJSONSchema(body as ChatCompletionRequest),
+                        }
+                      : getPromptAttributes(
+                          Array.isArray(body.prompt)
+                            ? (body.prompt as string[])
+                            : [body.prompt as string],
+                        )),
+                  }
+                : {}),
             },
           },
         );
-
-        const execContext = getExecContext(span);
-        const execPromise = safeExecuteInTheMiddle(
-          () => {
-            return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [body, options]);
-            });
-          },
-          (error) => {
-            if (error) {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-            }
-          },
-        );
-
-        const wrappedPromise = (execPromise as Promise<Completion>).then((result) => {
-          span.setAttributes({
-            [SemanticConventions.OUTPUT_VALUE]: result.choices[0]?.text ?? "",
-            [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-            [SemanticConventions.LLM_MODEL_NAME]: result.model,
-            ...getCompletionUsageAttributes(result),
-            [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-          });
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
-          return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
+        const finish = spanEnder(span);
+        let result: Promise<unknown>;
+        try {
+          result = context.with(trace.setSpan(context.active(), span), () =>
+            original.call(this, body, options),
+          );
+        } catch (error) {
+          finish(error);
           throw error;
-        });
-
-        return context.bind(execContext, wrappedPromise) as Promise<Completion>;
+        }
+        return observeResponse(
+          result,
+          (value) => {
+            if (
+              value &&
+              typeof (value as AsyncIterable<ChatCompletion>)[
+                Symbol.asyncIterator
+              ] === "function"
+            ) {
+              return observeStream(
+                value as StreamResponse<StreamChunk>,
+                finish,
+                chat,
+                hideOutputPayload,
+              );
+            }
+            const response = value as ChatCompletion & Completion;
+            if (response && Array.isArray(response.choices)) {
+              finish(undefined, {
+                [SemanticConventions.LLM_MODEL_NAME]: response.model,
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: response.model,
+                [SemanticConventions.GEN_AI_RESPONSE_ID]: response.id,
+                [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]:
+                  safelyJSONStringify(
+                    response.choices.map((c) => c.finish_reason),
+                  ) ?? "[]",
+                ...getUsageAttributes(response),
+                ...(!hideOutputPayload
+                  ? {
+                      [SemanticConventions.OUTPUT_VALUE]: chat
+                        ? (safelyJSONStringify(response) ?? "")
+                        : (response.choices[0]?.text ?? ""),
+                      [SemanticConventions.OUTPUT_MIME_TYPE]: chat
+                        ? MimeType.JSON
+                        : MimeType.TEXT,
+                      ...(chat ? getChatOutputMessagesAttributes(response) : {}),
+                      [SemanticConventions.RAW_OUTPUT]:
+                        safelyJSONStringify(response) ?? "",
+                    }
+                  : {}),
+              });
+            } else finish();
+            return value;
+          },
+          (error) => finish(error),
+          (status) =>
+            finish(
+              undefined,
+              { "http.response.status_code": status },
+              status >= 400 ? SpanStatusCode.ERROR : SpanStatusCode.OK,
+            ),
+        );
       };
-    };
   }
-
-  /**
-   * Un-patches the OpenAI module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiVLLMPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const OpenAI = moduleExports.OpenAI as {
-      prototype: {
-        chat?: { completions?: Record<string, unknown> };
-        completions?: Record<string, unknown>;
-      };
-    } | undefined;
-
-    if (OpenAI?.prototype) {
-      if (OpenAI.prototype.chat?.completions) {
-        this._unwrap(OpenAI.prototype.chat.completions, "create");
-      }
-      if (OpenAI.prototype.completions) {
-        this._unwrap(OpenAI.prototype.completions, "create");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiVLLMPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiVLLMPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-  }
-}
-
-/**
- * Type guard for chat completion response
- */
-function isChatCompletionResponse(
-  response: ChatCompletion | StreamResponse<ChatCompletion>,
-): response is ChatCompletion {
-  return "choices" in response && Array.isArray((response as ChatCompletion).choices);
-}
-
-/**
- * Type guard for stream response
- */
-function isStreamResponse<T>(
-  response: T | StreamResponse<T>,
-): response is StreamResponse<T> {
-  return typeof (response as StreamResponse<T>)[Symbol.asyncIterator] === "function";
-}
-
-/**
- * Wraps a chat stream to capture the full response
- */
-async function* wrapChatStream(
-  stream: StreamResponse<ChatCompletion>,
-  span: Span,
-): AsyncGenerator<ChatCompletion, void, unknown> {
-  let fullContent = "";
-  const allChunks: ChatCompletion[] = [];
-  let lastChunk: ChatCompletion | null = null;
-
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
-      }
-      lastChunk = chunk;
-      yield chunk;
-    }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.usage) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.usage.prompt_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.usage.completion_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = lastChunk.usage.total_tokens;
-    }
-  }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
 }
 
 /**
  * Gets input message attributes for chat requests
  */
-function getChatInputMessagesAttributes(request: ChatCompletionRequest): Attributes {
-  const serialized = request.messages.map((message) => {
+function getChatInputMessagesAttributes(
+  request: ChatCompletionRequest,
+): Attributes {
+  const serialized = (request.messages ?? []).map((message) => {
     const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
       obj.content = message.content;
@@ -554,9 +454,13 @@ function getChatInputMessagesAttributes(request: ChatCompletionRequest): Attribu
     if (message.tool_call_id) {
       obj.tool_call_id = message.tool_call_id;
     }
+    if (message.tool_calls) obj.tool_calls = message.tool_calls;
     return obj;
   });
-  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
+  return {
+    [SemanticConventions.LLM_INPUT_MESSAGES]:
+      safelyJSONStringify(serialized) ?? "[]",
+  };
 }
 
 /**
@@ -566,7 +470,9 @@ function getToolsJSONSchema(request: ChatCompletionRequest): Attributes {
   if (!request.tools) {
     return {};
   }
-  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
+  return {
+    [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]",
+  };
 }
 
 /**
@@ -574,7 +480,7 @@ function getToolsJSONSchema(request: ChatCompletionRequest): Attributes {
  */
 function getChatOutputMessagesAttributes(response: ChatCompletion): Attributes {
   const choice = response.choices[0];
-  if (!choice) {
+  if (!choice?.message) {
     return {};
   }
 
@@ -588,7 +494,10 @@ function getChatOutputMessagesAttributes(response: ChatCompletion): Attributes {
       function: { name: tc.function.name, arguments: tc.function.arguments },
     }));
   }
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
+  return {
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]:
+      safelyJSONStringify([msg]) ?? "[]",
+  };
 }
 
 /**
@@ -597,8 +506,10 @@ function getChatOutputMessagesAttributes(response: ChatCompletion): Attributes {
 function getUsageAttributes(response: ChatCompletion): Attributes {
   if (response.usage) {
     return {
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: response.usage.completion_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: response.usage.prompt_tokens,
+      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]:
+        response.usage.completion_tokens,
+      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]:
+        response.usage.prompt_tokens,
       [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: response.usage.total_tokens,
     };
   }
@@ -613,18 +524,4 @@ function getPromptAttributes(prompts: string[]): Attributes {
     acc[`${SemanticConventions.LLM_PROMPTS}.${index}`] = prompt;
     return acc;
   }, {});
-}
-
-/**
- * Gets usage attributes from completion response
- */
-function getCompletionUsageAttributes(response: Completion): Attributes {
-  if (response.usage) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: response.usage.completion_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: response.usage.prompt_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: response.usage.total_tokens,
-    };
-  }
-  return {};
 }
