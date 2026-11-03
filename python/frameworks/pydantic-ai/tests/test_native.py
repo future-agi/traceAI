@@ -3,8 +3,8 @@
 import asyncio
 import json
 import re
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 import pytest
