@@ -60,6 +60,43 @@ class LegacyStreamTest {
         }
     }
 
+    @Test void eofWithoutFinishReasonDoesNotMarkLegacyStreamSuccessful() throws Exception {
+        var exporter = InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            var raw = new TracingHttpClientTest.FakeResponse("text/event-stream", CHUNK);
+            var client = new OpenAIClientImpl(ClientOptions.builder()
+                .httpClient(new TracingHttpClientTest.FakeTransport(raw)).apiKey("offline-not-a-key").maxRetries(0).build());
+            var params = ChatCompletionCreateParams.builder().model("model").messages(List.of()).build();
+            try (var response = new TracedOpenAIClient(client, new FITracer(provider.get("test")))
+                    .streamChatCompletionResponse(params)) {
+                assertThat(response.stream().count()).isEqualTo(1);
+            }
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+            assertThat(exporter.getFinishedSpanItems().get(0).getStatus().getStatusCode())
+                .isNotEqualTo(io.opentelemetry.api.trace.StatusCode.OK);
+            assertThat(exporter.getFinishedSpanItems().get(0).getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.booleanKey("traceai.response.closed_early"))).isTrue();
+        }
+    }
+
+    @Test void terminalFinishReasonMarksLegacyStreamSuccessful() throws Exception {
+        var exporter = InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            var raw = new TracingHttpClientTest.FakeResponse("text/event-stream",
+                CHUNK.replace("\"finish_reason\":null", "\"finish_reason\":\"stop\"") + "data: [DONE]\n\n");
+            var client = new OpenAIClientImpl(ClientOptions.builder()
+                .httpClient(new TracingHttpClientTest.FakeTransport(raw)).apiKey("offline-not-a-key").maxRetries(0).build());
+            var params = ChatCompletionCreateParams.builder().model("model").messages(List.of()).build();
+            try (var response = new TracedOpenAIClient(client, new FITracer(provider.get("test")))
+                    .streamChatCompletionResponse(params)) {
+                assertThat(response.stream().count()).isEqualTo(1);
+            }
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+            assertThat(exporter.getFinishedSpanItems().get(0).getStatus().getStatusCode())
+                .isEqualTo(io.opentelemetry.api.trace.StatusCode.OK);
+        }
+    }
+
     @Test void readFailureFinishesTheLegacySpanAndClosesTheResponse() throws Exception {
         var exporter = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {

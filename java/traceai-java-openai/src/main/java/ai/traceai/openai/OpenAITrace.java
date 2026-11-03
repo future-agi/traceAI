@@ -85,6 +85,7 @@ final class OpenAITrace {
                 span.setStatus(StatusCode.ERROR);
                 span.setAttribute(SemanticConventions.ERROR_TYPE, "openai.stream_error");
             }
+            if ("response.incomplete".equals(type)) incomplete();
             if (type != null && (type.equals("response.completed") || type.equals("response.failed")
                     || type.equals("response.incomplete"))) complete = true;
             json(event.has("response") && event.get("response").isJsonObject()
@@ -92,9 +93,16 @@ final class OpenAITrace {
         });
     }
 
+    private void incomplete() {
+        failed = true;
+        span.setStatus(StatusCode.ERROR);
+        span.setAttribute(SemanticConventions.ERROR_TYPE, "openai.response_incomplete");
+    }
+
     private void json(JsonObject json) {
         attribute(json, "model", SemanticConventions.LLM_RESPONSE_MODEL);
         attribute(json, "id", SemanticConventions.LLM_RESPONSE_ID);
+        if ("incomplete".equals(string(json, "status"))) incomplete();
         if (json.has("error") && !json.get("error").isJsonNull()) {
             failed = true;
             span.setStatus(StatusCode.ERROR);

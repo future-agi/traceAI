@@ -137,6 +137,39 @@ class TracingHttpClientTest {
         assertThat(spans().get(1).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
     }
 
+    @Test void incompleteResponsesNeverReportSuccess() throws Exception {
+        String json = "{\"id\":\"r1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}";
+        String sse = "data: {\"type\":\"response.incomplete\",\"response\":" + json + "}\n\n";
+        for (String body : List.of(json, sse)) {
+            String contentType = body.equals(json) ? "application/json" : "text/event-stream";
+            try (var response = TracingHttpClient.wrap(new FakeTransport(new FakeResponse(contentType, body)), tracer)
+                    .execute(request("responses", "{}"))) {
+                assertThat(response.body().readAllBytes()).isEqualTo(body.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(spans()).hasSize(2);
+        for (var span : spans()) {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(attr(span, "error.type")).isEqualTo("openai.response_incomplete");
+        }
+    }
+
+    @Test void wrappingAContextBoundTracedTransportKeepsOneSpan() throws Exception {
+        var fake = new FakeTransport(new FakeResponse("application/json", "{}"));
+        var owner = TracingHttpClient.wrap(fake, tracer);
+        var parent = provider.get("test").spanBuilder("parent").startSpan();
+        HttpClient view;
+        try (var scope = parent.makeCurrent()) { view = TracingHttpClient.inCurrentContext(owner); }
+        var wrapped = TracingHttpClient.wrap(view, tracer);
+        try (var response = wrapped.execute(request("responses", "{}"))) { response.body().readAllBytes(); }
+        assertThat(spans()).hasSize(1);
+        assertThat(spans().get(0).getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+        wrapped.close();
+        assertThat(fake.closed).isFalse();
+        owner.close();
+        parent.end();
+    }
+
     @Test void captureHasABoundedBudgetAndDoesNotTruncateCallerData() throws Exception {
         String delta = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + "x".repeat(1000) + "\"}\n\n";
         String body = delta.repeat(120) + "data: [DONE]\n\n";

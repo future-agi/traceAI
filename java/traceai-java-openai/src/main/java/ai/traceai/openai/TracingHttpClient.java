@@ -47,7 +47,11 @@ public final class TracingHttpClient implements HttpClient {
 
     /** Wraps once; wrapping an already traced transport does not create duplicate spans. */
     public static HttpClient wrap(HttpClient client, FITracer tracer) {
-        return client instanceof TracingHttpClient ? client : new TracingHttpClient(client, tracer);
+        // A borrowed context view around a traced transport already creates its span inside
+        // the captured context. An outer wrapper would create a second, unrelated root span.
+        if (client instanceof TracingHttpClient || client instanceof ContextClient
+                && ((ContextClient) client).delegate instanceof TracingHttpClient) return client;
+        return new TracingHttpClient(client, tracer);
     }
 
     /** Uses the configured TraceAI tracer. */

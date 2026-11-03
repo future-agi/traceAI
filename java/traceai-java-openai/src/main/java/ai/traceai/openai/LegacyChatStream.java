@@ -27,6 +27,7 @@ final class LegacyChatStream implements StreamResponse<ChatCompletionChunk>, Ite
     private final AtomicBoolean closed = new AtomicBoolean();
     private final StringBuilder content = new StringBuilder();
     private boolean exhausted;
+    private boolean observedFinishReason;
     private boolean failed;
 
     LegacyChatStream(StreamResponse<ChatCompletionChunk> delegate, Span span, FITracer tracer) {
@@ -83,8 +84,10 @@ final class LegacyChatStream implements StreamResponse<ChatCompletionChunk>, Ite
             span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, chunk.id());
             span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, chunk.model());
             for (ChatCompletionChunk.Choice choice : chunk.choices()) {
-                choice.finishReason().ifPresent(reason ->
-                    span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, reason.toString()));
+                choice.finishReason().ifPresent(reason -> {
+                    observedFinishReason = true;
+                    span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, reason.toString());
+                });
                 if (choice.index() == 0 && !tracer.getConfig().isHideOutputs() && !tracer.getConfig().isHideOutputMessages()) {
                     choice.delta().content().ifPresent(value -> {
                         int remaining = 32000 - content.length();
@@ -118,8 +121,8 @@ final class LegacyChatStream implements StreamResponse<ChatCompletionChunk>, Ite
                 tracer.setOutputValue(span, content.toString());
                 tracer.setOutputMessages(span, List.of(FITracer.message("assistant", content.toString())));
             }
-            if (!failed && exhausted) span.setStatus(StatusCode.OK);
-            if (!exhausted) span.setAttribute("traceai.response.closed_early", true);
+            if (!failed && exhausted && observedFinishReason) span.setStatus(StatusCode.OK);
+            if (!exhausted || !observedFinishReason) span.setAttribute("traceai.response.closed_early", true);
         } catch (Exception | Error error) {
             tracer.setError(span, error);
             throw OpenAITrace.propagate(error);
