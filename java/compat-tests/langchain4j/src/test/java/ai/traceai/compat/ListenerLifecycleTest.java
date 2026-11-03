@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -49,6 +50,33 @@ class ListenerLifecycleTest {
                     .isEqualTo("java.util.concurrent.CancellationException");
         });
         pending.completeExceptionally(new IllegalStateException("late failure"));
+        assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+    }
+
+    @Test void providerCancellationFinishesSpanWithoutOnError() {
+        CompletableFuture<ChatResponse> pending = new CompletableFuture<>();
+        AtomicReference<CompletableFuture<ChatResponse>> original = new AtomicReference<>();
+        ChatModel model = new ChatModel() {
+            @Override public List<ChatModelListener> listeners() { return List.of(listener); }
+            @Override public CompletableFuture<ChatResponse> doChatAsync(ChatRequest request) { return pending; }
+            @Override public CompletableFuture<ChatResponse> chatAsync(ChatRequest request) {
+                CompletableFuture<ChatResponse> result = ChatModel.super.chatAsync(request);
+                original.set(result);
+                return result;
+            }
+        };
+        ChatModel guarded = LangChain4jListener.guardLifecycle(ChatModel.class, model);
+        CompletableFuture<ChatResponse> returned = guarded.chatAsync(request);
+        assertThat(returned).isSameAs(original.get());
+        assertThat(pending.cancel(false)).isTrue();
+        assertThat(returned.isCancelled()).isFalse();
+        assertThat(returned.isCompletedExceptionally()).isTrue();
+        assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("error.type")))
+                    .isEqualTo("java.util.concurrent.CancellationException");
+        });
+        assertThat(sdk.forceFlush().join(5, java.util.concurrent.TimeUnit.SECONDS).isSuccess()).isTrue();
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
     }
 

@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 /**
  * Explicitly registered official model listener for LangChain4j 0.35 and 1.x.
@@ -106,7 +107,14 @@ public final class LangChain4jListener implements ChatModelListener {
                         Object result = method.invoke(model, args);
                         if (result instanceof CompletableFuture<?> future) {
                             future.whenComplete((value, error) -> {
-                                if (future.isCancelled()) invocation.fail(new CancellationException());
+                                Throwable cause = error;
+                                while (cause instanceof CompletionException && cause.getCause() != null)
+                                    cause = cause.getCause();
+                                // A cancelled provider future can complete the framework's dependent
+                                // future exceptionally without setting its cancelled bit. LangChain4j
+                                // skips onError in both cases.
+                                if (future.isCancelled() || cause instanceof CancellationException)
+                                    invocation.fail(new CancellationException());
                             });
                         }
                         return result;
