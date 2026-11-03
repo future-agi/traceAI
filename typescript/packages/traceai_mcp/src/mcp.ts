@@ -151,7 +151,8 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
    */
   public instrumentServer(server: MCPServer): void {
     this.patchServer(server);
-    this.releaseOnClose(server);
+    // A Server may connect again after close(); retain its connect patch until
+    // disable(), while each connected transport releases its own patches.
     // A low-level Server exposes its connected transport via a public getter.
     const transport: unknown = Reflect.get(server, "transport");
     if (

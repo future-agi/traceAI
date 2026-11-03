@@ -491,6 +491,47 @@ it.each(sdkRoutes)("keeps a $name server patched across transport reconnects", a
   }
 });
 
+it.each(sdkRoutes)("keeps an explicitly instrumented $name server patched after server.close()", async (route) => {
+  const { Server } = require(
+    route.split ? `${route.root}/server` : `${route.root}/server/index.js`,
+  );
+  const schemas = require(
+    route.split ? `${route.root}/core` : `${route.root}/types.js`,
+  );
+  const server = new Server(
+    { name: "reconnecting-after-close", version: "1" },
+    { capabilities: { tools: {} } },
+  );
+  const observed: (string | undefined)[] = [];
+  server.setRequestHandler(
+    route.split ? "tools/call" : schemas.CallToolRequestSchema,
+    () => {
+      observed.push(activeId());
+      return { content: [] };
+    },
+  );
+  instrumentation.instrumentServer(server);
+  try {
+    for (let id = 1; id <= 2; id++) {
+      const [, serverTransport] = WireTransport.pair();
+      await server.connect(serverTransport);
+      context.with(ROOT_CONTEXT, () =>
+        serverTransport.onmessage?.({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "test", _meta: { traceparent } },
+        }),
+      );
+      await tick();
+      await server.close();
+    }
+    expect(observed).toEqual([traceId, traceId]);
+  } finally {
+    await server.close();
+  }
+});
+
 it("preserves frozen messages, metadata, send options and promise identity without double wrapping", async () => {
   const promise = Promise.resolve();
   const send = jest.fn((_message: unknown, _options?: unknown) => promise);
@@ -592,6 +633,8 @@ it("supports a framework-owned McpServer and reapplication after disable", async
   instrumentation.instrumentServer(server);
   expect(server.connect).not.toBe(connect);
   await server.close();
+  expect(server.connect).not.toBe(connect);
+  instrumentation.disable();
   expect(server.connect).toBe(connect);
 });
 
@@ -655,10 +698,10 @@ it.each([false, true])(
         expect(text).toContain(traceId);
       }
       await tick();
-      // The modern factory closes only transports; the legacy one closes its
-      // servers. Neither path should require callers to reapply patches.
+      // Both factory variants retain explicit server patches through close,
+      // allowing SDK-supported reconnects without reapplying instrumentation.
       for (const server of servers)
-        expect(server.connect === server.originalConnect).toBe(!modern);
+        expect(server.connect).not.toBe(server.originalConnect);
       await provider.forceFlush();
       expect(spans()).toHaveLength(3);
       expect(
