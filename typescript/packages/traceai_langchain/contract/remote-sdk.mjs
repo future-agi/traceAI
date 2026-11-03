@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { createRequire } from "node:module";
 import { Client } from "@langchain/langgraph-sdk";
 import { wrapLangGraphClient, langGraphTraceRequestHook } from "@traceai/langchain";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -112,6 +113,27 @@ try {
     }
     assert.ok(!JSON.stringify(received).includes("synthetic-private-reason"));
   }
+
+  // The published package has separate ESM and CommonJS module instances.
+  // Either import order must return the same proxy, not layer a second span.
+  const { wrapLangGraphClient: commonJSWrap } = createRequire(import.meta.url)("@traceai/langchain");
+  const spansBeforeMixed = received.flatMap((r) => r.body.resourceSpans.flatMap((resource) =>
+    resource.scopeSpans.flatMap((scope) => scope.spans))).length;
+  for (const [first, second] of [[wrapLangGraphClient, commonJSWrap], [commonJSWrap, wrapLangGraphClient]]) {
+    const original = new Client(config);
+    const onceWrapped = first(original, { tracerProvider: provider });
+    const twiceWrapped = second(onceWrapped, { tracerProvider: provider });
+    assert.equal(twiceWrapped, onceWrapped, "wrapping the same client across ESM and CommonJS must be idempotent");
+    assert.equal(second(original), onceWrapped, "both module instances must recognize the original client");
+    await twiceWrapped.runs.wait("synthetic-thread", "synthetic-assistant", { input: "synthetic-secret-input" });
+    for await (const _event of twiceWrapped.runs.stream("synthetic-thread", "synthetic-assistant", { input: "synthetic-secret-input" })) { /* consume */ }
+  }
+  await provider.forceFlush();
+  const mixedSpans = received.flatMap((r) => r.body.resourceSpans.flatMap((resource) =>
+    resource.scopeSpans.flatMap((scope) => scope.spans))).slice(spansBeforeMixed);
+  assert.deepEqual(mixedSpans.map((span) => span.name).sort(),
+    ["LangGraph runs.stream", "LangGraph runs.stream", "LangGraph runs.wait", "LangGraph runs.wait"],
+    "mixed-module wait and stream must each export exactly one span");
 
   console.log(`PASS remote SDK ${version}: wait, stream, OTLP and request hook`);
 } finally {

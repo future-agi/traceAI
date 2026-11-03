@@ -11,7 +11,15 @@ import {
 import { FISpanKind, SemanticConventions } from "@traceai/fi-semantic-conventions";
 
 /** The remote LangGraph SDK API is distinct from local LangGraph graph callbacks. */
-const clients = new WeakMap<object, object>();
+// ESM and CommonJS load separate copies of this module. Share a weak registry
+// across both builds so wrapping either the original or its proxy is idempotent
+// without mutating the caller's client or retaining it after garbage collection.
+const CLIENTS_KEY = Symbol.for("@traceai/langchain/langgraph-sdk/wrapped-clients/v1");
+const clients: WeakMap<object, object> = Reflect.get(globalThis, CLIENTS_KEY) ?? (() => {
+  const registry = new WeakMap<object, object>();
+  Reflect.set(globalThis, CLIENTS_KEY, registry);
+  return registry;
+})();
 const NAME = "@traceai/langchain/langgraph-sdk";
 export interface RemoteLangGraphOptions {
   /** Optional provider; otherwise the globally registered OTel provider is used. */
