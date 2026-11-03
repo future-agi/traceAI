@@ -153,5 +153,6 @@
   "typescript/packages/traceai_opencode_plugin": "0.1.0",
   "typescript/packages/traceai_pi_plugin": "0.1.0",
   "typescript/packages/traceai_vscode_extension": "0.1.0",
-  "typescript/packages/traceai_openrouter": "0.1.0"
+  "typescript/packages/traceai_openrouter": "0.1.0",
+  "typescript/packages/traceai_vitest_evals": "0.1.0"
 }

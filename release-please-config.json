@@ -1303,6 +1303,11 @@
       "extra-files": [
         "src/index.ts"
       ]
+    },
+    "typescript/packages/traceai_vitest_evals": {
+      "release-type": "node",
+      "component": "npm-traceai-vitest-evals",
+      "package-name": "@traceai/vitest-evals"
     }
   }
 }
