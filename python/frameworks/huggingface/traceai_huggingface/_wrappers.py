@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Tuple
 
 import opentelemetry.context as context_api
 from fi_instrumentation import get_attributes_from_context
+from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
@@ -25,6 +26,35 @@ from traceai_huggingface._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def _private_request_attributes(attributes, config):
+    """Avoid raw input copies outside FITracer's semantic privacy keys."""
+    for key, value in attributes:
+        if (config.hide_inputs or config.hide_input_text) and key in (
+            "huggingface.tools", "huggingface.tool_choice"
+        ):
+            continue
+        if config.hide_input_text and key == SpanAttributes.INPUT_VALUE:
+            continue
+        yield key, value
+
+
+def _private_response_attributes(attributes, config, *, chat=False, request=None):
+    """FITracer masks messages, but cannot mask the raw output duplicate."""
+    hide_raw = config.hide_output_messages or config.hide_output_text
+    hide_full_text = (
+        not chat
+        and (config.hide_inputs or config.hide_input_text)
+        and request is not None
+        and request.get("return_full_text") is True
+    )
+    for key, value in attributes:
+        if key == SpanAttributes.OUTPUT_VALUE and (hide_raw or hide_full_text):
+            continue
+        if hide_full_text and key.startswith(SpanAttributes.GEN_AI_OUTPUT_MESSAGES):
+            continue
+        yield key, value
 
 
 class _WithTracer(ABC):
@@ -94,7 +124,10 @@ class _TextGenerationWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -116,8 +149,11 @@ class _TextGenerationWrapper(_WithTracer):
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                    extra_attributes=_private_response_attributes(
+                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._tracer._self_config,
+                        chat=False,
+                        request=request_parameters,
                     ),
                 )
             except Exception:
@@ -168,7 +204,10 @@ class _AsyncTextGenerationWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
@@ -195,8 +234,11 @@ class _AsyncTextGenerationWrapper(_WithTracer):
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                    extra_attributes=_private_response_attributes(
+                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._tracer._self_config,
+                        chat=False,
+                        request=request_parameters,
                     ),
                 )
             except Exception:
@@ -236,7 +278,10 @@ class _ChatCompletionWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -258,8 +303,11 @@ class _ChatCompletionWrapper(_WithTracer):
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                    extra_attributes=_private_response_attributes(
+                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._tracer._self_config,
+                        chat=True,
+                        request=request_parameters,
                     ),
                 )
             except Exception:
@@ -310,7 +358,10 @@ class _AsyncChatCompletionWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
@@ -337,8 +388,11 @@ class _AsyncChatCompletionWrapper(_WithTracer):
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response, request_parameters
+                    extra_attributes=_private_response_attributes(
+                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._tracer._self_config,
+                        chat=True,
+                        request=request_parameters,
                     ),
                 )
             except Exception:
