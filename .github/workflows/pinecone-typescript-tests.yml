@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['2.0.0', '4.1.0']
+        sdk: ['2.0.0', '4.1.0', '9.1.0']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -39,7 +39,6 @@ jobs:
           corepack pnpm run build:deps
           corepack pnpm --filter @traceai/pinecone build
           npm install --prefix "$RUNNER_TEMP/pinecone-sdk" --ignore-scripts --no-audit --no-fund "@pinecone-database/pinecone@$SDK_VERSION"
-          npm install --prefix "$RUNNER_TEMP/pinecone-current" --ignore-scripts --no-audit --no-fund @pinecone-database/pinecone@9.1.0
       - name: Test real SDK lifecycle and OTLP export with only loopback networking
         working-directory: typescript/packages/traceai_pinecone
         run: |
@@ -52,5 +51,4 @@ jobs:
             ip link set lo up
             "$1" ../../node_modules/jest/bin/jest.js --runInBand "--moduleNameMapper=$2"
             "$1" contract/lifecycle.cjs "$3"
-            "$1" contract/lifecycle.cjs "$4" unsupported
-          ' -- "$(command -v node)" "$mapper" "$RUNNER_TEMP/pinecone-sdk" "$RUNNER_TEMP/pinecone-current"
+          ' -- "$(command -v node)" "$mapper" "$RUNNER_TEMP/pinecone-sdk"

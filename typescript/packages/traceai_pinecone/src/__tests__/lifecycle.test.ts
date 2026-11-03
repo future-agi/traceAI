@@ -30,20 +30,27 @@ function createIndex() {
     dimension: 2,
     totalRecordCount: 1,
   }), { status: 200, headers: { "content-type": "application/json" } }));
-  const index = new pinecone.Index("test-index", {
-    apiKey: "offline-test-key",
-    fetchApi,
-  }, "test-namespace", "https://pinecone.invalid");
+  const Index = pinecone.Index as any;
+  const config = { apiKey: "offline-test-key", fetchApi };
+  const index: pinecone.Index = typeof Index.prototype.searchDocuments === "function"
+    ? new Index({ name: "test-index", namespace: "test-namespace", host: "https://pinecone.invalid" }, config)
+    : new Index("test-index", config, "test-namespace", "https://pinecone.invalid");
   return { index, fetchApi };
 }
 
 async function callOperations(index: pinecone.Index) {
+  const modern = typeof (pinecone.Index.prototype as any).searchDocuments === "function";
   await index.query({ vector: [0.1, 0.2], topK: 1 });
-  await index.upsert([{ id: "record", values: [0.1, 0.2] }]);
-  await index.fetch(["record"]);
+  if (modern) {
+    await (index as any).upsert({ records: [{ id: "record", values: [0.1, 0.2] }, { id: "other", values: [0.3, 0.4] }] });
+    await (index as any).fetch({ ids: ["record", "other"] });
+  } else {
+    await index.upsert([{ id: "record", values: [0.1, 0.2] }]);
+    await index.fetch(["record"]);
+  }
   await index.update({ id: "record", metadata: { category: "test" } });
-  await index.deleteOne("record");
-  await index.deleteMany(["record"]);
+  await (index as any).deleteOne(modern ? { id: "record" } : "record");
+  await (index as any).deleteMany(modern ? { ids: ["record", "other"], namespace: "override" } : ["record"]);
   await index.deleteAll();
   // Added after the supported 2.0.0 floor.
   if (typeof index.listPaginated === "function") await index.listPaginated({ limit: 1 });
@@ -176,6 +183,36 @@ describe("Pinecone lifecycle with the real SDK and tracer", () => {
     expect(replacement).toHaveBeenCalledTimes(2);
     instrumentation.disable();
     expect(pinecone.Index.prototype.query).toBe(replacement);
+  });
+
+  it("records latest SDK object arguments and forwards optional operation options", async () => {
+    if (typeof (pinecone.Index.prototype as any).searchDocuments !== "function") return;
+    const { index, fetchApi } = createIndex();
+    instrumentation.manuallyInstrument(pinecone);
+    await callOperations(index);
+    const spans = exporter.getFinishedSpans();
+    expect(spans.find(span => span.name === "pinecone upsert")?.attributes).toMatchObject({
+      "db.vector.upsert.count": 2,
+      "db.vector.upsert.dimensions": 2,
+    });
+    expect(spans.find(span => span.name === "pinecone fetch")?.attributes["db.vector.fetch.ids_count"]).toBe(2);
+    expect(spans.find(span => span.name === "pinecone delete_many")?.attributes).toMatchObject({
+      "db.vector.delete.count": 2,
+      "db.vector.namespace": "override",
+    });
+    exporter.reset();
+    await (index as any).deleteOne({ id: "record", namespace: "override" });
+    expect(exporter.getFinishedSpans()[0].attributes["db.vector.namespace"]).toBe("override");
+    exporter.reset();
+    const filter = { category: { $eq: "test" } };
+    await (index as any).describeIndexStats({ filter });
+    const statsRequest = fetchApi.mock.calls[fetchApi.mock.calls.length - 1] as any[];
+    expect(JSON.parse(statsRequest[1].body).filter).toEqual(filter);
+    exporter.reset();
+    await (index as any).deleteAll({ namespace: "override" });
+    expect(exporter.getFinishedSpans()[0].attributes["db.vector.namespace"]).toBe("override");
+    const lastRequest = fetchApi.mock.calls[fetchApi.mock.calls.length - 1] as any[];
+    expect(JSON.parse(lastRequest[1].body).namespace).toBe("override");
   });
 
   it("records the index and namespace from real SDK state", async () => {

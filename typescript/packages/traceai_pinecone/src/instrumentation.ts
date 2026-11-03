@@ -108,7 +108,10 @@ export class PineconeInstrumentation extends InstrumentationBase {
   protected init() {
     return new InstrumentationNodeModuleDefinition(
       "@pinecone-database/pinecone",
-      ["^2.0.0", "^3.0.0", "^4.0.0"],
+      [
+        "^2.0.0", "^3.0.0", "^4.0.0", "^5.0.0",
+        "^6.0.0", "^7.0.0", "^8.0.0", "^9.0.0",
+      ],
       this.patch.bind(this),
       this.unpatch.bind(this)
     );
@@ -185,7 +188,8 @@ export class PineconeInstrumentation extends InstrumentationBase {
   }
 
   private getIndexName(instance: any): string {
-    return instance?.target?.index ?? instance?.indexName ?? instance?._indexName ?? "unknown";
+    return instance?.target?.indexName ?? instance?.target?.index ??
+      instance?.indexName ?? instance?._indexName ?? "unknown";
   }
 
   private getNamespace(instance: any): string {
@@ -276,15 +280,15 @@ export class PineconeInstrumentation extends InstrumentationBase {
     vectors: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = this.getNamespace(instance);
+    const namespace = vectors?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("upsert", indexName, namespace);
 
-    const vectorCount = Array.isArray(vectors) ? vectors.length : 1;
-    attributes[VectorDBConventions.DB_VECTOR_UPSERT_COUNT] = vectorCount;
+    const records = Array.isArray(vectors) ? vectors : vectors?.records;
+    attributes[VectorDBConventions.DB_VECTOR_UPSERT_COUNT] =
+      Array.isArray(records) ? records.length : 1;
 
-    if (Array.isArray(vectors) && vectors.length > 0 && vectors[0]?.values) {
-      attributes[VectorDBConventions.DB_VECTOR_UPSERT_DIMENSIONS] =
-        vectors[0].values.length;
+    if (Array.isArray(records) && records.length > 0 && records[0]?.values) {
+      attributes[VectorDBConventions.DB_VECTOR_UPSERT_DIMENSIONS] = records[0].values.length;
     }
 
     const span = this.fiTracer.startSpan("pinecone upsert", {
@@ -314,10 +318,11 @@ export class PineconeInstrumentation extends InstrumentationBase {
     ids: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = this.getNamespace(instance);
+    const namespace = ids?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("fetch", indexName, namespace);
 
-    const idCount = Array.isArray(ids) ? ids.length : 1;
+    const idCount = Array.isArray(ids) ? ids.length :
+      Array.isArray(ids?.ids) ? ids.ids.length : 1;
     attributes["db.vector.fetch.ids_count"] = idCount;
 
     const span = this.fiTracer.startSpan("pinecone fetch", {
@@ -388,7 +393,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     id: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = this.getNamespace(instance);
+    const namespace = id?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("delete", indexName, namespace);
 
     attributes[VectorDBConventions.DB_VECTOR_DELETE_COUNT] = 1;
@@ -420,7 +425,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     params: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = this.getNamespace(instance);
+    const namespace = params?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("delete", indexName, namespace);
 
     if (Array.isArray(params)) {
@@ -454,10 +459,11 @@ export class PineconeInstrumentation extends InstrumentationBase {
 
   private async wrapDeleteAll(
     original: Function,
-    instance: any
+    instance: any,
+    options?: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = this.getNamespace(instance);
+    const namespace = options?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes(
       "delete_all",
       indexName,
@@ -474,7 +480,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     try {
       const result = await context.with(
         trace.setSpan(context.active(), span),
-        () => original.call(instance)
+        () => original.call(instance, options)
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
@@ -532,7 +538,8 @@ export class PineconeInstrumentation extends InstrumentationBase {
 
   private async wrapDescribeStats(
     original: Function,
-    instance: any
+    instance: any,
+    options?: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
     const attributes = this.getCommonAttributes("describe_stats", indexName);
@@ -545,7 +552,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     try {
       const result = await context.with(
         trace.setSpan(context.active(), span),
-        () => original.call(instance)
+        () => original.call(instance, options)
       );
 
       if (result?.totalRecordCount !== undefined) {

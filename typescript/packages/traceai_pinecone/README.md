@@ -2,12 +2,12 @@
 
 Trace [Pinecone](https://www.pinecone.io/) index operations in Node.js with OpenTelemetry and send them to Future AGI.
 
-Supports `@pinecone-database/pinecone` majors **2–4**. Install a supported SDK version; SDK 5 and later are outside this package's compatibility range. The traced operations are listed below; control-plane, inference, and assistant APIs are not instrumented.
+Supports `@pinecone-database/pinecone` majors **2–9**. SDK 9 requires Node.js 22 or newer. The traced index operations are listed below; control-plane, inference, document, and assistant APIs are not instrumented.
 
 ## Installation
 
 ```bash
-npm install @traceai/pinecone @traceai/fi-core @pinecone-database/pinecone@^4
+npm install @traceai/pinecone @traceai/fi-core @pinecone-database/pinecone@^9
 ```
 
 ## Quick Start
@@ -118,6 +118,8 @@ Each span includes these semantic convention attributes:
 
 ## Real-World Use Cases
 
+The examples below use SDK 7–9's `{ records }` and `{ ids }` argument forms. SDK 2–6 use arrays for `upsert` and `fetch` instead.
+
 ### 1. Production RAG with Serverless Pinecone
 
 High-scale retrieval-augmented generation:
@@ -146,8 +148,8 @@ async function ingestDocuments(documents: Document[], namespace: string) {
     });
 
     // Upsert to Pinecone (traced automatically)
-    await index.namespace(namespace).upsert(
-      batch.map((doc, j) => ({
+    await index.namespace(namespace).upsert({
+      records: batch.map((doc, j) => ({
         id: doc.id,
         values: embeddings.data[j].embedding,
         metadata: {
@@ -156,8 +158,8 @@ async function ingestDocuments(documents: Document[], namespace: string) {
           created_at: doc.createdAt,
           chunk_index: doc.chunkIndex,
         },
-      }))
-    );
+      })),
+    });
   }
 }
 
@@ -224,14 +226,14 @@ class MultiTenantVectorStore {
   async storeForTenant(tenantId: string, documents: any[]) {
     const ns = this.index.namespace(`tenant_${tenantId}`);
 
-    await ns.upsert(documents.map(doc => ({
+    await ns.upsert({ records: documents.map(doc => ({
       id: `${tenantId}_${doc.id}`,
       values: doc.embedding,
       metadata: {
         tenant_id: tenantId,
         ...doc.metadata,
       },
-    })));
+    })) });
   }
 
   // Query within tenant namespace only (traced)
@@ -295,7 +297,7 @@ class RecommendationEngine {
     const batches = this.chunk(products, 100);
 
     for (const batch of batches) {
-      await this.index.upsert(
+      await this.index.upsert({ records:
         batch.map(p => ({
           id: p.id,
           values: p.embedding,
@@ -308,15 +310,15 @@ class RecommendationEngine {
             in_stock: p.inStock,
             tags: p.tags,
           },
-        }))
-      );
+        })),
+      });
     }
   }
 
   // Find similar products (traced)
   async findSimilar(productId: string, options: RecommendationOptions = {}) {
     // Fetch the source product embedding
-    const { records } = await this.index.fetch([productId]);
+    const { records } = await this.index.fetch({ ids: [productId] });
     const sourceProduct = records[productId];
 
     if (!sourceProduct) {
@@ -545,7 +547,7 @@ For high-throughput scenarios, batch your upserts:
 async function batchUpsert(index: any, vectors: any[], batchSize = 100) {
   for (let i = 0; i < vectors.length; i += batchSize) {
     const batch = vectors.slice(i, i + batchSize);
-    await index.upsert(batch);  // Each batch creates a trace span
+    await index.upsert({ records: batch });  // Each batch creates a trace span
   }
 }
 ```

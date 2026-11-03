@@ -36,14 +36,9 @@ async function main() {
       : require;
     const sdk = load("@pinecone-database/pinecone");
     const version = load("@pinecone-database/pinecone/package.json").version;
-    if (process.argv[3] === "unsupported") {
-      assert.equal(isPatched(), false, `SDK ${version} must not be automatically patched`);
-      console.log(JSON.stringify({ version, automaticallyPatched: false }));
-      return;
-    }
     assert.equal(isPatched(), true, `SDK ${version} must be automatically patched`);
     let calls = 0;
-    const index = new sdk.Index("test-index", {
+    const config = {
       apiKey: "offline-test-key",
       fetchApi: async () => {
         calls++;
@@ -51,7 +46,10 @@ async function main() {
           headers: { "content-type": "application/json" },
         });
       },
-    }, "test-namespace", "https://pinecone.invalid");
+    };
+    const index = Number(version.split(".")[0]) >= 7
+      ? new sdk.Index({ name: "test-index", namespace: "test-namespace", host: "https://pinecone.invalid" }, config)
+      : new sdk.Index("test-index", config, "test-namespace", "https://pinecone.invalid");
     const counts = [];
     for (let phase = 0; phase < 3; phase++) {
       requests.length = 0;
