@@ -50,27 +50,50 @@ async function requestModel(request: Request): Promise<string | undefined> {
   } catch { return; }
 }
 
-/** Parse bounded SSE event frames without retaining the stream or its content. */
-function observer(span: Span) {
+/** Read only a bounded JSON clone; do not depend on Content-Length (chunked responses omit it). */
+async function responseMetadata(response: Response): Promise<unknown> {
+  const reader = response.clone().body?.getReader();
+  if (!reader) return;
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 65536) return;
+      parts.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch { return; } // Metadata is best effort; the SDK still receives the original body.
+  finally { void reader.cancel().catch(() => {}); }
+}
+
+/** Observe complete bounded SSE frames, without retaining message content. */
+function observer(span: Span, markError: () => void) {
   const decoder = new TextDecoder();
   let pending = "";
-  const line = (raw: string) => {
-    const value = raw.trim();
-    if (!value.startsWith("data:")) return;
-    const data = value.slice(5).trim();
-    if (data === "[DONE]" || data.length > 65536) return;
-    try {
-      const event = object(JSON.parse(data));
-      // Chat chunks carry usage directly; Responses events carry the response in a nested object.
-      setOutput(span, event?.response ?? event);
-    } catch { /* malformed application data must not break inference */ }
-  };
   return (chunk: Uint8Array) => {
     pending += decoder.decode(chunk, { stream: true });
     if (pending.length > 65536) { pending = ""; return; }
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop() ?? "";
-    for (const item of lines) line(item);
+    // Match the SDK's SSE boundary variants, including CRLF and LF-only frames.
+    const boundary = /\r\n\r\n|\r\n\r|\r\n\n|\r\r\n|\n\r\n|\r\r|\n\r|\n\n/g;
+    let start = 0;
+    for (const match of pending.matchAll(boundary)) {
+      const frame = pending.slice(start, match.index);
+      start = match.index! + match[0].length;
+      const data = frame.split(/\r\n|\r|\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+      if (!data || data === "[DONE]") continue;
+      try {
+        const event = object(JSON.parse(data));
+        // Chat chunks carry usage directly; Responses events carry the response in a nested object.
+        setOutput(span, event?.response ?? event);
+      } catch { markError(); /* The SDK will report the parsing failure to its caller. */ }
+    }
+    pending = pending.slice(start);
   };
 }
 
@@ -112,7 +135,7 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
       const type = response.headers.get("content-type")?.toLowerCase() ?? "";
       if (type.includes("text/event-stream") && response.body) {
         const reader = response.body.getReader();
-        const observe = observer(span);
+        const observe = observer(span, () => span.setStatus({ code: SpanStatusCode.ERROR }));
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
             try {
@@ -126,11 +149,8 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       }
-      // A bounded JSON clone does not delay or consume the SDK's response body.
-      const length = Number(response.headers.get("content-length"));
-      if (type.includes("application/json") && length > 0 && length <= 65536) {
-        try { setOutput(span, await response.clone().json()); } catch { /* metadata is best effort */ }
-      }
+      // A bounded JSON clone does not consume the SDK's response body.
+      if (type.includes("application/json")) setOutput(span, await responseMetadata(response));
       end();
       return response;
     } catch (error) { end(true); throw error; }

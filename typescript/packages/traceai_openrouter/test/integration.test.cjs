@@ -37,10 +37,24 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
       assert.equal(span.attributes['gen_ai.response.model'], 'actual/model');
       assert.equal(span.attributes['gen_ai.request.model'], 'requested/model');
       assert.equal(JSON.stringify(span.attributes).includes('synthetic question'), false);
+      // Real HTTP chunked JSON responses often have no Content-Length.
+      const unboundedHeaderClient = new OpenRouter({ apiKey: 'synthetic-only', retryConfig: { strategy: 'none' },
+        httpClient: createOpenRouterTracingClient({ fetcher: async () => new Response(JSON.stringify(next), { headers: { 'content-type': 'application/json' } }), tracer: provider.getTracer('test') }) });
+      const chunked = await unboundedHeaderClient.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }] } });
+      assert.equal(chunked.usage.promptTokens, 3);
+      const chunkedSpan = exporter.getFinishedSpans().at(-1);
+      assert.equal(chunkedSpan.attributes['gen_ai.response.model'], 'actual/model');
+      assert.equal(chunkedSpan.attributes['gen_ai.usage.input_tokens'], 3);
+      assert.equal(chunkedSpan.attributes['gen_ai.usage.output_tokens'], 4);
       next = 'stream';
       const stream = await client.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
       for await (const _event of stream) { /* consume */ }
       assert.equal(exporter.getFinishedSpans().at(-1).attributes['gen_ai.usage.output_tokens'], 6);
+      const malformedStreamClient = new OpenRouter({ apiKey: 'synthetic-only', retryConfig: { strategy: 'none' },
+        httpClient: createOpenRouterTracingClient({ fetcher: async () => new Response('data: {bad json}\n\n', { headers: { 'content-type': 'text/event-stream' } }), tracer: provider.getTracer('test') }) });
+      const malformed = await malformedStreamClient.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
+      await assert.rejects(async () => { for await (const _event of malformed) { /* consume */ } });
+      assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
       next = 'error';
       await assert.rejects(() => client.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }] } }));
       assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
