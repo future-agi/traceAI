@@ -170,8 +170,12 @@ export class LanceDBInstrumentation extends InstrumentationBase {
       if (!owner._patches.includes(patch)) owner._patches.push(patch);
     }
     if (!this._patches.includes(patch)) this._patches.push(patch);
-    patch.owners.add(this);
-    this.install(patch);
+    // A pending openTable may settle after disable. Remember its methods for
+    // re-enable, but do not install hooks while no instrumentor is active.
+    if (this.isEnabled()) {
+      patch.owners.add(this);
+      this.install(patch);
+    }
     return activePatches.has(patch);
   }
 
@@ -183,8 +187,11 @@ export class LanceDBInstrumentation extends InstrumentationBase {
         const tableName = typeof args[0] === "string" ? args[0] : args[0]?.name;
         return instrumentation.run(this, operation, () => original.apply(this, args), { tableName }, false,
           (result) => {
-            if (instrumentation.isEnabled() && (operation === "createTable" || operation === "openTable")) {
-              instrumentation.instrumentTable(result, tableName, group);
+            if (operation === "createTable" || operation === "openTable") {
+              // Ownership can change while the call is in flight. Discover the
+              // returned table under the current owner, or retain dormant hooks
+              // for this owner's next enable if everyone was disabled.
+              (owner() ?? instrumentation).instrumentTable(result, tableName, group);
             }
             return result;
           });

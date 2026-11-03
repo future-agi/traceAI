@@ -187,6 +187,53 @@ describe("LanceDB instrumentation lifecycle", () => {
     } finally { second.disable(); await secondProvider.shutdown(); }
   });
 
+  it("instruments a table opened across owner handoff", async () => {
+    const secondExporter = new InMemorySpanExporter();
+    const secondProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(secondExporter)] });
+    const second = new LanceDBInstrumentation();
+    second.setTracerProvider(secondProvider);
+    let resolveTable!: (value: any) => void;
+    const pending = new Promise<any>(resolve => { resolveTable = resolve; });
+    class DeferredTable { name = "deferred"; async countRows() { return 3; } }
+    const deferredModule = { connect: async () => ({ openTable: () => pending }) };
+    try {
+      instrumentation.manuallyInstrument(deferredModule);
+      second.manuallyInstrument(deferredModule);
+      const connection = await deferredModule.connect();
+      const opening = connection.openTable();
+      instrumentation.disable();
+      const deferred = new DeferredTable();
+      resolveTable(deferred);
+      expect(await opening).toBe(deferred);
+      exporter.reset();
+      secondExporter.reset();
+      expect(await deferred.countRows()).toBe(3);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      expect(secondExporter.getFinishedSpans().map(span => span.name)).toEqual(["lancedb countRows"]);
+    } finally { second.disable(); await secondProvider.shutdown(); }
+  });
+
+  it("remembers in-flight table discovery while disabled for the next enable", async () => {
+    let resolveTable!: (value: any) => void;
+    const pending = new Promise<any>(resolve => { resolveTable = resolve; });
+    class DeferredTable { name = "deferred"; async countRows() { return 3; } }
+    const deferredModule = { connect: async () => ({ openTable: () => pending }) };
+    instrumentation.manuallyInstrument(deferredModule);
+    const connection = await deferredModule.connect();
+    const opening = connection.openTable();
+    instrumentation.disable();
+    const deferred = new DeferredTable();
+    resolveTable(deferred);
+    expect(await opening).toBe(deferred);
+    expect(isPatched()).toBe(false);
+    exporter.reset();
+    await deferred.countRows();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    instrumentation.enable();
+    await deferred.countRows();
+    expect(exporter.getFinishedSpans().map(span => span.name)).toEqual(["lancedb countRows"]);
+  });
+
   it("does not hand off a different LanceDB module to an unrelated provider", async () => {
     const secondExporter = new InMemorySpanExporter();
     const secondProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(secondExporter)] });

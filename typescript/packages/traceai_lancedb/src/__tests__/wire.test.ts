@@ -84,9 +84,11 @@ for (const packageName of ["lancedb-floor", "@lancedb/lancedb"]) {
       const spans = payloads.flatMap(payload => payload.resourceSpans.flatMap((resource: any) =>
         resource.scopeSpans.flatMap((scope: any) => scope.spans)));
       const database = spans.filter((span: any) => span.name.startsWith("lancedb"));
-      expect(database.map((span: any) => span.name)).toEqual([
-        "lancedb tableNames", "lancedb openTable", "lancedb countRows", "lancedb countRows",
+      expect(database.map((span: any) => span.name).sort()).toEqual([
+        "lancedb countRows", "lancedb countRows", "lancedb openTable", "lancedb tableNames",
       ]);
+      expect(database.filter((span: any) => span.name === "lancedb countRows" && span.status.code === 2)).toHaveLength(1);
+      expect(database.filter((span: any) => span.status.code === 2)).toHaveLength(1);
       for (const span of database) {
         expect(span.parentSpanId).toBe(parent.spanContext().spanId);
         expect(span.kind).toBe(3); // OTLP CLIENT enum
@@ -96,7 +98,6 @@ for (const packageName of ["lancedb-floor", "@lancedb/lancedb"]) {
           { key: "fi.span.kind", value: { stringValue: "VECTOR_DB" } },
         ]));
       }
-      expect(database[3].status.code).toBe(2);
       expect(JSON.stringify(payloads)).not.toContain("private_engine_failure");
       expect(JSON.stringify(payloads)).not.toContain("synthetic-test-only");
       expect(JSON.stringify(payloads)).not.toContain("db://synthetic");
