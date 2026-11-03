@@ -398,3 +398,64 @@ def test_stream_shape_and_privacy_over_localhost_otlp(tracing, monkeypatch, priv
         # core without this option; current-core runs must enforce it on wire.
         hides_errors = private and hasattr(config, "hide_error_details")
         assert (b"private-error" in received[0]) is not hides_errors
+
+@pytest.mark.parametrize("flag, hidden, visible", [
+    ("hide_input_messages", b"CANARY_INPUT", b"CANARY_OUTPUT"),
+    ("hide_input_text", b"CANARY_INPUT", b"CANARY_OUTPUT"),
+    ("hide_input_images", b"CANARY_IMAGE", b"CANARY_OUTPUT"),
+    ("hide_output_messages", b"CANARY_OUTPUT", b"CANARY_INPUT"),
+    ("hide_output_text", b"CANARY_OUTPUT", b"CANARY_INPUT"),
+])
+def test_stream_granular_privacy_on_otlp_wire(tracing, monkeypatch, flag, hidden, visible):
+    _, _, provider = tracing
+    received = []
+
+    class Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Receiver)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(
+        endpoint=f"http://127.0.0.1:{server.server_port}/v1/traces", timeout=3,
+    )))
+
+    def operation(self, messages):
+        yield delta("CANARY_OUTPUT")
+
+    model_cls = export_model(monkeypatch, operation)
+    SmolagentsInstrumentor().instrument(
+        tracer_provider=provider, config=TraceConfig(**{flag: True}),
+    )
+    try:
+        list(model_cls().generate_stream([{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "CANARY_INPUT"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,CANARY_IMAGE"}},
+            ],
+        }]))
+        provider.force_flush()
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+    assert len(received) == 1
+    (span,) = ExportTraceServiceRequest.FromString(received[0]).resource_spans[0].scope_spans[0].spans
+    attrs = {a.key: a.value for a in span.attributes}
+    assert attrs[GEN_AI_SPAN_KIND].string_value == "LLM"
+    assert hidden not in received[0], flag
+    assert visible in received[0], flag
+    if flag == "hide_input_images":
+        assert b"CANARY_INPUT" in received[0]  # Preserve text in the structured message.
+    if flag.startswith("hide_output"):
+        assert OUTPUT_VALUE not in attrs
+    else:
+        assert "input.value" not in attrs

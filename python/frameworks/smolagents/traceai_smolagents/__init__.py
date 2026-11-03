@@ -70,7 +70,7 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             method = "generate" if hasattr(model_subclass, "generate") else "__call__"
             wrappers = {
                 method: _ModelWrapper(tracer=self._tracer, method_name=method),
-                "generate_stream": _ModelStreamWrapper(tracer=self._tracer),
+                "generate_stream": _ModelStreamWrapper(tracer=self._tracer, config=config),
             }
             for method_name, wrapper in wrappers.items():
                 # Only wrap defining classes. Inherited aliases otherwise stack

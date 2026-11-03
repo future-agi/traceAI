@@ -13,7 +13,7 @@ from typing import (
     Tuple,
 )
 
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
@@ -395,7 +395,8 @@ class _ModelWrapper:
 class _ModelStreamAccumulator:
     """Keep output fragments, not SDK response objects or transport handles."""
 
-    def __init__(self) -> None:
+    def __init__(self, hide_raw_output: bool = False) -> None:
+        self._hide_raw_output = hide_raw_output
         self._content: list[str] = []
         self._tools: dict[int, dict[str, Any]] = {}
         self._input_tokens: Optional[int] = None
@@ -440,8 +441,11 @@ class _ModelStreamAccumulator:
                 id=tool["id"], function=SimpleNamespace(**tool["function"]),
             ) for tool in self._tools.values()],
         )
-        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
-        span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+        # The raw JSON duplicates message content. FITracer only masks the
+        # structured fields for granular message/text privacy settings.
+        if not self._hide_raw_output:
+            span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
         span.set_attributes(dict(_llm_output_messages(message)))
         if self._input_tokens is not None:
             span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, self._input_tokens)
@@ -452,8 +456,9 @@ class _ModelStreamAccumulator:
 
 
 class _ModelStreamWrapper:
-    def __init__(self, tracer: trace_api.Tracer) -> None:
+    def __init__(self, tracer: trace_api.Tracer, config: TraceConfig) -> None:
         self._tracer = tracer
+        self._config = config
 
     def __call__(
         self,
@@ -465,18 +470,26 @@ class _ModelStreamWrapper:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         arguments = _bind_arguments(wrapped, *args, **kwargs)
+        # input.value is the entire request (including text and image bytes),
+        # not just the fields FITracer masks for granular privacy flags.
+        hide_raw_input = any((
+            self._config.hide_input_messages, self._config.hide_input_text,
+            self._config.hide_input_images,
+        ))
         attributes = {
             GEN_AI_SPAN_KIND: LLM,
-            **dict(_input_value_and_mime_type(arguments)),
+            **({} if hide_raw_input else dict(_input_value_and_mime_type(arguments))),
             **dict(_llm_invocation_parameters(instance, arguments)),
             **dict(_llm_input_messages(arguments.get("messages", []))),
             **dict(_llm_tools(arguments.get("tools_to_call_from", []))),
             **dict(get_attributes_from_context()),
-            **dict(_get_raw_input(args, **kwargs)),
+            **({} if hide_raw_input else dict(_get_raw_input(args, **kwargs))),
         }
         if (model_id := getattr(instance, "model_id", None)) is not None:
             attributes[GEN_AI_REQUEST_MODEL] = model_id
-        accumulator = _ModelStreamAccumulator()
+        accumulator = _ModelStreamAccumulator(
+            hide_raw_output=self._config.hide_output_messages or self._config.hide_output_text
+        )
         return _trace_stream(
             self._tracer, f"{instance.__class__.__name__}.generate_stream", attributes,
             lambda: wrapped(*args, **kwargs),
