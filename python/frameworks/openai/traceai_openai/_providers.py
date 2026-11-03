@@ -15,21 +15,27 @@ DEFAULT_PROVIDER = FiLLMProviderValues.OPENAI.value
 # Exact API hosts.
 _HOSTS = {
     "api.openai.com": FiLLMProviderValues.OPENAI.value,
+    "ollama.com": "ollama",
     "generativelanguage.googleapis.com": FiLLMProviderValues.GOOGLE.value,
     "api.anthropic.com": FiLLMProviderValues.ANTHROPIC.value,
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
+    "api.z.ai": "zai",
     "api.together.ai": "together",
+    "api.fireworks.ai": "fireworks",
     "inference.baseten.co": "baseten",
     "dashscope.aliyuncs.com": "dashscope",
     "dashscope-intl.aliyuncs.com": "dashscope",
     "dashscope-us.aliyuncs.com": "dashscope",
     "api.perplexity.ai": "perplexity",
+    "api.parallel.ai": "parallel",
     "api.orcarouter.ai": "orcarouter",
     "api.anannas.ai": "anannas",
     "anannas.ai": "anannas",
     "api.doubleword.ai": "doubleword",
+    # Identify the gateway, not the upstream provider it may select or fall back to.
+    "ai-gateway.vercel.sh": "vercel",
 }
 
 # Vendors that give every resource, workspace or endpoint its own subdomain.

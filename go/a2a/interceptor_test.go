@@ -680,7 +680,11 @@ func TestProtocolErrorKeepsTheAgentMessageOnlyWhenContentIsOn(t *testing.T) {
 			}
 			s := only(t, rec)
 			a := attrs(s)
-			if s.Status().Code != codes.Error || str(a, traceaia2a.ErrorType) != "TASK_NOT_FOUND" || s.Status().Description != "TASK_NOT_FOUND" {
+			wantDescription := "TASK_NOT_FOUND"
+			if hide {
+				wantDescription = ""
+			}
+			if s.Status().Code != codes.Error || str(a, traceaia2a.ErrorType) != "TASK_NOT_FOUND" || s.Status().Description != wantDescription {
 				t.Errorf("status %+v error.type %q", s.Status(), str(a, traceaia2a.ErrorType))
 			}
 			if has(a, traceaia2a.ErrorMessage) == hide {

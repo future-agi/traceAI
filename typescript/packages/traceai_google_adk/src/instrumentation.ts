@@ -23,6 +23,7 @@ import {
   MimeType,
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
+import { nativeTracingEnabled } from "./native-state";
 
 export interface GoogleADKInstrumentationConfig {
   instrumentationConfig?: Record<string, unknown>;
@@ -32,7 +33,8 @@ export interface GoogleADKInstrumentationConfig {
 /**
  * Google ADK Instrumentation class.
  *
- * Provides automatic instrumentation for the @google/adk SDK.
+ * @deprecated Legacy hooks are retained for compatibility only, not ADK 2.x
+ * support. Use configure() or GoogleADKSpanExporter with native ADK telemetry.
  */
 export class GoogleADKInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
@@ -49,6 +51,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
   }
 
   override enable(): void {
+    this._diag.warn("GoogleADKInstrumentation is deprecated and does not support ADK 2.x. Use configure() with ADK native telemetry; do not combine the two routes.");
     super.enable();
     this.fiTracer = new FITracer({
       tracer: this.tracer,
@@ -75,7 +78,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
   }
 
   private patch(adkModule: any & { _fiPatched?: boolean }): any {
-    if (adkModule?._fiPatched || _isFIPatched) {
+    if (nativeTracingEnabled || adkModule?._fiPatched || _isFIPatched) {
       return adkModule;
     }
 

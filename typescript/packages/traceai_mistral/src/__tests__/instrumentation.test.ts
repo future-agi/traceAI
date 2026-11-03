@@ -3,6 +3,7 @@ import { MistralInstrumentation, isPatched } from "../instrumentation";
 
 // Mock the dependencies
 jest.mock("@traceai/fi-core", () => ({
+  ...jest.requireActual<typeof import("@traceai/fi-core")>("@traceai/fi-core"),
   FITracer: jest.fn().mockImplementation(() => ({
     startSpan: jest.fn().mockReturnValue({
       setStatus: jest.fn(),
@@ -254,7 +255,7 @@ describe("Mistral Instrumentation - Version", () => {
   it("should export version", () => {
     const { VERSION } = require("../version");
     expect(typeof VERSION).toBe("string");
-    expect(VERSION).toBe("0.1.0");
+    expect(VERSION).toBe(require("../../package.json").version);
   });
 });
 
