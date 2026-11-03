@@ -98,7 +98,9 @@ def _input(span: Any, operation: str, kwargs: dict[str, Any], content: bool) -> 
     # Keep only plain chat messages and plain text Responses inputs.
     if operation == "chat":
         if not isinstance(value, (list, tuple)) or any(
-            not isinstance(msg, dict) or not isinstance(msg.get("content"), str)
+            not isinstance(msg, dict)
+            or not isinstance(msg.get("role"), str)
+            or not isinstance(msg.get("content"), str)
             for msg in value
         ):
             return

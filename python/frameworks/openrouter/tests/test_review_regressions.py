@@ -5,8 +5,6 @@ import json
 import httpx
 import pytest
 from fi_instrumentation import TraceConfig
-from openrouter import OpenRouter
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
