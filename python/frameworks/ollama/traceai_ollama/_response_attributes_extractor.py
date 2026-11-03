@@ -12,6 +12,8 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from traceai_ollama._utils import _redact_tool_calls
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -97,7 +99,8 @@ class _ResponseAttributesExtractor:
         elif self._config.hide_output_text:
             if isinstance(output.get("message"), dict):
                 output["message"] = {
-                    key: REDACTED_VALUE if key in ("content", "thinking") else value
+                    key: REDACTED_VALUE if key in ("content", "thinking") else
+                    _redact_tool_calls(value) if key == "tool_calls" else value
                     for key, value in output["message"].items() if key != "logprobs"
                 }
             for key in ("response", "thinking"):
@@ -137,4 +140,5 @@ class _ResponseAttributesExtractor:
             if function.get("name"):
                 yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}", function["name"]
             if "arguments" in function:
-                yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}", safe_json_dumps(function["arguments"])
+                arguments = REDACTED_VALUE if self._config.hide_output_text else function["arguments"]
+                yield f"{tool_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}", safe_json_dumps(arguments)

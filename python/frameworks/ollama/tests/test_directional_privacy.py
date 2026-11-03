@@ -69,6 +69,27 @@ def test_generate_and_embed_input_text_not_serialized(client_span, flag):
         assert PROMPT not in json.dumps(attrs)
 
 
+def test_chat_input_thinking_and_tool_arguments_hidden(client_span):
+    messages = [{"role": "user", "content": "ok", "thinking": "SYNTHETIC_INPUT_THINK_83",
+                 "tool_calls": [{"function": {"name": "lookup", "arguments": {"query": "SYNTHETIC_INPUT_TOOL_83"}}}]}]
+    attrs = client_span("hide_input_text", "chat", {"messages": messages},
+                        {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
+    assert "SYNTHETIC_INPUT_THINK_83" not in json.dumps(attrs)
+    assert "SYNTHETIC_INPUT_TOOL_83" not in json.dumps(attrs)
+    message = json.loads(attrs["input.value"])["messages"][0]
+    assert message["role"] == "user"
+    assert message["tool_calls"][0]["function"]["name"] == "lookup"
+    assert messages[0]["tool_calls"][0]["function"]["arguments"]["query"] == "SYNTHETIC_INPUT_TOOL_83"
+    assert messages[0]["thinking"] == "SYNTHETIC_INPUT_THINK_83"
+
+
+def test_chat_none_messages_keeps_span(client_span):
+    attrs = client_span("hide_input_text", "chat", {"messages": None},
+                        {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
+    assert attrs["gen_ai.provider.name"] == "ollama"
+    assert json.loads(attrs["input.value"]) == {"messages": []}
+
+
 def test_chat_images_hidden_in_all_attributes(client_span):
     messages = [{"role": "user", "content": "ok", "images": [IMAGE]}]
     attrs = client_span("hide_input_images", "chat", {"messages": messages},
@@ -77,6 +98,17 @@ def test_chat_images_hidden_in_all_attributes(client_span):
     assert messages[0]["images"] == [IMAGE]
     assert "images" not in json.loads(attrs["input.value"])["messages"][0]
     assert not any(key.endswith(".images") for key in attrs)
+
+
+def test_generated_tool_arguments_hidden_under_output_text(client_span):
+    response = {"model": "synthetic-model", "done": True,
+                "message": {"role": "assistant", "content": "ok", "tool_calls": [
+                    {"function": {"name": "lookup", "arguments": {"query": "SYNTHETIC_TOOL_ARGUMENT_83"}}}]}}
+    attrs = client_span("hide_output_text", "chat", {"messages": [{"role": "user", "content": "ok"}]}, response)
+    assert "SYNTHETIC_TOOL_ARGUMENT_83" not in json.dumps(attrs)
+    assert json.loads(attrs["output.value"])["message"]["tool_calls"][0]["function"]["name"] == "lookup"
+    assert attrs["gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name"] == "lookup"
+    assert response["message"]["tool_calls"][0]["function"]["arguments"]["query"] == "SYNTHETIC_TOOL_ARGUMENT_83"
 
 
 @pytest.mark.parametrize("flag", ["hide_output_text", "hide_output_messages"])

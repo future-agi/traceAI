@@ -257,9 +257,12 @@ async def test_output_privacy_on_otlp_wire(tracing, endpoint, asynchronous, stre
         output = json.dumps({key: value for key, value in attrs.items() if key == "output.value" or key.startswith("gen_ai.output.")})
         assert "hello" not in output
         assert "consider" not in output
+        assert "Rome" not in output
+        assert "Paris" not in output
         if flag != "hide_output_text":
-            assert "Rome" not in output
             assert "weather" not in output
+        elif endpoint == "chat":
+            assert attrs["gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name"] == "weather"
         assert attrs["gen_ai.usage.total_tokens"] == 7
     finally:
         if asynchronous:

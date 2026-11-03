@@ -11,6 +11,8 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from traceai_ollama._utils import _redact_tool_calls
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -58,7 +60,7 @@ class _RequestAttributesExtractor:
 
         # For chat endpoint
         if "messages" in request_parameters:
-            messages = system_messages + list(request_parameters.get("messages", []))
+            messages = system_messages + list(request_parameters.get("messages") or ())
             yield from self._extract_messages(messages)
             if self._config.hide_input_messages:
                 yield SpanAttributes.INPUT_VALUE, REDACTED_VALUE
@@ -68,8 +70,12 @@ class _RequestAttributesExtractor:
                 serialized = []
                 for message in messages:
                     item = dict(message)
-                    if self._config.hide_input_text and "content" in item:
-                        item["content"] = REDACTED_VALUE
+                    if self._config.hide_input_text:
+                        for key in ("content", "thinking"):
+                            if key in item:
+                                item[key] = REDACTED_VALUE
+                        if "tool_calls" in item:
+                            item["tool_calls"] = _redact_tool_calls(item["tool_calls"])
                     if self._config.hide_input_images:
                         item.pop("images", None)
                     serialized.append(item)
