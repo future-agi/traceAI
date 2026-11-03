@@ -437,6 +437,29 @@ test('current SDK pipeThrough preventCancel releases source when output is cance
   assert.equal(f.spans().length, 1, 'source completion should export a span');
 });
 
+test('current SDK values preventCancel keeps span open until resumed source completes', async t => {
+  const f = await modern(t);
+  f.instrumentation.instrumentClient(f.client);
+  f.respond(() => sseResponse([
+    chunk('one'),
+    chunk('two', { usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 } }),
+  ]));
+  const stream = await f.client.chat.stream(request);
+  for await (const event of stream.values({ preventCancel: true })) {
+    assert.equal(event.data.choices[0].delta.content, 'one');
+    break;
+  }
+  assert.equal(stream.locked, false, 'return should release the reader');
+  assert.equal(f.spans().length, 0, 'releasing the reader is not source completion');
+  const reader = stream.getReader();
+  assert.equal((await reader.read()).value.data.choices[0].delta.content, 'two');
+  assert.equal((await reader.read()).done, true);
+  reader.releaseLock();
+  assert.equal(f.spans().length, 1, 'completion should export exactly once');
+  assert.equal(f.spans()[0].attributes[S.LLM_TOKEN_COUNT_TOTAL], 8);
+  assert.equal(JSON.parse(f.spans()[0].attributes[S.LLM_OUTPUT_MESSAGES])[0].content, 'onetwo');
+});
+
 test('SDK floor direct async generator next and return finalize spans', async t => {
   const { default: Client } = await import('mistral-floor');
   for (const method of ['next', 'return']) {

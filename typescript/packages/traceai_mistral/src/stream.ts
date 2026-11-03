@@ -11,11 +11,11 @@ export function observeStream<T>(
   const finish = (error?: unknown) => {
     if (!ended) { ended = true; onEnd(error); }
   };
-  const observe = async (call: () => PromiseLike<IteratorResult<T>>): Promise<IteratorResult<T>> => {
+  const observe = async (call: () => PromiseLike<IteratorResult<T>>, finishOnDone = true): Promise<IteratorResult<T>> => {
     try {
       const result = await context.with(spanContext, call);
-      if (result.done) finish();
-      else onValue(result.value);
+      if (result.done && finishOnDone) finish();
+      else if (!result.done) onValue(result.value);
       return result;
     } catch (error) { finish(error); throw error; }
   };
@@ -23,9 +23,11 @@ export function observeStream<T>(
     try { const result = await context.with(spanContext, call); finish(); return result; }
     catch (error) { finish(error); throw error; }
   };
-  const wrapIterator = (iterator: AsyncIterator<T>): AsyncIterableIterator<T> => ({
+  const wrapIterator = (iterator: AsyncIterator<T>, preventCancel = false): AsyncIterableIterator<T> => ({
     next: (...args) => observe(() => iterator.next(...args)),
-    return: value => observe(() => iterator.return ? iterator.return(value) : Promise.resolve({ done: true, value })),
+    // ReadableStream.values({preventCancel:true}).return() only releases its reader.
+    // The source can be resumed, so a done result here is not stream completion.
+    return: value => observe(() => iterator.return ? iterator.return(value) : Promise.resolve({ done: true, value }), !preventCancel),
     throw: error => observe(() => iterator.throw ? iterator.throw(error) : Promise.reject(error)),
     [Symbol.asyncIterator]() { return this; },
   });
@@ -61,7 +63,10 @@ export function observeStream<T>(
     get(target, key) {
       const value = Reflect.get(target, key, target);
       if ((key === Symbol.asyncIterator || key === "values") && typeof value === "function") {
-        return (...args: unknown[]) => wrapIterator(Reflect.apply(value, target, args));
+        return (...args: unknown[]) => wrapIterator(
+          Reflect.apply(value, target, args),
+          key === "values" && (args[0] as { preventCancel?: boolean } | undefined)?.preventCancel === true,
+        );
       }
       if (key === "next" && typeof value === "function") {
         return (...args: unknown[]) => observe(() => Reflect.apply(value, target, args));
