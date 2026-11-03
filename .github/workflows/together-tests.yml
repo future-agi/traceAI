@@ -68,7 +68,7 @@ jobs:
             cp typescript/packages/traceai_together/contract/typecheck.ts "$sdk/typecheck.ts"
             mkdir -p "$sdk/node_modules/@traceai"
             ln -s "$GITHUB_WORKSPACE/typescript/packages/traceai_together" "$sdk/node_modules/@traceai/together"
-            pnpm --dir typescript exec tsc --strict --skipLibCheck --noEmit --esModuleInterop --target es2020 --module commonjs --moduleResolution node "$sdk/typecheck.ts"
+            typescript/node_modules/.bin/tsc --strict --skipLibCheck --noEmit --esModuleInterop --target es2020 --module commonjs --moduleResolution node "$sdk/typecheck.ts"
           done
       - name: Build installable tarball without changing lockfile
         working-directory: typescript/packages/traceai_together
