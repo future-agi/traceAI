@@ -97,3 +97,75 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
     } finally { await provider.shutdown(); }
   });
 }
+
+for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
+  test(`${moduleName}: 200 response validation, provider stream failures and semantic kinds`, async () => {
+    const { OpenRouter } = await import(moduleName);
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    let reply = new Response('{}', { headers: { 'content-type': 'application/json' } });
+    const client = new OpenRouter({ apiKey: 'synthetic-only', retryConfig: { strategy: 'none' },
+      httpClient: createOpenRouterTracingClient({ fetcher: async () => reply.clone(), tracer: provider.getTracer('test') }) });
+    try {
+      for (const invoke of [
+        () => client.chat.send({ chatRequest: { model: 'synthetic', messages: [{ role: 'user', content: 'synthetic' }] } }),
+        () => client.embeddings.generate({ requestBody: { model: 'synthetic', input: 'synthetic' } }),
+        () => client.rerank.rerank({ requestBody: { model: 'synthetic', query: 'synthetic', documents: ['synthetic'] } }),
+        () => client.responses.send({ responsesRequest: { model: 'synthetic', input: 'synthetic' } }),
+      ]) {
+        await assert.rejects(invoke);
+        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
+      }
+      for (const response of [
+        new Response('{broken', { headers: { 'content-type': 'application/json' } }),
+        new Response('{}', { status: 201, headers: { 'content-type': 'application/json' } }),
+        new Response('{}', { headers: { 'content-type': 'text/plain' } }),
+      ]) {
+        reply = response;
+        await assert.rejects(() => client.chat.send({ chatRequest: { model: 'synthetic', messages: [{ role: 'user', content: 'synthetic' }] } }));
+        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
+      }
+      // The same validation must not falsely mark valid chat, embedding or rerank responses.
+      for (const [invoke, payload, kind] of [
+        [() => client.chat.send({ chatRequest: { model: 'synthetic', messages: [{ role: 'user', content: 'synthetic' }] } }),
+          { id: 'synthetic-id', object: 'chat.completion', created: 1, system_fingerprint: 'synthetic', model: 'synthetic', choices: [{ index: 0, message: { role: 'assistant', content: 'synthetic' }, finish_reason: 'stop' }] }, 'LLM'],
+        [() => client.embeddings.generate({ requestBody: { model: 'synthetic', input: 'synthetic' } }),
+          { data: [], model: 'synthetic', object: 'list' }, 'EMBEDDING'],
+        [() => client.rerank.rerank({ requestBody: { model: 'synthetic', query: 'synthetic', documents: ['synthetic'] } }),
+          { model: 'synthetic', results: [] }, 'RERANKER'],
+      ]) {
+        reply = new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
+        await invoke();
+        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 0);
+        assert.equal(exporter.getFinishedSpans().at(-1).attributes['fi.span.kind'], kind);
+      }
+      for (const [data, type] of [
+        [{ type: 'error', code: 'server_error', message: 'synthetic failure', param: null, sequence_number: 0 }, 'error'],
+        [{ type: 'response.failed', sequence_number: 0, response: {} }, 'response.failed'],
+      ]) {
+        reply = new Response(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+        const stream = await client.responses.send({ responsesRequest: { model: 'synthetic', input: 'synthetic', stream: true } });
+        if (type === 'error') {
+          const events = [];
+          for await (const event of stream) events.push(event);
+          assert.equal(events[0].type, type);
+        } else {
+          try { for await (const _event of stream) { /* SDK may validate response.failed fields */ } } catch { /* failure event remains a failure */ }
+        }
+        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
+      }
+      // A clean byte-stream EOF with a response.failed event must itself mark an error,
+      // independently of whether the SDK accepts the payload's nested response shape.
+      const failureBody = 'event: response.failed\ndata: {"type":"response.failed","sequence_number":0,"response":{}}\n\n';
+      const transport = createOpenRouterTracingClient({ fetcher: async () => new Response(failureBody, { headers: { 'content-type': 'text/event-stream' } }), tracer: provider.getTracer('test') });
+      const failureResponse = await transport.request(new Request('https://openrouter.ai/api/v1/responses', { method: 'POST', body: '{}' }));
+      await failureResponse.text();
+      assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
+      for (const [path, kind] of [['embeddings', 'EMBEDDING'], ['rerank', 'RERANKER']]) {
+        await createOpenRouterTracingClient({ fetcher: async () => new Response('{}', { headers: { 'content-type': 'application/json' } }), tracer: provider.getTracer('test') })
+          .request(new Request(`https://openrouter.ai/api/v1/${path}`, { method: 'POST', body: '{}' }));
+        assert.equal(exporter.getFinishedSpans().at(-1).attributes['fi.span.kind'], kind);
+      }
+    } finally { await provider.shutdown(); }
+  });
+}

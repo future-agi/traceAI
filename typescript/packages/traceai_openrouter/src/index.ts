@@ -1,5 +1,9 @@
 import { context, trace, SpanKind, SpanStatusCode, type Span, type Tracer } from "@opentelemetry/api";
 import { HTTPClient, type Fetcher } from "@openrouter/sdk";
+// The SDK exports its generated response schemas through this public subpath. The
+// workspace's CommonJS tsconfig uses legacy Node resolution, so load it at runtime.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const sdkOperations = require("@openrouter/sdk/models/operations") as Record<string, { safeParse(value: unknown): { success: boolean } }>;
 
 export const VERSION = "0.1.0"; // x-release-please-version
 
@@ -8,6 +12,15 @@ const operations: Readonly<Record<string, string>> = {
   "/chat/completions": "chat", "/embeddings": "embeddings", "/rerank": "rerank",
   "/responses": "responses", "/beta/responses": "responses",
 };
+const responseSchemas = {
+  chat: sdkOperations.SendChatCompletionRequestResponse$inboundSchema,
+  embeddings: sdkOperations.CreateEmbeddingsResponse$inboundSchema,
+  rerank: sdkOperations.CreateRerankResponse$inboundSchema,
+  responses: sdkOperations.CreateResponsesResponse$inboundSchema,
+};
+function spanKind(operation: string): string {
+  return operation === "embeddings" ? "EMBEDDING" : operation === "rerank" ? "RERANKER" : "LLM";
+}
 
 type Usage = Record<string, unknown>;
 const object = (value: unknown): Usage | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Usage : undefined;
@@ -51,9 +64,9 @@ async function requestModel(request: Request): Promise<string | undefined> {
 }
 
 /** Read only a bounded JSON clone; do not depend on Content-Length (chunked responses omit it). */
-async function responseMetadata(response: Response): Promise<unknown> {
+async function responseMetadata(response: Response): Promise<{ payload?: unknown; malformed?: boolean }> {
   const reader = response.clone().body?.getReader();
-  if (!reader) return;
+  if (!reader) return {};
   const parts: Uint8Array[] = [];
   let size = 0;
   try {
@@ -61,14 +74,15 @@ async function responseMetadata(response: Response): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 65536) return;
+      if (size > 65536) return {};
       parts.push(value);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch { return; } // Metadata is best effort; the SDK still receives the original body.
+    try { return { payload: JSON.parse(new TextDecoder().decode(bytes)) }; }
+    catch { return { malformed: true }; } // The SDK also rejects malformed JSON.
+  } catch { return {}; } // A clone read failure does not prove that the SDK's own read failed.
   finally { void reader.cancel().catch(() => {}); }
 }
 
@@ -89,6 +103,7 @@ function observer(span: Span, markError: () => void) {
       if (!data || data === "[DONE]") continue;
       try {
         const event = object(JSON.parse(data));
+        if (event?.type === "error" || event?.type === "response.failed" || event?.type === "response.incomplete") markError();
         // Chat chunks carry usage directly; Responses events carry the response in a nested object.
         setOutput(span, event?.response ?? event);
       } catch { markError(); /* The SDK will report the parsing failure to its caller. */ }
@@ -122,7 +137,7 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
     // callModel sends through the Responses route; mark the same span rather than adding a duplicate.
     const name = request.headers.get("x-openrouter-callmodel") === "true" ? "callModel" : operation;
     const span = tracer.startSpan(`${name} openrouter`, { kind: SpanKind.CLIENT, attributes: {
-      "fi.span.kind": "LLM", "gen_ai.operation.name": name, "gen_ai.provider.name": "openrouter",
+      "fi.span.kind": spanKind(operation), "gen_ai.operation.name": name, "gen_ai.provider.name": "openrouter",
     } });
     const model = await requestModel(request);
     if (model) span.setAttribute("gen_ai.request.model", model);
@@ -132,8 +147,14 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
       // Keep only the SDK's transport in scope; do not wrap a separate HTTP span.
       const response = await context.with(trace.setSpan(context.active(), span), () => fetcher(input, init));
       if (!response.ok) { span.setAttribute("http.response.status_code", response.status); end(true); return response; }
-      const type = response.headers.get("content-type")?.toLowerCase() ?? "";
-      if (type.includes("text/event-stream") && response.body) {
+      const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
+      // These inference routes accept only 200 JSON or SSE in the official SDK.
+      // Other successful HTTP statuses/content types are rejected by its matcher.
+      if (response.status !== 200 || (type !== "application/json" && type !== "text/event-stream")) {
+        end(true);
+        return response;
+      }
+      if (type === "text/event-stream" && response.body) {
         const reader = response.body.getReader();
         const observe = observer(span, () => span.setStatus({ code: SpanStatusCode.ERROR }));
         const body = new ReadableStream<Uint8Array>({
@@ -150,8 +171,15 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       }
       // A bounded JSON clone does not consume the SDK's response body.
-      if (type.includes("application/json")) setOutput(span, await responseMetadata(response));
-      end();
+      if (type === "application/json") {
+        const metadata = await responseMetadata(response);
+        if (metadata.malformed || (metadata.payload !== undefined && !responseSchemas[operation as keyof typeof responseSchemas].safeParse(metadata.payload).success)) {
+          end(true);
+        } else {
+          setOutput(span, metadata.payload);
+          end();
+        }
+      } else end();
       return response;
     } catch (error) { end(true); throw error; }
   } });
