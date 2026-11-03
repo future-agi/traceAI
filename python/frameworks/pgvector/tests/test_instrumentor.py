@@ -307,27 +307,32 @@ def test_all_vector_operators(operator, distance):
     "query,top_k",
     [
         (
-            "SELECT id FROM items WHERE category IN "
-            "(SELECT category FROM allowed LIMIT 1) "
-            "ORDER BY embedding <-> %s::vector LIMIT 10",
+            (
+                "SELECT id FROM items WHERE category IN "
+                "(SELECT category FROM allowed LIMIT 1) "
+                "ORDER BY embedding <-> %s::vector LIMIT 10"
+            ),
             10,
         ),
         (
-            "SELECT id FROM items WHERE category IN "
-            "(SELECT category FROM allowed LIMIT 1) "
-            "ORDER BY embedding <-> %s::vector",
+            (
+                "SELECT id FROM items WHERE category IN "
+                "(SELECT category FROM allowed LIMIT 1) "
+                "ORDER BY embedding <-> %s::vector"
+            ),
             None,
         ),
         (
-            "SELECT id FROM items ORDER BY embedding <=> %s LIMIT 10 "
-            "OFFSET (SELECT count(*) FROM allowed LIMIT 1)",
+            (
+                "SELECT id FROM items ORDER BY embedding <=> %s LIMIT 10 "
+                "OFFSET (SELECT count(*) FROM allowed LIMIT 1)"
+            ),
             10,
         ),
         ("SELECT embedding <-> %s FROM items LIMIT 5;", 5),
         ("SELECT embedding <-> %s FROM items LIMIT 5; SELECT 1 LIMIT 1", None),
         (
-            "SELECT * FROM (SELECT embedding <-> %s FROM items LIMIT 1) sub "
-            "LIMIT 10",
+            ("SELECT * FROM (SELECT embedding <-> %s FROM items LIMIT 1) sub LIMIT 10"),
             None,
         ),
     ],
@@ -481,7 +486,9 @@ def test_database_opt_in_emits_no_native_metrics(monkeypatch):
                     assert not metric.name.startswith(("db.", "db_"))
                     assert "postgres" not in metric.name.lower()
                     for point in metric.data.data_points:
-                        assert not any(key.startswith("db.") for key in point.attributes)
+                        assert not any(
+                            key.startswith("db.") for key in point.attributes
+                        )
                         assert "private" not in str(point.attributes)
 
     instrumentor = PgVectorInstrumentor()
