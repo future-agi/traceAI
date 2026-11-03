@@ -79,6 +79,27 @@ class LegacyStreamTest {
         }
     }
 
+    @Test void secondaryChoiceFinishDoesNotCompleteTruncatedPrimaryChoice() throws Exception {
+        var exporter = InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            String secondary = CHUNK.replace("\"index\":0", "\"index\":1")
+                .replace("\"finish_reason\":null", "\"finish_reason\":\"stop\"");
+            var raw = new TracingHttpClientTest.FakeResponse("text/event-stream", CHUNK + secondary);
+            var client = new OpenAIClientImpl(ClientOptions.builder()
+                .httpClient(new TracingHttpClientTest.FakeTransport(raw)).apiKey("offline-not-a-key").maxRetries(0).build());
+            var params = ChatCompletionCreateParams.builder().model("model").messages(List.of()).build();
+            try (var response = new TracedOpenAIClient(client, new FITracer(provider.get("test")))
+                    .streamChatCompletionResponse(params)) {
+                assertThat(response.stream().count()).isEqualTo(2);
+            }
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+            var span = exporter.getFinishedSpanItems().get(0);
+            assertThat(span.getStatus().getStatusCode()).isNotEqualTo(io.opentelemetry.api.trace.StatusCode.OK);
+            assertThat(span.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.booleanKey("traceai.response.closed_early"))).isTrue();
+        }
+    }
+
     @Test void terminalFinishReasonMarksLegacyStreamSuccessful() throws Exception {
         var exporter = InMemorySpanExporter.create();
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
