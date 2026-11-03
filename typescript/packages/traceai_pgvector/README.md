@@ -37,11 +37,12 @@ const sdk = new NodeSDK({
 sdk.start();
 
 const pg = require("pg");
-const pgvector = require("pgvector");
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 async function main() {
   try {
+    // Dynamic import works with both CommonJS and ESM pgvector releases.
+    const pgvector = await import("pgvector");
     const result = await pool.query(
       "SELECT id FROM documents ORDER BY embedding <=> $1::vector LIMIT $2",
       [pgvector.toSql([0.1, 0.2, 0.3]), 5],

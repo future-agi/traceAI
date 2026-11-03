@@ -20,8 +20,8 @@ const sql = "SELECT id FROM documents ORDER BY embedding <=> $1::vector LIMIT $2
 const result = { rows: [{ id: 1, embedding: "private-result-vector" }], rowCount: 1 };
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function controlledClient(pg: any) {
-  const client = new pg.Client({ host: "127.0.0.1", user: "synthetic", database: "synthetic" });
+function controlledClient(pg: any, options: Record<string, unknown> = {}) {
+  const client = new pg.Client({ host: "127.0.0.1", user: "synthetic", database: "synthetic", ...options });
   const submitted: any[] = [];
   client._pulseQueryQueue = () => {
     const queue = client._queryQueue ?? client.queryQueue;
@@ -156,6 +156,35 @@ for (const [version, pg] of versions) {
       expect(query.emit).toBe(originalEmit);
       expect(onEnd).toHaveBeenCalledWith(result);
       expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("emitter-only Query with a client timeout finishes and restores emit", async () => {
+      const { client, submitted } = controlledClient(pg, { query_timeout: 5 });
+      const query = new pg.Query(sql);
+      const originalEmit = query.emit;
+      expect(client.query(query)).toBe(query);
+      expect(submitted).toHaveLength(1);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
+      expect(exporter.getFinishedSpans()[0].status.message).toBe("Query read timeout");
+      expect(query.emit).toBe(originalEmit);
+      expect(client._queryQueue ?? client.queryQueue).toHaveLength(0);
+      query.emit("end", result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("emitter-only Query with timeout still finishes on successful end", () => {
+      const { client, submitted } = controlledClient(pg, { query_timeout: 100 });
+      const query = new pg.Query(sql);
+      const originalEmit = query.emit;
+      client.query(query);
+      submitted[0].callback(null, result); // pg's timeout wrapper clears the timer.
+      query.emit("end", result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.OK);
+      expect(query.emit).toBe(originalEmit);
     });
 
     test("Query error events retain EventEmitter's unhandled-error contract", () => {

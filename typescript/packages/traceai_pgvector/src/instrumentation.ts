@@ -137,9 +137,14 @@ export class PgVectorInstrumentation extends InstrumentationBase<PgVectorInstrum
     const callback = submittable && typeof query.callback === "function" ? query.callback
       : callbackIndex >= 0 ? args[callbackIndex] : query?.callback;
     const hasCallback = typeof callback === "function";
-    // A custom Submittable without a callback or EventEmitter has no observable
-    // completion contract. Pass it through rather than invent an early success.
-    if (submittable && ((!hasCallback && typeof query.emit !== "function") || !canAssign(query, hasCallback ? "callback" : "emit"))) {
+    const readTimeout = submittable && (query.query_timeout || receiver?.connectionParameters?.query_timeout);
+    // pg's timeout path invokes a captured callback instead of emitting end/error.
+    // Older pg versions call that callback even when none was supplied (and throw).
+    // Give emitter-only queries a callback for the timeout path, while retaining
+    // emit observation for queries that complete by emitting end/error.
+    const cannotObserveTimeout = readTimeout && !hasCallback && !canAssign(query, "callback");
+    if (submittable && ((!hasCallback && typeof query.emit !== "function") ||
+        !canAssign(query, hasCallback ? "callback" : "emit") || cannotObserveTimeout)) {
       return original.apply(receiver, args);
     }
 
@@ -207,10 +212,19 @@ export class PgVectorInstrumentation extends InstrumentationBase<PgVectorInstrum
         return context.with(parent, () => originalEmit.call(this, event, ...eventArgs));
       };
       query.emit = wrappedEmit;
+      const callbackDescriptor = readTimeout ? Object.getOwnPropertyDescriptor(query, "callback") : undefined;
+      const timeoutCallback: QueryFunction = (error, result) => finish(error, result);
+      if (readTimeout) query.callback = timeoutCallback;
       restore = () => {
         if (query.emit === wrappedEmit) {
           if (descriptor) Object.defineProperty(query, "emit", descriptor);
           else delete query.emit;
+        }
+        // If pg has replaced the callback with its timer wrapper, leave it alone:
+        // that wrapper owns clearing the timer and handling late completions.
+        if (readTimeout && query.callback === timeoutCallback) {
+          if (callbackDescriptor) Object.defineProperty(query, "callback", callbackDescriptor);
+          else delete query.callback;
         }
       };
     }
