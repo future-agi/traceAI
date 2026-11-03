@@ -8,8 +8,9 @@ processors on, mutates, or shuts down the application's tracer provider.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from types import MappingProxyType
 
 from fi_instrumentation.instrumentation import TraceConfig
 from fi_instrumentation.instrumentation._tracers import FITracer
@@ -235,6 +236,13 @@ class NativeSpan(trace.Span):
         self.logical_kind = logical_kind
         self.include_content = include_content
         self.agent = agent
+        # FallbackModel reads the current span's attributes to identify its
+        # chat span. Expose only projected, non-content metadata, never the
+        # underlying SDK span or payload fields (even with content opted in).
+        self._attributes = project(attributes, logical_kind, False)
+        self.attributes: Mapping[str, AttributeValue] = MappingProxyType(
+            self._attributes
+        )
         self.tokens: dict[str, int] = {
             key[len(_USAGE) :]: value
             for key, value in (attributes or {}).items()
@@ -247,6 +255,7 @@ class NativeSpan(trace.Span):
             return
         attrs = project({key: value}, self.logical_kind, self.include_content)
         for mapped, val in attrs.items():
+            self._attributes.update(project({mapped: val}, self.logical_kind, False))
             if mapped.startswith(_USAGE):
                 self.tokens[mapped[len(_USAGE) :]] = val
             self.span.set_attribute(mapped, val)
@@ -311,8 +320,15 @@ class NativeSpan(trace.Span):
         self, name: str, attributes: Attributes = None, timestamp: int | None = None
     ) -> None:
         # Arbitrary native events can quote payloads even with content disabled.
+        # The FI span applies its error-detail policy to this small safe subset.
         if name == "exception":
-            self.span.add_event(name, {}, timestamp)
+            safe = {
+                key: value
+                for key, value in (attributes or {}).items()
+                if (key == "exception.type" and isinstance(value, str))
+                or (key == "exception.escaped" and isinstance(value, (str, bool)))
+            }
+            self.span.add_event(name, safe, timestamp)
 
     def update_name(self, name: str) -> None:
         # Native names were projected at creation; do not reintroduce raw names.

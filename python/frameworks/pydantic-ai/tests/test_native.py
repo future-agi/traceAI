@@ -169,6 +169,55 @@ def test_native_entrypoints_and_provider(setup, monkeypatch, builtin, method):
     global_provider.shutdown()
 
 
+def test_fallback_selects_actual_model_and_retains_attempt(setup):
+    from pydantic_ai.models.fallback import FallbackModel
+
+    _, exporter = setup()
+
+    def fail(messages, info):
+        raise ValueError(SECRET)
+
+    def succeed(messages, info):
+        return ModelResponse(parts=[TextPart("ok")])
+
+    model = FallbackModel(
+        FunctionModel(fail), FunctionModel(succeed), fallback_on=(ValueError,)
+    )
+    assert Agent(model).run_sync("question").output == "ok"
+    llm = by_kind(exporter, "LLM")
+    assert len(llm) == 1
+    assert llm[0].attributes["gen_ai.request.model"] == "function:succeed:"
+    assert llm[0].attributes["gen_ai.system"] == "function"
+    if hasattr(FallbackModel, "_record_failed_attempt"):
+        assert any(
+            s.attributes.get("gen_ai.request.model") == "function:fail:"
+            for s in exporter.get_finished_spans()
+        )
+    assert SECRET not in repr(exporter.get_finished_spans())
+
+
+def test_exception_events_keep_safe_fields_not_content(setup):
+    from opentelemetry.trace import StatusCode
+
+    _, exporter = setup(config=TraceConfig(hide_error_details=True))
+
+    def fail(messages, info):
+        raise ValueError(SECRET)
+
+    with pytest.raises(ValueError):
+        Agent(FunctionModel(fail)).run_sync(SECRET)
+    for span in by_kind(exporter, "LLM") + by_kind(exporter, "AGENT"):
+        assert span.status.status_code is StatusCode.ERROR
+        events = [e for e in span.events if e.name == "exception"]
+        assert events
+        assert any(e.attributes.get("exception.type") == "ValueError" for e in events)
+        assert any(e.attributes.get("exception.escaped") == "False" for e in events)
+        assert all(
+            set(e.attributes) <= {"exception.type", "exception.escaped"} for e in events
+        )
+        assert SECRET not in repr(events)
+
+
 def test_convenience_and_lifecycle_do_not_replace_other_owners():
     provider, exporter = new_provider()
     previous = InstrumentationSettings(tracer_provider=provider)
@@ -615,6 +664,12 @@ def test_native_projection_hides_sampler_inputs_and_unknown_events():
         "gen_ai.usage.output_tokens": 3,
     }
     with tracer.start_as_current_span(SECRET, attributes=attrs) as span:
+        assert span.attributes["gen_ai.request.model"] == "test"
+        assert SECRET not in repr(span.attributes)
+        span.set_attribute("gen_ai.request.model", "selected")
+        assert span.attributes["gen_ai.request.model"] == "selected"
+        with pytest.raises(TypeError):
+            span.attributes["gen_ai.request.model"] = SECRET
         span.add_event(SECRET, {SECRET: SECRET})
         span.update_name(SECRET)
         span.set_attribute("pydantic_ai.metadata", SECRET)
@@ -629,6 +684,38 @@ def test_native_projection_hides_sampler_inputs_and_unknown_events():
     )
     assert seen
     provider.shutdown()
+
+
+def test_current_span_view_never_exposes_opted_in_content(setup):
+    from opentelemetry.trace import get_current_span
+
+    _, exporter = setup(include_content=True)
+    tracer = Agent._instrument_default.tracer
+    with tracer.start_as_current_span(
+        "chat",
+        attributes={
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "fallback:example",
+            "gen_ai.input.messages": SECRET,
+            "model_request_parameters": SECRET,
+        },
+    ) as span:
+        assert get_current_span() is span
+        assert span.attributes["gen_ai.request.model"] == "fallback:example"
+        assert SECRET not in repr(span.attributes)
+        span.add_event(
+            "exception",
+            {
+                "exception.type": "ValueError",
+                "exception.escaped": "False",
+                "exception.message": SECRET,
+                "exception.stacktrace": SECRET,
+            },
+        )
+    event = by_kind(exporter, "LLM")[0].events[0]
+    assert event.attributes["exception.type"] == "ValueError"
+    assert event.attributes["exception.escaped"] == "False"
+    assert SECRET not in repr(event)
 
 
 def test_structured_stream_retains_native_result(setup):
