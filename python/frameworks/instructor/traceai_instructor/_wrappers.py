@@ -51,6 +51,7 @@ class _Request:
             SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.CHAIN.value,
         })
         self.hooks_class = hooks_class
+        self.hide_input_images = config.hide_input_images
         # Generic JSON values mix text and image content; omit the whole value
         # rather than leave a second unredacted copy behind narrower flags.
         self.capture_input = not any((config.hide_inputs, config.hide_input_messages,
@@ -167,8 +168,14 @@ class _Request:
             if self.capture_output:
                 _content(self.span, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, self.last)
         if error is not None:
-            self.span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)))
-            self.span.record_exception(error)
+            if self.hide_input_images:
+                # Released core versions do not derive error redaction from this
+                # flag. Never pass the original image-bearing error to telemetry.
+                self.span.set_status(trace.StatusCode.ERROR)
+                self.span.add_event("exception", {"exception.type": type(error).__name__})
+            else:
+                self.span.set_status(trace.Status(trace.StatusCode.ERROR, str(error)))
+                self.span.record_exception(error)
         elif closed:
             self.span.set_attribute("instructor.stream.closed_early", True)
         else:

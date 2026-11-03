@@ -16,7 +16,7 @@ try:
 except ImportError:
     Protect = None
 
-_instruments = ("instructor >= 1.0.0",)
+_instruments = ("instructor >= 1.10.0",)
 
 
 class _OwnedProtectWrapper(GuardrailProtectWrapper):

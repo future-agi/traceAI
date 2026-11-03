@@ -22,13 +22,14 @@ def tracing():
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = FITracer(provider.get_tracer(__name__), config=TraceConfig())
-    yield _RequestWrapper(tracer), exporter, provider
+    config = TraceConfig()
+    tracer = FITracer(provider.get_tracer(__name__), config=config)
+    yield _RequestWrapper(tracer, config=config), exporter, provider
     provider.shutdown()
 
 
 def test_public_dependency_floor():
-    assert InstructorInstrumentor().instrumentation_dependencies() == ("instructor >= 1.0.0",)
+    assert InstructorInstrumentor().instrumentation_dependencies() == ("instructor >= 1.10.0",)
 
 
 def test_objects_are_never_introspected():
@@ -84,8 +85,8 @@ def test_real_suppression_context(tracing):
 @pytest.mark.parametrize("async_", [False, True])
 def test_failure_privacy_reaches_otlp(tracing, async_):
     _, exporter, provider = tracing
-    wrapper = _RequestWrapper(FITracer(provider.get_tracer(__name__),
-                                      config=TraceConfig(hide_inputs=True, hide_outputs=True)))
+    config = TraceConfig(hide_inputs=True, hide_outputs=True)
+    wrapper = _RequestWrapper(FITracer(provider.get_tracer(__name__), config=config), config=config)
     def fail():
         raise ValueError("synthetic-secret-in-error")
     async def async_fail():
@@ -98,6 +99,41 @@ def test_failure_privacy_reaches_otlp(tracing, async_):
     assert span.status.status_code == trace.StatusCode.ERROR
     assert span.events[0].name == "exception"
     assert b"synthetic-secret-in-error" not in encode_spans([span]).SerializeToString()
+
+
+@pytest.mark.parametrize("route", ["sync", "async", "stream"])
+@pytest.mark.parametrize("hide_error_details", [None, False])
+def test_hide_input_images_redacts_exception_telemetry(tracing, route, hide_error_details):
+    _, exporter, provider = tracing
+    image = "data:image/png;base64,c3ludGhldGljLXByaXZhdGU="
+    config = TraceConfig(hide_input_images=True, hide_error_details=hide_error_details)
+    wrapper = _RequestWrapper(FITracer(provider.get_tracer(__name__), config=config), config=config)
+
+    def fail(**kwargs):
+        raise ValueError(f"invalid image: {image}")
+
+    async def async_fail(**kwargs):
+        fail()
+
+    def stream_fail(**kwargs):
+        yield "first"
+        fail()
+
+    with pytest.raises(ValueError, match="invalid image") as exc:
+        if route == "async":
+            asyncio.run(wrapper(async_fail, None, (), {"messages": [image]}))
+        elif route == "stream":
+            stream = wrapper(stream_fail, None, (), {"messages": [image]})
+            assert next(stream) == "first"
+            next(stream)
+        else:
+            wrapper(fail, None, (), {"messages": [image]})
+    assert image in str(exc.value)  # Do not change the application's exception.
+    span, = exporter.get_finished_spans()
+    assert span.status.status_code == trace.StatusCode.ERROR
+    assert span.events[0].name == "exception"
+    assert "input.value" not in span.attributes
+    assert image.encode() not in encode_spans([span]).SerializeToString()
 
 
 @pytest.mark.parametrize("ending", ["exhaust", "error", "close", "unstarted_close", "throw"])
