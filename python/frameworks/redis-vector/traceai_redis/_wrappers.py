@@ -38,16 +38,25 @@ class BaseWrapper:
         self._is_async = is_async
         self.enabled = True
 
-    def _attributes(self, instance: Any, args: tuple, kwargs: dict) -> dict:
-        attributes = {"db.system": "redis", "db.operation.name": self.operation}
-        # Metadata is best effort; a descriptor must not break the database call.
+    @staticmethod
+    def _index_name(instance: Any) -> str | None:
+        # A descriptor must not break the database call or leak sensitive data.
         try:
             for name in ("name", "index_name", "_name"):
                 index_name = getattr(instance, name, None)
                 if isinstance(index_name, str):
-                    attributes["db.namespace"] = index_name
-                    attributes["db.vector.collection.name"] = index_name
-                    break
+                    return index_name
+        except Exception:  # noqa: BLE001 - best-effort telemetry metadata
+            logger.debug("Redis index metadata extraction failed")
+        return None
+
+    def _attributes(self, instance: Any, args: tuple, kwargs: dict) -> dict:
+        attributes = {"db.system": "redis", "db.operation.name": self.operation}
+        index_name = self._index_name(instance)
+        if index_name is not None:
+            attributes["db.namespace"] = index_name
+            attributes["db.vector.collection.name"] = index_name
+        try:
             if self.operation == "load":
                 data = args[0] if args else kwargs.get("data")
                 # Never consume generators or call user-defined __len__ methods.
@@ -131,10 +140,14 @@ class BaseWrapper:
             and parent[0] == "query"
             and parent[1] is instance
         )
+        ft_index_name = (
+            self._index_name(instance) if self.operation == "ft_search" else None
+        )
         internal_ft_search = (
-            self.operation == "ft_search"
+            ft_index_name is not None
             and parent is not None
             and parent[0] in ("query", "search")
+            and ft_index_name == self._index_name(parent[1])
         )
         if internal_search or internal_ft_search:
             with commands:

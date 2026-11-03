@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from unittest.mock import PropertyMock
 
@@ -192,6 +193,50 @@ def test_independent_nested_search_is_traced(telemetry, monkeypatch, asynchronou
     assert child.name == "redis vector_search"
     assert parent.name == "redis load"
     assert child.parent.span_id == parent.context.span_id
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_independent_ft_search_inside_redisvl_search_is_traced(
+    telemetry, clients, monkeypatch, asynchronous
+):
+    instrumentor, provider, exporter = telemetry
+    cls = AsyncSearchIndex if asynchronous else SearchIndex
+    client = clients[int(asynchronous)]
+
+    def search(self, *args, **kwargs):
+        independent = client.ft("independent-index").search(Query("*"))
+        expected = client.ft("documents").search(Query("*"))
+        assert independent.total == expected.total == 1
+        return expected
+
+    async def asearch(self, *args, **kwargs):
+        independent = await client.ft("independent-index").search(Query("*"))
+        expected = await client.ft("documents").search(Query("*"))
+        assert independent.total == expected.total == 1
+        return expected
+
+    monkeypatch.setattr(cls, "search", asearch if asynchronous else search)
+    instrumentor.instrument(tracer_provider=provider)
+    result = cls.from_dict(SCHEMA).search(Query("*"))
+    if asynchronous:
+        result = asyncio.run(result)
+    assert result.total == 1
+    child, parent = exporter.get_finished_spans()
+    assert (child.name, child.attributes["db.namespace"]) == (
+        "redis ft_search",
+        "independent-index",
+    )
+    assert (parent.name, parent.attributes["db.namespace"]) == (
+        "redis vector_search",
+        "documents",
+    )
+    assert child.parent.span_id == parent.context.span_id
+
+
+def test_readme_qualifies_lower_level_search_result_shape():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    assert "With the default RESP2 client" in readme
+    assert "RESP3 client can return a raw mapping" in readme
 
 
 def test_partial_instrumentation_failure_restores_patches(telemetry, monkeypatch):

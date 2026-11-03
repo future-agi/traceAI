@@ -66,7 +66,7 @@ print(index.query(query))
 provider.force_flush()
 ```
 
-Use `index.query(query)` with a RedisVL `VectorQuery`; RedisVL supplies the vector parameters and processes the results. For the lower-level search API, use `index.search(query.query, query_params=query.params)`, which returns a redis-py `Result` with `.docs` and `.total`.
+Use `index.query(query)` with a RedisVL `VectorQuery`; RedisVL supplies the vector parameters and processes the results. For the lower-level search API, use `index.search(query.query, query_params=query.params)`. With the default RESP2 client, it returns a redis-py `Result` with `.docs` and `.total`; a RESP3 client can return a raw mapping instead. Use `index.query(query)` when you need RedisVL's processed result list.
 
 Open the `redis-vector-search` project in Future AGI to inspect `redis load` and `redis query` spans. A query that internally calls RedisVL `search()` and redis-py `search()` emits one search span, not three.
 
