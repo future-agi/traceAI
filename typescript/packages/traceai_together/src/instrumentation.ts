@@ -45,6 +45,8 @@ type TogetherExports = {
   Completions?: ResourceClass;
   Embeddings?: ResourceClass;
 };
+// The SDK's default export is a class; namespace and CommonJS exports are objects.
+type TogetherModule = Record<string, unknown> | Function;
 
 // Type definitions for Together AI SDK
 interface TogetherMessage {
@@ -179,7 +181,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
   private readonly _resources = new Set<Resource>();
-  private readonly _manualModules = new Set<Record<string, unknown>>();
+  private readonly _manualModules = new Set<TogetherModule>();
 
   constructor({
     instrumentationConfig,
@@ -235,7 +237,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
   /**
    * Manually instruments the Together module
    */
-  manuallyInstrument(module: Record<string, unknown>) {
+  manuallyInstrument(module: TogetherModule) {
     this._manualModules.add(module);
     if (this.isEnabled()) this.patch(module);
   }
@@ -244,9 +246,10 @@ export class TogetherInstrumentation extends InstrumentationBase {
    * Patches the Together module
    */
   private patch(
-    module: Record<string, unknown>,
+    module: TogetherModule,
   ) {
-    const Together = (module.Together ?? module.default ?? module) as TogetherExports;
+    const exports = module as Record<string, unknown>;
+    const Together = (exports.Together ?? exports.default ?? module) as TogetherExports;
     const candidates = [
       [Together.Chat?.Completions, this.createChatCompletionWrapper(this)],
       [Together.Completions, this.createCompletionWrapper(this)],
