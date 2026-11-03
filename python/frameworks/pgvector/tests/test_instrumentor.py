@@ -336,6 +336,41 @@ def test_tokenless_queries_preserve_driver_contract(telemetry, driver, factory, 
     assert not exporter.get_finished_spans()
 
 
+@pytest.mark.parametrize("driver,factory", [(psycopg2, Cursor2), (psycopg, Cursor3)])
+@pytest.mark.parametrize("query", ["   ", "/* comment only */", "-- comment only\n"])
+@pytest.mark.parametrize("keyword", [False, True])
+def test_tokenless_executemany_preserves_driver_contract(
+    telemetry, driver, factory, query, keyword
+):
+    _, exporter, _ = telemetry
+    cursor = driver.connect(cursor_factory=factory).cursor()
+    values = iter([(1,), (2,)])
+    if keyword:
+        assert cursor.executemany(query=query, params_seq=values) is cursor
+    else:
+        assert cursor.executemany(query, values) is cursor
+    assert cursor.calls == [(query, [(1,), (2,)], {})]
+    assert not exporter.get_finished_spans()
+
+
+@pytest.mark.parametrize("query", ["   ", "/* comment only */", "-- comment only\n"])
+def test_async_tokenless_executemany_preserves_driver_contract(telemetry, query):
+    _, exporter, _ = telemetry
+
+    async def run():
+        cursor = (
+            await psycopg.AsyncConnection.connect(cursor_factory=AsyncCursor3)
+        ).cursor()
+        assert (
+            await cursor.executemany(query=query, params_seq=iter([(1,), (2,)]))
+            is cursor
+        )
+        assert cursor.calls == [(query, [(1,), (2,)], {})]
+
+    asyncio.run(run())
+    assert not exporter.get_finished_spans()
+
+
 def test_async_tokenless_queries_preserve_driver_contract(telemetry):
     _, exporter, _ = telemetry
 
@@ -382,6 +417,24 @@ def test_database_opt_in_emits_no_native_metrics(monkeypatch):
         return Connection(kwargs["cursor_factory"])
 
     monkeypatch.setattr(psycopg.AsyncConnection, "connect", classmethod(connect_async))
+
+    def assert_no_database_metrics():
+        data = reader.get_metrics_data()
+        if data is None:
+            return
+        for resource in data.resource_metrics:
+            for scope in resource.scope_metrics:
+                # The SDK may publish its own span/processor metrics. A DBAPI
+                # meter must never export database metrics or private values.
+                assert "psycopg" not in scope.scope.name
+                assert "dbapi" not in scope.scope.name
+                for metric in scope.metrics:
+                    assert not metric.name.startswith(("db.", "db_"))
+                    assert "postgres" not in metric.name.lower()
+                    for point in metric.data.data_points:
+                        assert not any(key.startswith("db.") for key in point.attributes)
+                        assert "private" not in str(point.attributes)
+
     instrumentor = PgVectorInstrumentor()
     try:
         instrumentor.instrument(tracer_provider=provider)
@@ -400,12 +453,12 @@ def test_database_opt_in_emits_no_native_metrics(monkeypatch):
 
         async_cursor = asyncio.run(run())
         assert len(exporter.get_finished_spans()) == 3
-        assert reader.get_metrics_data() is None
+        assert_no_database_metrics()
         instrumentor.uninstrument()
         cursor.execute("SELECT 1")
         cursor2.execute("SELECT 1")
         asyncio.run(async_cursor.execute("SELECT 1"))
-        assert reader.get_metrics_data() is None
+        assert_no_database_metrics()
     finally:
         if instrumentor.is_instrumented_by_opentelemetry:
             instrumentor.uninstrument()

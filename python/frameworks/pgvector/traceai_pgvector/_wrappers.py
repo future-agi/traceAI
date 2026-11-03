@@ -157,6 +157,8 @@ def enrich_cursor_factory(
                 return super().execute(*args, **kwargs)
 
         def executemany(self, *args, **kwargs):
+            if tokenless(args, kwargs):
+                return super(base, self).executemany(*args, **kwargs)
             with query_context(self, args, kwargs):
                 return super().executemany(*args, **kwargs)
 
@@ -168,6 +170,8 @@ def enrich_cursor_factory(
                 return await super().execute(*args, **kwargs)
 
         async def executemany(self, *args, **kwargs):
+            if tokenless(args, kwargs):
+                return await super(base, self).executemany(*args, **kwargs)
             with query_context(self, args, kwargs):
                 return await super().executemany(*args, **kwargs)
 
