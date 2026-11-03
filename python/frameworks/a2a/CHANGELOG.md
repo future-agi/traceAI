@@ -2,6 +2,13 @@
 
 All notable changes to `traceAI-a2a` will be documented here.
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-a2a-v0.1.0...traceai-a2a-v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **a2a:** adapt native SDK tracing across supported clients ([#339](https://github.com/future-agi/traceAI/issues/339)) ([f20cfb8](https://github.com/future-agi/traceAI/commit/f20cfb89ef2c51c059a0d8f4dbe44ea73443d6c5))
+
 ## [0.1.0] - 2026-04-08
 
 ### Added

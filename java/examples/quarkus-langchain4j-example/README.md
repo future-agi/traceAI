@@ -1,89 +1,66 @@
 # Quarkus LangChain4j to Future AGI
 
-A Quarkus command-line app with one `@RegisterAiService` and one `@Tool`. Quarkus LangChain4j already creates the
-spans; `quarkus-opentelemetry` exports them; `application.properties` points the exporter at Future AGI. There is no
-traceAI module here and no `traceai-langchain4j` (that one wraps plain LangChain4j, not Quarkus' build-time AI
-services).
+Export Quarkus LangChain4j's native AI-service, model and tool spans through Quarkus OpenTelemetry. The indexed `traceai-java-quarkus-langchain4j` dependency supplies error-status contributors and removes `host.name`; the application contains no copied telemetry classes.
 
-Docs page: `docs/integrations/traceai/java/quarkus-langchain4j` in future-agi/docs.
+Use Java 21 with Quarkus LangChain4j 1.14.2 / Quarkus 3.33.3.1, or the supported floor pair 1.12.0 / 3.33.2. Use the plain `traceai-langchain4j` wrapper only outside Quarkus; adding it here can duplicate model spans.
 
-## Tested
+## Build the example
 
-| | |
-| --- | --- |
-| `io.quarkiverse.langchain4j:quarkus-langchain4j-bom` | **1.14.2** (latest stable on Maven Central, 2026-10-15) with Quarkus platform **3.33.3.1** (the version 1.14.2 is built against), OpenTelemetry SDK 1.57.0 |
-| Also run | 1.8.2 + Quarkus 3.27.2 (the PRD pin), live export only, see "Older versions" |
-| JDK / Maven | OpenJDK 21.0.12, Maven 3.10.0 |
-| Model | `quarkus-langchain4j-openai` against an OpenAI-compatible endpoint (tests: a scripted local server) |
-| Mode | JVM. Native image not built or tested. |
-
-## Files
-
-| File | What |
-| --- | --- |
-| `src/main/resources/application.properties` | The recipe: exporter, headers, resource, privacy defaults |
-| `Assistant.java`, `WeatherTools.java`, `AskCommand.java` | The app: one AI service, one tool, a command-mode `main` |
-| `FutureAgiTracingDefaults.java` | Application code to copy: `ERROR` status on failed model calls and AI service calls, no error text unless opted in, removes `host.name` |
-| `ToolErrorStatus.java` | Application code to copy: `ERROR` status on a failed tool span (needs quarkus-langchain4j 1.12.0+) |
-| `src/test/...` | 14 tests against a scripted OpenAI-compatible server and a stand-in OTLP collector |
-| `run_e2e.sh` | Tests, negative check, live run against a real model and a real Future AGI |
-
-## Run
+From the repository's `java/` directory, install the adapter and its parent into your local Maven repository:
 
 ```bash
-export JAVA_HOME=<jdk 17+>   # 21 tested
-./run_e2e.sh                 # tests + "no quarkus-opentelemetry exports nothing", no keys needed
-
-# live: a real OpenAI-compatible model and a real Future AGI
-FI_API_KEY=... FI_SECRET_KEY=... FI_BASE_URL=https://api.futureagi.com FI_PROJECT_NAME=quarkus-demo \
-OPENAI_API_KEY=... OPENAI_BASE_URL=https://api.openai.com/v1/ OPENAI_MODEL=gpt-4o-mini ./run_e2e.sh
-
-# the app alone
-mvn package -DskipTests
-java -jar target/quarkus-app/quarkus-run.jar "What is the weather in Paris?"
-
-# the older pair
-QLC4J_VERSION=1.8.2 QUARKUS_VERSION=3.27.2 ./run_e2e.sh
+./mvnw -pl traceai-java-quarkus-langchain4j -am install
+./mvnw -f examples/quarkus-langchain4j-example/pom.xml package
 ```
 
-## What one question exports
+The consumer is a separate Maven project and resolves the installed JAR. The module belongs to the Java reactor and `traceai-bom`.
 
+## Configure and run
+
+Set your own provider credentials and Future AGI keys through your environment or secret store:
+
+```bash
+export OPENAI_API_KEY="YOUR_PROVIDER_KEY"
+export OPENAI_MODEL="gpt-4o-mini"
+export FI_API_KEY="YOUR_API_KEY"
+export FI_SECRET_KEY="YOUR_SECRET_KEY"
+export FI_PROJECT_NAME="quarkus-weather"
+export FI_BASE_URL="https://api.futureagi.com"
+
+java -jar examples/quarkus-langchain4j-example/target/quarkus-app/quarkus-run.jar \
+  "What is the weather in Paris?"
 ```
-langchain4j.aiservices.Assistant.chat            root (AI service span)
-├── completion <model>                           gen_ai.operation.name=chat, gen_ai.provider.name=open_ai,
-│   └── POST /chat/completions                   gen_ai.request/response.model, gen_ai.usage.input/output_tokens
-├── langchain4j.tools.currentWeather             gen_ai.operation.name=execute_tool, gen_ai.tool.name, gen_ai.tool.call.id
-└── completion <model>
-    └── POST /chat/completions                   Quarkus REST client span: method, url.full, status code
+
+`application.properties` sets HTTP/protobuf export, both authentication headers and the project resource attributes. Quarkus appends `/v1/traces` to its configured endpoint, so the setting ends at `/tracer`, not `/tracer/v1/traces`.
+
+Quarkus owns the provider, exporter and shutdown. The adapter creates no spans and installs no second provider. Normal JVM shutdown flushes queued spans; forced termination can lose the last batch.
+
+## Privacy and migration
+
+Keep the four `quarkus.langchain4j.tracing.include-*` switches false and `quarkus.otel.span.event.count.limit=0` as shown in `application.properties`. This keeps prompts, completions, tool arguments/results and exception events out of exported traces. Failed AI-service, model and tool spans still receive `ERROR` with an empty status message. `host.name` is removed after Quarkus builds the resource.
+
+To include error messages in span status, set `FI_EXPORT_ERROR_DETAILS=true`. Content switches and the event limit remain separate opt-ins. A tool failure may be returned to the model as a tool result; enabling prompt capture can therefore disclose that error text too. Application logging is separate from trace export.
+
+If you previously copied `FutureAgiTracingDefaults` and `ToolErrorStatus`, remove those application classes when adding the package. Keep your existing exporter and privacy configuration and `FI_EXPORT_ERROR_DETAILS` setting. Do not add a second OpenTelemetry SDK or the plain LangChain4j wrapper.
+
+Native `gen_ai.prompt` and `gen_ai.completion` remain span attributes when enabled; this adapter does not convert them into Future AGI's Input/Output fields. AI-service spans retain their native names without aggregated token counts. The supported route is JVM synchronous model/tool calls; native-image and streaming support are not claimed.
+
+## Offline regression tests
+
+The JUnit tests use a scripted localhost model server and an OTLP/HTTP recorder. `PackagedAdapterTest` verifies CDI discovery from the JAR's Jandex index, while `UpstreamDefaultsTest` demonstrates why the error/privacy contributors are necessary.
+
+```bash
+# From java/, after installing the adapter
+./mvnw -f examples/quarkus-langchain4j-example/pom.xml clean test
+
+# Repeat at the supported floor
+./mvnw -f examples/quarkus-langchain4j-example/pom.xml clean test \
+  -Dquarkus-langchain4j.version=1.12.0 -Dquarkus.platform.version=3.33.2
+
+# Exercise production JVM shutdown with the batch exporter
+./mvnw -f examples/quarkus-langchain4j-example/pom.xml package \
+  -DskipTests -Dquarkus.otel.simple=false
+./mvnw -f examples/quarkus-langchain4j-example/pom.xml failsafe:integration-test failsafe:verify
 ```
 
-In Future AGI the model spans are type `llm` with model and tokens, the tool span is type `tool`, the AI service and
-REST client spans are `unknown`. Resource: `project_name`, `project_type=observe`, `service.name`, `service.version`,
-`telemetry.sdk.*`, `webengine.*`.
-
-## Privacy defaults and opt-ins
-
-| What | Default | Opt in |
-| --- | --- | --- |
-| Prompt, completion, tool arguments, tool result | off (upstream default, written out) | `quarkus.langchain4j.tracing.include-prompt`, `-completion`, `-tool-arguments`, `-tool-result` = `true` (or `QUARKUS_LANGCHAIN4J_TRACING_INCLUDE_PROMPT=true` ...). Stored as span attributes `gen_ai.prompt`, `gen_ai.completion`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`; Future AGI's Input/Output columns stay empty. |
-| Error message in the span status | off | `FI_EXPORT_ERROR_DETAILS=true` (`fi.export-error-details`) |
-| Exception events (`exception.message`, full `exception.stacktrace`) | off: `quarkus.otel.span.event.count.limit=0` | raise the limit. Future AGI stores only the event name and time. |
-| `host.name` resource attribute | removed by `FutureAgiTracingDefaults.DropHostName` | none |
-
-## Upstream behaviour the recipe works around (asserted in `UpstreamDefaultsTest`)
-
-- Quarkus appends `/v1/traces` to `quarkus.otel.exporter.otlp.traces.endpoint`. Set it to `{base}/tracer`; a value
-  ending in `/tracer/v1/traces` posts to `/tracer/v1/traces/v1/traces`.
-- Quarkus always adds `host.name` to the resource, after `quarkus.otel.resource.attributes` and after the
-  `disabled-keys` filter, so configuration cannot remove it.
-- Quarkus LangChain4j calls `recordException` on failures but never sets the span status, so failures arrive as
-  `UNSET` with the exception message and stack trace in an event.
-- `quarkus.otel.span.event.count.limit=0` needs OpenTelemetry SDK 1.51+. Quarkus 3.27.2 (SDK 1.44.1) refuses to start
-  with it.
-
-## Older versions
-
-1.8.2 (the PRD pin) was run live on Quarkus 3.27.2 with `-Dpre112` (leaves `ToolErrorStatus` out, skips the tests):
-the trace shape is the same, but the model spans carry no `gen_ai.operation.name` and use
-`gen_ai.usage.prompt_tokens`/`completion_tokens`, so Future AGI shows them as `unknown` without tokens. The source shows
-the current names from quarkus-langchain4j 1.11.0 and `ToolSpanContributor` from 1.12.0.
+CI downloads dependencies first, then runs these tests with networking restricted to loopback. `run_e2e.sh` also supports optional real-service execution when explicitly configured with credentials; it is not needed for the offline suite.

@@ -10,22 +10,19 @@
 #                                                         -> project $FI_PROJECT_NAME-batch
 #   4. negative: built without quarkus-opentelemetry, nothing is exported (local stub collector)
 #
-# Needs JDK 17+ (21 tested) and Maven; JAVA_HOME is respected.
+# Needs JDK 21 and Maven; JAVA_HOME is respected. Install the adapter from java/ before running.
 # Live steps need: FI_API_KEY, FI_SECRET_KEY, OPENAI_API_KEY and optionally FI_BASE_URL (default
 #   https://api.futureagi.com), FI_PROJECT_NAME (default quarkus-langchain4j-example), OPENAI_BASE_URL, OPENAI_MODEL,
 #   OPENAI_FAIL_MODEL (a model name the endpoint rejects, default no-such-model-quarkus-example), MARKER.
-# QLC4J_VERSION + QUARKUS_VERSION select another tested pair, e.g. 1.8.2 + 3.27.2 (tests are skipped on 1.8.x).
+# QLC4J_VERSION + QUARKUS_VERSION select the supported floor pair, 1.12.0 + 3.33.2.
 set -u
 cd "$(dirname "$0")"
 
 MVN_ARGS=(-B -q)
 if [ -n "${QLC4J_VERSION:-}" ]; then
   MVN_ARGS+=("-Dquarkus-langchain4j.version=$QLC4J_VERSION" "-Dquarkus.platform.version=${QUARKUS_VERSION:?set QUARKUS_VERSION too}")
-  case "$QLC4J_VERSION" in 1.8.*|1.9.*|1.10.*|1.11.*) MVN_ARGS+=(-Dpre112) ;; esac
-  case "$QUARKUS_VERSION" in 3.2[0-9].*|3.1[0-9].*)
-    # OpenTelemetry SDK < 1.51 refuses quarkus.otel.span.event.count.limit=0 at startup.
-    export QUARKUS_OTEL_SPAN_EVENT_COUNT_LIMIT=128
-    echo "note: Quarkus $QUARKUS_VERSION: span events back on, exception messages and stack traces are exported" ;;
+  case "$QLC4J_VERSION" in 0.*|1.[0-9].*|1.10.*|1.11.*)
+    echo "Use Quarkus LangChain4j 1.12.0 or newer with Quarkus 3.33.2 or newer."; exit 1 ;;
   esac
 fi
 RUN() { java -jar "$1/quarkus-run.jar" "${@:2}"; }

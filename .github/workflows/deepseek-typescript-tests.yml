@@ -1,0 +1,67 @@
+name: DeepSeek TypeScript tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_deepseek/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/deepseek-typescript-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_deepseek/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/deepseek-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: DeepSeek (OpenAI ${{ matrix.openai }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        openai: ['4.0.0', '5.23.2', '7.47.0']
+    env:
+      SDK_VERSION: ${{ matrix.openai }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install pinned dependencies
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/deepseek... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "openai@$SDK_VERSION"
+      - name: Build CJS and ESM packages
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/deepseek run build
+      - name: Run unit tests and real-SDK OTLP contracts with only loopback networking
+        run: |
+          PACKAGE="$GITHUB_WORKSPACE/typescript/packages/traceai_deepseek"
+          sudo env OPENAI_TEST_MODULE="$RUNNER_TEMP/openai-sdk/node_modules/openai" \
+            unshare --net -- bash -euc '
+              ip link set lo up
+              "$1" "$2/node_modules/jest/bin/jest.js" --config "$2/jest.config.js" --runInBand
+              "$1" --test "$2/test/contract.cjs" "$2/test/loading.cjs"
+            ' _ "$(command -v node)" "$PACKAGE"
+      - name: Check lockfile stays unchanged
+        run: git diff --exit-code -- typescript/pnpm-lock.yaml
