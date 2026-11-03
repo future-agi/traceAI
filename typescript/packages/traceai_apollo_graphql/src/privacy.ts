@@ -54,6 +54,8 @@ export function sanitizeSpan(span: ReadableSpan, options: PrivacyOptions = {}): 
 /** Destination-local policy; application-created spans are intentionally unchanged. */
 export class FiSanitizingExporter implements SpanExporter {
   private readonly options: Readonly<PrivacyOptions>;
+  private readonly pending = new Set<Promise<void>>();
+  private failed = false;
   constructor(private readonly inner: SpanExporter, options: PrivacyOptions = {}) {
     this.options = Object.freeze({ ...options });
   }
@@ -62,12 +64,42 @@ export class FiSanitizingExporter implements SpanExporter {
     try {
       sanitized = spans.map(span => sanitizeSpan(span, this.options));
     } catch {
+      this.failed = true;
       // Never forward the originals, or include the failed payload in diagnostics.
       callback({ code: ExportResultCode.FAILED, error: new Error('Apollo trace sanitization failed') });
       return;
     }
-    this.inner.export(sanitized, callback);
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    this.pending.add(done);
+    try {
+      this.inner.export(sanitized, result => {
+        if (result.code !== ExportResultCode.SUCCESS) this.failed = true;
+        this.pending.delete(done);
+        finish();
+        callback(result.code === ExportResultCode.SUCCESS ? result : {
+          code: ExportResultCode.FAILED, error: new Error('Apollo telemetry export failed'),
+        });
+      });
+    } catch {
+      this.failed = true;
+      this.pending.delete(done);
+      finish();
+      callback({ code: ExportResultCode.FAILED, error: new Error('Apollo telemetry export failed') });
+    }
   }
-  shutdown(): Promise<void> { return this.inner.shutdown(); }
-  forceFlush(): Promise<void> { return this.inner.forceFlush?.() ?? Promise.resolve(); }
+  async forceFlush(): Promise<void> {
+    await Promise.all([...this.pending]);
+    await this.inner.forceFlush?.();
+    if (this.failed) {
+      this.failed = false;
+      throw new Error('Apollo telemetry export failed');
+    }
+  }
+  async shutdown(): Promise<void> {
+    try {
+      await Promise.all([...this.pending]);
+      if (this.failed) throw new Error('Apollo telemetry export failed');
+    } finally { await this.inner.shutdown(); }
+  }
 }

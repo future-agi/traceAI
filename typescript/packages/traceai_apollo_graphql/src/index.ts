@@ -17,7 +17,7 @@ export interface ApolloTracingOptions extends PrivacyOptions {
   baseUrl?: string;
   apiKey?: string;
   secretKey?: string;
-  /** Maximum resolver depth. Defaults to top-level fields only. */
+  /** Maximum resolver path depth (list indexes count). Defaults to top-level fields only. */
   depth?: number;
 }
 export interface ApolloTracing {
@@ -39,7 +39,7 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
   if (!supportedVersion || Number(supportedVersion[1]) < 11) {
     throw new Error('Apollo tracing requires GraphQL >=16.11.0 <17 (stable); install graphql@16');
   }
-  if (Object.keys(require.cache).some(path => /[/\\]graphql[/\\](index|graphql)\.js$/.test(path))) {
+  if (Object.keys(require.cache).some(path => /[/\\]graphql[/\\](?:index|graphql|execution[/\\]execute|language[/\\]parser|validation[/\\]validate)\.js$/.test(path))) {
     throw new Error('Initialize Apollo tracing before importing graphql or Apollo; use node --import');
   }
   const provider = trace.getTracerProvider();
@@ -63,14 +63,20 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
   }
   const depth = options.depth ?? 1;
   if (!Number.isInteger(depth) || depth < 1) throw new Error('depth must be a positive integer');
-  const processor = new BatchSpanProcessor({ exporter: new FiSanitizingExporter(new OTLPTraceExporter({
+  // OTel's OTLP HTTP exporter merges ambient headers with supplied headers.
+  // Refuse rather than forward a different collector's credentials to this endpoint.
+  if (process.env.OTEL_EXPORTER_OTLP_HEADERS || process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS) {
+    throw new Error('Unset OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS before Apollo tracing');
+  }
+  const exporter = new FiSanitizingExporter(new OTLPTraceExporter({
     url: `${baseUrl.href.replace(/\/+$/, '')}/tracer/v1/traces`,
     headers: { 'X-Api-Key': apiKey, 'X-Secret-Key': secretKey },
     compression: CompressionAlgorithm.NONE,
     timeoutMillis: 3000,
   }), {
     captureContent: options.captureContent ?? process.env.FI_APOLLO_CAPTURE_CONTENT === 'true',
-  }), exportTimeoutMillis: 4000 });
+  });
+  const processor = new BatchSpanProcessor({ exporter, exportTimeoutMillis: 4000 });
   const instrumentations = [
     new HttpInstrumentation(),
     new GraphQLInstrumentation({
@@ -89,10 +95,19 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
     }),
     spanProcessors: [processor],
     metricReaders: [],
-    logRecordProcessors: [],
     instrumentations,
   });
-  sdk.start();
+  // NodeSDK otherwise installs an OTLP logger provider by default, even with no
+  // log processors requested. Keep startup traces-only without changing the
+  // application's eventual logging configuration.
+  const logsExporter = process.env.OTEL_LOGS_EXPORTER;
+  try {
+    process.env.OTEL_LOGS_EXPORTER = 'none';
+    sdk.start();
+  } finally {
+    if (logsExporter === undefined) delete process.env.OTEL_LOGS_EXPORTER;
+    else process.env.OTEL_LOGS_EXPORTER = logsExporter;
+  }
   // Apollo 5 standalone uses the ESM named createServer binding. OTel patches the
   // CommonJS HTTP module; refresh its ESM exports, rather than inventing a root span.
   require('node:http');
@@ -111,7 +126,10 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
     }
   };
   return {
-    forceFlush: () => shutdown ?? safely(() => processor.forceFlush()),
+    forceFlush: () => shutdown ?? safely(async () => {
+      await processor.forceFlush();
+      await exporter.forceFlush();
+    }),
     shutdown: () => {
       if (!shutdown) {
         instrumentations.forEach(instrumentation => instrumentation.disable());

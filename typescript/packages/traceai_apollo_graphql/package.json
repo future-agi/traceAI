@@ -13,7 +13,7 @@
     "test": "node --test test/*.test.cjs",
     "prepack": "npm run build"
   },
-  "engines": { "node": ">=20.6.0" },
+  "engines": { "node": ">=22.15.0" },
   "dependencies": {
     "@opentelemetry/api": "1.9.0",
     "@opentelemetry/core": "2.12.0",

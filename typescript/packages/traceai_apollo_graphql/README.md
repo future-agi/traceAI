@@ -4,7 +4,7 @@ Trace Apollo Server requests, GraphQL operations and resolvers in Future AGI usi
 
 ## Setup
 
-Use Apollo Server 5, GraphQL 16.11 or later in the 16.x line, and Node.js 20.6 or later. Node.js 22 or later is recommended. Server 4.13 remains compatible for migrations, but is end-of-life and should not be used for new applications. This package targets the server executing resolvers, not Apollo Gateway or Router.
+Use Apollo Server 5, GraphQL 16.11 or later in the 16.x line, and Node.js 22.15 or later. The current Apollo dependency tree cannot be installed with strict engine checks on Node 20. Server 4.13 remains compatible for migrations, but is end-of-life and should not be used for new applications. This package targets the server executing resolvers, not Apollo Gateway or Router.
 
 ```sh
 npm install @traceai/apollo-graphql @apollo/server@5 graphql@16
@@ -58,7 +58,7 @@ Preload instrumentation **before** the application module graph:
 node --import ./instrumentation.mjs server.mjs
 ```
 
-A static import beside Apollo imports is not a substitute for preloading. Apollo and GraphQL must not load before tracing. The adapter refreshes Node's ESM HTTP exports after upstream instrumentation patches HTTP, so Apollo Server 5 standalone retains the HTTP request parent.
+A static import beside Apollo imports is not a substitute for preloading. Apollo and GraphQL must not load before tracing. The adapter refreshes Node's ESM HTTP exports after upstream instrumentation patches HTTP, so Apollo Server 5 standalone retains the HTTP request parent. Return an extensible object from your Apollo context factory: the upstream GraphQL instrumentation adds execution metadata to it, so a frozen context causes requests to fail.
 
 ## Configuration
 
@@ -69,12 +69,12 @@ A static import beside Apollo imports is not a substitute for preloading. Apollo
 | `projectName` | `FI_PROJECT_NAME`, otherwise `apollo-graphql` |
 | `baseUrl` | `FI_BASE_URL`, otherwise `https://api.futureagi.com` |
 | `apiKey`, `secretKey` | `FI_API_KEY`, `FI_SECRET_KEY`; both required |
-| `depth` | `1`: top-level resolver spans only; positive integer |
+| `depth` | `1`: top-level resolver paths only; positive integer. List indexes also count as path components, so nested fields under lists can be excluded at lower depths. |
 | `captureContent` | `FI_APOLLO_CAPTURE_CONTENT === 'true'`, otherwise `false` |
 
-The destination is `{baseUrl}/tracer/v1/traces`, with `X-Api-Key` and `X-Secret-Key` headers. `project_name`, `project_type=observe` and `service.name` are resource attributes. No automatic host/process/environment resource detection, metrics exporter or log exporter is enabled.
+The destination is `{baseUrl}/tracer/v1/traces`, with `X-Api-Key` and `X-Secret-Key` headers. Unset `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` before `configure()`; otherwise startup refuses to forward another collector's credentials. `project_name`, `project_type=observe` and `service.name` are resource attributes. No automatic host/process/environment resource detection, metrics exporter or log exporter is enabled.
 
-`forceFlush()` exports completed spans. Call `shutdown()` **after** `server.stop()` to drain requests before flushing. Both resolve to `false` when export fails and do not log the error payload. Shutdown is idempotent. There are no automatic signal handlers in this package. Export attempts time out after 3 seconds; the batch processor has a 4-second export timeout.
+`forceFlush()` waits for completed spans, including in-flight background exports. Call `shutdown()` **after** `server.stop()` to drain requests before flushing. Both resolve to `false` when export fails and do not log the error payload. Shutdown is idempotent. There are no automatic signal handlers in this package. The HTTP exporter's 3-second timeout is a socket inactivity timeout, not a wall-clock deadline; the batch processor has a 4-second export timeout.
 
 ## Trace shape and privacy
 
