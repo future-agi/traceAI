@@ -129,6 +129,7 @@ def test_execute_preserves_result_and_emits_one_span(
     assert span.kind == trace.SpanKind.CLIENT
     assert span.name == "postgresql select"
     assert span.attributes["db.vector.distance_type"] == "l2_distance"
+    assert span.attributes["db.vector.query.metric"] == "l2_distance"
     assert span.attributes["db.vector.query.top_k"] == 5
     assert "secret" not in str(span.attributes)
     assert not span.events
@@ -297,8 +298,56 @@ def test_all_vector_operators(operator, distance):
         f"SELECT * FROM items ORDER BY embedding {operator} %s LIMIT 5"
     )
     assert attributes["db.vector.distance_type"] == distance
+    assert attributes["db.vector.query.metric"] == distance
     assert attributes["db.vector.query.type"] == "similarity_search"
     assert attributes["db.vector.query.top_k"] == 5
+
+
+@pytest.mark.parametrize(
+    "query,top_k",
+    [
+        (
+            "SELECT id FROM items WHERE category IN "
+            "(SELECT category FROM allowed LIMIT 1) "
+            "ORDER BY embedding <-> %s::vector LIMIT 10",
+            10,
+        ),
+        (
+            "SELECT id FROM items WHERE category IN "
+            "(SELECT category FROM allowed LIMIT 1) "
+            "ORDER BY embedding <-> %s::vector",
+            None,
+        ),
+        (
+            "SELECT id FROM items ORDER BY embedding <=> %s LIMIT 10 "
+            "OFFSET (SELECT count(*) FROM allowed LIMIT 1)",
+            10,
+        ),
+        ("SELECT embedding <-> %s FROM items LIMIT 5;", 5),
+        ("SELECT embedding <-> %s FROM items LIMIT 5; SELECT 1 LIMIT 1", None),
+        (
+            "SELECT * FROM (SELECT embedding <-> %s FROM items LIMIT 1) sub "
+            "LIMIT 10",
+            None,
+        ),
+    ],
+)
+def test_vector_top_k_respects_query_level(query, top_k):
+    attributes = query_attributes(query)
+    assert attributes.get("db.vector.query.top_k") == top_k
+
+
+def test_nested_limit_on_exported_span(telemetry):
+    _, exporter, _ = telemetry
+    query = (
+        "SELECT id FROM items WHERE category IN "
+        "(SELECT category FROM allowed LIMIT 1) "
+        "ORDER BY embedding <=> %s::vector LIMIT 10"
+    )
+    psycopg.connect(cursor_factory=Cursor3).cursor().execute(query, ([1, 2],))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["db.vector.query.metric"] == "cosine_distance"
+    assert span.attributes["db.vector.query.top_k"] == 10
 
 
 def test_bytes_and_composed(telemetry):

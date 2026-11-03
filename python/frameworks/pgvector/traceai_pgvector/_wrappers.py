@@ -64,6 +64,34 @@ def _structure(query: str) -> str:
     return "".join(parts)
 
 
+def _outer_limit(structure: str, vector_start: int) -> int | None:
+    """Only attribute an unambiguous outer LIMIT to an outer vector search.
+
+    SQL is not fully parsed here. Parenthesis depth is enough to exclude nested
+    SELECT limits; anything less certain is left unreported rather than wrong.
+    """
+    if ";" in structure.strip().rstrip(";"):
+        return None
+    depth = 0
+    vector_depth = None
+    limits = []
+    pattern = r"\(|\)|\bLIMIT\s+(\d+)\b|" + VECTOR_OP_PATTERN.pattern
+    for match in re.finditer(pattern, structure, re.IGNORECASE):
+        if match.start() == vector_start:
+            vector_depth = depth
+        if match.group() == "(":
+            depth += 1
+        elif match.group() == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and match.start() > vector_start:
+            limits.append(int(match.group(1)))
+    if depth != 0 or vector_depth != 0 or len(limits) != 1:
+        return None
+    return limits[0] if limits[0] <= 2**63 - 1 else None
+
+
 def query_attributes(query: Any, cursor: Any = None) -> dict:
     """Read query metadata without consuming parameters or exporting SQL."""
     try:
@@ -86,6 +114,7 @@ def query_attributes(query: Any, cursor: Any = None) -> dict:
                     "db.vector.extension": "pgvector",
                     "db.vector.operator": vector.group(),
                     "db.vector.distance_type": VECTOR_OPERATORS[vector.group()],
+                    "db.vector.query.metric": VECTOR_OPERATORS[vector.group()],
                 }
             )
             if re.search(
@@ -94,11 +123,9 @@ def query_attributes(query: Any, cursor: Any = None) -> dict:
                 re.IGNORECASE,
             ):
                 attributes["db.vector.query.type"] = "similarity_search"
-            limit = re.search(r"\bLIMIT\s+(\d+)\b", structure, re.IGNORECASE)
-            if limit:
-                value = int(limit.group(1))
-                if value <= 2**63 - 1:
-                    attributes["db.vector.query.top_k"] = value
+            top_k = _outer_limit(structure, vector.start())
+            if top_k is not None:
+                attributes["db.vector.query.top_k"] = top_k
         return attributes
     except Exception:  # noqa: BLE001 - metadata is best-effort; never block the driver
         # Fail open. Error strings/tracebacks can contain SQL and credentials,
