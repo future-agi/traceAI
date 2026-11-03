@@ -55,6 +55,11 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
       const malformed = await malformedStreamClient.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
       await assert.rejects(async () => { for await (const _event of malformed) { /* consume */ } });
       assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
+      const invalidSchemaClient = new OpenRouter({ apiKey: 'synthetic-only', retryConfig: { strategy: 'none' },
+        httpClient: createOpenRouterTracingClient({ fetcher: async () => new Response('data: {"unexpected":"value"}\n\n', { headers: { 'content-type': 'text/event-stream' } }), tracer: provider.getTracer('test') }) });
+      const invalidSchema = await invalidSchemaClient.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
+      await assert.rejects(async () => { for await (const _event of invalidSchema) { /* consume */ } });
+      assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);
       next = 'error';
       await assert.rejects(() => client.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }] } }));
       assert.equal(exporter.getFinishedSpans().at(-1).status.code, 2);

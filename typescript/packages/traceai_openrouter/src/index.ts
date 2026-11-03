@@ -145,7 +145,7 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
               controller.enqueue(value);
             } catch (error) { end(true); controller.error(error); }
           },
-          async cancel(reason) { try { await reader.cancel(reason); } finally { end(); } },
+          async cancel(reason) { try { await reader.cancel(reason); } finally { end(reason instanceof Error); } },
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       }
