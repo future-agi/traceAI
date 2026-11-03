@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Traces synchronous Pinecone query, upsert, delete-by-ID and fetch operations.
@@ -91,8 +92,8 @@ public class TracedPineconeIndex {
     public QueryResponseWithUnsignedIndices query(
             List<Float> queryVector, int topK, String namespace, Map<String, Object> filter,
             boolean includeValues, boolean includeMetadata) {
-        return query(topK, queryVector, null, null, null, namespace,
-                filter == null ? null : buildFilterStruct(filter), includeValues, includeMetadata);
+        return queryWithFilter(topK, queryVector, null, null, null, namespace,
+                () -> filter == null ? null : buildFilterStruct(filter), includeValues, includeMetadata);
     }
 
     /**
@@ -112,13 +113,22 @@ public class TracedPineconeIndex {
     public QueryResponseWithUnsignedIndices query(
             int topK, List<Float> vector, List<Long> sparseIndices, List<Float> sparseValues,
             String id, String namespace, Struct filter, boolean includeValues, boolean includeMetadata) {
+        return queryWithFilter(topK, vector, sparseIndices, sparseValues, id, namespace,
+                () -> filter, includeValues, includeMetadata);
+    }
+
+    private QueryResponseWithUnsignedIndices queryWithFilter(
+            int topK, List<Float> vector, List<Long> sparseIndices, List<Float> sparseValues,
+            String id, String namespace, Supplier<Struct> filter, boolean includeValues, boolean includeMetadata) {
         return trace("Query", FISpanKind.RETRIEVER, namespace, span -> {
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             if (vector != null) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vector.size());
             }
+            // Convert within FITracer's error scope, but before invoking the SDK.
+            Struct nativeFilter = filter.get();
             QueryResponseWithUnsignedIndices response = index.query(topK, vector, sparseIndices,
-                    sparseValues, id, namespace, filter, includeValues, includeMetadata);
+                    sparseValues, id, namespace, nativeFilter, includeValues, includeMetadata);
             if (response != null && response.getMatchesList() != null) {
                 span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT,
                         (long) response.getMatchesList().size());

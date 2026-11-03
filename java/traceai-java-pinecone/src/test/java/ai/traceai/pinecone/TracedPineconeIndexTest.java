@@ -138,6 +138,12 @@ class TracedPineconeIndexTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
         verifyNoInteractions(index);
+        assertThat(exporter.getFinishedSpanItems()).hasSize(4).allSatisfy(span -> {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(span.getEvents()).hasSize(1);
+            assertThat(span.hasEnded()).isTrue();
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("pinecone.filter"))).isNull();
+        });
     }
 
     @Test
