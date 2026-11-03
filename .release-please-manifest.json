@@ -93,7 +93,7 @@
   "typescript/packages/traceai_huggingface": "0.1.1",
   "typescript/packages/traceai_instructor": "0.1.2",
   "typescript/packages/traceai_lancedb": "0.1.2",
-  "typescript/packages/traceai_langchain": "0.1.6",
+  "typescript/packages/traceai_langchain": "0.1.7",
   "typescript/packages/traceai_livekit": "0.1.1",
   "typescript/packages/traceai_llamaindex": "0.1.4",
   "typescript/packages/traceai_mastra": "0.2.2",
