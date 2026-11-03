@@ -3,6 +3,7 @@ import { MistralInstrumentation, isPatched } from "../instrumentation";
 
 // Mock the dependencies
 jest.mock("@traceai/fi-core", () => ({
+  ...jest.requireActual<typeof import("@traceai/fi-core")>("@traceai/fi-core"),
   FITracer: jest.fn().mockImplementation(() => ({
     startSpan: jest.fn().mockReturnValue({
       setStatus: jest.fn(),
