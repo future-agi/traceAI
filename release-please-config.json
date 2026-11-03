@@ -1323,6 +1323,12 @@
       "package-name": "github.com/future-agi/traceAI/go/langchaingo",
       "tag-separator": "/",
       "initial-version": "0.1.0"
+    },
+    "ruby/roast": {
+      "release-type": "ruby",
+      "component": "traceai-roast",
+      "package-name": "traceai-roast",
+      "version-file": "lib/traceai/roast/version.rb"
     }
   }
 }
