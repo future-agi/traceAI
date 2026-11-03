@@ -1,392 +1,115 @@
 # @traceai/mistral
 
-OpenTelemetry instrumentation for [Mistral AI](https://mistral.ai/) - leading open-weight AI models.
+Trace native Mistral SDK calls in Future AGI, including model inputs and outputs, tool calls, token usage, errors, and streaming responses.
 
-## Features
-
-- Automatic tracing of Mistral Chat Completions
-- Embeddings API tracing
-- Support for all Mistral models
-- Tool/function calling tracing
-- Token usage tracking
-- Error handling and exception recording
-
-## Installation
+## Install
 
 ```bash
-npm install @traceai/mistral
-# or
-pnpm add @traceai/mistral
-# or
-yarn add @traceai/mistral
+npm install @traceai/mistral @traceai/fi-core @mistralai/mistralai
 ```
 
-## Quick Start
+Set `FI_API_KEY` and `FI_SECRET_KEY` to your Future AGI credentials, and `MISTRAL_API_KEY` to your own Mistral API key.
 
-```typescript
-import { MistralInstrumentation } from "@traceai/mistral";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Mistral } from "@mistralai/mistralai";
+## Trace a client
 
-// Initialize OpenTelemetry
-const provider = new NodeTracerProvider();
-const exporter = new OTLPTraceExporter({
-  url: "http://localhost:4318/v1/traces",
-});
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
-
-// Initialize Mistral instrumentation
-const mistralInstrumentation = new MistralInstrumentation();
-mistralInstrumentation.manuallyInstrument(require("@mistralai/mistralai"));
-
-// Use Mistral as normal - all calls are automatically traced
-const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
-
-const chatResponse = await mistral.chat.complete({
-  model: "mistral-large-latest",
-  messages: [
-    { role: "user", content: "Explain quantum computing in simple terms" }
-  ],
-});
-
-console.log(chatResponse.choices[0].message.content);
-```
-
-## Configuration
-
-### Basic Configuration
-
-```typescript
-const instrumentation = new MistralInstrumentation({
-  instrumentationConfig: {
-    enabled: true,
-  },
-});
-```
-
-### With Trace Configuration
-
-```typescript
-const instrumentation = new MistralInstrumentation({
-  instrumentationConfig: {
-    enabled: true,
-  },
-  traceConfig: {
-    hideInputs: false,  // Set to true to hide sensitive input data
-    hideOutputs: false, // Set to true to hide sensitive output data
-  },
-});
-```
-
-### With TraceAI Core
+Use explicit client instrumentation with either ESM or CommonJS. It returns the same client and preserves your transport, endpoint, request options, and cancellation signals.
 
 ```typescript
 import { register, ProjectType } from "@traceai/fi-core";
 import { MistralInstrumentation } from "@traceai/mistral";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { Mistral } from "@mistralai/mistralai";
 
-// 1. Register TraceAI Core TracerProvider
-const tracerProvider = register({
-  projectName: "my-mistral-app",
+const provider = register({
+  projectName: "mistral-app",
   projectType: ProjectType.OBSERVE,
-  sessionName: "mistral-session-" + Date.now(),
 });
+const instrumentation = new MistralInstrumentation();
+instrumentation.setTracerProvider(provider);
 
-// 2. Register instrumentation BEFORE importing Mistral SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider,
-  instrumentations: [new MistralInstrumentation()],
-});
+const client = instrumentation.instrumentClient(
+  new Mistral({ apiKey: process.env.MISTRAL_API_KEY }),
+);
 
-// 3. NOW import and use Mistral
-const { Mistral } = await import("@mistralai/mistralai");
-const client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
+try {
+  const response = await client.chat.complete({
+    model: "mistral-small-latest",
+    messages: [{ role: "user", content: "Suggest a name for a neighborhood bakery." }],
+  });
+  console.log(response.choices[0]?.message.content);
+} finally {
+  instrumentation.disable();
+  await provider.shutdown();
+}
+```
 
-// 4. Use normally - all calls are traced
-const response = await client.chat.complete({
+Open the **mistral-app** project in Future AGI to inspect the request's span.
+
+If you already have an OpenTelemetry tracer provider, pass it to `setTracerProvider` instead of creating another one. Choose this instrumentation or the SDK's native telemetry, not both, to avoid duplicate model spans.
+
+## Instrument all native clients
+
+For SDKs with a named `Mistral` export and resource clients, register the imported module instead. This covers clients and resource objects created before or after registration, without modifying the ESM namespace.
+
+```typescript
+import * as mistralSDK from "@mistralai/mistralai";
+
+instrumentation.manuallyInstrument(mistralSDK);
+const client = new mistralSDK.Mistral({ apiKey: process.env.MISTRAL_API_KEY });
+```
+
+CommonJS applications can also register the instrumentation before requiring the SDK through OpenTelemetry's `registerInstrumentations`. For ESM, explicit `instrumentClient` or `manuallyInstrument` registration avoids depending on a loader hook.
+
+Legacy default-export SDKs, including `0.1.3` and `1.0.0`, define methods on each client. Use `instrumentClient(client)` with those versions and keep calling their original `chat`, `chatStream`, and `embeddings` APIs.
+
+`disable()` restores instrumented methods. `enable()` reattaches them. Registering the same client or module repeatedly does not add duplicate spans.
+
+## Stream a response
+
+Replace the completion call in the example above with this block, keeping the provider shutdown after consumption.
+
+```typescript
+const stream = await client.chat.stream({
   model: "mistral-small-latest",
-  messages: [{ role: "user", content: "Hello!" }],
+  messages: [{ role: "user", content: "Write a short welcome message for the bakery." }],
 });
 
-// 5. Shutdown when done
-await tracerProvider.shutdown();
-```
-
-## Supported Models
-
-### Chat Models
-
-| Model | ID | Description |
-|-------|-----|-------------|
-| Mistral Large | `mistral-large-latest` | Most capable model, flagship |
-| Mistral Medium | `mistral-medium-latest` | Balanced performance |
-| Mistral Small | `mistral-small-latest` | Fast and cost-effective |
-| Open Mistral 7B | `open-mistral-7b` | Open-weight 7B model |
-| Open Mixtral 8x7B | `open-mixtral-8x7b` | Open-weight MoE model |
-| Open Mixtral 8x22B | `open-mixtral-8x22b` | Largest open model |
-| Codestral | `codestral-latest` | Specialized for code |
-
-### Embedding Models
-
-| Model | ID | Dimensions |
-|-------|-----|------------|
-| Mistral Embed | `mistral-embed` | 1024 |
-
-## Real-World Use Cases
-
-### 1. AI Assistant with Function Calling
-
-```typescript
-async function aiAssistant(userQuery: string) {
-  const tools = [
-    {
-      type: "function",
-      function: {
-        name: "get_current_weather",
-        description: "Get the current weather in a location",
-        parameters: {
-          type: "object",
-          properties: {
-            location: {
-              type: "string",
-              description: "City name",
-            },
-            unit: {
-              type: "string",
-              enum: ["celsius", "fahrenheit"],
-            },
-          },
-          required: ["location"],
-        },
-      },
-    },
-  ];
-
-  const response = await mistral.chat.complete({
-    model: "mistral-large-latest",
-    messages: [{ role: "user", content: userQuery }],
-    tools,
-    tool_choice: "auto",
-  });
-
-  return response.choices[0].message;
+for await (const event of stream) {
+  const content = event.data.choices[0]?.delta.content;
+  if (typeof content === "string") process.stdout.write(content);
 }
 ```
 
-### 2. Code Generation with Codestral
+The span ends when consumption completes, fails, or is cancelled—not when the stream is first returned. Consume or cancel streams before shutting down the tracer provider. Web stream reader, pipe, and tee methods remain available when supplied by your SDK version.
+
+Stream output capture uses a bounded 65,536-character budget for event JSON and assembled content. Longer output is marked with `mistral.output.truncated`; final token usage is still recorded.
+
+## Control captured content
 
 ```typescript
-async function generateCode(prompt: string) {
-  const response = await mistral.chat.complete({
-    model: "codestral-latest",
-    messages: [
-      {
-        role: "system",
-        content: "You are an expert programmer. Write clean, efficient code.",
-      },
-      { role: "user", content: prompt },
-    ],
-    temperature: 0.2,
-    max_tokens: 2000,
-  });
-
-  return response.choices[0].message.content;
-}
-
-// Usage
-const code = await generateCode("Write a TypeScript function to merge two sorted arrays");
-```
-
-### 3. Semantic Search with Embeddings
-
-```typescript
-async function semanticSearch(query: string, documents: string[]) {
-  // Get query embedding
-  const queryEmbedding = await mistral.embeddings.create({
-    model: "mistral-embed",
-    inputs: query,
-  });
-
-  // Get document embeddings
-  const docEmbeddings = await mistral.embeddings.create({
-    model: "mistral-embed",
-    inputs: documents,
-  });
-
-  // Calculate cosine similarities
-  const queryVector = queryEmbedding.data[0].embedding;
-  const similarities = docEmbeddings.data.map((doc, index) => ({
-    document: documents[index],
-    similarity: cosineSimilarity(queryVector, doc.embedding),
-  }));
-
-  // Sort by similarity
-  return similarities.sort((a, b) => b.similarity - a.similarity);
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dotProduct / (magnitudeA * magnitudeB);
-}
-```
-
-### 4. Multi-Turn Conversation
-
-```typescript
-class ChatSession {
-  private history: Array<{ role: string; content: string }> = [];
-
-  constructor(systemPrompt?: string) {
-    if (systemPrompt) {
-      this.history.push({ role: "system", content: systemPrompt });
-    }
-  }
-
-  async chat(userMessage: string): Promise<string> {
-    this.history.push({ role: "user", content: userMessage });
-
-    const response = await mistral.chat.complete({
-      model: "mistral-large-latest",
-      messages: this.history,
-    });
-
-    const assistantMessage = response.choices[0].message.content;
-    this.history.push({ role: "assistant", content: assistantMessage || "" });
-
-    return assistantMessage || "";
-  }
-}
-
-// Usage
-const session = new ChatSession("You are a helpful coding assistant.");
-const answer1 = await session.chat("What is TypeScript?");
-const answer2 = await session.chat("How does it compare to JavaScript?");
-```
-
-### 5. Safe Prompting
-
-```typescript
-async function safeChatCompletion(userMessage: string) {
-  const response = await mistral.chat.complete({
-    model: "mistral-large-latest",
-    messages: [{ role: "user", content: userMessage }],
-    safe_prompt: true, // Enable Mistral's safety guardrails
-  });
-
-  return response.choices[0].message.content;
-}
-```
-
-### 6. JSON Mode
-
-```typescript
-async function extractStructuredData(text: string) {
-  const response = await mistral.chat.complete({
-    model: "mistral-large-latest",
-    messages: [
-      {
-        role: "system",
-        content: "Extract information as JSON. Only output valid JSON.",
-      },
-      {
-        role: "user",
-        content: `Extract person information from: "${text}"
-
-Return JSON with fields: name, age, occupation, location`,
-      },
-    ],
-    temperature: 0,
-    response_format: { type: "json_object" },
-  });
-
-  return JSON.parse(response.choices[0].message.content || "{}");
-}
-```
-
-## Traced Attributes
-
-The instrumentation captures the following attributes:
-
-| Attribute | Description |
-|-----------|-------------|
-| `llm.system` | Always "mistralai" |
-| `llm.provider` | Always "mistralai" |
-| `llm.model_name` | The model used |
-| `llm.input_messages` | Input messages with role and content |
-| `llm.output_messages` | Output messages with role and content |
-| `llm.invocation_parameters` | Model parameters |
-| `llm.token_count.prompt` | Number of input tokens |
-| `llm.token_count.completion` | Number of output tokens |
-| `llm.token_count.total` | Total tokens used |
-| `llm.tools` | Tool definitions if provided |
-| `embedding.model_name` | Embedding model used |
-| `embedding.embeddings` | Embedding text and vectors |
-
-## Integration with TraceAI Platform
-
-```typescript
-import { MistralInstrumentation } from "@traceai/mistral";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Resource } from "@opentelemetry/resources";
-
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    "service.name": "my-mistral-app",
-    "deployment.environment": "production",
-  }),
-});
-
-const exporter = new OTLPTraceExporter({
-  url: "https://api.traceai.com/v1/traces",
-  headers: {
-    Authorization: `Bearer ${process.env.TRACEAI_API_KEY}`,
+const instrumentation = new MistralInstrumentation({
+  traceConfig: {
+    hideInputs: true,
+    hideOutputs: true,
+    hideEmbeddingVectors: true,
   },
 });
-
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
-
-const instrumentation = new MistralInstrumentation();
-instrumentation.manuallyInstrument(require("@mistralai/mistralai"));
+instrumentation.setTracerProvider(provider);
 ```
 
-## Running Examples
+These settings omit message content, tool payloads, and embedding data while preserving operational metadata and token usage. Content-hiding settings also hide exception details by default. The corresponding `FI_HIDE_*` environment variables are supported through `@traceai/fi-core`.
 
-The `examples/` directory contains real-world examples:
+## Supported operations
 
-```bash
-cd examples
-cp .env.example .env
-# Edit .env with your API keys
+When present in your SDK version:
 
-pnpm install
-pnpm run example
-```
+- `chat.complete`, `chat.stream`, `chat.parse`, and `chat.parseStream`
+- `fim.complete` and `fim.stream`
+- `agents.complete` and `agents.stream`
+- `embeddings.create`
+- `beta.conversations.start`, `append`, and `restart`, plus their streaming variants
 
-## E2E Testing
-
-Run E2E tests with real API keys:
-
-```bash
-MISTRAL_API_KEY=your_key pnpm test -- --testPathPattern=e2e
-```
+Tool definitions, tool-call arguments, and tool results are captured as part of the model request or response. This package does not execute tools or create spans for your application's tool functions. Administrative APIs and the SDK's separate Responses, audio, and realtime clients are not instrumented.
 
 ## License
 
 Apache-2.0
-
-## Related Packages
-
-- [@traceai/openai](../traceai_openai) - OpenAI instrumentation
-- [@traceai/groq](../traceai_groq) - Groq instrumentation
-- [@traceai/anthropic](../traceai_anthropic) - Anthropic instrumentation
-- [@traceai/cohere](../traceai_cohere) - Cohere instrumentation
-- [@traceai/google-genai](../traceai_google_genai) - Google GenAI instrumentation
-- [@traceai/fi-core](../fi-core) - Core tracing utilities

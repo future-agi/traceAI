@@ -98,7 +98,7 @@ func TestClassifyError(t *testing.T) {
 func clearHideEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{EnvHideLLMInvocationParameters, EnvHideInputs, EnvHideOutputs, EnvHideInputMessages,
-		EnvHideOutputMessages, EnvHideInputImages, EnvHideInputText, EnvHideOutputText, EnvBase64ImageMaxLength} {
+		EnvHideOutputMessages, EnvHideInputImages, EnvHideInputText, EnvHideOutputText, EnvBase64ImageMaxLength, EnvHideErrorDetails} {
 		t.Setenv(k, "")
 	}
 }

@@ -16,18 +16,18 @@ from traceai_tavily.version import __version__
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# (module, class, wrapper type). Both methods are defined in each class body in
+# (module, class, wrapper type). The methods are defined in each class body in
 # tavily-python 0.8.4, so wrapping the class covers every instance, including
 # the deprecated ``tavily.Client`` subclass.
 _CLIENTS = (
     ("tavily.tavily", "TavilyClient", SyncWrapper),
     ("tavily.async_tavily", "AsyncTavilyClient", AsyncWrapper),
 )
-_METHODS = ("search", "extract")
+_METHODS = ("search", "extract", "map", "crawl", "research", "get_research")
 
 
 class TavilyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
-    """Trace ``search`` and ``extract`` on TavilyClient and AsyncTavilyClient.
+    """Trace search, extraction, mapping, crawling and research client calls.
 
     ``instrument()`` accepts ``tracer_provider`` and ``config`` (a
     ``fi_instrumentation.TraceConfig``; by default one read from the
