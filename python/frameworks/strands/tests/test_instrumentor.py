@@ -429,12 +429,10 @@ class TestStrandsOtlpExporterIsNotDoubled:
 
         assert _RecordingStrandsTelemetry.calls == ["otlp"]
 
-    def test_added_for_the_default_endpoint_when_nothing_is_set(self):
-        configure_strands_tracing(
-            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
-        )
+    def test_no_implicit_localhost_exporter_or_metrics_when_already_exporting(self):
+        configure_strands_tracing(tracer_provider=_provider_exporting_to(_FUTURE_AGI))
 
-        assert _RecordingStrandsTelemetry.calls == ["otlp"]
+        assert _RecordingStrandsTelemetry.calls == []
 
     def test_added_when_the_provider_has_no_span_processors(
         self, monkeypatch, mock_tracer_provider

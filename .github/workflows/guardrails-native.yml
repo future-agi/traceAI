@@ -1,0 +1,44 @@
+name: Guardrails compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - python/frameworks/guardrails/**
+      - python/tests/test_framework_guardrails.py
+      - .github/workflows/guardrails-native.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        guardrails: ['0.5.0', '0.11.0']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install declared floor or native SDK
+        run: |
+          python -m venv "$RUNNER_TEMP/guardrails-venv"
+          "$RUNNER_TEMP/guardrails-venv/bin/pip" install -e python/frameworks/guardrails \
+            "guardrails-ai==${{ matrix.guardrails }}" \
+            pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+      - name: Test with external networking disabled
+        run: |
+          mkdir -p "$RUNNER_TEMP/guardrails-home"
+          sudo unshare --net sh -c 'ip link set lo up; exec "$@"' sh \
+            env HOME="$RUNNER_TEMP/guardrails-home" LITELLM_LOCAL_MODEL_COST_MAP=True \
+            GUARDRAILS_NO_METRICS=true \
+            "$RUNNER_TEMP/guardrails-venv/bin/python" -I -m pytest -q -o addopts= \
+            -p no:cacheprovider python/frameworks/guardrails/tests \
+            python/tests/test_framework_guardrails.py

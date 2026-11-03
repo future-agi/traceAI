@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import re
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
@@ -25,6 +27,15 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from traceai_pydantic_ai import PydanticAIInstrumentor, instrument_pydantic_ai
 
 SECRET = "private-payload-92734"
+
+
+def test_version_matches_manifest():
+    import traceai_pydantic_ai
+
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert traceai_pydantic_ai.__version__ == re.search(
+        r'^version\s*=\s*"([^"]+)"', pyproject, re.M
+    ).group(1)
 
 
 def new_provider(exporter=None):
