@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Plan the Codex/Pi, Go and Java integration checks, without changing Python CI.
+"""Plan selected TypeScript, Go and Java integration checks, without changing Python CI.
 
 Uses the existing Python planner's NUL-safe, rename-aware git diff reader. The
 same files can land independently with each integration: absent target directories
 are ignored, but an existing target may not silently lose its manifest or tests.
-CI changes run every present target; TS shared dependencies run both TS targets.
+CI changes run every present target; TS shared dependencies run all TS targets.
 """
 import argparse
 import json
@@ -18,6 +18,7 @@ from python_test_plan import PlanError, changed_paths, commit_count
 TARGETS = (
     ('codex-sdk', 'typescript', 'typescript/packages/traceai_codex_sdk', 'package.json'),
     ('pi-coding-agent', 'typescript', 'typescript/packages/traceai_pi_coding_agent', 'package.json'),
+    ('instructor', 'typescript', 'typescript/packages/traceai_instructor', 'package.json'),
     ('openai', 'go', 'go/openai', 'go.mod'),
     ('a2a', 'go', 'go/a2a', 'go.mod'),
     ('eino', 'go', 'go/eino', 'go.mod'),
