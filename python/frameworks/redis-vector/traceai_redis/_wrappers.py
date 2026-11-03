@@ -143,15 +143,32 @@ class BaseWrapper:
         ft_index_name = (
             self._index_name(instance) if self.operation == "ft_search" else None
         )
+        query = args[0] if args else kwargs.get("query")
         internal_ft_search = (
             ft_index_name is not None
             and parent is not None
-            and parent[0] in ("query", "search")
+            and parent[0] == "search"
             and ft_index_name == self._index_name(parent[1])
+            and query is not None
+            and query is parent[2]
         )
         if internal_search or internal_ft_search:
-            with commands:
-                yield None
+            # RedisVL.query delegates through RedisVL.search. Keep the delegated
+            # search's query in context so only its corresponding FT call is
+            # folded into the outer span, not other calls on the same index.
+            token = (
+                context_api.attach(
+                    context_api.set_value(_VECTOR_SPAN_KEY, ("search", instance, query))
+                )
+                if internal_search
+                else None
+            )
+            try:
+                with commands:
+                    yield None
+            finally:
+                if token is not None:
+                    context_api.detach(token)
             return
         with self._tracer.start_as_current_span(
             self.span_name,
@@ -159,7 +176,9 @@ class BaseWrapper:
             attributes=self._attributes(instance, args, kwargs),
         ) as span:
             token = context_api.attach(
-                context_api.set_value(_VECTOR_SPAN_KEY, (self.operation, instance))
+                context_api.set_value(
+                    _VECTOR_SPAN_KEY, (self.operation, instance, query)
+                )
             )
             try:
                 with commands:

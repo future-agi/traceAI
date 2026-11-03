@@ -205,13 +205,13 @@ def test_independent_ft_search_inside_redisvl_search_is_traced(
 
     def search(self, *args, **kwargs):
         independent = client.ft("independent-index").search(Query("*"))
-        expected = client.ft("documents").search(Query("*"))
+        expected = client.ft("documents").search(args[0])
         assert independent.total == expected.total == 1
         return expected
 
     async def asearch(self, *args, **kwargs):
         independent = await client.ft("independent-index").search(Query("*"))
-        expected = await client.ft("documents").search(Query("*"))
+        expected = await client.ft("documents").search(args[0])
         assert independent.total == expected.total == 1
         return expected
 
@@ -231,6 +231,39 @@ def test_independent_ft_search_inside_redisvl_search_is_traced(
         "documents",
     )
     assert child.parent.span_id == parent.context.span_id
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_same_index_preflight_ft_search_remains_visible(
+    telemetry, clients, monkeypatch, asynchronous
+):
+    instrumentor, provider, exporter = telemetry
+    cls = AsyncSearchIndex if asynchronous else SearchIndex
+    client = clients[int(asynchronous)]
+    main_query = Query("*")
+    preflight_query = Query("*")  # Same expression, but a distinct operation.
+
+    def search(self, query, **kwargs):
+        assert query is main_query
+        assert client.ft("documents").search(preflight_query).total == 1
+        return client.ft("documents").search(query, **kwargs)
+
+    async def asearch(self, query, **kwargs):
+        assert query is main_query
+        assert (await client.ft("documents").search(preflight_query)).total == 1
+        return await client.ft("documents").search(query, **kwargs)
+
+    monkeypatch.setattr(cls, "search", asearch if asynchronous else search)
+    instrumentor.instrument(tracer_provider=provider)
+    result = cls.from_dict(SCHEMA).search(main_query)
+    if asynchronous:
+        result = asyncio.run(result)
+    assert result.total == 1
+    preflight, outer = exporter.get_finished_spans()
+    assert preflight.name == "redis ft_search"
+    assert preflight.attributes["db.namespace"] == "documents"
+    assert outer.name == "redis vector_search"
+    assert preflight.parent.span_id == outer.context.span_id
 
 
 def test_readme_qualifies_lower_level_search_result_shape():
