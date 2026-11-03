@@ -301,6 +301,43 @@ for (const [version, pg] of versions) {
       expect(exporter.getFinishedSpans()).toHaveLength(1);
     });
 
+    if (version.startsWith("8.23.1")) {
+      test.each(["success", "error"])("Query third-argument callback finishes on %s and restores callback", (outcome) => {
+        const { client, submitted } = controlledClient(pg);
+        const query = new pg.Query(sql);
+        const originalEmit = query.emit;
+        const callback = jest.fn();
+        expect(client.query(query, undefined, callback)).toBe(query);
+        expect(exporter.getFinishedSpans()).toHaveLength(0);
+        const error = new Error("synthetic third-argument query failure");
+        if (outcome === "error") submitted[0].handleError(error);
+        else {
+          submitted[0]._results = result;
+          submitted[0].handleReadyForQuery();
+        }
+        expect(callback).toHaveBeenCalledWith(...(outcome === "error" ? [error] : [null, result]));
+        expect(query.callback).toBe(callback);
+        expect(query.emit).toBe(originalEmit);
+        expect(exporter.getFinishedSpans()).toHaveLength(1);
+        expect(exporter.getFinishedSpans()[0].status.code).toBe(outcome === "error" ? SpanStatusCode.ERROR : SpanStatusCode.OK);
+      });
+    }
+
+    if (version.startsWith("8.23.1")) {
+      test("Query callback in second argument takes precedence over third", () => {
+        const { client, submitted } = controlledClient(pg);
+        const query = new pg.Query(sql);
+        const preferred = jest.fn();
+        const ignored = jest.fn();
+        expect(client.query(query, preferred, ignored)).toBe(query);
+        submitted[0].handleError(new Error("synthetic failure"));
+        expect(preferred).toHaveBeenCalledTimes(1);
+        expect(ignored).not.toHaveBeenCalled();
+        expect(query.callback).toBe(preferred);
+        expect(exporter.getFinishedSpans()).toHaveLength(1);
+      });
+    }
+
     test("immutable custom Submittables pass through without inventing completion", () => {
       const { client, submitted } = controlledClient(pg);
       const callback = jest.fn();

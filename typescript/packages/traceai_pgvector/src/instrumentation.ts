@@ -128,9 +128,11 @@ export class PgVectorInstrumentation extends InstrumentationBase<PgVectorInstrum
   private wrapQuery(receiver: any, original: QueryFunction, args: any[]): any {
     const query = args[0];
     const submittable = query != null && typeof query.submit === "function";
-    // pg gives an existing Submittable callback precedence over the second argument.
+    // pg gives an existing Submittable callback precedence, then values, then callback.
     const callbackIndex = submittable
-      ? (typeof query.callback !== "function" && typeof args[1] === "function" ? 1 : -1)
+      ? (typeof query.callback === "function" ? -1
+        : typeof args[1] === "function" ? 1
+        : typeof args[2] === "function" ? 2 : -1)
       : (typeof args[2] === "function" ? 2 : typeof args[1] === "function" ? 1 : -1);
     const callback = submittable && typeof query.callback === "function" ? query.callback
       : callbackIndex >= 0 ? args[callbackIndex] : query?.callback;
@@ -181,7 +183,7 @@ export class PgVectorInstrumentation extends InstrumentationBase<PgVectorInstrum
         query.callback = wrapped;
         restore = () => {
           if (query.callback === wrapped) {
-            if (callbackIndex === 1) query.callback = callback;
+            if (callbackIndex >= 0) query.callback = callback;
             else if (descriptor) Object.defineProperty(query, "callback", descriptor);
             else delete query.callback;
           }

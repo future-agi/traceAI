@@ -1,0 +1,41 @@
+name: ChromaDB offline compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/chromadb/**'
+      - 'python/fi_instrumentation/**'
+      - '.github/workflows/chromadb-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ChromaDB ${{ matrix.sdk }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+        sdk: ['chromadb==0.5.1', 'chromadb']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Resolve and install the complete package
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install ./python/frameworks/chromadb '${{ matrix.sdk }}' 'fi-instrumentation-otel==1.2.2' pytest pytest-asyncio
+          .venv/bin/pip check
+      - name: Run tests with loopback networking only
+        run: |
+          sudo unshare --net sh -c 'ip link set lo up; exec "$@"' sh \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -I -m pytest \
+            "$GITHUB_WORKSPACE/python/frameworks/chromadb/tests" -q

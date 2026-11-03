@@ -2,7 +2,8 @@
 
 ``FakeVoyage`` speaks enough of the Voyage HTTP API for voyageai 0.3.7 to
 0.5.x: ``POST /v1/embeddings`` (base64 or list vectors, float and packed
-binary dtypes), ``POST /v1/rerank`` and ``POST /v1/multimodalembeddings``.
+binary dtypes), ``POST /v1/rerank``, ``POST /v1/multimodalembeddings`` and
+``POST /v1/contextualizedembeddings``.
 The real ``voyageai.Client`` / ``AsyncClient`` reach it through
 ``base_url=fake.base_url``. Nothing here leaves 127.0.0.1 and every key is a
 placeholder.
@@ -175,17 +176,41 @@ class FakeVoyage:
                             "usage": {"total_tokens": rerank_tokens(len(documents))},
                         },
                     )
+                elif path == "/v1/contextualizedembeddings":
+                    inputs = list(body.get("inputs") or [])
+                    data = []
+                    for i, chunks in enumerate(inputs):
+                        if body.get("enable_auto_chunking"):
+                            chunks = ["SERVER-CHUNK-PRIVATE"] * 2
+                        data.append(
+                            {
+                                "object": "list",
+                                "index": i,
+                                "data": [
+                                    {"embedding": _embedding(body), "index": j, "text": text}
+                                    for j, text in enumerate(chunks)
+                                ],
+                            }
+                        )
+                    self._send(
+                        200,
+                        {
+                            "object": "list",
+                            "data": data,
+                            "usage": {"total_tokens": 7 * sum(len(d["data"]) for d in data)},
+                        },
+                    )
                 elif path == "/v1/multimodalembeddings":
                     inputs = list(body.get("inputs") or [])
                     data = [
-                        {"object": "embedding", "embedding": _vector(DIMENSION), "index": i}
+                        {"object": "embedding", "embedding": _embedding(body), "index": i}
                         for i in range(len(inputs))
                     ]
                     usage = {
                         "text_tokens": 3,
-                        "image_pixels": 0,
-                        "video_pixels": 0,
-                        "total_tokens": 3,
+                        "image_pixels": 128,
+                        "video_pixels": 256,
+                        "total_tokens": 11,
                     }
                     self._send(200, {"object": "list", "data": data, "usage": usage})
                 else:
