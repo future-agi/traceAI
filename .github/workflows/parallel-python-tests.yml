@@ -1,0 +1,78 @@
+name: Parallel Python contracts
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/parallel/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/parallel-python-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/parallel/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/parallel-python-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Parallel (${{ matrix.parallel }}, OpenAI ${{ matrix.openai }}, ${{ matrix.distribution }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            parallel: '1.0.1'
+            openai: '1.69.0'
+            distribution: wheel
+          - python: '3.13'
+            parallel: '1.3.7'
+            openai: '3.42.0'
+            distribution: sdist
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+      PARALLEL_VERSION: ${{ matrix.parallel }}
+      OPENAI_VERSION: ${{ matrix.openai }}
+      DISTRIBUTION: ${{ matrix.distribution }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install distributions
+        shell: bash
+        run: |
+          python -m venv .parallel-test-venv
+          .parallel-test-venv/bin/pip install build
+          .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/parallel
+          .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/openai
+          if [ "$DISTRIBUTION" = wheel ]; then
+            packages=(python/frameworks/{parallel,openai}/dist/*.whl)
+          else
+            packages=(python/frameworks/{parallel,openai}/dist/*.tar.gz)
+          fi
+          .parallel-test-venv/bin/pip install "${packages[@]}" \
+            "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" pytest pytest-asyncio
+      - name: Test with only loopback networking
+        shell: bash
+        run: |
+          sudo --preserve-env=FI_BASE_URL,FI_GRPC_URL unshare --net bash -c '
+            set -e
+            ip link set lo up
+            "$1" -I -m pytest \
+              python/frameworks/parallel/tests python/frameworks/openai/tests \
+              -q -p no:cacheprovider
+          ' _ "$PWD/.parallel-test-venv/bin/python"

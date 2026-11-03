@@ -26,6 +26,7 @@ jest.mock("@traceai/fi-core", () => ({
     startActiveSpan: jest.fn((name: any, fn: any) => fn(mockSpan)),
   })),
   TraceConfigOptions: {},
+  generateTraceConfig: jest.fn((options: any) => options || {}),
 }));
 
 // Mock OpenTelemetry context
