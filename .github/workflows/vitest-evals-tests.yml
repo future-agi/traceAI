@@ -1,0 +1,37 @@
+name: Vitest evals TypeScript tests
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_vitest_evals/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
+      - '.github/workflows/vitest-evals-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  vitest-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - name: Frozen install and build
+        working-directory: typescript
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/vitest-evals...'
+          pnpm --filter '@traceai/vitest-evals' run build
+      - name: Isolated Vitest 4.1 floor dependencies
+        run: npm install --prefix "$RUNNER_TEMP/floor-consumer" --ignore-scripts --no-audit --no-fund vitest@4.1.0 vite@7.1.12 vitest-evals@0.17.0
+      - name: Offline unit and loopback OTLP contract on floor and latest
+        run: |
+          sudo env PATH="$PATH" TEST_FLOOR_CONSUMER="$RUNNER_TEMP/floor-consumer" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" "$(command -v node)" --test typescript/packages/traceai_vitest_evals/test/reporter.test.cjs typescript/packages/traceai_vitest_evals/test/integration.test.cjs
+      - name: Release coverage
+        run: python3 .github/release/release_plan.py --check
