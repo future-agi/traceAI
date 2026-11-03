@@ -1,0 +1,8 @@
+# frozen_string_literal: true
+source "https://rubygems.org"
+gemspec
+gem "opentelemetry-sdk", "~> 1.0"
+gem "opentelemetry-exporter-otlp", "~> 0.32"
+gem "minitest", "~> 5.0"
+# CI pins the lowest supported Roast and tests the latest published release separately.
+gem "roast-ai", ENV.fetch("ROAST_VERSION") unless ENV.fetch("ROAST_VERSION", "").empty?
