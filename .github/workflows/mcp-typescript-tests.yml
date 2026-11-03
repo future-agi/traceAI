@@ -1,0 +1,66 @@
+name: MCP TypeScript propagation
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_mcp/**'
+      - 'typescript/tsconfig*.json'
+      - 'typescript/package.json'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - '.github/workflows/mcp-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  propagation:
+    name: MCP propagation (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.23.4', '24.11.0']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install locked dependencies without package scripts
+        working-directory: typescript
+        run: pnpm --filter @traceai/mcp... install --frozen-lockfile --ignore-scripts
+      - name: Build CommonJS and ESM distributions
+        working-directory: typescript/packages/traceai_mcp
+        run: pnpm run build
+      - name: Test SDK floor, current SDK and split server with loopback-only networking
+        working-directory: typescript/packages/traceai_mcp
+        run: |
+          NODE="$(command -v node)"
+          JEST="$($NODE -p 'require.resolve("jest/bin/jest")')"
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash "$NODE" "$JEST" --config "$PWD/jest.config.js" --runInBand
+      - name: Install the packed distribution with only the split SDK
+        working-directory: typescript/packages/traceai_mcp
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcp-package"
+          pnpm pack --pack-destination "$RUNNER_TEMP/mcp-package"
+          npm install --prefix "$RUNNER_TEMP/mcp-smoke" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP/mcp-package"/*.tgz \
+            @modelcontextprotocol/server@2.4.0 mcp-handler@2.3.0 \
+            @opentelemetry/api@1.9.0 @opentelemetry/core@1.30.1 @opentelemetry/context-async-hooks@1.30.1
+          cp contract/types.mts "$RUNNER_TEMP/mcp-smoke/types.mts"
+          pnpm exec tsc --module Node16 --moduleResolution Node16 --target es2022 --skipLibCheck --strict --noEmit "$RUNNER_TEMP/mcp-smoke/types.mts"
+          git diff --exit-code -- ../../pnpm-lock.yaml
+      - name: Verify CJS auto hook, ESM manual and mcp-handler with loopback-only networking
+        working-directory: typescript/packages/traceai_mcp
+        run: |
+          NODE="$(command -v node)"
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            "$NODE" "$PWD/contract/smoke.cjs" "$RUNNER_TEMP/mcp-smoke"
