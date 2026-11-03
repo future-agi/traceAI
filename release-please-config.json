@@ -605,7 +605,9 @@
       "release-type": "node",
       "component": "npm-traceai-auto",
       "package-name": "@traceai/auto",
-      "extra-files": ["src/index.ts"]
+      "extra-files": [
+        "src/index.ts"
+      ]
     },
     "typescript/packages/traceai_bedrock": {
       "release-type": "node",
@@ -1293,6 +1295,14 @@
       "release-type": "node",
       "component": "npm-traceai-vscode-extension",
       "package-name": "@traceai/vscode-extension"
+    },
+    "typescript/packages/traceai_openrouter": {
+      "release-type": "node",
+      "component": "npm-traceai-openrouter",
+      "package-name": "@traceai/openrouter",
+      "extra-files": [
+        "src/index.ts"
+      ]
     }
   }
 }
