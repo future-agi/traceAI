@@ -23,6 +23,8 @@ export {
   REDACTED_VALUE,
 } from "./constants";
 export { generateTraceConfig } from "./traceConfig";
+// Native exporters reuse the same opt-in policy without creating extra spans.
+export { redactPiiInValue } from "./piiRedaction";
 export {
   ERROR_TYPE,
   ERROR_MESSAGE,

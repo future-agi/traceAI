@@ -149,7 +149,7 @@ export function createFIObservability(
             ...exporterOptions,
             serviceName,
             // Default the FI project to the service name so a project is created.
-            projectName: exporterOptions.projectName ?? serviceName,
+            projectName: exporterOptions.projectName ?? process.env.FI_PROJECT_NAME ?? serviceName,
           }),
         ],
       },
