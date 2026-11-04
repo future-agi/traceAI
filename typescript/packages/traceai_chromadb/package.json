@@ -40,7 +40,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
-    "chromadb": "^1.0.0 || ^2.0.0 || ^3.0.0"
+    "chromadb": "^1.1.0 || ^2.0.0 || ^3.0.0"
   },
   "devDependencies": {
     "@opentelemetry/sdk-trace-base": "^2.0.1",

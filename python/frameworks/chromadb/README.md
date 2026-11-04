@@ -144,9 +144,10 @@ export FI_HIDE_OUTPUTS=true
 export FI_HIDE_ERROR_DETAILS=true
 ```
 
-`FI_HIDE_INPUTS` omits collection names and filters, including requested result
-fields. `FI_HIDE_OUTPUTS` omits result IDs and scores. Counts, dimensions and
-operation names remain available. `FI_HIDE_ERROR_DETAILS` removes exception
+As in the TypeScript integration, `FI_HIDE_INPUTS` omits both collection-name
+attributes (`db.namespace` and `db.vector.collection.name`) and filters. Python
+also omits requested result fields. `FI_HIDE_OUTPUTS` omits result IDs and scores.
+Counts, dimensions and operation names remain available. `FI_HIDE_ERROR_DETAILS` removes exception
 messages, stack traces and error status descriptions while retaining error types
 and error status. If the error flag is unset, hiding inputs or outputs also hides
 error details. These settings affect exported telemetry, not database arguments,
