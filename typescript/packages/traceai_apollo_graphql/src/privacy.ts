@@ -1,12 +1,14 @@
 import type { Attributes } from '@opentelemetry/api';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace';
+import { generateTraceConfig, redactPiiInString, type TraceConfig, type TraceConfigOptions } from '@traceai/fi-core';
 
-export interface PrivacyOptions {
+export interface PrivacyOptions extends TraceConfigOptions {
   /**
    * Include upstream query source and error messages. configure() masks string and
    * numeric literals only; enum, Boolean and null literals remain visible.
    * Never includes stacks or variable-value attributes. Error messages may contain data.
+   * Shared FI hiding/redaction controls still apply; captureContent cannot bypass them.
    * When wrapping your own exporter, source masking is your instrumentation's responsibility.
    */
   captureContent?: boolean;
@@ -22,47 +24,64 @@ const metadata = new Set([
   'http.request.method', 'http.response.status_code', 'http.method', 'http.status_code',
 ]);
 
+type PrivacyPolicy = Readonly<TraceConfig & Pick<PrivacyOptions, 'captureContent'>>;
+const resolvePolicy = (options: PrivacyOptions): PrivacyPolicy => Object.freeze({
+  ...generateTraceConfig(options), captureContent: options.captureContent,
+});
+
 /** Filter only upstream HTTP/GraphQL spans, without mutating other exporters' view. */
 export function sanitizeSpan(span: ReadableSpan, options: PrivacyOptions = {}): ReadableSpan {
+  return sanitizeWithPolicy(span, resolvePolicy(options));
+}
+
+function sanitizeWithPolicy(span: ReadableSpan, policy: PrivacyPolicy): ReadableSpan {
   if (!scopes.has(span.instrumentationScope.name)) return span;
+  const keepSource = policy.captureContent && !policy.hideInputs && !policy.hideInputMessages && !policy.hideInputText;
+  const keepErrors = policy.captureContent && !policy.hideErrorDetails;
+  const text = (value: string): string => policy.piiRedaction ? redactPiiInString(value) : value;
+  const redact = (value: Attributes[string]): Attributes[string] => {
+    if (typeof value === 'string') return text(value);
+    if (Array.isArray(value)) return value.map(item => typeof item === 'string' ? text(item) : item) as typeof value;
+    return value;
+  };
   const attributes: Attributes = {};
   for (const [key, value] of Object.entries(span.attributes)) {
-    if (metadata.has(key) || (options.captureContent && key === 'graphql.source')) {
-      attributes[key] = value;
+    if (metadata.has(key) || (keepSource && key === 'graphql.source')) {
+      attributes[key] = redact(value);
     }
   }
   // Unknown event names and link attributes can themselves contain payloads.
   const events = span.events.filter(event => event.name === 'exception').map(event => {
     const attributes: Attributes = {};
-    for (const key of options.captureContent
-      ? ['exception.type', 'exception.message'] : ['exception.type']) {
-      if (event.attributes?.[key] !== undefined) attributes[key] = event.attributes[key];
+    for (const key of keepErrors ? ['exception.type', 'exception.message'] : ['exception.type']) {
+      if (event.attributes?.[key] !== undefined) attributes[key] = redact(event.attributes[key]);
     }
     return { ...event, attributes };
   });
+  const status = { code: span.status.code, ...(keepErrors && span.status.message !== undefined
+    ? { message: text(span.status.message) } : {}) };
   return Object.create(span, {
+    name: { value: typeof span.name === 'string' ? text(span.name) : span.name, enumerable: true },
     attributes: { value: attributes, enumerable: true },
     events: { value: events, enumerable: true },
     links: { value: span.links.map(link => ({ ...link, attributes: {} })), enumerable: true },
-    status: {
-      value: options.captureContent ? { ...span.status } : { code: span.status.code },
-      enumerable: true,
-    },
+    status: { value: status, enumerable: true },
   });
 }
 
 /** Destination-local policy; application-created spans are intentionally unchanged. */
 export class FiSanitizingExporter implements SpanExporter {
-  private readonly options: Readonly<PrivacyOptions>;
+  private readonly policy: PrivacyPolicy;
   private readonly pending = new Set<Promise<void>>();
   private failed = false;
+  private shutdownPromise?: Promise<void>;
   constructor(private readonly inner: SpanExporter, options: PrivacyOptions = {}) {
-    this.options = Object.freeze({ ...options });
+    this.policy = resolvePolicy(options);
   }
   export(spans: ReadableSpan[], callback: (result: ExportResult) => void): void {
     let sanitized: ReadableSpan[];
     try {
-      sanitized = spans.map(span => sanitizeSpan(span, this.options));
+      sanitized = spans.map(span => sanitizeWithPolicy(span, this.policy));
     } catch {
       this.failed = true;
       // Never forward the originals, or include the failed payload in diagnostics.
@@ -108,10 +127,12 @@ export class FiSanitizingExporter implements SpanExporter {
       throw new Error('Apollo telemetry export failed');
     }
   }
-  async shutdown(): Promise<void> {
-    try {
-      await this.waitForPending();
-      if (this.failed) throw new Error('Apollo telemetry export failed');
-    } finally { await this.inner.shutdown(); }
+  shutdown(): Promise<void> {
+    return this.shutdownPromise ??= (async () => {
+      try {
+        await this.waitForPending();
+        if (this.failed) throw new Error('Apollo telemetry export failed');
+      } finally { await this.inner.shutdown(); }
+    })();
   }
 }

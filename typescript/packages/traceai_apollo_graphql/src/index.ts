@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { diag, ProxyTracerProvider, SpanStatusCode, trace } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { DeadlineOTLPExporter } from './transport';
 import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { GraphQLInstrumentation } from '@opentelemetry/instrumentation-graphql';
@@ -68,12 +68,12 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
   if (process.env.OTEL_EXPORTER_OTLP_HEADERS || process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS) {
     throw new Error('Unset OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS before Apollo tracing');
   }
-  const exporter = new FiSanitizingExporter(new OTLPTraceExporter({
+  const exporter = new FiSanitizingExporter(new DeadlineOTLPExporter({
     url: `${baseUrl.href.replace(/\/+$/, '')}/tracer/v1/traces`,
     headers: { 'X-Api-Key': apiKey, 'X-Secret-Key': secretKey },
     compression: CompressionAlgorithm.NONE,
-    timeoutMillis: 3000,
-  }), {
+  }, 3000), {
+    ...options,
     captureContent: options.captureContent ?? process.env.FI_APOLLO_CAPTURE_CONTENT === 'true',
   });
   const processor = new BatchSpanProcessor({ exporter, exportTimeoutMillis: 4000 });
@@ -134,7 +134,12 @@ export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
       if (!shutdown) {
         instrumentations.forEach(instrumentation => instrumentation.disable());
         syncBuiltinESMExports();
-        shutdown = safely(() => sdk.shutdown());
+        shutdown = safely(async () => {
+          // BatchSpanProcessor skips exporter.shutdown() if its flush rejects.
+          // Our exporter shutdown is idempotent and must run on that path too.
+          try { await sdk.shutdown(); }
+          finally { await exporter.shutdown(); }
+        });
       }
       return shutdown;
     },

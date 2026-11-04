@@ -58,6 +58,38 @@ test('exporter freezes privacy options and delegates lifecycle', async () => {
   options.captureContent = true;
   exporter.export([fixture()], () => {});
   assert.equal(spans[0].attributes['graphql.source'], undefined);
-  await exporter.forceFlush(); await exporter.shutdown();
+  await exporter.forceFlush();
+  const shutdown = exporter.shutdown();
+  assert.equal(shutdown, exporter.shutdown());
+  await shutdown;
   assert.equal(flushed, 1); assert.equal(stopped, 1);
+});
+
+test('shared policy is resolved once and PII redaction never mutates the original span', () => {
+  const original = process.env.FI_HIDE_INPUTS;
+  try {
+    process.env.FI_HIDE_INPUTS = 'true';
+    const options = { captureContent: true, piiRedaction: true, hideErrorDetails: false };
+    let exported;
+    const exporter = new FiSanitizingExporter({
+      export(spans, callback) { exported = spans[0]; callback({ code: ExportResultCode.SUCCESS }); },
+      shutdown: async () => {},
+    }, options);
+    process.env.FI_HIDE_INPUTS = 'false';
+    options.piiRedaction = false;
+    const span = fixture();
+    span.name = 'review.person@example.test';
+    span.status.message = 'review.person@example.test';
+    span.events[1].attributes['exception.message'] = 'review.person@example.test';
+    exporter.export([span], () => {});
+    assert.equal(exported.attributes['graphql.source'], undefined);
+    assert.equal(exported.name, '<EMAIL_ADDRESS>');
+    assert.equal(exported.status.message, '<EMAIL_ADDRESS>');
+    assert.equal(exported.events[0].attributes['exception.message'], '<EMAIL_ADDRESS>');
+    assert.equal(span.status.message, 'review.person@example.test');
+    assert.equal(span.events[1].attributes['exception.message'], 'review.person@example.test');
+  } finally {
+    if (original === undefined) delete process.env.FI_HIDE_INPUTS;
+    else process.env.FI_HIDE_INPUTS = original;
+  }
 });
