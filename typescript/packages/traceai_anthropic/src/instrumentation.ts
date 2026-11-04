@@ -168,16 +168,29 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
   signal?.addEventListener("abort", onAbort, { once: true });
   if (signal?.aborted) finish(true);
 
-  const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+  // Legacy SDKs share this factory between Symbol.asyncIterator and tee(). It is
+  // private in the SDK's TypeScript declaration, but is a regular instance field.
+  // Observing only Symbol.asyncIterator misses tee(), which calls the factory directly.
+  const sdkStream = stream as unknown as { iterator?: () => AsyncIterator<MessageStreamEvent> };
+  const originalIterator = typeof sdkStream.iterator === "function"
+    ? sdkStream.iterator.bind(stream)
+    : stream[Symbol.asyncIterator].bind(stream);
   let iteratorObserved = false;
-  stream[Symbol.asyncIterator] = () => {
+  const observeIterator = () => {
     const iterator = originalIterator();
-    // Only the first iterator owns the span. The SDK rejects subsequent consumers;
-    // their errors must not end the active iterator's span or discard its output.
-    if (iteratorObserved) return iterator;
-    iteratorObserved = true;
+    let ownsSpan = false;
+    let closed = false;
     return {
+      [Symbol.asyncIterator]() { return this; },
       async next(...args: [] | [undefined]) {
+        // SDK generators claim consumption on first next(), not creation. A return
+        // or throw before that closes only this iterator, leaving the stream usable.
+        if (!closed && !iteratorObserved) {
+          iteratorObserved = true;
+          ownsSpan = true;
+        }
+        // Rejected secondary consumers cannot finish the owner's span or lose usage.
+        if (!ownsSpan) return iterator.next(...args);
         pending++;
         try {
           const result = await iterator.next(...args);
@@ -199,6 +212,8 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
         }
       },
       async return(value?: unknown) {
+        closed = true;
+        if (!ownsSpan) return iterator.return ? iterator.return(value) : { done: true as const, value };
         pending++;
         try {
           return iterator.return ? await iterator.return(value) : { done: true as const, value };
@@ -211,6 +226,11 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
         }
       },
       async throw(error?: unknown) {
+        closed = true;
+        if (!ownsSpan) {
+          if (iterator.throw) return iterator.throw(error);
+          throw error;
+        }
         pending++;
         try {
           if (iterator.throw) return await iterator.throw(error);
@@ -222,8 +242,13 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
       },
     };
   };
-  // The original object keeps its controller, tee() and toReadableStream().
-  // Those helpers all obtain their iterator through the method above.
+  if (typeof sdkStream.iterator === "function") {
+    sdkStream.iterator = observeIterator;
+  } else {
+    // Preserve support for async iterables without the SDK's factory field.
+    stream[Symbol.asyncIterator] = observeIterator;
+  }
+  // Keep the SDK object, controller and helpers; no iterator is advanced here.
   return stream;
 }
 

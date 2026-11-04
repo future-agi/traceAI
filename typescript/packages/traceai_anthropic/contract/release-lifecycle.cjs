@@ -170,6 +170,121 @@ async function main() {
       });
     }
     if (!native) {
+      const collect = async stream => {
+        const received = [];
+        for await (const event of stream) received.push(event.type);
+        return received;
+      };
+      const assertCompletion = () => {
+        const spans = memory.getFinishedSpans();
+        assert.equal(spans.length, 1, "one consumed request must export exactly one span");
+        assert.equal(spans[0].status.code, SpanStatusCode.OK);
+        assert.equal(spans[0].attributes["gen_ai.usage.input_tokens"], 12);
+        assert.equal(spans[0].attributes["gen_ai.usage.output_tokens"], 2);
+        assert.equal(spans[0].attributes["gen_ai.usage.total_tokens"], 14);
+        assert.equal(spans[0].events.length, 0);
+        assert.equal(JSON.stringify(spans[0].attributes).includes("OUTPUT_CANARY"), !privacy);
+      };
+      const expectedEvents = events.map(event => event.type);
+      for (const bothBranches of [false, true]) {
+        await check(`tee preserves one traced completion (both=${bothBranches})`, async () => {
+          memory.reset();
+          const stream = await client.messages.create({ ...params, stream: true });
+          try {
+            const [left, right] = stream.tee();
+            assert.equal(memory.getFinishedSpans().length, 0);
+            if (bothBranches) {
+              assert.deepEqual(await Promise.all([collect(left), collect(right)]), [expectedEvents, expectedEvents]);
+            } else {
+              assert.deepEqual(await collect(left), expectedEvents);
+              assertCompletion();
+              // The slower branch replays buffered events, not a second request span.
+              assert.deepEqual(await collect(right), expectedEvents);
+            }
+            assertCompletion();
+            stream.controller.abort();
+            assertCompletion();
+          } finally {
+            stream.controller.abort();
+          }
+        });
+      }
+      for (const unusedTee of [false, true]) {
+        await check(`ownership begins at first next, not iterator creation (unusedTee=${unusedTee})`, async () => {
+          memory.reset();
+          const stream = await client.messages.create({ ...params, stream: true });
+          try {
+            const unused = unusedTee ? stream.tee() : stream[Symbol.asyncIterator]();
+            // Merely requesting either kind of iterator must not own or drain the stream.
+            await delay(20);
+            assert.equal(memory.getFinishedSpans().length, 0);
+            assert.deepEqual(await collect(stream), expectedEvents);
+            assertCompletion();
+            if (!unusedTee) await unused.return();
+            assertCompletion();
+          } finally {
+            stream.controller.abort();
+          }
+        });
+      }
+      for (const closeMethod of ["return", "throw"]) {
+        await check(`${closeMethod} before first next cannot finish or later claim the stream`, async () => {
+          memory.reset();
+          const stream = await client.messages.create({ ...params, stream: true });
+          try {
+            const unused = stream[Symbol.asyncIterator]();
+            if (closeMethod === "return") {
+              assert.deepEqual(await unused.return("unused"), { done: true, value: "unused" });
+            } else {
+              const error = new Error("unstarted iterator closed");
+              await assert.rejects(unused.throw(error), candidate => candidate === error);
+            }
+            const early = memory.getFinishedSpans().length;
+            assert.equal((await unused.next()).done, true);
+            assert.equal(stream.controller.signal.aborted, false);
+            assert.deepEqual(await collect(stream), expectedEvents);
+            assert.equal(early, 0, "closing an unstarted iterator is not request cancellation");
+            assertCompletion();
+          } finally {
+            stream.controller.abort();
+          }
+        });
+      }
+      await check("unused iterator cannot prevent a tee consumer from owning the span", async () => {
+        memory.reset();
+        const stream = await client.messages.create({ ...params, stream: true });
+        try {
+          const unused = stream[Symbol.asyncIterator]();
+          const [left, right] = stream.tee();
+          assert.deepEqual(await Promise.all([collect(left), collect(right)]), [expectedEvents, expectedEvents]);
+          assertCompletion();
+          await unused.return();
+          assertCompletion();
+        } finally {
+          stream.controller.abort();
+        }
+      });
+      await check("tee observes only requested events and controller cancellation", async () => {
+        memory.reset();
+        const stream = await client.messages.create({ ...params, stream: true });
+        try {
+          const [left, right] = stream.tee();
+          const first = left[Symbol.asyncIterator]();
+          const second = right[Symbol.asyncIterator]();
+          assert.equal((await first.next()).value.type, "message_start");
+          assert.equal((await second.next()).value.type, "message_start");
+          await delay(20);
+          assert.equal(memory.getFinishedSpans().length, 0, "instrumentation must not drain the tee");
+          stream.controller.abort();
+          const spans = memory.getFinishedSpans();
+          assert.equal(spans.length, 1);
+          assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
+          assert.equal(spans[0].attributes["gen_ai.usage.output_tokens"], 0);
+          assert(!JSON.stringify(spans[0].attributes).includes("OUTPUT_CANARY"));
+        } finally {
+          stream.controller.abort();
+        }
+      });
       await check("rejected second iterator does not finish the active stream", async () => {
         memory.reset();
         const stream = await client.messages.create({ ...params, stream: true });
