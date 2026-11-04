@@ -326,9 +326,10 @@ class _Operation:
         query: Optional[str],
     ) -> None:
         name = type(error).__name__
-        if self._method in ("map", "crawl", "research", "get_research"):
+        if self._method in ("extract", "map", "crawl", "research", "get_research"):
             # SDK/HTTP errors can echo URLs, schema, prompts and streamed output.
-            # Type-only events keep the expanded surface private even on core 1.1.
+            # Type-only events keep those out of telemetry even on core 1.1,
+            # where hide_inputs does not strip exception messages or status text.
             span.set_status(Status(StatusCode.ERROR, name))
             span.add_event("exception", {"exception.type": name})
             return
