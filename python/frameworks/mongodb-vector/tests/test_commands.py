@@ -157,6 +157,29 @@ def test_write_error_is_not_success_and_does_not_leak(tracing, error_key):
     assert "PRIVATE" not in str(span.status.description)
 
 
+@pytest.mark.parametrize("error_count", [1, 1.0])
+def test_client_bulk_write_error_count_marks_error_without_payloads(tracing, error_count):
+    listener().started(started({"bulkWrite": 1, "ops": [], "nsInfo": []}))
+    listener().succeeded(succeeded("bulkWrite", {
+        "ok": 1, "nErrors": error_count,
+        "cursor": {"firstBatch": [{"ok": 0, "errmsg": "PRIVATE error document"}]},
+    }))
+    span = tracing[2].get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "MongoDB command failed"
+    assert span.attributes["error.type"] == "MongoDBCommandError"
+    assert "PRIVATE" not in span.to_json()
+
+
+@pytest.mark.parametrize("error_count", [0, 0.0, -1, None, "1", True, {}, [], float("nan")])
+def test_client_bulk_write_ignores_nonpositive_or_malformed_error_count(tracing, error_count):
+    listener().started(started({"bulkWrite": 1, "ops": [], "nsInfo": []}))
+    listener().succeeded(succeeded("bulkWrite", {"ok": 1, "nErrors": error_count}))
+    span = tracing[2].get_finished_spans()[0]
+    assert span.status.status_code is not StatusCode.ERROR
+    assert "error.type" not in span.attributes
+
+
 def test_overlapping_connections_and_duplicate_completion(tracing):
     listener().started(started({"find": "rows"}, connection=("localhost", 1)))
     listener().started(started({"find": "rows"}, connection=("localhost", 2)))
