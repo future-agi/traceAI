@@ -15,7 +15,7 @@ Native MCP error spans can contain exception text and stack traces. The `FI_HIDE
 Use Python 3.11–3.13. Install the published package and the MCP 1.x SDK:
 
 ```bash
-pip install "traceAI-mcp>=0.1.3" "mcp>=1.8.1,<2"
+pip install "traceAI-mcp>=0.1.3" "mcp>=1.30.0,<2"
 ```
 
 Keep your existing application, agent, or model instrumentation to create spans. Configure its provider/exporter in both client and server processes. Enable MCP propagation in each process before importing transport functions:
@@ -26,17 +26,11 @@ from traceai_mcp import MCPInstrumentor
 MCPInstrumentor().instrument()
 ```
 
-The instrumentor connects existing spans; installing it alone will not create a request or tool span tree. Its package dependency remains `mcp>=1.8.1` for compatibility with existing applications, but new MCP 2.x setups should use the native route instead.
+The instrumentor connects existing spans; installing it alone will not create a request or tool span tree. It requires `mcp>=1.30.0`; new MCP 2.x setups should use the native route instead.
 
-### MCP 1.8.1 dependency compatibility
+### Upgrading older MCP 1.x applications
 
-MCP 1.8.1 uses a private Pydantic API that is absent in newer Pydantic releases. If you must stay on MCP 1.8.1, pin its compatible Pydantic dependency:
-
-```bash
-pip install "traceAI-mcp>=0.1.3" "mcp==1.8.1" "pydantic==2.11.10"
-```
-
-This pin applies only to MCP 1.8.1; do not impose it on newer SDK versions.
+Upgrade the MCP SDK to at least 1.30.0 in both client and server environments. MCP 1.8.1 can close the session when a request is cancelled, preventing subsequent requests from completing. Pinning Pydantic resolves an import incompatibility in that older SDK, but does not fix cancellation. SDK versions below 1.30.0 are no longer supported by this instrumentor.
 
 ## Instrumentation lifecycle
 
