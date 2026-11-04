@@ -1,0 +1,106 @@
+name: OpenAI-compatible recipe tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/examples/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/frameworks/openai/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/openai-compatible-recipe-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/examples/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/frameworks/openai/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/openai-compatible-recipe-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Recipe plan
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          matrix = []
+          for recipe in ('databricks', 'lepton', 'orcarouter', 'anannas-ai', 'doubleword', 'baseten', 'perplexity', 'qwen'):
+              root = Path('python/examples') / recipe
+              if not root.exists():
+                  continue  # Recipes may land independently.
+              assert (root / 'src/app.py').is_file(), f'{recipe}: missing app'
+              assert (root / 'requirements.txt').is_file(), f'{recipe}: missing requirements'
+              assert list((root / 'tests').glob('test_*.py')), f'{recipe}: missing tests'
+              for sdk, mode in (('3.24.0', 'source'), ('1.69.0', 'source'), ('3.24.0', 'published')):
+                  matrix.append({'recipe': recipe, 'sdk': sdk, 'mode': mode})
+          assert matrix, 'No recipe tests found'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('matrix=' + json.dumps({'include': matrix}) + '\n')
+          PY
+  recipe:
+    name: Recipe (${{ matrix.recipe }}, openai ${{ matrix.sdk }}, ${{ matrix.mode }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+      RECIPE: ${{ matrix.recipe }}
+      SDK_VERSION: ${{ matrix.sdk }}
+      PACKAGE_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11.9'
+      - name: Install SDK and harness dependencies
+        run: |
+          python -m pip install "openai==$SDK_VERSION" httpx 'wrapt<2' \
+            opentelemetry-api opentelemetry-sdk opentelemetry-instrumentation \
+            opentelemetry-exporter-otlp-proto-http requests protobuf \
+            opentelemetry-proto pydantic jsonschema pytest
+          if [ "$PACKAGE_MODE" = published ]; then
+            python -m pip install 'traceAI-openai==0.1.10' 'fi-instrumentation-otel==1.1.0'
+          fi
+      - name: Run isolated recipe contracts
+        run: |
+          if [ "$PACKAGE_MODE" = published ]; then
+            export PYTHONPATH="python/examples/$RECIPE/src:python/tests"
+          else
+            export PYTHONPATH="python/examples/$RECIPE/src:python:python/frameworks/openai:python/tests"
+          fi
+          python -m pytest "python/examples/$RECIPE/tests" -q \
+            --noconftest -p no:cacheprovider -o addopts='' -rfEs
+  result:
+    name: OpenAI-compatible recipes
+    if: always()
+    needs: [plan, recipe]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every planned recipe contract
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          RECIPE_RESULT: ${{ needs.recipe.result }}
+        run: test "$PLAN_RESULT" = success && test "$RECIPE_RESULT" = success

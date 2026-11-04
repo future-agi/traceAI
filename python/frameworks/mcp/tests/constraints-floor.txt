@@ -1,0 +1,3 @@
+# Minimum supported MCP SDK, including request-cancellation liveness.
+# Do not pin Pydantic to mask incompatibilities in older, unsupported SDKs.
+mcp==1.30.0

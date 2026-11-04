@@ -1,23 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>ai.traceai</groupId>
+        <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.1</version>
     </parent>
 
     <artifactId>traceai-java-weaviate</artifactId>
     <name>TraceAI Java Weaviate</name>
     <description>Weaviate vector database instrumentation for TraceAI Java SDK</description>
 
+    <properties>
+        <!-- Minimum supported stable v6 client; overridden by the compatibility matrix. -->
+        <weaviate6.version>6.0.0</weaviate6.version>
+    </properties>
+
     <dependencies>
         <!-- TraceAI Core -->
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-core</artifactId>
         </dependency>
 
@@ -29,7 +32,28 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Current client, separate from the retained legacy v5 entry point.
+             Neither SDK is pulled into a customer's application transitively. -->
+        <dependency>
+            <groupId>io.weaviate</groupId>
+            <artifactId>client6</artifactId>
+            <version>${weaviate6.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Testing -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.3.2-alpha</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.18.2</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

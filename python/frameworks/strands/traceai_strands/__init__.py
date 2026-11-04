@@ -1,41 +1,18 @@
-"""TraceAI instrumentation for AWS Strands Agents.
+"""Adapt Strands' native OpenTelemetry spans for Future AGI.
 
-This module provides integration between TraceAI and AWS Strands Agents SDK,
-enabling comprehensive observability for AI agent workflows.
-
-Strands has built-in OpenTelemetry support, so this integration provides:
-1. A convenience function to configure Strands with TraceAI's endpoint
-2. Optional callback handlers for extended event capture
-3. Helper functions for trace attribute management
-
-Example usage:
-
-    from fi_instrumentation import register
-    from fi_instrumentation.fi_types import ProjectType
-    from traceai_strands import configure_strands_tracing, StrandsCallbackHandler
-
-    # Setup TraceAI
-    trace_provider = register(
-        project_type=ProjectType.OBSERVE,
-        project_name="strands-agent",
-    )
-
-    # Configure Strands to use TraceAI
-    configure_strands_tracing(tracer_provider=trace_provider)
-
-    # Or use with callback handler for extended events
-    from strands import Agent
-
-    callback = StrandsCallbackHandler(tracer_provider=trace_provider)
-    agent = Agent(
-        model="us.anthropic.claude-sonnet-4-20250514-v1:0",
-        callback_handler=callback,
-    )
+Wrap the exporter with StrandsSpanExporter and install one global provider before
+creating agents. Legacy setup, callback and attribute helpers remain available.
 """
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from traceai_strands._exporter import StrandsSpanExporter
 
 from traceai_strands._instrumentor import (
     configure_strands_tracing,
     StrandsInstrumentor,
+    create_traced_agent,
 )
 from traceai_strands._callback import StrandsCallbackHandler
 from traceai_strands._attributes import (
@@ -45,6 +22,8 @@ from traceai_strands._attributes import (
 )
 
 __all__ = [
+    "StrandsSpanExporter",
+    "create_traced_agent",
     "configure_strands_tracing",
     "StrandsInstrumentor",
     "StrandsCallbackHandler",
@@ -53,4 +32,12 @@ __all__ = [
     "get_model_attributes",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"  # x-release-please-version
+
+
+def __getattr__(name: str) -> Any:
+    # Keep the legacy attribute helpers importable without loading the exporter.
+    if name == "StrandsSpanExporter":
+        from traceai_strands._exporter import StrandsSpanExporter
+        return StrandsSpanExporter
+    raise AttributeError(name)

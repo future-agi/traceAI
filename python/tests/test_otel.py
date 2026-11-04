@@ -312,14 +312,17 @@ class TestTracerProvider:
         assert isinstance(details, str)
         assert len(details) > 0
 
-    @patch('fi_instrumentation.otel.signal.signal')
-    def test_tracer_provider_signal_handlers(self, mock_signal):
-        """Test TracerProvider sets up signal handlers."""
+    @patch('fi_instrumentation.otel.atexit.register')
+    @patch('signal.signal')
+    def test_tracer_provider_signal_handlers(self, mock_signal, mock_atexit):
+        """Cleanup must not take ownership of application signal handlers."""
         provider = TracerProvider()
-        provider.setup_signal_handlers()
-        
-        # Should register signal handlers
-        assert mock_signal.call_count >= 2  # SIGTERM and SIGINT
+        mock_signal.reset_mock()
+        mock_atexit.reset_mock()
+        assert provider.setup_signal_handlers() is provider
+        mock_signal.assert_not_called()
+        mock_atexit.assert_called_once_with(provider.shutdown)
+        provider.shutdown()
 
 
 class TestSpanProcessors:

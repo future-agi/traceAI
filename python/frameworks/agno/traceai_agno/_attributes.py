@@ -12,9 +12,11 @@ class SpanAttributes:
     """OpenTelemetry GenAI semantic convention attributes."""
 
     # LLM attributes
-    GEN_AI_PROVIDER_NAME = "gen_ai.system"
+    GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
     GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
-    LLM_RESPONSE_MODEL = "gen_ai.response.model"
+    GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+    # Keep the previous Python constant name as an alias for existing callers.
+    LLM_RESPONSE_MODEL = GEN_AI_RESPONSE_MODEL
     GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
     GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
     GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p"

@@ -1,5 +1,7 @@
+import sys
 from enum import Enum
-from inspect import signature
+from functools import wraps
+from inspect import signature, isgeneratorfunction, unwrap
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -109,6 +111,30 @@ def _smolagent_run_attributes(
             )
 
 
+class _TimeoutWrapper:
+    """Carry the OTel context into the SDK's code-execution timeout thread."""
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        timeout_decorator = wrapped(*args, **kwargs)
+
+        def decorate(function):
+            @wraps(function)
+            def call(*call_args, **call_kwargs):
+                parent_context = context_api.get_current()
+
+                @wraps(function)
+                def run_in_context(*worker_args, **worker_kwargs):
+                    token = context_api.attach(parent_context)
+                    try:
+                        return function(*worker_args, **worker_kwargs)
+                    finally:
+                        context_api.detach(token)
+
+                return timeout_decorator(run_in_context)(*call_args, **call_kwargs)
+            return call
+        return decorate
+
+
 class _RunWrapper:
     def __init__(self, tracer: trace_api.Tracer) -> None:
         self._tracer = tracer
@@ -176,27 +202,121 @@ class _StepWrapper:
             return wrapped(*args, **kwargs)
         agent = instance
         span_name = f"Step {agent.step_number}"
-        with self._tracer.start_as_current_span(
-            span_name,
-            attributes={
-                GEN_AI_SPAN_KIND: CHAIN,
-                INPUT_VALUE: _get_input_value(wrapped, *args, **kwargs),
-                **dict(get_attributes_from_context()),
-                **dict(_get_raw_input(args, **kwargs)),
-            },
-        ) as span:
-            result = wrapped(*args, **kwargs)
-            step_log = args[0]  # ActionStep
+        def finish(span, result):
+            step_log = args[0] if args else kwargs["memory_step"]
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(result))
-            span.set_attribute(OUTPUT_VALUE, step_log.observations)
+            if step_log.observations is not None:
+                span.set_attribute(OUTPUT_VALUE, step_log.observations)
             if step_log.error is not None:
                 span.record_exception(step_log.error)
-            span.set_status(trace_api.StatusCode.OK)
-        return result
+                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(step_log.error)))
+            else:
+                span.set_status(trace_api.StatusCode.OK)
+
+        attributes = {
+            GEN_AI_SPAN_KIND: CHAIN,
+            INPUT_VALUE: _get_input_value(wrapped, *args, **kwargs),
+            **dict(get_attributes_from_context()),
+            **dict(_get_raw_input(args, **kwargs)),
+        }
+        # functools.wraps preserves generator identity in __wrapped__, not in
+        # the outer function's flags. Invoke the outer callable, never bypass it.
+        if isgeneratorfunction(unwrap(wrapped)):
+            def stream():
+                span = self._tracer.start_span(span_name, attributes=attributes)
+                producer_context = trace_api.set_span_in_context(span)
+                iterator = advance = close = None
+                advance_args = ()
+                try:
+                    # An outer decorator executes eagerly while constructing
+                    # the iterator. It belongs to the producer's Step too.
+                    token = context_api.attach(producer_context)
+                    try:
+                        iterator = iter(wrapped(*args, **kwargs))
+                    finally:
+                        producer_context = context_api.get_current()
+                        context_api.detach(token)
+                    value, thrown = None, None
+                    while True:
+                        # Resume the producer's latest context, including any
+                        # still-open child span or attached values at its yield.
+                        # Protocol lookups belong to the producer as well.
+                        token = context_api.attach(producer_context)
+                        try:
+                            if thrown is not None:
+                                try:
+                                    advance = iterator.throw
+                                except AttributeError:
+                                    # Like yield from, an iterator without throw
+                                    # propagates the consumer's original error.
+                                    raise thrown[1]
+                                advance_args = thrown
+                            elif value is None:
+                                # Unwrapping the callable does not prove that its
+                                # decorator returned a generator. next/send(None)
+                                # must work for ordinary iterators such as map.
+                                advance, advance_args = next, (iterator,)
+                            else:
+                                advance, advance_args = iterator.send, (value,)
+                            try:
+                                item = advance(*advance_args)
+                            except StopIteration as stopped:
+                                finish(span, stopped.value)
+                                return stopped.value
+                        finally:
+                            producer_context = context_api.get_current()
+                            context_api.detach(token)
+
+                        try:
+                            value = yield item
+                        except GeneratorExit:
+                            token = context_api.attach(producer_context)
+                            try:
+                                try:
+                                    close = iterator.close
+                                except AttributeError:
+                                    pass
+                                else:
+                                    close()
+                            finally:
+                                producer_context = context_api.get_current()
+                                context_api.detach(token)
+                            raise
+                        except BaseException:
+                            thrown = sys.exc_info()
+                        else:
+                            thrown = None
+                except GeneratorExit:
+                    span.set_status(trace_api.StatusCode.OK)
+                    raise
+                except BaseException as exc:
+                    span.record_exception(exc)
+                    span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
+                    raise
+                finally:
+                    # Dropping an iterator (e.g. map) with no close method can
+                    # finalize its suspended generator. Release every owned
+                    # protocol reference under the producer's latest context,
+                    # not later when this proxy frame unwinds in the consumer.
+                    token = context_api.attach(producer_context)
+                    try:
+                        close = advance = None
+                        advance_args = ()
+                        iterator = None
+                    finally:
+                        context_api.detach(token)
+                        span.end()
+            return stream()
+        with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
+            result = wrapped(*args, **kwargs)
+            finish(span, result)
+            return result
 
 
 def _llm_input_messages(messages: list[Any]) -> Iterator[Tuple[str, Any]]:
     for i, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            message = {"role": message.role, "content": message.content}
         content = message.get("content")
         if content:
             if isinstance(content, str):
@@ -248,10 +368,11 @@ def _llm_output_messages(output_message: Any) -> Iterator[Tuple[str, Any]]:
                         f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_NAME}",
                         name,
                     )
-                if isinstance(arguments := getattr(function, "arguments", None), dict):
+                arguments = getattr(function, "arguments", None)
+                if isinstance(arguments, (dict, str)):
                     yield (
                         f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
-                        safe_json_dumps(arguments),
+                        arguments if isinstance(arguments, str) else safe_json_dumps(arguments),
                     )
 
 
@@ -298,8 +419,9 @@ def _input_value_and_mime_type(
 
 
 class _ModelWrapper:
-    def __init__(self, tracer: trace_api.Tracer) -> None:
+    def __init__(self, tracer: trace_api.Tracer, method_name: str = "__call__") -> None:
         self._tracer = tracer
+        self._method_name = method_name
 
     def __call__(
         self,
@@ -311,7 +433,7 @@ class _ModelWrapper:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         arguments = _bind_arguments(wrapped, *args, **kwargs)
-        span_name = f"{instance.__class__.__name__}.__call__"
+        span_name = f"{instance.__class__.__name__}.{self._method_name}"
         model = instance
         with self._tracer.start_as_current_span(
             span_name,
@@ -319,7 +441,7 @@ class _ModelWrapper:
                 GEN_AI_SPAN_KIND: LLM,
                 **dict(_input_value_and_mime_type(arguments)),
                 **dict(_llm_invocation_parameters(instance, arguments)),
-                **dict(_llm_input_messages(kwargs.get("messages", []))),
+                **dict(_llm_input_messages(arguments.get("messages", []))),
                 **dict(get_attributes_from_context()),
                 **dict(_get_raw_input(args, **kwargs)),
             },
@@ -327,15 +449,21 @@ class _ModelWrapper:
             output_message = wrapped(*args, **kwargs)
             span.set_status(trace_api.StatusCode.OK)
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(output_message))
-            span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, model.last_input_token_count)
-            span.set_attribute(
-                GEN_AI_USAGE_OUTPUT_TOKENS, model.last_output_token_count
-            )
+            # Modern SDKs return usage on ChatMessage; historical releases
+            # expose counts on the model. Never let missing usage break a call.
+            usage = getattr(output_message, "token_usage", None)
+            if usage is not None and isinstance(getattr(usage, "input_tokens", None), int):
+                input_tokens, output_tokens = usage.input_tokens, usage.output_tokens
+            else:
+                input_tokens = getattr(model, "last_input_token_count", None)
+                output_tokens = getattr(model, "last_output_token_count", None)
+            if isinstance(input_tokens, int):
+                span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
+            if isinstance(output_tokens, int):
+                span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+            if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                span.set_attribute(GEN_AI_USAGE_TOTAL_TOKENS, input_tokens + output_tokens)
             span.set_attribute(GEN_AI_REQUEST_MODEL, model.model_id)
-            span.set_attribute(
-                GEN_AI_USAGE_TOTAL_TOKENS,
-                model.last_input_token_count + model.last_output_token_count,
-            )
             span.set_attributes(dict(_llm_output_messages(output_message)))
             span.set_attributes(
                 dict(_llm_tools(arguments.get("tools_to_call_from", [])))

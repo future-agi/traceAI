@@ -20,6 +20,7 @@ public class TraceConfig {
     private boolean hideOutputs = false;
     private boolean hideInputMessages = false;
     private boolean hideOutputMessages = false;
+    private boolean hideErrorDetails = false;
     private String baseUrl;
     private String apiKey;
     private String secretKey;
@@ -55,24 +56,27 @@ public class TraceConfig {
      */
     public static class Builder {
         private final TraceConfig config = new TraceConfig();
+        private Boolean hideInputs;
+        private Boolean hideOutputs;
+        private Boolean hideErrorDetails;
 
         /**
-         * Sets whether to hide input values in traces.
+         * Sets whether to hide input values, raw input and input messages in traces.
          * @param hide true to hide inputs
          * @return this builder
          */
         public Builder hideInputs(boolean hide) {
-            config.hideInputs = hide;
+            hideInputs = hide;
             return this;
         }
 
         /**
-         * Sets whether to hide output values in traces.
+         * Sets whether to hide output values, raw output and output messages in traces.
          * @param hide true to hide outputs
          * @return this builder
          */
         public Builder hideOutputs(boolean hide) {
-            config.hideOutputs = hide;
+            hideOutputs = hide;
             return this;
         }
 
@@ -93,6 +97,18 @@ public class TraceConfig {
          */
         public Builder hideOutputMessages(boolean hide) {
             config.hideOutputMessages = hide;
+            return this;
+        }
+
+        /**
+         * Hides error messages, stack traces and status descriptions recorded by FITracer.
+         * Error status and exception/error type are retained. Defaults to
+         * FI_HIDE_ERROR_DETAILS, or false when the variable is unset.
+         * @param hide true to hide error details, independently of input/output hiding
+         * @return this builder
+         */
+        public Builder hideErrorDetails(boolean hide) {
+            hideErrorDetails = hide;
             return this;
         }
 
@@ -179,7 +195,8 @@ public class TraceConfig {
         /**
          * Builds the TraceConfig instance.
          * Fields not explicitly set will fall back to environment variables:
-         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME.
+         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME, FI_HIDE_INPUTS,
+         * FI_HIDE_OUTPUTS, FI_HIDE_ERROR_DETAILS. Explicit boolean values (including false) win.
          * @return the configured TraceConfig
          */
         public TraceConfig build() {
@@ -195,6 +212,12 @@ public class TraceConfig {
             if (config.projectName == null) {
                 config.projectName = System.getenv("FI_PROJECT_NAME");
             }
+            config.hideInputs = hideInputs != null
+                ? hideInputs : Boolean.parseBoolean(System.getenv("FI_HIDE_INPUTS"));
+            config.hideOutputs = hideOutputs != null
+                ? hideOutputs : Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUTS"));
+            config.hideErrorDetails = hideErrorDetails != null
+                ? hideErrorDetails : Boolean.parseBoolean(System.getenv("FI_HIDE_ERROR_DETAILS"));
             return config;
         }
     }
@@ -204,6 +227,7 @@ public class TraceConfig {
     public boolean isHideOutputs() { return hideOutputs; }
     public boolean isHideInputMessages() { return hideInputMessages; }
     public boolean isHideOutputMessages() { return hideOutputMessages; }
+    public boolean isHideErrorDetails() { return hideErrorDetails; }
     public String getBaseUrl() { return baseUrl; }
     public String getApiKey() { return apiKey; }
     public String getSecretKey() { return secretKey; }

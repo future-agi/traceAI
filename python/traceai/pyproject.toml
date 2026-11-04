@@ -1,11 +1,29 @@
 [tool.poetry]
 name = "traceai"
 version = "0.1.0"
-description = "TraceAI - Simple one-liner SDK for FutureAGI observability"
+description = "Initialize Future AGI OpenTelemetry tracing and opt in to installed AI framework instrumentors with one call."
 authors = ["Future AGI <no-reply@futureagi.com>"]
 
 packages = [
     { include = "traceai", from = ".." },
+]
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
 ]
 
 [tool.poetry.dependencies]
@@ -37,6 +55,12 @@ all = [
     "traceai-litellm",
 ]
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/traceai"
+Changelog = "https://github.com/future-agi/traceAI/releases"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

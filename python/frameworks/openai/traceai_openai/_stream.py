@@ -20,9 +20,26 @@ logger.addHandler(logging.NullHandler())
 class _ResponseAccumulator(Protocol):
     def process_chunk(self, chunk: Any) -> None: ...
 
+    def get_status(self) -> Optional[trace_api.Status]: ...
+
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]: ...
+
+
+def _finish_on_exit(stream: Any, error: Optional[BaseException]) -> None:
+    """Finish even on an early context exit, without ending an exhausted span twice."""
+    if stream._self_is_finished:
+        return
+    if error is None:
+        status = trace_api.Status(status_code=trace_api.StatusCode.OK)
+    else:
+        stream._self_with_span.record_exception(error)
+        status = trace_api.Status(
+            status_code=trace_api.StatusCode.ERROR,
+            description=f"{type(error).__name__}: {error}",
+        )
+    stream._finish_tracing(status=status)
 
 
 class _Stream(ObjectProxy):  # type: ignore
@@ -45,6 +62,30 @@ class _Stream(ObjectProxy):  # type: ignore
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
 
+    def __enter__(self) -> "_Stream":
+        # ObjectProxy otherwise returns the SDK stream, bypassing our iterator.
+        self.__wrapped__.__enter__()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return self.__wrapped__.__exit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            _finish_on_exit(self, exc)
+
+    def close(self) -> Any:
+        error = None
+        try:
+            return self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __iter__(self) -> Iterator[Any]:
         return self
 
@@ -56,7 +97,7 @@ class _Stream(ObjectProxy):  # type: ignore
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -86,6 +127,11 @@ class _Stream(ObjectProxy):  # type: ignore
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,
@@ -122,6 +168,29 @@ class _AsyncStream(ObjectProxy):
         self._self_is_finished = with_span.is_finished
         self._self_response_accumulator = response_accumulator
 
+    async def __aenter__(self) -> "_AsyncStream":
+        await self.__wrapped__.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return await self.__wrapped__.__aexit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            _finish_on_exit(self, exc)
+
+    async def close(self) -> Any:
+        error = None
+        try:
+            return await self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __aiter__(self):
         return self
 
@@ -133,7 +202,7 @@ class _AsyncStream(ObjectProxy):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
                 self._finish_tracing(status=status)
             raise
-        except Exception as exception:
+        except BaseException as exception:
             if not self._self_is_finished:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -163,6 +232,11 @@ class _AsyncStream(ObjectProxy):
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if (
+            self._self_response_accumulator is not None
+            and (status is None or status.status_code != trace_api.StatusCode.ERROR)
+        ):
+            status = self._self_response_accumulator.get_status() or status
         _finish_tracing(
             status=status,
             with_span=self._self_with_span,

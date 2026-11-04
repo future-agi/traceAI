@@ -56,6 +56,7 @@ class PineconeInstrumentor(BaseInstrumentor):
     """
 
     __slots__ = (
+        "_index_class",
         "_original_query",
         "_original_upsert",
         "_original_delete",
@@ -79,18 +80,13 @@ class PineconeInstrumentor(BaseInstrumentor):
 
         pinecone = import_module(_MODULE)
 
-        # Get the Index class - handle both v3 and v4 API
-        try:
-            # Pinecone v3+
-            index_class = pinecone.Index
-        except AttributeError:
-            # Pinecone v4+ might have different structure
-            try:
-                from pinecone import Index
-                index_class = Index
-            except ImportError:
-                logger.warning("Could not find Pinecone Index class")
-                return
+        # SDK 7 removed the top-level Index re-export; its factory still
+        # returns pinecone.db_data.Index. Wrap that class, not the factory.
+        index_class = getattr(pinecone, "Index", None)
+        if index_class is None:
+            from pinecone.db_data import Index
+            index_class = Index
+        self._index_class = index_class
 
         # Store original methods
         self._original_query = index_class.query
@@ -102,46 +98,40 @@ class PineconeInstrumentor(BaseInstrumentor):
 
         # Wrap methods
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.query",
+            module=index_class,
+            name="query",
             wrapper=QueryWrapper(tracer=tracer),
         )
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.upsert",
+            module=index_class,
+            name="upsert",
             wrapper=UpsertWrapper(tracer=tracer),
         )
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.delete",
+            module=index_class,
+            name="delete",
             wrapper=DeleteWrapper(tracer=tracer),
         )
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.fetch",
+            module=index_class,
+            name="fetch",
             wrapper=FetchWrapper(tracer=tracer),
         )
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.update",
+            module=index_class,
+            name="update",
             wrapper=UpdateWrapper(tracer=tracer),
         )
         wrap_function_wrapper(
-            module=_MODULE,
-            name="Index.describe_index_stats",
+            module=index_class,
+            name="describe_index_stats",
             wrapper=DescribeIndexStatsWrapper(tracer=tracer),
         )
 
         logger.debug("Pinecone instrumentation enabled")
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        pinecone = import_module(_MODULE)
-
-        try:
-            index_class = pinecone.Index
-        except AttributeError:
-            from pinecone import Index
-            index_class = Index
+        index_class = self._index_class
 
         # Restore original methods
         index_class.query = self._original_query

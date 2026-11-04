@@ -261,23 +261,22 @@ HuggingFaceInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "huggingface" |
-| `llm.provider` | "huggingface" |
-| `llm.model` | Model name |
-| `llm.token_count.completion` | Output token count |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "huggingface" |
+| `gen_ai.request.model` | Model name |
+| `gen_ai.usage.output_tokens` | Output token count |
 | `huggingface.finish_reason` | Response finish reason |
 
 ### Chat Completion Attributes
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "huggingface" |
-| `llm.model` | Model name |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "huggingface" |
+| `gen_ai.request.model` | Model name |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
+| `gen_ai.usage.total_tokens` | Total token count |
 | `huggingface.tools_count` | Number of tools provided |
 | `huggingface.finish_reason` | Response finish reason |
 
@@ -285,8 +284,8 @@ HuggingFaceInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "EMBEDDING" |
-| `embedding.model` | Embedding model name |
+| `gen_ai.span.kind` | "EMBEDDING" |
+| `embedding.model_name` | Embedding model name |
 | `huggingface.texts_count` | Number of texts embedded |
 | `huggingface.embedding_dimensions` | Vector dimensions |
 

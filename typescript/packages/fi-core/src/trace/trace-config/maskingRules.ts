@@ -1,87 +1,26 @@
-import { AttributeValue } from "@opentelemetry/api";
+import { Attributes, AttributeValue } from "@opentelemetry/api";
 import { REDACTED_VALUE } from "./constants";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
-import { MaskingRule, MaskingRuleArgs } from "./types";
+import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
+import { isErrorDetailAttribute } from "./errorDetails";
+import { redactMessages } from "./messageRedaction";
 
-/**
- * Redacts content within a JSON blob of messages.
- * Parses the JSON string, replaces all "content" fields with REDACTED_VALUE,
- * and returns the modified JSON string.
- */
-function redactContentInJsonBlob(value: AttributeValue): AttributeValue | undefined {
-  if (typeof value !== "string") return value;
-  try {
-    const messages = JSON.parse(value);
-    if (!Array.isArray(messages)) return REDACTED_VALUE;
-    const redacted = messages.map((msg: Record<string, unknown>) => {
-      const copy = { ...msg };
-      if (copy.content !== undefined) {
-        copy.content = REDACTED_VALUE;
-      }
-      return copy;
-    });
-    return JSON.stringify(redacted);
-  } catch {
-    return REDACTED_VALUE;
-  }
-}
-
-/**
- * Redacts images within a JSON blob of messages.
- * Removes image_url fields from content arrays within messages.
- */
-function redactImagesInJsonBlob(value: AttributeValue): AttributeValue | undefined {
-  if (typeof value !== "string") return value;
-  try {
-    const messages = JSON.parse(value);
-    if (!Array.isArray(messages)) return value;
-    const redacted = messages.map((msg: Record<string, unknown>) => {
-      const copy = { ...msg };
-      if (Array.isArray(copy.content)) {
-        copy.content = (copy.content as Record<string, unknown>[]).filter(
-          (part) => part.type !== "image_url" && part.type !== "input_image" && part.type !== "image"
-        );
-      }
-      return copy;
-    });
-    return JSON.stringify(redacted);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Masks input text in LLM input messages (JSON blob format).
- * Redacts "content" fields within the gen_ai.input.messages JSON blob.
- */
-const maskInputTextRule: MaskingRule = {
+// Apply text and image settings together: the masking rule list stops at its
+// first match, so independent rules would let image hiding bypass text hiding.
+const maskInputContentRule: MaskingRule = {
   condition: ({ config, key }) =>
-    config.hideInputText &&
+    (config.hideInputText || config.hideInputImages) &&
     key === SemanticConventions.LLM_INPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactContentInJsonBlob(value) : undefined,
+  action: ({ config, value }) => value != null
+    ? redactMessages({ value, hideText: config.hideInputText, hideImages: config.hideInputImages }) : undefined,
 };
 
-/**
- * Masks output text in LLM output messages (JSON blob format).
- * Redacts "content" fields within the gen_ai.output.messages JSON blob.
- */
 const maskOutputTextRule: MaskingRule = {
   condition: ({ config, key }) =>
-    config.hideOutputText &&
-    key === SemanticConventions.LLM_OUTPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactContentInJsonBlob(value) : undefined,
-};
-
-/**
- * Masks input images in LLM input messages (JSON blob format).
- * Removes image content parts from the gen_ai.input.messages JSON blob.
- */
-const maskInputImagesRule: MaskingRule = {
-  condition: ({ config, key }) =>
-    config.hideInputImages &&
-    key === SemanticConventions.LLM_INPUT_MESSAGES,
-  action: ({ value }: MaskingRuleArgs) => value != null ? redactImagesInJsonBlob(value) : undefined,
+    config.hideOutputText && key === SemanticConventions.LLM_OUTPUT_MESSAGES,
+  action: ({ value }) => value != null
+    ? redactMessages({ value, hideText: true, hideImages: false }) : undefined,
 };
 
 /**
@@ -102,8 +41,31 @@ const maskEmbeddingVectorsRule: MaskingRule = {
  */
 const maskingRules: MaskingRule[] = [
   {
+    // Error text (exception messages, stack traces, provider error bodies) can quote the content
     condition: ({ config, key }) =>
-      config.hideInputs && key === SemanticConventions.INPUT_VALUE,
+      config.hideErrorDetails && isErrorDetailAttribute(key),
+    action: () => undefined,
+  },
+  {
+    // Raw/value payloads are opaque duplicates. Do not attempt provider-specific
+    // JSON parsing here: granular hiding must also cover every copied payload.
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
+      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideInputText) &&
+      key.startsWith(`${SemanticConventions.EMBEDDING_EMBEDDINGS}.`) &&
+      key.endsWith(`.${SemanticConventions.EMBEDDING_TEXT}`),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    // Prompt substitution values are opaque input payloads, including images.
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
+      key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES,
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -113,7 +75,8 @@ const maskingRules: MaskingRule[] = [
   },
   {
     condition: ({ config, key }) =>
-      config.hideOutputs && key === SemanticConventions.OUTPUT_VALUE,
+      (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -133,8 +96,7 @@ const maskingRules: MaskingRule[] = [
       key === SemanticConventions.LLM_OUTPUT_MESSAGES,
     action: () => undefined,
   },
-  maskInputImagesRule,
-  maskInputTextRule,
+  maskInputContentRule,
   maskOutputTextRule,
   maskEmbeddingVectorsRule,
 ];
@@ -153,12 +115,38 @@ export function mask({
 }: MaskingRuleArgs): AttributeValue | undefined {
   for (const rule of maskingRules) {
     if (rule.condition({ config, key, value })) {
-      return rule.action({ config, key, value });
+      value = rule.action({ config, key, value });
+      break;
     }
   }
-  // No key-based rule matched — apply PII redaction if enabled
+  // Apply PII redaction to retained text even when a content rule matched.
   if (config.piiRedaction && value != null) {
     return redactPiiInValue(value);
   }
   return value;
+}
+
+/**
+ * Applies {@link mask} to every attribute, dropping the ones it removes. Used for attributes set on
+ * a {@link FISpan} and for the attributes passed when a span is created, so both get the same
+ * masking (content hiding, error-detail hiding and PII redaction).
+ * @param config The {@link TraceConfig} to use
+ * @param attributes The attributes to mask
+ * @returns A new object with the masked attributes
+ */
+export function maskAttributes({
+  config,
+  attributes,
+}: {
+  config: TraceConfig;
+  attributes: Attributes;
+}): Attributes {
+  const masked: Attributes = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    const maskedValue = mask({ config, key, value });
+    if (maskedValue != null) {
+      masked[key] = maskedValue;
+    }
+  }
+  return masked;
 }

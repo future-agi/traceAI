@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-fixture-stream-nousage","object":"chat.completion.chunk","created":1760000000,"model":"gpt-4.1-mini-2025-04-14","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fixture-stream-nousage","object":"chat.completion.chunk","created":1760000000,"model":"gpt-4.1-mini-2025-04-14","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fixture-stream-nousage","object":"chat.completion.chunk","created":1760000000,"model":"gpt-4.1-mini-2025-04-14","choices":[{"index":0,"delta":{"content":" friend"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

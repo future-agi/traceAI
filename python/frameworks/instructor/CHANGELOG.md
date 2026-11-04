@@ -1,3 +1,10 @@
+
+
+## [0.2.1] - 2026-10-29
+
+### Fixed
+- Publish package changes merged after 0.2.0 was uploaded to PyPI; one-time bootstrap patch for the automated release pipeline.
+
 ## [0.1.7] - 2025-06-10
 ### Feature
 - Added support for ai-evaluation

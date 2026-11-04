@@ -3,6 +3,7 @@ import collections
 import inspect
 from collections.abc import Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from secrets import randbits
 from types import ModuleType
@@ -25,8 +26,10 @@ from typing import (
 
 import wrapt  # type: ignore[import-untyped]
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, Context, get_value
 from opentelemetry.sdk.trace.id_generator import IdGenerator, RandomIdGenerator
+from opentelemetry.sdk.trace.sampling import Sampler, SamplingResult
 from opentelemetry.trace import (
     INVALID_SPAN,
     INVALID_SPAN_ID,
@@ -81,11 +84,85 @@ class _IdGenerator(IdGenerator):
         return trace_id
 
 
+class _OpaqueSamplerKey:
+    """Probe SDK key handling without putting sampler data into its warnings."""
+
+    def __init__(self, key: Any) -> None:
+        self.key = key
+
+    def __bool__(self) -> bool:
+        return bool(self.key)
+
+
+class _StringableSamplerKey(_OpaqueSamplerKey):
+    def __str__(self) -> str:
+        return "<non-string sampler key>"
+
+
+class _PrivacySampler(Sampler):
+    """Filter sampler-owned attributes before the SDK calls processors.
+
+    The delegate still receives the real sampling inputs and controls the
+    decision, result attribute selection and trace state. This wrapper is local
+    to the FI tracer; it never changes the provider's sampler.
+    """
+
+    def __init__(self, delegate: Sampler, config: TraceConfig) -> None:
+        self._delegate = delegate
+        self._config = config
+        self.selected_kind = None
+
+    def should_sample(self, *args: Any, **kwargs: Any) -> SamplingResult:
+        result = self._delegate.should_sample(*args, **kwargs)
+        attributes = result.attributes
+        if attributes is not None:
+            # Ask the installed SDK how it handles malformed keys, using only
+            # an opaque key and a harmless value in its validation diagnostics.
+            # Normalize before masking and before resolving collisions, as the
+            # SDK's mapping validation does. Never log an application's key.
+            normalized = {}
+            for key, value in attributes.items():
+                if isinstance(key, str) and key:
+                    normalized[key] = value
+                    continue
+                if key is None or isinstance(key, str):
+                    probe = key
+                elif (type(key).__str__ is not object.__str__ or
+                      type(key).__repr__ is not object.__repr__):
+                    probe = _StringableSamplerKey(key)
+                else:
+                    probe = _OpaqueSamplerKey(key)
+                if BoundedAttributes(attributes={probe: 0}):
+                    normalized[str(key)] = value
+            attributes = {}
+            none_value = object()
+            for key, value in normalized.items():
+                # Sampler results are values, not FI lazy-value callbacks. A
+                # sentinel distinguishes an SDK-valid None from a policy drop.
+                candidate = none_value if value is None else ((lambda: value) if callable(value) else value)
+                masked = self._config.mask(key, candidate)
+                if masked is not None:
+                    attributes[key] = None if masked is none_value else masked
+            self.selected_kind = attributes.get(SpanAttributes.GEN_AI_SPAN_KIND)
+        return SamplingResult(result.decision, attributes, result.trace_state)
+
+    def get_description(self) -> str:
+        return self._delegate.get_description()
+
+
 class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
     def __init__(self, wrapped: Tracer, config: TraceConfig = TraceConfig()) -> None:
         super().__init__(wrapped)
         self._self_config = config
         self._self_id_generator = _IdGenerator()
+        self._self_active_sampler: ContextVar[Optional[_PrivacySampler]] = ContextVar(
+            "fi_active_sampler", default=None
+        )
+
+    @property
+    def sampler(self) -> Sampler:
+        active = self._self_active_sampler.get()
+        return active if active is not None else _PrivacySampler(self.__wrapped__.sampler, self._self_config)
 
     @property
     def id_generator(self) -> IdGenerator:
@@ -141,28 +218,74 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
         *,
         fi_span_kind: Optional["FiSpanKind"] = None,
     ) -> FiSpan:
-        otel_span: Span
         if get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            otel_span = INVALID_SPAN
-        else:
-            tracer = cast(Tracer, self.__wrapped__)
+            logical_kind = (
+                get_span_kind_attributes(fi_span_kind).get(SpanAttributes.GEN_AI_SPAN_KIND)
+                if fi_span_kind is not None else (attributes or {}).get(SpanAttributes.GEN_AI_SPAN_KIND)
+            )
+            return FiSpan(INVALID_SPAN, config=self._self_config, span_kind=logical_kind)
+
+        # A sampler runs inside start_span, so it must see the creation
+        # attributes. Apply privacy policy before passing anything to OTel.
+        creation_attributes = dict(attributes or {})
+        if fi_span_kind is not None:
+            creation_attributes.update(get_span_kind_attributes(fi_span_kind))
+        creation_attributes.update(dict(get_attributes_from_context()))
+        masked_attributes = {}
+        for key, value in creation_attributes.items():
+            masked = self._self_config.mask(key, value)
+            if masked is not None:
+                masked_attributes[key] = masked
+
+        # Links are observed by samplers and processors as well as exporters.
+        # Copy them so neither the caller's Link nor its attributes are changed.
+        masked_links = None if links is None else [
+            Link(link.context, {
+                key: masked
+                for key, value in (link.attributes or {}).items()
+                if (masked := self._self_config.mask(key, value)) is not None
+            } if link.attributes is not None else None)
+            for link in links
+        ]
+
+        tracer = cast(Tracer, self.__wrapped__)
+        delegate_sampler = getattr(tracer, "sampler", None)
+        privacy_sampler = (
+            _PrivacySampler(delegate_sampler, self._self_config)
+            if delegate_sampler is not None else None
+        )
+        token = self._self_active_sampler.set(privacy_sampler)
+        try:
             otel_span = tracer.__class__.start_span(
                 self,
                 name=name,
                 context=context,
                 kind=kind,
-                attributes=None,
-                links=links,
+                attributes=masked_attributes,
+                links=masked_links,
                 start_time=start_time,
                 record_exception=record_exception,
                 set_status_on_exception=set_status_on_exception,
             )
-        fi_span = FiSpan(otel_span, config=self._self_config)
-        if attributes:
-            fi_span.set_attributes(dict(attributes))
-        if fi_span_kind is not None:
-            fi_span.set_attributes(get_span_kind_attributes(fi_span_kind))
-        fi_span.set_attributes(dict(get_attributes_from_context()))
+        finally:
+            self._self_active_sampler.reset(token)
+        fi_span = FiSpan(
+            otel_span,
+            config=self._self_config,
+            span_kind=masked_attributes.get(SpanAttributes.GEN_AI_SPAN_KIND),
+        )
+        # Remember only the kind actually selected by the sampler. Reapplying
+        # caller attributes would overwrite or resurrect sampler-owned fields.
+        sampled_attributes = getattr(otel_span, "attributes", None) or {}
+        sampled_kind = sampled_attributes.get(SpanAttributes.GEN_AI_SPAN_KIND)
+        if sampled_kind is None and privacy_sampler is not None and otel_span.is_recording():
+            # The SDK's attribute limit may evict the selected kind before we
+            # wrap the span. Retain only a kind the sampler actually returned.
+            sampled_kind = privacy_sampler.selected_kind
+        # Only a caller-declared kind has FI's retention priority. A kind added
+        # solely by the sampler must obey the SDK's normal attribute limits.
+        if sampled_kind is not None and SpanAttributes.GEN_AI_SPAN_KIND in masked_attributes:
+            fi_span._remember_sampled_kind(sampled_kind)
         return fi_span
 
     @overload  # for @tracer.agent usage (no parameters)

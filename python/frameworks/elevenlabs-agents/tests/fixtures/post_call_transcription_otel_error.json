@@ -1,0 +1,183 @@
+{
+  "type": "post_call_transcription_otel",
+  "event_timestamp": 1760000060,
+  "data": {
+    "conversation_id": "conv_7701k1zph3fkeh5s8xg9z90errr1",
+    "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+    "otlp_traces": {
+      "resourceSpans": [
+        {
+          "resource": {
+            "attributes": [
+              {
+                "key": "service.name",
+                "value": {
+                  "stringValue": "elevenlabs-convai"
+                }
+              },
+              {
+                "key": "elevenlabs.conversation_id",
+                "value": {
+                  "stringValue": "conv_7701k1zph3fkeh5s8xg9z90errr1"
+                }
+              }
+            ]
+          },
+          "scopeSpans": [
+            {
+              "scope": {
+                "name": "elevenlabs.convai",
+                "version": "1.0.0"
+              },
+              "spans": [
+                {
+                  "traceId": "0af7651916cd43dd8448eb211c80319c",
+                  "spanId": "b000000000000001",
+                  "name": "elevenlabs.conversation",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000100000000000",
+                  "endTimeUnixNano": "1760000118000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.conversation_id",
+                      "value": {
+                        "stringValue": "conv_7701k1zph3fkeh5s8xg9z90errr1"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.agent_id",
+                      "value": {
+                        "stringValue": "agent_7101k5zvyjhmfg983brhmhkd98n6"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.source",
+                      "value": {
+                        "stringValue": "post_call_webhook"
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 2,
+                    "message": "call ended: websocket closed abnormally {{MARKER}} /home/alice/app/agent.py on alice-laptop.local"
+                  }
+                },
+                {
+                  "traceId": "0af7651916cd43dd8448eb211c80319c",
+                  "spanId": "b000000000000002",
+                  "name": "elevenlabs.recv.user_transcript",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000101000000000",
+                  "endTimeUnixNano": "1760000104000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.user.text",
+                      "value": {
+                        "stringValue": "Book me a table for two at eight. {{MARKER}}"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.turn.index",
+                      "value": {
+                        "intValue": "0"
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 1
+                  },
+                  "parentSpanId": "b000000000000001"
+                },
+                {
+                  "traceId": "0af7651916cd43dd8448eb211c80319c",
+                  "spanId": "b000000000000003",
+                  "name": "elevenlabs.recv.agent_response",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000105000000000",
+                  "endTimeUnixNano": "1760000110000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.agent.text",
+                      "value": {
+                        "stringValue": "Sure, let me check...{{MARKER}}"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.producing_llm",
+                      "value": {
+                        "stringValue": "gpt-4o-mini"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.llm_usage.gpt-4o-mini.input",
+                      "value": {
+                        "stringValue": "{'tokens': 120, 'price': 1.8e-05}"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.llm_usage.gpt-4o-mini.output_total",
+                      "value": {
+                        "stringValue": "{'tokens': 9, 'price': 5.4e-06}"
+                      }
+                    },
+                    {
+                      "key": "elevenlabs.turn.index",
+                      "value": {
+                        "intValue": "1"
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 1
+                  },
+                  "parentSpanId": "b000000000000001"
+                },
+                {
+                  "traceId": "0af7651916cd43dd8448eb211c80319c",
+                  "spanId": "b000000000000004",
+                  "name": "elevenlabs.tool.book_table",
+                  "kind": 1,
+                  "startTimeUnixNano": "1760000106000000000",
+                  "endTimeUnixNano": "1760000116000000000",
+                  "attributes": [
+                    {
+                      "key": "elevenlabs.tool.params",
+                      "value": {
+                        "stringValue": "{\"party\": 2, \"time\": \"20:00\", \"who\": \"{{MARKER}}\"}"
+                      }
+                    }
+                  ],
+                  "status": {
+                    "code": 2,
+                    "message": "upstream timeout {{MARKER}}"
+                  },
+                  "parentSpanId": "b000000000000003",
+                  "events": [
+                    {
+                      "name": "exception",
+                      "timeUnixNano": "1760000116000000000",
+                      "attributes": [
+                        {
+                          "key": "exception.message",
+                          "value": {
+                            "stringValue": "ReadTimeout {{MARKER}}"
+                          }
+                        },
+                        {
+                          "key": "exception.stacktrace",
+                          "value": {
+                            "stringValue": "Traceback (most recent call last):\n  File \"/Users/alice/{{MARKER}}/tools.py\", line 9"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,15 +1,14 @@
 {
   "name": "@traceai/fi-instrumentation-vertexai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for Google Cloud Vertex AI SDK",
-  "main": "dist/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js"
     }
   },
   "files": [
@@ -34,13 +33,16 @@
     "gemini",
     "llm",
     "ai",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi",
+    "vertexai"
   ],
-  "author": "FutureAGI",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/futureagi/traceai.git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_vertexai"
   },
   "dependencies": {
@@ -70,5 +72,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/vertexai",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
   }
 }

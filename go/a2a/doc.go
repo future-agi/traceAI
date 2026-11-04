@@ -1,0 +1,40 @@
+// Package traceaia2a traces A2A (Agent2Agent) protocol client and server calls made with
+// the official Go SDK, github.com/a2aproject/a2a-go/v2, for Future AGI.
+//
+// [Interceptor] is an a2aclient.CallInterceptor, the SDK's own extension
+// point, attached with a2aclient.WithCallInterceptors. Each SendMessage,
+// SendStreamingMessage, GetTask, CancelTask and SubscribeToTask call becomes
+// one OpenTelemetry client span with gen_ai.span.kind=AGENT and the A2A
+// attribute names Python traceai-a2a uses (gen_ai.a2a.task.id,
+// gen_ai.a2a.task.state, gen_ai.a2a.agent.url, ...), each written only when
+// a2a-go reports that fact. A stream is one span: every event is a span event
+// on it, and the span ends at the reply message or at a terminal or
+// interrupted task state. Use [NewClientFromCard] or [NewClientFromEndpoints],
+// and [WrapHandler] on the server, to also observe
+// clean EOF and early iterator abandonment, which the SDK's hooks do not report.
+// These wrappers complete the existing span and never create a duplicate.
+// The W3C traceparent is written into the request's
+// service parameters (HTTP headers on the JSON-RPC and REST transports, call
+// metadata on gRPC), so a remote agent that reads it continues the same trace.
+//
+// The span is not an LLM span: the model call, if any, happens inside the
+// remote agent and is not observed here.
+//
+// Content (the text you send and the agent's reply, artifacts and status
+// message) is captured by default, as in every traceAI instrumentor. The
+// traceAI switches turn it off: FI_HIDE_INPUTS, FI_HIDE_OUTPUTS (and the
+// other FI_HIDE_* names, which this package honours on spans your own code
+// starts), or a [TraceConfig] in code.
+//
+// The package depends only on the OpenTelemetry API and a2a-go. It does not
+// create an exporter: build a TracerProvider with the stock OTLP/HTTP exporter
+// pointed at Future AGI (see the example directory) and pass it with
+// [WithTracerProvider], or install it as the global provider.
+//
+// [ServerInterceptor] attaches to a2asrv.WithCallInterceptors and traces the
+// same methods as SERVER spans. It extracts W3C context from incoming service
+// parameters and passes the span context to the executor. Existing local
+// transport spans remain parents. Use [ServerInterceptor.Wrap] for additional
+// middleware that can reject a response by returning an error from After, so
+// the rejection ends the server span even when the SDK skips subsequent hooks.
+package traceaia2a

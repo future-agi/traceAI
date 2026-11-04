@@ -1,0 +1,7 @@
+# Not a traceAI package: EverOS emits its own spans. 1.4.2 is the latest release
+# on PyPI (2026-10-14); 1.4.1, the version the fixtures were recorded on, also
+# passes. Python >=3.12 is EverOS's own floor.
+everos[otel]==1.4.2
+# The otel extra asks only for >=1.27.0; 1.45.0 is what the tests resolved.
+opentelemetry-sdk==1.45.0
+opentelemetry-exporter-otlp-proto-http==1.45.0

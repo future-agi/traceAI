@@ -48,17 +48,20 @@ class _RequestAttributesExtractor:
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes including messages."""
+        system_messages = []
+        if "system" in request_parameters:
+            system_messages.append({"role": "system", "content": request_parameters["system"]})
+
         # For chat endpoint
         if "messages" in request_parameters:
-            messages = request_parameters.get("messages", [])
+            messages = system_messages + list(request_parameters.get("messages", []))
             yield from self._extract_messages(messages)
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps({"messages": messages})
 
         # For generate endpoint
         elif "prompt" in request_parameters:
             prompt = request_parameters.get("prompt", "")
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "user"
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", prompt
+            yield from self._extract_messages(system_messages + [{"role": "user", "content": prompt}])
             yield SpanAttributes.INPUT_VALUE, prompt
 
         # For embed endpoint
@@ -68,11 +71,6 @@ class _RequestAttributesExtractor:
                 yield SpanAttributes.INPUT_VALUE, safe_json_dumps(input_text)
             else:
                 yield SpanAttributes.INPUT_VALUE, str(input_text)
-
-        # System prompt if provided
-        if "system" in request_parameters:
-            system = request_parameters.get("system", "")
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME_PROMPT, system
 
     def _extract_messages(
         self, messages: List[Dict[str, Any]]

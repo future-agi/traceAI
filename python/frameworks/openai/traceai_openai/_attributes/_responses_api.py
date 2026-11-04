@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Tuple, Union
 
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import assert_never
@@ -534,7 +534,17 @@ class _ResponsesApiAttributes:
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", obj.role
-        yield from cls._get_attributes_from_output_message_content_list(obj.content, prefix)
+        from openai.types import responses
+
+        content = list(obj.content or [])
+        if content and all(isinstance(item, responses.ResponseOutputText) for item in content):
+            # Text-only answers are one flat message.content, the same shape Chat
+            # Completions use, so trace viewers render them as the assistant text.
+            yield f"{prefix}{MessageAttributes.MESSAGE_CONTENT}", "".join(
+                item.text for item in content
+            )
+            return
+        yield from cls._get_attributes_from_output_message_content_list(content, prefix)
 
     @classmethod
     @stop_on_exception
@@ -585,12 +595,23 @@ class _ResponsesApiAttributes:
         obj: responses.response_reasoning_item.ResponseReasoningItem,
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        if isinstance(obj.summary, Iterable):
-            for i, item in enumerate(obj.summary):
-                yield from cls._get_attributes_from_response_reasoning_item_summary(
-                    item,
-                    f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}.",
-                )
+        summary = list(obj.summary or [])
+        for i, item in enumerate(summary):
+            yield from cls._get_attributes_from_response_reasoning_item_summary(
+                item,
+                f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}.",
+            )
+        # DeepSeek returns plaintext reasoning in content, not summary. Older
+        # SDKs retain these extra items as dictionaries; newer SDKs type them.
+        for i, item in enumerate(getattr(obj, "content", None) or [], start=len(summary)):
+            if isinstance(item, Mapping):
+                kind, text = item.get("type"), item.get("text")
+            else:
+                kind, text = getattr(item, "type", None), getattr(item, "text", None)
+            if kind == "reasoning_text" and isinstance(text, str):
+                inner_prefix = f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}."
+                yield f"{inner_prefix}{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "text"
+                yield f"{inner_prefix}{MessageContentAttributes.MESSAGE_CONTENT_TEXT}", text
 
     @classmethod
     @stop_on_exception

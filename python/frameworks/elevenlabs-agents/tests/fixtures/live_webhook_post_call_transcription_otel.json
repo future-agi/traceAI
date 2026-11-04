@@ -1,0 +1,734 @@
+{
+ "type": "post_call_transcription_otel",
+ "event_timestamp": 1792453038,
+ "data": {
+  "conversation_id": "conv_LIVEA",
+  "agent_id": "agent_LIVE",
+  "branch_id": "agtbrch_LIVE",
+  "version_id": "agtvrsn_LIVE",
+  "environment": "production",
+  "otlp_traces": {
+   "resourceSpans": [
+    {
+     "resource": {
+      "attributes": [
+       {
+        "key": "service.name",
+        "value": {
+         "stringValue": "elevenlabs-convai"
+        }
+       },
+       {
+        "key": "elevenlabs.conversation_id",
+        "value": {
+         "stringValue": "conv_LIVEA"
+        }
+       },
+       {
+        "key": "elevenlabs.agent_id",
+        "value": {
+         "stringValue": "agent_LIVE"
+        }
+       }
+      ]
+     },
+     "scopeSpans": [
+      {
+       "scope": {
+        "name": "elevenlabs.convai",
+        "version": "1.0.0"
+       },
+       "spans": [
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc002",
+         "name": "elevenlabs.conversation",
+         "kind": 1,
+         "startTimeUnixNano": "1792453028000000000",
+         "endTimeUnixNano": "1792453034000000000",
+         "attributes": [
+          {
+           "key": "elevenlabs.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.conversation_id",
+           "value": {
+            "stringValue": "conv_LIVEA"
+           }
+          },
+          {
+           "key": "elevenlabs.conversation_product",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.status",
+           "value": {
+            "stringValue": "done"
+           }
+          },
+          {
+           "key": "elevenlabs.session.duration_ms",
+           "value": {
+            "intValue": "6000"
+           }
+          },
+          {
+           "key": "elevenlabs.source",
+           "value": {
+            "stringValue": "post_call_webhook"
+           }
+          },
+          {
+           "key": "elevenlabs.user_id",
+           "value": {
+            "stringValue": "live-user-42"
+           }
+          },
+          {
+           "key": "elevenlabs.environment",
+           "value": {
+            "stringValue": "production"
+           }
+          },
+          {
+           "key": "elevenlabs.cost",
+           "value": {
+            "intValue": "16"
+           }
+          },
+          {
+           "key": "elevenlabs.cost_fiat",
+           "value": {
+            "doubleValue": 0.0031428
+           }
+          },
+          {
+           "key": "elevenlabs.authorization_method",
+           "value": {
+            "stringValue": "public"
+           }
+          },
+          {
+           "key": "elevenlabs.termination_reason",
+           "value": {
+            "stringValue": "Client disconnected: 1000"
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.call_successful",
+           "value": {
+            "stringValue": "success"
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.transcript_summary",
+           "value": {
+            "stringValue": "The user requested a Zen quote. The agent successfully used a tool to retrieve the quote \"Encourage flow\" and provided it to the user."
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.call_summary_title",
+           "value": {
+            "stringValue": "Zen Quote"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__agent_turns",
+           "value": {
+            "intValue": "2"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_agent_turns",
+           "value": {
+            "intValue": "2"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_subagent_turns",
+           "value": {
+            "intValue": "2"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__conversation_id",
+           "value": {
+            "stringValue": "conv_LIVEA"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__call_duration_secs",
+           "value": {
+            "intValue": "6"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_utc",
+           "value": {
+            "stringValue": "2026-10-19T23:37:14.882495+00:00"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time",
+           "value": {
+            "stringValue": "Monday, 23:37 19 October 2026"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_date",
+           "value": {
+            "stringValue": "Monday, 19 October 2026"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_hour",
+           "value": {
+            "intValue": "23"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_minute",
+           "value": {
+            "intValue": "37"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_second",
+           "value": {
+            "intValue": "14"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__is_text_only",
+           "value": {
+            "boolValue": true
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__channel",
+           "value": {
+            "stringValue": "python_sdk"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__conversation_history",
+           "value": {
+            "stringValue": "{\"x-elevenlabs-history\": true, \"entries\": [{\"role\": \"agent\", \"message\": \"Hi.\"}, {\"role\": \"user\", \"message\": \"Give me a zen quote please.\"}, {\"role\": \"agent\", \"tool_requests\": [{\"tool_name\": \"get_zen\", \"params_as_json\": {}}]}, {\"role\": \"agent\", \"tool_results\": [{\"tool_name\": \"get_zen\", \"result_value\": \"Encourage flow.\"}]}, {\"role\": \"agent\", \"message\": \"Encourage flow.\"}]}"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__user_id",
+           "value": {
+            "stringValue": "live-user-42"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__environment",
+           "value": {
+            "stringValue": "production"
+           }
+          },
+          {
+           "key": "elevenlabs.visited_agents.0.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.visited_agents.0.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc003",
+         "parentSpanId": "0000000000abc002",
+         "name": "elevenlabs.recv.agent_response",
+         "kind": 1,
+         "startTimeUnixNano": "1792453028000000000",
+         "endTimeUnixNano": "1792453028009999872",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.agent.text",
+           "value": {
+            "stringValue": "Hi."
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "0"
+           }
+          },
+          {
+           "key": "elevenlabs.producing_llm",
+           "value": {
+            "stringValue": "gpt-4o-mini"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_ttf_response_since_user_message_ms",
+           "value": {
+            "doubleValue": 1.5
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc004",
+         "parentSpanId": "0000000000abc002",
+         "name": "elevenlabs.recv.user_transcript",
+         "kind": 1,
+         "startTimeUnixNano": "1792453028000000000",
+         "endTimeUnixNano": "1792453029000000000",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "user"
+           }
+          },
+          {
+           "key": "elevenlabs.user.text",
+           "value": {
+            "stringValue": "Give me a zen quote please."
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "1"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc005",
+         "parentSpanId": "0000000000abc002",
+         "name": "elevenlabs.recv.agent_response",
+         "kind": 1,
+         "startTimeUnixNano": "1792453029000000000",
+         "endTimeUnixNano": "1792453029009999872",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "2"
+           }
+          },
+          {
+           "key": "elevenlabs.producing_llm",
+           "value": {
+            "stringValue": "gpt-4o-mini"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_llm_service_ttfb_ms",
+           "value": {
+            "doubleValue": 655.2
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_llm_tool_request_generation_latency_ms",
+           "value": {
+            "doubleValue": 655.9
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input",
+           "value": {
+            "stringValue": "{\"tokens\": 432, \"price\": 6.48e-05}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input_cache_read",
+           "value": {
+            "stringValue": "{\"tokens\": 0, \"price\": 0.0}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input_cache_write",
+           "value": {
+            "stringValue": "{\"tokens\": 0, \"price\": 0.0}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.output_total",
+           "value": {
+            "stringValue": "{\"tokens\": 11, \"price\": 6.5999999999999995e-06}"
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc006",
+         "parentSpanId": "0000000000abc005",
+         "name": "elevenlabs.tool.get_zen",
+         "kind": 1,
+         "startTimeUnixNano": "1792453029000000000",
+         "endTimeUnixNano": "1792453029105612288",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "client_tool_call"
+           }
+          },
+          {
+           "key": "elevenlabs.tool.name",
+           "value": {
+            "stringValue": "get_zen"
+           }
+          },
+          {
+           "key": "elevenlabs.tool_span_id",
+           "value": {
+            "stringValue": "76b319af74984315"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.tool.latency_ms",
+           "value": {
+            "doubleValue": 105.6
+           }
+          },
+          {
+           "key": "elevenlabs.tool.params",
+           "value": {
+            "stringValue": "{}"
+           }
+          },
+          {
+           "key": "elevenlabs.tool.result",
+           "value": {
+            "stringValue": "Encourage flow."
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc007",
+         "parentSpanId": "0000000000abc002",
+         "name": "elevenlabs.recv.agent_response",
+         "kind": 1,
+         "startTimeUnixNano": "1792453029000000000",
+         "endTimeUnixNano": "1792453029009999872",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "3"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000abc001",
+         "spanId": "0000000000abc008",
+         "parentSpanId": "0000000000abc002",
+         "name": "elevenlabs.recv.agent_response",
+         "kind": 1,
+         "startTimeUnixNano": "1792453029000000000",
+         "endTimeUnixNano": "1792453034000000000",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.agent.text",
+           "value": {
+            "stringValue": "Encourage flow."
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "4"
+           }
+          },
+          {
+           "key": "elevenlabs.producing_llm",
+           "value": {
+            "stringValue": "gpt-4o-mini"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_llm_service_ttf_sentence_ms",
+           "value": {
+            "doubleValue": 577.3
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_llm_service_ttfb_ms",
+           "value": {
+            "doubleValue": 525.4
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_llm_service_tt_last_sentence_ms",
+           "value": {
+            "doubleValue": 577.3
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_ttf_response_since_user_message_ms",
+           "value": {
+            "doubleValue": 1348.9
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input",
+           "value": {
+            "stringValue": "{\"tokens\": 456, \"price\": 6.84e-05}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input_cache_read",
+           "value": {
+            "stringValue": "{\"tokens\": 0, \"price\": 0.0}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.input_cache_write",
+           "value": {
+            "stringValue": "{\"tokens\": 0, \"price\": 0.0}"
+           }
+          },
+          {
+           "key": "elevenlabs.llm_usage.gpt-4o-mini.output_total",
+           "value": {
+            "stringValue": "{\"tokens\": 5, \"price\": 3e-06}"
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

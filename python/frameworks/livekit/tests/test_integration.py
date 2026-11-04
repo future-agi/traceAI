@@ -2,9 +2,11 @@
 Tests for traceai-livekit: enabling the Future AGI attribute mapping.
 
 livekit-agents 1.8 adds a privacy filter to the tracer provider it is handed, through
-`add_span_processor`. `fi_instrumentation.register()` marks its own exporter as a default that the
-next `add_span_processor` call replaces, so the filter used to shut the exporter down and no trace
-was sent. These tests pin that the exporter stays next to LiveKit's filter.
+`add_span_processor`. Older fi-instrumentation-otel releases (1.1.0 and earlier, see its CHANGELOG)
+have `fi_instrumentation.register()` mark its own exporter as a default that the next
+`add_span_processor` call replaces, so the filter used to shut the exporter down and no trace was
+sent. traceAI-livekit still allows those releases, so `enable_*` clears that mark itself. These
+tests pin that the exporter stays next to LiveKit's filter, with or without the mark.
 
 Two end-to-end tests send one agent turn through the real mapping and the real HTTP exporter to
 a collector on 127.0.0.1, and read back what arrived: LiveKit 1.8's conversation content must reach
@@ -17,7 +19,8 @@ on the provider it held before each test.
 
 import asyncio
 import gzip
-import signal
+import importlib.metadata
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterator, List
@@ -32,11 +35,10 @@ from fi_instrumentation.fi_types import SpanAttributes  # noqa: E402
 from fi_instrumentation.otel import (  # noqa: E402
     BatchSpanProcessor,
     Transport,
-    register,
 )
 from fi_instrumentation.otel import HTTPSpanExporter as _FIHTTPSpanExporter  # noqa: E402
 from livekit.agents import Agent, AgentSession, llm  # noqa: E402
-from livekit.agents.telemetry import pii, traces  # noqa: E402
+from livekit.agents.telemetry import pii  # noqa: E402
 from livekit.agents.telemetry.traces import _GatedSpanExporter  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS  # noqa: E402
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
@@ -51,64 +53,21 @@ from traceai_livekit import (  # noqa: E402
 )
 
 
-@pytest.fixture()
-def exported_spans(monkeypatch: pytest.MonkeyPatch) -> List[Any]:
-    """Spans handed to the Future AGI exporters, captured instead of sent."""
-    captured: List[Any] = []
-
-    def fake_export(self: Any, spans: Any) -> SpanExportResult:
-        captured.extend(spans)
-        return SpanExportResult.SUCCESS
-
-    monkeypatch.setattr(MappedHTTPSpanExporter, "export", fake_export)
-    monkeypatch.setattr(MappedGRPCSpanExporter, "export", fake_export)
-    return captured
-
-
-@pytest.fixture()
-def make_provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
-    """Build a provider with `register()` and make the integration pick it up.
-
-    The provider is returned to the integration through a patched
-    `trace_api.get_tracer_provider`, so the process-wide provider is never set. `register()`
-    replaces the SIGINT/SIGTERM handlers; they are put back, and every provider is shut down.
-    `enable_*` points LiveKit's module tracer at the provider; it is put back on the provider it
-    held before, so no later test finds it on a shut-down one.
-    """
-    monkeypatch.setenv("FI_API_KEY", "test-api-key")
-    monkeypatch.setenv("FI_SECRET_KEY", "test-secret-key")
-    saved_handlers = {
-        sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)
-    }
-    saved_tracer_provider = traces.tracer._tracer_provider
-    providers: List[Any] = []
-
-    def _make(transport: Transport = Transport.HTTP, batch: bool = True) -> Any:
-        provider = register(
-            project_name="livekit-test",
-            set_global_tracer_provider=False,
-            verbose=False,
-            transport=transport,
-            batch=batch,
-        )
-        providers.append(provider)
-        monkeypatch.setattr(
-            "traceai_livekit.integration.trace_api.get_tracer_provider",
-            lambda: provider,
-        )
-        return provider
-
-    yield _make
-
-    traces.tracer.set_provider(saved_tracer_provider)
-    for provider in providers:
-        provider.shutdown()
-    for sig, handler in saved_handlers.items():
-        signal.signal(sig, handler)
-
-
 def _processors(provider: Any) -> List[Any]:
     return list(provider._active_span_processor._span_processors)
+
+
+# The last fi-instrumentation-otel release whose register() marks its exporter as a default the next
+# add_span_processor() call replaces. Later releases, and this repository's source, have the TH-8727
+# fix. Raise this only if a release with the mark is published after 1.1.0.
+_LAST_RELEASE_WITH_THE_MARK = (1, 1, 0)
+
+
+def _installed_core_marks_the_exporter() -> bool:
+    """What the installed fi-instrumentation-otel release's register() should do, by its version."""
+    installed = importlib.metadata.version("fi-instrumentation-otel")
+    release = tuple(int(part) for part in re.findall(r"\d+", installed)[:3])
+    return release <= _LAST_RELEASE_WITH_THE_MARK
 
 
 def _future_agi_processors(provider: Any, exporter_type: type) -> List[Any]:
@@ -193,15 +152,25 @@ def test_a_processor_added_after_enabling_runs_alongside_the_exporter(
     assert [s.name for s in other.get_finished_spans()] == ["after-add"]
 
 
-def test_register_alone_still_lets_add_span_processor_replace_its_default(
+def test_add_span_processor_after_register_alone_matches_the_installed_core(
     make_provider: Any,
 ) -> None:
+    # Expected from the installed release, not read from the provider: a mark reintroduced in
+    # register() fails here against this repository's fi_instrumentation.
+    expect_the_mark = _installed_core_marks_the_exporter()
     provider = make_provider()
+    future_agi_processor = _processors(provider)[0]
     other_processor = SimpleSpanProcessor(InMemorySpanExporter())
+
+    assert bool(getattr(provider, "_default_processor", False)) is expect_the_mark
 
     provider.add_span_processor(other_processor)
 
-    assert _processors(provider) == [other_processor]
+    if expect_the_mark:
+        # Without enable_*, the processor replaces the exporter: why enable_* clears the mark.
+        assert _processors(provider) == [other_processor]
+    else:
+        assert _processors(provider) == [future_agi_processor, other_processor]
 
 
 def test_livekit_cloud_never_receives_our_copies_of_redacted_content(

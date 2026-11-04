@@ -1,15 +1,26 @@
 """Wrapper classes for Fireworks AI instrumentation."""
 
+import inspect
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
+from urllib.parse import urlsplit
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import REDACTED_VALUE, TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
+
+from traceai_fireworks._privacy import _hide_raw_output, _messages_for_telemetry
+from traceai_fireworks._raw_response import _RawNonStreamResponse, _RawStreamResponse
+from traceai_fireworks._stream import (
+    _AsyncStream,
+    _Stream,
+    _get_stream_output_attributes as _get_stream_output_attributes,
+)
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -17,13 +28,27 @@ logger.addHandler(logging.NullHandler())
 # Fireworks-specific base URL for detection
 FIREWORKS_BASE_URL = "api.fireworks.ai"
 
+# Capture model request data, never SDK transport options. Arbitrary extra_body,
+# extra_headers, extra_query and future unknown kwargs may contain credentials.
+_REQUEST_BODY_FIELDS = frozenset({
+    "audio", "frequency_penalty", "function_call", "functions", "logit_bias",
+    "logprobs", "max_completion_tokens", "max_tokens", "modalities", "n",
+    "parallel_tool_calls", "prediction", "presence_penalty", "reasoning_effort",
+    "response_format", "seed", "service_tier", "stop", "store", "stream_options",
+    "temperature", "tool_choice", "tools", "top_logprobs", "top_p", "user",
+})
+
 
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, *args: Any,
+        config: Optional[TraceConfig] = None, **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._config = config if config is not None else TraceConfig()
 
     @contextmanager
     def _start_span(
@@ -52,22 +77,36 @@ def _is_fireworks_client(instance: Any) -> bool:
         if hasattr(instance, "_client"):
             client = instance._client
             if hasattr(client, "base_url"):
-                base_url = str(client.base_url)
-                return FIREWORKS_BASE_URL in base_url
+                host = urlsplit(str(client.base_url)).hostname
+                return bool(host and host.lower().rstrip(".") == FIREWORKS_BASE_URL)
     except Exception:
         pass
     return False
 
 
+def _shared_instrumentor_enabled() -> bool:
+    """Let the request-level instrumentor own spans when both routes are enabled.
+
+    Do not import the optional package here: legacy users can keep openai 1.0,
+    which predates the shared instrumentor's supported SDK floor. Inspect live
+    state on each call so either installation/uninstallation order works.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
+
+
 def _get_input_attributes(
     model: str,
-    messages: list,
+    messages: Any,
+    *,
+    config: Optional[TraceConfig] = None,
     **kwargs: Any,
 ) -> Dict[str, AttributeValue]:
     """Extract input attributes from request parameters."""
+    config = config if config is not None else TraceConfig()
     attributes: Dict[str, AttributeValue] = {
         SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.LLM.value,
-        SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
@@ -87,34 +126,42 @@ def _get_input_attributes(
     if "presence_penalty" in kwargs and kwargs["presence_penalty"] is not None:
         invocation_params["presence_penalty"] = kwargs["presence_penalty"]
 
-    if invocation_params:
+    if invocation_params and not (config.hide_inputs or config.hide_llm_invocation_parameters):
         attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
 
-    # Add input messages
-    for i, message in enumerate(messages):
-        prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-        if isinstance(message, dict):
-            if "role" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-            if "content" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message["content"]) if message["content"] else ""
-        else:
-            # Handle message objects
-            if hasattr(message, "role"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
-            if hasattr(message, "content"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
+    # Apply policy before BOTH flattened content and raw-input serialization.
+    # Never replace or mutate the messages passed to the provider.
+    messages = _messages_for_telemetry(messages, config)
 
-    # Add raw input
-    raw_input = {"model": model, "messages": messages}
-    raw_input.update({k: v for k, v in kwargs.items() if v is not None})
-    attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(raw_input)
+    # Add input messages from the same privacy-filtered copy as raw input.
+    for i, message in enumerate(messages or []):
+        prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+        if "role" in message:
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
+        if "content" in message:
+            content = message["content"]
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
+
+    # Only allow known model request fields into telemetry.
+    raw_input: Dict[str, Any] = {"model": model}
+    if messages is not None:
+        raw_input["messages"] = messages
+    if not (config.hide_inputs or config.hide_llm_invocation_parameters):
+        raw_input.update({
+            k: v for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS and v is not None
+        })
+    attributes[SpanAttributes.INPUT_VALUE] = (
+        REDACTED_VALUE if config.hide_inputs else safe_json_dumps(raw_input)
+    )
 
     return attributes
 
 
-def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
-    """Extract output attributes from response."""
+def _get_output_attributes(
+    response: Any, *, config: Optional[TraceConfig] = None,
+) -> Dict[str, AttributeValue]:
+    """Extract attributes only from a parsed provider response, never SDK internals."""
+    config = config if config is not None else TraceConfig()
     attributes: Dict[str, AttributeValue] = {}
 
     # Get model from response
@@ -144,53 +191,21 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
         if hasattr(usage, "total_tokens"):
             attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
 
-    # Add raw output
+    # Raw response wrappers carry credentials and request options in __dict__.
+    # Only serialize the provider's public model, and cover raw duplicates when
+    # a narrower message/text policy is selected.
     try:
-        if hasattr(response, "model_dump"):
+        if _hide_raw_output(config):
+            attributes[SpanAttributes.OUTPUT_VALUE] = REDACTED_VALUE
+        elif callable(getattr(response, "model_dump", None)):
             attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.model_dump())
-        elif hasattr(response, "__dict__"):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.__dict__)
     except Exception:
         pass
 
-    return attributes
-
-
-def _get_stream_output_attributes(
-    chunks: list,
-    full_content: str,
-) -> Dict[str, AttributeValue]:
-    """Extract output attributes from streaming response chunks."""
-    attributes: Dict[str, AttributeValue] = {
-        SpanAttributes.OUTPUT_VALUE: full_content,
-        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}": "assistant",
-        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}": full_content,
+    return {
+        key: masked for key, value in attributes.items()
+        if (masked := config.mask(key, value)) is not None
     }
-
-    # Get info from last chunk
-    if chunks:
-        last_chunk = chunks[-1]
-        if hasattr(last_chunk, "model"):
-            attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] = last_chunk.model
-
-        if hasattr(last_chunk, "usage") and last_chunk.usage:
-            usage = last_chunk.usage
-            if hasattr(usage, "prompt_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-            if hasattr(usage, "completion_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-            if hasattr(usage, "total_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
-
-    # Add raw output
-    try:
-        attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps([
-            c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks
-        ])
-    except Exception:
-        pass
-
-    return attributes
 
 
 class _CompletionsWrapper(_WithTracer):
@@ -203,8 +218,8 @@ class _CompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is a Fireworks client
-        if not _is_fireworks_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_fireworks_client(instance):
             return wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -214,7 +229,7 @@ class _CompletionsWrapper(_WithTracer):
 
         # Get input attributes - exclude model, messages, stream from kwargs
         extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
             try:
@@ -223,45 +238,38 @@ class _CompletionsWrapper(_WithTracer):
                 if stream:
                     return self._wrap_stream(response, span)
 
-                # Non-streaming response
-                output_attrs = _get_output_attributes(response)
+                # Buffered raw responses cache their public parse result. Use
+                # that model for telemetry but return the original raw object.
+                parsed = response
+                if callable(getattr(type(response), "parse", None)):
+                    if (not response.http_response.is_stream_consumed
+                            or inspect.iscoroutinefunction(response.parse)):
+                        return _RawNonStreamResponse(
+                            response, span, asynchronous=False, config=self._config,
+                            get_attributes=_get_output_attributes,
+                        )
+                    try:
+                        parsed = response.parse()
+                    except Exception:
+                        # A caller's later parse must retain native error timing.
+                        parsed = None
+                output_attrs = _get_output_attributes(parsed, config=self._config)
                 span.set_attributes(output_attrs)
                 span.set_status(Status(StatusCode.OK))
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
 
     def _wrap_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap a streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+        """Transfer span ownership to a proxy, including before first iteration."""
+        if callable(getattr(type(stream), "parse", None)):
+            return _RawStreamResponse(stream, span, asynchronous=False, config=self._config)
+        return _Stream(stream, span, config=self._config)
 
 
 class _AsyncCompletionsWrapper(_WithTracer):
@@ -274,8 +282,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is a Fireworks client
-        if not _is_fireworks_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_fireworks_client(instance):
             return await wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -285,7 +293,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
 
         # Get input attributes - exclude model, messages, stream from kwargs
         extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
             try:
@@ -294,42 +302,33 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 if stream:
                     return self._wrap_async_stream(response, span)
 
-                # Non-streaming response
-                output_attrs = _get_output_attributes(response)
+                parsed = response
+                if callable(getattr(type(response), "parse", None)):
+                    if not response.http_response.is_stream_consumed:
+                        return _RawNonStreamResponse(
+                            response, span, asynchronous=True, config=self._config,
+                            get_attributes=_get_output_attributes,
+                        )
+                    try:
+                        parsed = response.parse()
+                        if inspect.isawaitable(parsed):
+                            parsed = await parsed
+                    except Exception:
+                        parsed = None
+                output_attrs = _get_output_attributes(parsed, config=self._config)
                 span.set_attributes(output_attrs)
                 span.set_status(Status(StatusCode.OK))
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
 
-    async def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap an async streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            async for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+    def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
+        """Transfer ownership only after the SDK returns a response."""
+        if callable(getattr(type(stream), "parse", None)):
+            return _RawStreamResponse(stream, span, asynchronous=True, config=self._config)
+        return _AsyncStream(stream, span, config=self._config)

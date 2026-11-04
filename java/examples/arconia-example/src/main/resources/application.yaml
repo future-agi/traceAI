@@ -1,0 +1,32 @@
+# Arconia -> Future AGI. Keys come from the environment, never from this file.
+#   FI_API_KEY, FI_SECRET_KEY   required
+#   FI_BASE_URL                 default https://api.futureagi.com (self-hosted: your collector URL, no trailing slash)
+#   FI_PROJECT_NAME             default arconia-example
+# Do not also set OTEL_EXPORTER_OTLP_* variables: they beat everything below.
+spring:
+  application:
+    name: arconia-example
+
+arconia:
+  otel:
+    traces:
+      exporter:
+        otlp:
+          endpoint: ${FI_BASE_URL:https://api.futureagi.com}/tracer/v1/traces
+          # protocol: leave unset. HTTP/protobuf is the default. Writing the documented value
+          # "http-protobuf" silently disables the exporter on Arconia 0.30.0 and 0.31.0.
+          compression: none        # Optional. Arconia defaults to gzip, which Future AGI Cloud and v1.56.0+ accept; none also works with older self-hosted collectors
+          headers:
+            X-Api-Key: ${FI_API_KEY}
+            X-Secret-Key: ${FI_SECRET_KEY}
+    # Future AGI ingests traces only. Keep these two off the trace route.
+    metrics:
+      exporter:
+        type: none
+    logs:
+      exporter:
+        type: none
+    resource:
+      attributes:
+        project_name: ${FI_PROJECT_NAME:arconia-example}
+        project_type: observe

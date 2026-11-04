@@ -148,6 +148,7 @@ BUILTIN_TOOLS = frozenset([
     "WebFetch",
     "AskUserQuestion",
     "Task",
+    "Agent",
     "NotebookEdit",
     "TodoRead",
     "TodoWrite",

@@ -81,9 +81,9 @@ from traceai_openai_agents._processor import (
                 )
             ],
             {
-                "llm.input_messages.1.message.contents.0.message_content.text": "Hello",
-                "llm.input_messages.1.message.contents.0.message_content.type": "text",
-                "llm.input_messages.1.message.role": "user",
+                "gen_ai.input.messages.1.message.contents.0.message_content.text": "Hello",
+                "gen_ai.input.messages.1.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.1.message.role": "user",
             },
             id="simple_message",
         ),
@@ -97,9 +97,9 @@ from traceai_openai_agents._processor import (
                 )
             ],
             {
-                "llm.input_messages.1.message.role": "assistant",
-                "llm.input_messages.1.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.input.messages.1.message.role": "assistant",
+                "gen_ai.input.messages.1.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="function_call",
         ),
@@ -136,15 +136,15 @@ from traceai_openai_agents._processor import (
                 ),
             ],
             {
-                "llm.input_messages.1.message.contents.0.message_content.text": "Hello",
-                "llm.input_messages.1.message.contents.0.message_content.type": "text",
-                "llm.input_messages.1.message.role": "user",
-                "llm.input_messages.2.message.contents.0.message_content.text": "Hi",
-                "llm.input_messages.2.message.contents.0.message_content.type": "text",
-                "llm.input_messages.2.message.role": "assistant",
-                "llm.input_messages.3.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.3.message.tool_calls.0.tool_call.function.name": "test_func",
-                "llm.input_messages.3.message.role": "assistant",
+                "gen_ai.input.messages.1.message.contents.0.message_content.text": "Hello",
+                "gen_ai.input.messages.1.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.1.message.role": "user",
+                "gen_ai.input.messages.2.message.contents.0.message_content.text": "Hi",
+                "gen_ai.input.messages.2.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.2.message.role": "assistant",
+                "gen_ai.input.messages.3.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.3.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.input.messages.3.message.role": "assistant",
             },
             id="multiple_messages",
         ),
@@ -162,9 +162,9 @@ from traceai_openai_agents._processor import (
                 )
             ],
             {
-                "llm.input_messages.1.message.contents.0.message_content.text": "Debug info",
-                "llm.input_messages.1.message.contents.0.message_content.type": "text",
-                "llm.input_messages.1.message.role": "developer",
+                "gen_ai.input.messages.1.message.contents.0.message_content.text": "Debug info",
+                "gen_ai.input.messages.1.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.1.message.role": "developer",
             },
             id="developer_message",
         ),
@@ -451,14 +451,14 @@ def test_get_attributes_from_function_call_output(
             {
                 "input.mime_type": "application/json",
                 "input.value": '[{"role": "user", "content": "Hello"}]',
-                "llm.input_messages.0.message.content": "Hello",
-                "llm.input_messages.0.message.role": "user",
-                "llm.invocation_parameters": '{"temperature": 0.7}',
-                "llm.model_name": "gpt-4",
-                "llm.output_messages.0.message.content": "Hi",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.token_count.completion": 5,
-                "llm.token_count.prompt": 10,
+                "gen_ai.input.messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.request.parameters": '{"temperature": 0.7}',
+                "gen_ai.request.model": "gpt-4",
+                "gen_ai.output.messages.0.message.content": "Hi",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.input_tokens": 10,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -473,7 +473,7 @@ def test_get_attributes_from_function_call_output(
                 usage=None,
             ),
             {
-                "llm.model_name": "gpt-4",
+                "gen_ai.request.model": "gpt-4",
             },
             id="minimal_generation",
         ),
@@ -491,15 +491,15 @@ def test_get_attributes_from_function_call_output(
             {
                 "input.mime_type": "application/json",
                 "input.value": '[{"role": "user", "content": "Hello"}]',
-                "llm.input_messages.0.message.content": "Hello",
-                "llm.input_messages.0.message.role": "user",
-                "llm.invocation_parameters": '{"temperature": 0.7, "base_url": "https://api.openai.com/v1"}',
-                "llm.model_name": "gpt-4",
-                "llm.provider": "openai",
-                "llm.output_messages.0.message.content": "Hi",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.token_count.completion": 5,
-                "llm.token_count.prompt": 10,
+                "gen_ai.input.messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.request.parameters": '{"temperature": 0.7, "base_url": "https://api.openai.com/v1"}',
+                "gen_ai.request.model": "gpt-4",
+                "gen_ai.provider.name": "openai",
+                "gen_ai.output.messages.0.message.content": "Hi",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.input_tokens": 10,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -516,14 +516,14 @@ def test_get_attributes_from_function_call_output(
             {
                 "input.mime_type": "application/json",
                 "input.value": '[{"role": "user", "content": "Hello"}]',
-                "llm.input_messages.0.message.content": "Hello",
-                "llm.input_messages.0.message.role": "user",
-                "llm.invocation_parameters": '{"temperature": 0.7, "base_url": "https://other-api.com"}',
-                "llm.model_name": "gpt-4",
-                "llm.output_messages.0.message.content": "Hi",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.token_count.completion": 5,
-                "llm.token_count.prompt": 10,
+                "gen_ai.input.messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.request.parameters": '{"temperature": 0.7, "base_url": "https://other-api.com"}',
+                "gen_ai.request.model": "gpt-4",
+                "gen_ai.output.messages.0.message.content": "Hi",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.input_tokens": 10,
                 "output.mime_type": "application/json",
                 "output.value": '[{"role": "assistant", "content": "Hi"}]',
             },
@@ -586,8 +586,8 @@ def test_get_attributes_from_mcp_list_tool_span_data(
             {
                 "input.value": '[{"role": "user", "content": "Hello"}]',
                 "input.mime_type": "application/json",
-                "llm.input_messages.0.message.role": "user",
-                "llm.input_messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.input.messages.0.message.content": "Hello",
             },
             id="simple_input",
         ),
@@ -614,10 +614,10 @@ def test_get_attributes_from_mcp_list_tool_span_data(
                     ]
                 ),
                 "input.mime_type": "application/json",
-                "llm.input_messages.0.message.role": "user",
-                "llm.input_messages.0.message.content": "Hello",
-                "llm.input_messages.1.message.role": "assistant",
-                "llm.input_messages.1.message.content": "Hi",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.input.messages.0.message.content": "Hello",
+                "gen_ai.input.messages.1.message.role": "assistant",
+                "gen_ai.input.messages.1.message.content": "Hi",
             },
             id="multiple_messages",
         ),
@@ -645,8 +645,8 @@ def test_get_attributes_from_chat_completions_input(
                     ]
                 ),
                 "output.mime_type": "application/json",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.content": "Hi",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.content": "Hi",
             },
             id="simple_output",
         ),
@@ -673,10 +673,10 @@ def test_get_attributes_from_chat_completions_input(
                     ]
                 ),
                 "output.mime_type": "application/json",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.content": "Hi",
-                "llm.output_messages.1.message.role": "user",
-                "llm.output_messages.1.message.content": "Thanks",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.content": "Hi",
+                "gen_ai.output.messages.1.message.role": "user",
+                "gen_ai.output.messages.1.message.content": "Thanks",
             },
             id="multiple_messages",
         ),
@@ -698,8 +698,8 @@ def test_get_attributes_from_chat_completions_output(
         pytest.param(
             [{"role": "user", "content": "Hello"}],
             {
-                "llm.input_messages.0.message.role": "user",
-                "llm.input_messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.input.messages.0.message.content": "Hello",
             },
             id="simple_message",
         ),
@@ -712,10 +712,10 @@ def test_get_attributes_from_chat_completions_output(
                 }
             ],
             {
-                "llm.input_messages.0.message.role": "assistant",
-                "llm.input_messages.0.message.content": "Hi",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.input.messages.0.message.role": "assistant",
+                "gen_ai.input.messages.0.message.content": "Hi",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="message_with_tool_calls",
         ),
@@ -731,12 +731,12 @@ def test_get_attributes_from_chat_completions_output(
                 }
             ],
             {
-                "llm.input_messages.0.message.role": "assistant",
-                "llm.input_messages.0.message.content": "Hi",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.function.name": "test_func1",
-                "llm.input_messages.0.message.tool_calls.1.tool_call.id": "456",
-                "llm.input_messages.0.message.tool_calls.1.tool_call.function.name": "test_func2",
+                "gen_ai.input.messages.0.message.role": "assistant",
+                "gen_ai.input.messages.0.message.content": "Hi",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.function.name": "test_func1",
+                "gen_ai.input.messages.0.message.tool_calls.1.tool_call.id": "456",
+                "gen_ai.input.messages.0.message.tool_calls.1.tool_call.function.name": "test_func2",
             },
             id="message_with_multiple_tool_calls",
         ),
@@ -755,26 +755,26 @@ def test_get_attributes_from_chat_completions_output(
                 },
             ],
             {
-                "llm.input_messages.0.message.role": "user",
-                "llm.input_messages.0.message.content": "Hello",
-                "llm.input_messages.1.message.role": "assistant",
-                "llm.input_messages.1.message.content": "Hi",
-                "llm.input_messages.1.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.input.messages.0.message.role": "user",
+                "gen_ai.input.messages.0.message.content": "Hello",
+                "gen_ai.input.messages.1.message.role": "assistant",
+                "gen_ai.input.messages.1.message.content": "Hi",
+                "gen_ai.input.messages.1.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="multiple_messages_with_tool_calls",
         ),
         pytest.param(
             [{"role": "user"}],
             {
-                "llm.input_messages.0.message.role": "user",
+                "gen_ai.input.messages.0.message.role": "user",
             },
             id="message_without_content",
         ),
         pytest.param(
             [{"content": "Hello"}],
             {
-                "llm.input_messages.0.message.content": "Hello",
+                "gen_ai.input.messages.0.message.content": "Hello",
             },
             id="message_without_role",
         ),
@@ -786,9 +786,9 @@ def test_get_attributes_from_chat_completions_output(
                 }
             ],
             {
-                "llm.input_messages.0.message.role": "assistant",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.id": "123",
-                "llm.input_messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.input.messages.0.message.role": "assistant",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.input.messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="message_without_content_but_with_tool_calls",
         ),
@@ -800,7 +800,7 @@ def test_get_attributes_from_chat_completions_message_dicts(
 ) -> None:
     attributes = dict(
         _get_attributes_from_chat_completions_message_dicts(
-            message_dicts, "llm.input_messages."
+            message_dicts, "gen_ai.input.messages."
         )
     )
     assert attributes == expected_attributes
@@ -811,14 +811,14 @@ def test_get_attributes_from_chat_completions_message_dicts(
     [
         pytest.param(
             "Hello",
-            {"llm.input_messages.0.message.content": "Hello"},
+            {"gen_ai.input.messages.0.message.content": "Hello"},
             id="simple_text",
         ),
         pytest.param(
             [{"type": "text", "text": "Hi"}],
             {
-                "llm.input_messages.0.message.contents.0.message_content.type": "text",
-                "llm.input_messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.input.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.0.message.contents.0.message_content.text": "Hi",
             },
             id="content_list",
         ),
@@ -835,10 +835,10 @@ def test_get_attributes_from_chat_completions_message_dicts(
         pytest.param(
             [{"type": "text", "text": "Hello"}, {"type": "text", "text": "World"}],
             {
-                "llm.input_messages.0.message.contents.0.message_content.type": "text",
-                "llm.input_messages.0.message.contents.0.message_content.text": "Hello",
-                "llm.input_messages.0.message.contents.1.message_content.type": "text",
-                "llm.input_messages.0.message.contents.1.message_content.text": "World",
+                "gen_ai.input.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.input.messages.0.message.contents.0.message_content.text": "Hello",
+                "gen_ai.input.messages.0.message.contents.1.message_content.type": "text",
+                "gen_ai.input.messages.0.message.contents.1.message_content.text": "World",
             },
             id="multiple_content_items",
         ),
@@ -851,7 +851,7 @@ def test_get_attributes_from_chat_completions_message_content(
     attributes = dict(
         _get_attributes_from_chat_completions_message_content(
             message_content,
-            "llm.input_messages.0.",
+            "gen_ai.input.messages.0.",
         )
     )
     assert attributes == expected_attributes
@@ -968,8 +968,8 @@ def test_get_attributes_from_chat_completions_tool_call_dict(
         pytest.param(
             {"input_tokens": 10, "output_tokens": 5},
             {
-                "llm.token_count.prompt": 10,
-                "llm.token_count.completion": 5,
+                "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.output_tokens": 5,
             },
             id="complete_usage",
         ),
@@ -986,14 +986,14 @@ def test_get_attributes_from_chat_completions_tool_call_dict(
         pytest.param(
             {"input_tokens": 10},
             {
-                "llm.token_count.prompt": 10,
+                "gen_ai.usage.input_tokens": 10,
             },
             id="only_input_tokens",
         ),
         pytest.param(
             {"output_tokens": 5},
             {
-                "llm.token_count.completion": 5,
+                "gen_ai.usage.output_tokens": 5,
             },
             id="only_output_tokens",
         ),
@@ -1023,7 +1023,7 @@ def test_get_attributes_from_chat_completions_usage(
                 mcp_data={"key": "value"},
             ),
             {
-                "tool.name": "test_func",
+                "gen_ai.tool.name": "test_func",
                 "input.value": '{"k": "v"}',
                 "input.mime_type": "application/json",
                 "output.value": '{"result": "success"}',
@@ -1039,7 +1039,7 @@ def test_get_attributes_from_chat_completions_usage(
                 mcp_data=None,
             ),
             {
-                "tool.name": "test_func",
+                "gen_ai.tool.name": "test_func",
             },
             id="minimal_function",
         ),
@@ -1051,7 +1051,7 @@ def test_get_attributes_from_chat_completions_usage(
                 mcp_data={"metadata": "value"},
             ),
             {
-                "tool.name": "test_func",
+                "gen_ai.tool.name": "test_func",
                 "input.value": '{"complex": {"nested": "data"}}',
                 "input.mime_type": "application/json",
                 "output.value": '{"result": "success"}',
@@ -1193,9 +1193,9 @@ def test_get_attributes_from_message_content_list(
                 user="test-user",
             ),
             {
-                "llm.input_messages.0.message.content": "Be helpful",
-                "llm.input_messages.0.message.role": "system",
-                "llm.invocation_parameters": json.dumps(
+                "gen_ai.input.messages.0.message.content": "Be helpful",
+                "gen_ai.input.messages.0.message.role": "system",
+                "gen_ai.request.parameters": json.dumps(
                     {
                         "id": "test-id",
                         "created_at": 1234567890.0,
@@ -1211,16 +1211,16 @@ def test_get_attributes_from_message_content_list(
                         "user": "test-user",
                     }
                 ),
-                "llm.model_name": "gpt-4",
-                "llm.output_messages.0.message.contents.0.message_content.text": "Hi",
-                "llm.output_messages.0.message.contents.0.message_content.type": "text",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.token_count.completion": 5,
-                "llm.token_count.completion_details.reasoning": 0,
-                "llm.token_count.prompt": 10,
-                "llm.token_count.prompt_details.cache_read": 0,
-                "llm.token_count.total": 15,
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.request.model": "gpt-4",
+                "gen_ai.output.messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.output.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.output_tokens.reasoning": 0,
+                "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.input_tokens.cache_read": 0,
+                "gen_ai.usage.total_tokens": 15,
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1247,7 +1247,7 @@ def test_get_attributes_from_message_content_list(
                 status="incomplete",
             ),
             {
-                "llm.invocation_parameters": json.dumps(
+                "gen_ai.request.parameters": json.dumps(
                     {
                         "id": "incomplete-id",
                         "created_at": 1234567890.0,
@@ -1256,7 +1256,7 @@ def test_get_attributes_from_message_content_list(
                         "tool_choice": "auto",
                     }
                 ),
-                "llm.model_name": "gpt-4",
+                "gen_ai.request.model": "gpt-4",
             },
             id="incomplete_response",
         ),
@@ -1273,7 +1273,7 @@ def test_get_attributes_from_message_content_list(
                 status="completed",
             ),
             {
-                "llm.invocation_parameters": json.dumps(
+                "gen_ai.request.parameters": json.dumps(
                     {
                         "id": "minimal-id",
                         "created_at": 1234567890.0,
@@ -1282,7 +1282,7 @@ def test_get_attributes_from_message_content_list(
                         "tool_choice": "none",
                     }
                 ),
-                "llm.model_name": "gpt-4",
+                "gen_ai.request.model": "gpt-4",
             },
             id="minimal_response",
         ),
@@ -1303,7 +1303,7 @@ def test_get_attributes_from_message_content_list(
                 ),
             ),
             {
-                "llm.invocation_parameters": json.dumps(
+                "gen_ai.request.parameters": json.dumps(
                     {
                         "id": "error-id",
                         "created_at": 1234567890.0,
@@ -1312,7 +1312,7 @@ def test_get_attributes_from_message_content_list(
                         "tool_choice": "none",
                     }
                 ),
-                "llm.model_name": "gpt-4",
+                "gen_ai.request.model": "gpt-4",
             },
             id="error_response",
         ),
@@ -1386,9 +1386,9 @@ def test_get_attributes_from_message_content_list(
                 user="test-user",
             ),
             {
-                "llm.input_messages.0.message.content": "Be helpful\nAnd friendly",
-                "llm.input_messages.0.message.role": "system",
-                "llm.invocation_parameters": json.dumps(
+                "gen_ai.input.messages.0.message.content": "Be helpful\nAnd friendly",
+                "gen_ai.input.messages.0.message.role": "system",
+                "gen_ai.request.parameters": json.dumps(
                     {
                         "id": "complex-id",
                         "created_at": 1234567890.0,
@@ -1404,22 +1404,22 @@ def test_get_attributes_from_message_content_list(
                         "user": "test-user",
                     }
                 ),
-                "llm.model_name": "gpt-4",
-                "llm.output_messages.0.message.contents.0.message_content.text": "Hi",
-                "llm.output_messages.0.message.contents.0.message_content.type": "text",
-                "llm.output_messages.0.message.contents.1.message_content.text": "I cannot help with that",  # noqa: E501
-                "llm.output_messages.0.message.contents.1.message_content.type": "text",
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.1.message.role": "assistant",
-                "llm.output_messages.1.message.tool_calls.0.tool_call.id": "123",
-                "llm.output_messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
-                "llm.output_messages.1.message.tool_calls.0.tool_call.function.arguments": '{"arg": "value"}',  # noqa: E501
-                "llm.token_count.completion": 500,
-                "llm.token_count.completion_details.reasoning": 50,
-                "llm.token_count.prompt": 1000,
-                "llm.token_count.prompt_details.cache_read": 100,
-                "llm.token_count.total": 1500,
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.request.model": "gpt-4",
+                "gen_ai.output.messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.output.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.0.message.contents.1.message_content.text": "I cannot help with that",  # noqa: E501
+                "gen_ai.output.messages.0.message.contents.1.message_content.type": "text",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.1.message.role": "assistant",
+                "gen_ai.output.messages.1.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.output.messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.output.messages.1.message.tool_calls.0.tool_call.function.arguments": '{"arg": "value"}',  # noqa: E501
+                "gen_ai.usage.output_tokens": 500,
+                "gen_ai.usage.output_tokens.reasoning": 50,
+                "gen_ai.usage.input_tokens": 1000,
+                "gen_ai.usage.input_tokens.cache_read": 100,
+                "gen_ai.usage.total_tokens": 1500,
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1430,7 +1430,7 @@ def test_get_attributes_from_message_content_list(
                         },
                     }
                 ),
-                "llm.tools.1.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.1.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1468,7 +1468,7 @@ def test_get_attributes_from_response(
                 )
             ],
             {
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1492,7 +1492,7 @@ def test_get_attributes_from_response(
                 )
             ],
             {
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1540,7 +1540,7 @@ def test_get_attributes_from_response(
                 ),
             ],
             {
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1554,7 +1554,7 @@ def test_get_attributes_from_response(
                         },
                     }
                 ),
-                "llm.tools.1.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.1.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1595,7 +1595,7 @@ def test_get_attributes_from_response(
                 )
             ],
             {
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1637,7 +1637,7 @@ def test_get_attributes_from_response(
                 )
             ],
             {
-                "llm.tools.0.tool.json_schema": json.dumps(
+                "gen_ai.tool.definitions.0.tool.json_schema": json.dumps(
                     {
                         "type": "function",
                         "function": {
@@ -1685,9 +1685,9 @@ def test_get_attributes_from_tools(
                 )
             ],
             {
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.contents.0.message_content.type": "text",
-                "llm.output_messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.0.message.contents.0.message_content.text": "Hi",
             },
             id="message_output",
         ),
@@ -1701,9 +1701,9 @@ def test_get_attributes_from_tools(
                 )
             ],
             {
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.tool_calls.0.tool_call.id": "123",
-                "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="function_call_output",
         ),
@@ -1730,12 +1730,12 @@ def test_get_attributes_from_tools(
                 ),
             ],
             {
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.contents.0.message_content.type": "text",
-                "llm.output_messages.0.message.contents.0.message_content.text": "Hi",
-                "llm.output_messages.1.message.role": "assistant",
-                "llm.output_messages.1.message.tool_calls.0.tool_call.id": "123",
-                "llm.output_messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.output.messages.1.message.role": "assistant",
+                "gen_ai.output.messages.1.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.output.messages.1.message.tool_calls.0.tool_call.function.name": "test_func",
             },
             id="multiple_outputs",
         ),
@@ -1755,11 +1755,11 @@ def test_get_attributes_from_tools(
                 ),
             ],
             {
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.tool_calls.0.tool_call.id": "123",
-                "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "test_func1",
-                "llm.output_messages.0.message.tool_calls.1.tool_call.id": "456",
-                "llm.output_messages.0.message.tool_calls.1.tool_call.function.name": "test_func2",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id": "123",
+                "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name": "test_func1",
+                "gen_ai.output.messages.0.message.tool_calls.1.tool_call.id": "456",
+                "gen_ai.output.messages.0.message.tool_calls.1.tool_call.function.name": "test_func2",
             },
             id="multiple_function_calls",
         ),
@@ -1793,12 +1793,12 @@ def test_get_attributes_from_tools(
                 ),
             ],
             {
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.contents.0.message_content.type": "text",
-                "llm.output_messages.0.message.contents.0.message_content.text": "Hi",
-                "llm.output_messages.1.message.role": "assistant",
-                "llm.output_messages.1.message.contents.0.message_content.type": "text",
-                "llm.output_messages.1.message.contents.0.message_content.text": "World",
+                "gen_ai.output.messages.0.message.role": "assistant",
+                "gen_ai.output.messages.0.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.0.message.contents.0.message_content.text": "Hi",
+                "gen_ai.output.messages.1.message.role": "assistant",
+                "gen_ai.output.messages.1.message.contents.0.message_content.type": "text",
+                "gen_ai.output.messages.1.message.contents.0.message_content.text": "World",
             },
             id="multiple_messages",
         ),
@@ -1823,8 +1823,8 @@ def test_get_attributes_from_response_output(
         pytest.param(
             "Be helpful",
             {
-                "llm.input_messages.0.message.role": "system",
-                "llm.input_messages.0.message.content": "Be helpful",
+                "gen_ai.input.messages.0.message.role": "system",
+                "gen_ai.input.messages.0.message.content": "Be helpful",
             },
             id="with_instructions",
         ),
@@ -1841,8 +1841,8 @@ def test_get_attributes_from_response_output(
         pytest.param(
             "Be helpful\nAnd friendly",
             {
-                "llm.input_messages.0.message.role": "system",
-                "llm.input_messages.0.message.content": "Be helpful\nAnd friendly",
+                "gen_ai.input.messages.0.message.role": "system",
+                "gen_ai.input.messages.0.message.content": "Be helpful\nAnd friendly",
             },
             id="multiline_instructions",
         ),
@@ -2034,11 +2034,11 @@ def test_get_attributes_from_message(
                 ),
             ),
             {
-                "llm.token_count.prompt": 10,
-                "llm.token_count.completion_details.reasoning": 0,
-                "llm.token_count.completion": 5,
-                "llm.token_count.prompt_details.cache_read": 0,
-                "llm.token_count.total": 15,
+                "gen_ai.usage.input_tokens": 10,
+                "gen_ai.usage.output_tokens.reasoning": 0,
+                "gen_ai.usage.output_tokens": 5,
+                "gen_ai.usage.input_tokens.cache_read": 0,
+                "gen_ai.usage.total_tokens": 15,
             },
             id="complete_usage",
         ),
@@ -2060,11 +2060,11 @@ def test_get_attributes_from_message(
                 ),
             ),
             {
-                "llm.token_count.prompt": 0,
-                "llm.token_count.completion_details.reasoning": 0,
-                "llm.token_count.completion": 0,
-                "llm.token_count.prompt_details.cache_read": 0,
-                "llm.token_count.total": 0,
+                "gen_ai.usage.input_tokens": 0,
+                "gen_ai.usage.output_tokens.reasoning": 0,
+                "gen_ai.usage.output_tokens": 0,
+                "gen_ai.usage.input_tokens.cache_read": 0,
+                "gen_ai.usage.total_tokens": 0,
             },
             id="zero_tokens",
         ),
@@ -2081,11 +2081,11 @@ def test_get_attributes_from_message(
                 ),
             ),
             {
-                "llm.token_count.completion": 500,
-                "llm.token_count.completion_details.reasoning": 50,
-                "llm.token_count.prompt": 1000,
-                "llm.token_count.prompt_details.cache_read": 100,
-                "llm.token_count.total": 1500,
+                "gen_ai.usage.output_tokens": 500,
+                "gen_ai.usage.output_tokens.reasoning": 50,
+                "gen_ai.usage.input_tokens": 1000,
+                "gen_ai.usage.input_tokens.cache_read": 100,
+                "gen_ai.usage.total_tokens": 1500,
             },
             id="large_token_counts",
         ),

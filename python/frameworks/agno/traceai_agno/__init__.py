@@ -1,32 +1,9 @@
-"""TraceAI instrumentation for Agno Agent Framework.
+"""Future AGI export setup for the maintained OpenInference Agno instrumentor.
 
-This module provides integration between TraceAI and the Agno agent framework,
-enabling comprehensive observability for AI agent workflows.
-
-Agno has built-in OpenTelemetry support via the openinference-instrumentation-agno
-package. This integration provides:
-1. A convenience function to configure Agno with TraceAI's endpoint
-2. Helper functions for trace attribute management
-3. Session and user tracking utilities
-
-Example usage:
-
-    from fi_instrumentation import register
-    from fi_instrumentation.fi_types import ProjectType
-    from traceai_agno import configure_agno_tracing
-
-    # Setup TraceAI
-    trace_provider = register(
-        project_type=ProjectType.OBSERVE,
-        project_name="agno-agent",
-    )
-
-    # Configure Agno to use TraceAI (call BEFORE creating agents)
-    configure_agno_tracing(tracer_provider=trace_provider)
-
-    # Now import and use Agno normally
-    from agno.agent import Agent
-    from agno.models.openai import OpenAIChat
+Configure once before running agents. Pass an existing provider explicitly, or
+supply an OTLP traces endpoint to create one. The exported attribute/context
+helpers are for manual use; they do not transform automatically emitted spans.
+See the package README for authentication, content controls, and shutdown.
 """
 
 from traceai_agno._instrumentor import (
@@ -55,4 +32,4 @@ __all__ = [
     "create_trace_context",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.0"  # x-release-please-version

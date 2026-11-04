@@ -1,0 +1,45 @@
+name: PrismML recipe tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/examples/prismml/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/prismml-recipe-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recipe:
+    name: PrismML recipe (${{ matrix.packages }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        packages: [published, source]
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: python/examples/prismml/src:python/tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install published recipe pins and test tools
+        run: pip install -r python/examples/prismml/requirements.txt pytest httpx 'wrapt<2'
+      - name: Install source distributions
+        if: matrix.packages == 'source'
+        run: pip install ./python ./python/frameworks/openai
+      - name: Loopback-only recipe contracts
+        run: pytest python/examples/prismml/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
