@@ -963,6 +963,10 @@
       "extra-files": [
         {
           "type": "generic",
+          "path": "README.md"
+        },
+        {
+          "type": "generic",
           "path": "compatibility/spring-ai/pom.xml"
         },
         {
