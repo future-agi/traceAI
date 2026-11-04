@@ -70,8 +70,15 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
 export class CodexSDKInstrumentation {
   private tracerProvider?: TracerProvider;
   private readonly traceConfig?: TraceConfigOptions;
-  /** Undo functions for the class patch and wrapCodex() factories. */
+  /** Undo functions for class patches. */
   private readonly undo: Array<() => void> = [];
+  /** Client undo functions hold only WeakRefs; collected clients release their bookkeeping. */
+  private readonly clientUndo = new Set<() => void>();
+  private readonly clientFinalizer = new FinalizationRegistry<() => void>((undo) => {
+    // Deactivate the owner too: saved factories must remain inert after collection.
+    undo();
+    this.clientUndo.delete(undo);
+  });
   /** Thread undo functions hold only WeakRefs; collected threads release their bookkeeping. */
   private readonly threadUndo = new Set<() => void>();
   private readonly threadFinalizer = new FinalizationRegistry<() => void>((undo) => {
@@ -129,7 +136,10 @@ export class CodexSDKInstrumentation {
     if (!codex || typeof codex !== "object") return codex;
     this.enabled = true;
     const undo = patchCodex(codex as Record<string | symbol, unknown>, (thread) => this.wrapThread(thread));
-    if (undo) this.undo.push(undo);
+    if (undo) {
+      this.clientUndo.add(undo);
+      this.clientFinalizer.register(codex, undo, undo);
+    }
     return codex;
   }
 
@@ -141,6 +151,15 @@ export class CodexSDKInstrumentation {
       undo();
     }
     this.threadUndo.clear();
+    for (const undo of this.clientUndo) {
+      this.clientFinalizer.unregister(undo);
+      try {
+        undo();
+      } catch (error) {
+        diag.debug(`${INSTRUMENTATION_NAME}: unpatch failed: ${error}`);
+      }
+    }
+    this.clientUndo.clear();
     while (this.undo.length) {
       const fn = this.undo.pop();
       try {

@@ -583,16 +583,18 @@ describe("patching", () => {
     const mod = fakeModule();
     const instrumentation = new CodexSDKInstrumentation({ tracerProvider: provider });
     const codex = instrumentation.wrapCodex(new mod.Codex([]));
-    const undo = (instrumentation as unknown as { undo: unknown[] }).undo;
-    const clientCleanupCount = undo.length;
-    expect(clientCleanupCount).toBeGreaterThan(0);
+    const { undo, clientUndo } = instrumentation as unknown as { undo: unknown[]; clientUndo: Set<unknown> };
+    expect(clientUndo.size).toBe(1);
+    expect(undo).toHaveLength(0);
     try {
       for (let i = 0; i < 5000; i += 1) codex.startThread();
-      expect(undo).toHaveLength(clientCleanupCount);
+      expect(clientUndo.size).toBe(1);
+      expect(undo).toHaveLength(0);
     } finally {
       instrumentation.unpatch();
       await provider.shutdown();
     }
+    expect(clientUndo.size).toBe(0);
     expect(undo).toHaveLength(0);
   });
 
