@@ -16,6 +16,7 @@ export const SpanNames = {
   RESUME: "Cursor Agent resume",
   /** Prefix of a tool span: `Cursor tool: read`. */
   TOOL_PREFIX: "Cursor tool: ",
+  SUBAGENT: "Cursor subagent",
   THINKING: "Cursor thinking",
   ASSISTANT_MESSAGE: "Cursor assistant message",
 } as const;
