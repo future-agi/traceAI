@@ -28,7 +28,12 @@ ERROR = "SYNTHETIC-PRIVATE-ERROR-1104"
 
 @pytest.fixture
 def server():
-    state = {"requests": [], "started": threading.Event(), "release": threading.Event()}
+    state = {
+        "requests": [],
+        "started": threading.Event(),
+        "release": threading.Event(),
+        "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -73,11 +78,7 @@ def server():
                     {
                         **common,
                         "choices": [],
-                        "usage": {
-                            "prompt_tokens": 12,
-                            "completion_tokens": 3,
-                            "total_tokens": 15,
-                        },
+                        "usage": state["usage"],
                     },
                 ]
                 payload = (
@@ -99,11 +100,7 @@ def server():
                                 "finish_reason": "stop",
                             }
                         ],
-                        "usage": {
-                            "prompt_tokens": 12,
-                            "completion_tokens": 3,
-                            "total_tokens": 15,
-                        },
+                        "usage": state["usage"],
                     }
                 ).encode()
                 code, mime = 200, "application/json"
