@@ -2,7 +2,15 @@ import { Attributes, Context, Span, SpanStatusCode, context } from "@opentelemet
 import { SemanticConventions as S, MimeType } from "@traceai/fi-semantic-conventions";
 import { safelyJSONStringify } from "@traceai/fi-core";
 
-interface Usage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+interface Usage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  completion_tokens_details?: { reasoning_tokens?: number } | null;
+  dram_cached_tokens?: number;
+  sram_cached_tokens?: number;
+}
 interface ToolCall {
   index?: number;
   id?: string;
@@ -43,11 +51,44 @@ export function audioResponseAttributes(result: unknown): Attributes {
   };
 }
 
-function usageAttributes(usage?: Usage | null): Attributes {
+/** Usage values are snapshots, not deltas. Prefer present newer fields, including zero. */
+function mergeUsage(previous?: Usage | null, next?: Usage | null): Usage | undefined {
+  if (!next) return previous ?? undefined;
+  if (!previous) return next;
+  return {
+    ...previous, ...next,
+    prompt_tokens: next.prompt_tokens ?? previous.prompt_tokens,
+    completion_tokens: next.completion_tokens ?? previous.completion_tokens,
+    total_tokens: next.total_tokens ?? previous.total_tokens,
+    prompt_tokens_details: {
+      ...previous.prompt_tokens_details, ...next.prompt_tokens_details,
+      cached_tokens: next.prompt_tokens_details?.cached_tokens ?? previous.prompt_tokens_details?.cached_tokens,
+    },
+    completion_tokens_details: {
+      ...previous.completion_tokens_details, ...next.completion_tokens_details,
+      reasoning_tokens: next.completion_tokens_details?.reasoning_tokens ?? previous.completion_tokens_details?.reasoning_tokens,
+    },
+    dram_cached_tokens: next.dram_cached_tokens ?? previous.dram_cached_tokens,
+    sram_cached_tokens: next.sram_cached_tokens ?? previous.sram_cached_tokens,
+  };
+}
+
+function responseUsage(result: Completion): Usage | undefined {
+  // New SDKs split standard usage and hardware cache metrics; older streams
+  // put all usage in x_groq. Neither source should hide fields in the other.
+  return mergeUsage(result.x_groq?.usage, result.usage);
+}
+
+function usageAttributes(usage?: Usage): Attributes {
   return {
     [S.LLM_TOKEN_COUNT_PROMPT]: usage?.prompt_tokens,
     [S.LLM_TOKEN_COUNT_COMPLETION]: usage?.completion_tokens,
     [S.LLM_TOKEN_COUNT_TOTAL]: usage?.total_tokens,
+    [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]: usage?.prompt_tokens_details?.cached_tokens,
+    [S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING]: usage?.completion_tokens_details?.reasoning_tokens,
+    // Hardware cache counters are provider-specific, not additional billable tokens.
+    "groq.usage.dram_cached_tokens": usage?.dram_cached_tokens,
+    "groq.usage.sram_cached_tokens": usage?.sram_cached_tokens,
   };
 }
 
@@ -61,7 +102,7 @@ function completionAttributes(result: Completion): Attributes {
     [S.GEN_AI_RESPONSE_MODEL]: result.model,
     [S.GEN_AI_RESPONSE_ID]: result.id,
     [S.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(choices.map(c => c.finish_reason).filter(Boolean)) ?? undefined,
-    ...usageAttributes(result.usage ?? result.x_groq?.usage),
+    ...usageAttributes(responseUsage(result)),
   };
 }
 
@@ -75,8 +116,7 @@ class Accumulator {
   add(chunk: Completion) {
     this.id = chunk.id ?? this.id;
     this.model = chunk.model ?? this.model;
-    const usage = chunk.usage ?? chunk.x_groq?.usage;
-    if (usage) this.usage = { ...this.usage, ...usage };
+    this.usage = mergeUsage(this.usage, responseUsage(chunk));
     for (const choice of chunk.choices ?? []) {
       let acc = this.choices.get(choice.index);
       if (!acc) {

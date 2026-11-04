@@ -55,6 +55,13 @@ const maskingRules: MaskingRule[] = [
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
+    // Tool definitions are input content too: descriptions, schema enums and
+    // defaults can contain private text even when no messages contain it.
+    condition: ({ config, key }) =>
+      (config.hideInputs || config.hideInputText) && key === SemanticConventions.LLM_TOOLS,
+    action: () => undefined,
+  },
+  {
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText) &&
       key.startsWith(`${SemanticConventions.EMBEDDING_EMBEDDINGS}.`) &&
