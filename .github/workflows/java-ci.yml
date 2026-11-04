@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        anthropic: ['0.1.0', '3.3.0']
+        anthropic: ['0.1.0', '3.4.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -112,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        anthropic: ['3.2.0', '3.3.0']
+        anthropic: ['3.2.0', '3.4.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

@@ -45,6 +45,8 @@ class WrapperContractTest {
     private volatile String response = MESSAGE;
     private volatile String receivedKey;
     private volatile String receivedAuthorization;
+    private volatile String receivedCustomCredential;
+    private volatile String receivedQuery;
     private volatile String receivedBody;
 
     @BeforeEach
@@ -54,6 +56,8 @@ class WrapperContractTest {
             receivedBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             receivedKey = exchange.getRequestHeaders().getFirst("x-api-key");
             receivedAuthorization = exchange.getRequestHeaders().getFirst("authorization");
+            receivedCustomCredential = exchange.getRequestHeaders().getFirst("x-custom-credential");
+            receivedQuery = exchange.getRequestURI().getRawQuery();
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(status, bytes.length);
@@ -113,6 +117,8 @@ class WrapperContractTest {
         traced().createMessage(call(builder, "build"));
         assertEquals("synthetic-request-secret", receivedKey);
         assertEquals("Bearer synthetic-auth-secret", receivedAuthorization);
+        assertEquals("synthetic-custom-secret", receivedCustomCredential);
+        assertEquals("api_key=synthetic-query-secret", receivedQuery);
         String raw = attr(SemanticConventions.RAW_INPUT);
         assertNotNull(raw);
         String exported = span().toString();
