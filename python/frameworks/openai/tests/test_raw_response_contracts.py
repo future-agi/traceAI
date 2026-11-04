@@ -34,14 +34,15 @@ def response_body():
 
 
 @contextmanager
-def tracing(instrumented=True):
+def tracing(instrumented=True, config=None):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = OpenAIInstrumentor()
     if instrumented:
         instrumentor.instrument(
-            tracer_provider=provider, config=TraceConfig(hide_inputs=True)
+            tracer_provider=provider,
+            config=config if config is not None else TraceConfig(hide_inputs=True),
         )
     try:
         yield exporter

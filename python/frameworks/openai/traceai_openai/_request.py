@@ -32,7 +32,7 @@ from traceai_openai._response_accumulator import (
     _response_status,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
-from traceai_openai._span_io_handler import add_io_to_span_attributes
+from traceai_openai._span_io_handler import _embedding_summary, add_io_to_span_attributes
 from traceai_openai._stream import (
     _AsyncRawResponse,
     _AsyncStream,
@@ -265,8 +265,17 @@ class _WithOpenAI(ABC):
                 with_span.set_attribute(
                     SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
                 )
-            telemetry_output = parsed
+            telemetry_output = attributes_response = parsed
             status = _response_status(parsed)
+            if cast_to is CreateEmbeddingResponse and not isinstance(parsed, CreateEmbeddingResponse):
+                # Endpoint policy must not depend on the application's parse type.
+                # Keep only a vector-free summary for mappings; opaque parse values
+                # cannot safely be exported. Do not reparse or mutate SDK results.
+                telemetry_output = (
+                    _embedding_summary(parsed.get("model"), parsed.get("data"))
+                    if isinstance(parsed, Mapping) else None
+                )
+                attributes_response = telemetry_output
             if cast_to is self._openai.types.responses.response.Response:
                 if isinstance(parsed, Mapping):
                     telemetry_output = response_output(parsed, self._config)
@@ -290,7 +299,7 @@ class _WithOpenAI(ABC):
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,
-                    response=parsed,
+                    response=attributes_response,
                     response_attributes_extractor=extractor,
                 ),
             )
@@ -315,6 +324,11 @@ class _WithOpenAI(ABC):
                     # Optional eager telemetry must not change SDK behavior: callers
                     # still receive the envelope and may inspect malformed bodies.
                     logger.debug("Could not eagerly parse raw response for telemetry", exc_info=True)
+                    if not getattr(response, "_is_sse_stream", False):
+                        # This body is already buffered, and legacy callers need
+                        # not parse or close the envelope. End once with an unknown
+                        # outcome, without exporting an instrumentation exception.
+                        with_span.finish_tracing(status=trace_api.Status(trace_api.StatusCode.UNSET))
                 else:
                     raw._trace_parsed(parsed)
             return raw

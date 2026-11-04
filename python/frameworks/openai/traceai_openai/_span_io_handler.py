@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
@@ -90,6 +90,22 @@ def _set_mime_type(span: _WithSpan, key: str, value: Any) -> None:
     span.set_attribute(key, mime)
 
 
+def _embedding_summary(model: Any, data: Any) -> Dict[str, Any]:
+    """Summarize typed or mapping embeddings without copying or exporting vectors."""
+    data = data if isinstance(data, list) else []
+    first = data[0] if data else None
+    vector = (
+        first.get("embedding") if isinstance(first, Mapping)
+        else getattr(first, "embedding", None)
+    )
+    summary: Dict[str, Any] = {"embeddings": len(data)}
+    if isinstance(model, str):
+        summary["model"] = model
+    if isinstance(vector, list):
+        summary["dimensions"] = len(vector)
+    return summary
+
+
 def _json_output_for(output_data: Any, config: Optional[TraceConfig] = None) -> Optional[str]:
     """JSON for responses whose output is not a chat message: the Responses API
     object as JSON, and a compact summary for embeddings (never the vectors)."""
@@ -106,14 +122,7 @@ def _json_output_for(output_data: Any, config: Optional[TraceConfig] = None) -> 
             body = {"output_text": output_text, **body}
         return json.dumps(body, ensure_ascii=False)
     if isinstance(output_data, CreateEmbeddingResponse):
-        data = list(output_data.data or [])
-        first = getattr(data[0], "embedding", None) if data else None
-        summary = {
-            "model": output_data.model,
-            "embeddings": len(data),
-            "dimensions": len(first) if isinstance(first, list) else None,
-        }
-        return json.dumps({k: v for k, v in summary.items() if v is not None})
+        return json.dumps(_embedding_summary(output_data.model, output_data.data))
     return None
 
 
