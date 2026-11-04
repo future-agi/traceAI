@@ -2,11 +2,15 @@
 
 import os
 from dataclasses import fields, replace
-from typing import Any, cast
+from functools import wraps
+from inspect import signature
+from typing import Any, Callable, cast
 
 from fi_instrumentation.instrumentation import TraceConfig as FITraceConfig
 from fi_instrumentation.instrumentation._spans import FiSpan
 from openinference.instrumentation import OITracer, TraceConfig
+from opentelemetry.util.types import AttributeValue
+from wrapt import ObjectProxy
 
 
 def privacy_configs(config: TraceConfig | None) -> tuple[TraceConfig, FITraceConfig]:
@@ -36,6 +40,33 @@ def privacy_configs(config: TraceConfig | None) -> tuple[TraceConfig, FITraceCon
     )
 
 
+class _PrivacyConfig(ObjectProxy):
+    """Compose FI masking into OI's sampling and final attribute-write paths."""
+
+    def __init__(self, config: TraceConfig, fi_config: FITraceConfig):
+        super().__init__(config)
+        self._self_fi_config = fi_config
+        self._self_externalize = "externalize" in signature(config.mask).parameters
+
+    # OI inspects mask's signature to detect its side-effect-free sampling mode
+    # (externalize=False). Preserve that contract and all OI-only options without
+    # mutating the caller's config or requiring a newer mask signature.
+    @wraps(TraceConfig.mask)
+    def mask(
+        self,
+        key: str,
+        value: AttributeValue | Callable[[], AttributeValue],
+        **kwargs: Any,
+    ) -> AttributeValue | None:
+        masked = self._self_fi_config.mask(key, value)
+        if masked is None:
+            return None
+        if not self._self_externalize:
+            # Match OI's fallback for custom configs with a two-argument mask.
+            kwargs.pop("externalize", None)
+        return cast(TraceConfig, self.__wrapped__).mask(key, masked, **kwargs)
+
+
 class AgnoTracer(OITracer):
     """Retain OI spans while applying shared FI event/status/attribute privacy.
 
@@ -45,14 +76,12 @@ class AgnoTracer(OITracer):
     """
 
     def __init__(self, wrapped: Any, config: TraceConfig, fi_config: FITraceConfig):
-        super().__init__(wrapped, config=config)
+        super().__init__(
+            wrapped, config=cast(TraceConfig, _PrivacyConfig(config, fi_config))
+        )
         self._self_fi_config = fi_config
 
     def start_span(self, *args: Any, **kwargs: Any) -> FiSpan:
-        if attributes := kwargs.get("attributes"):
-            kwargs["attributes"] = {
-                key: masked
-                for key, value in attributes.items()
-                if (masked := self._self_fi_config.mask(key, value)) is not None
-            }
+        # OI adds context attributes inside start_span, before FiSpan exists.
+        # Its composed config must protect those writes and sampler inputs too.
         return FiSpan(super().start_span(*args, **kwargs), config=self._self_fi_config)
