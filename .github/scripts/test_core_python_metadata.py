@@ -2,9 +2,9 @@
 
 The Python CI Plan job runs these standard-library-only checks before installing
 packages. EvalTag uses PEP 604 unions at runtime, so Python 3.9 cannot import core.
-The ceiling must cover only runtimes qualified with all advertised extras.
-Core tracing alone works on 3.15, but evaluation's native dependency does not;
-Requires-Python therefore conservatively excludes 3.15 for the distribution.
+The distribution's ceiling covers core tracing, including Python 3.15.
+Optional evaluation dependencies have their own compatibility matrix and must
+neither lower that ceiling nor silently disappear on newer Python runtimes.
 """
 
 import re
@@ -34,8 +34,16 @@ class CorePythonMetadataTests(unittest.TestCase):
             "Programming Language :: Python :: 3.10", self.poetry["classifiers"]
         )
 
-    def test_python_ceiling_matches_all_extras_qualification(self):
-        self.assertRegex(self.poetry["dependencies"]["python"], r",<3\.15$")
+    def test_python_ceiling_matches_core_qualification(self):
+        self.assertRegex(self.poetry["dependencies"]["python"], r",<3\.16$")
+
+    def test_evaluation_stays_optional_without_runtime_omission(self):
+        for name in ("futureagi", "ai-evaluation"):
+            dependency = self.poetry["dependencies"][name]
+            self.assertTrue(dependency["optional"])
+            self.assertNotIn("python", dependency)
+            self.assertNotIn("markers", dependency)
+            self.assertIn(name, self.poetry["extras"]["evaluation"])
 
     def test_classifiers_match_the_declared_range(self):
         minors = sorted(
@@ -47,7 +55,7 @@ class CorePythonMetadataTests(unittest.TestCase):
                 )
             )
         )
-        self.assertEqual(minors, list(range(10, 15)))
+        self.assertEqual(minors, list(range(10, 16)))
 
     def test_lockfile_python_range_matches_distribution(self):
         lock = tomllib.loads((CORE / "poetry.lock").read_text())

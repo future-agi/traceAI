@@ -21,18 +21,28 @@ permissions:
 
 jobs:
   core:
-    name: Core Python ${{ matrix.python }} OTel ${{ matrix.otel }}
+    name: Core Python ${{ matrix.python }} OTel ${{ matrix.otel }} (${{ matrix.profile }})
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
         otel: ['floor', 'latest']
+        profile: ['tracing']
+        # Evaluation's native dependencies have a narrower runtime range and
+        # newer OTel requirements; neither should restrict core tracing.
+        include:
+          - {python: '3.10', otel: 'latest', profile: 'evaluation'}
+          - {python: '3.11', otel: 'latest', profile: 'evaluation'}
+          - {python: '3.12', otel: 'latest', profile: 'evaluation'}
+          - {python: '3.13', otel: 'latest', profile: 'evaluation'}
+          - {python: '3.14', otel: 'latest', profile: 'evaluation'}
     env:
       FI_BASE_URL: http://127.0.0.1:9
       FI_GRPC_URL: http://127.0.0.1:9
       OTEL_TEST_VERSION: ${{ matrix.otel }}
+      INSTALL_PROFILE: ${{ matrix.profile }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -53,11 +63,9 @@ jobs:
           if [ "$OTEL_TEST_VERSION" = floor ]; then
             pins=(opentelemetry-api==1.29.0 opentelemetry-sdk==1.29.0 opentelemetry-exporter-otlp-proto-http==1.29.0 opentelemetry-instrumentation==0.50b0)
           fi
-          extras=('' '[grpc]' '[evaluation]' '[grpc,evaluation]')
-          # Evaluation has its own newer OTel requirements. Exercise the core's
-          # supported OTel floor without forcing incompatible optional packages.
-          if [ "$OTEL_TEST_VERSION" = floor ]; then
-            extras=('' '[grpc]')
+          extras=('' '[grpc]')
+          if [ "$INSTALL_PROFILE" = evaluation ]; then
+            extras=('[evaluation]' '[grpc,evaluation]')
           fi
           i=0
           for extra in "${extras[@]}"; do
@@ -72,11 +80,20 @@ jobs:
             "$py" -m pip check
             "$py" -I -c 'from fi_instrumentation import register; from importlib.metadata import version; print(version("fi-instrumentation-otel"))'
             if [[ "$extra" == *evaluation* ]]; then
-              "$py" -I -c 'from importlib.metadata import version; print(version("ai-evaluation"), version("futureagi"))'
+              "$py" -I -c 'import fi.evals; from importlib.metadata import version; print(version("ai-evaluation"), version("futureagi"))'
+            else
+              "$py" -I -c 'from importlib.metadata import distributions; assert not {"ai-evaluation", "futureagi", "litellm", "fastuuid"}.intersection(d.metadata["Name"].lower() for d in distributions())'
             fi
             if [[ "$extra" == *grpc* ]]; then
               "$py" -I -c 'from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter'
             fi
+            # gRPC-specific tests assume that optional exporter is installed.
+            # Run them in each explicit grpc profile, never require it for base.
+            selection=()
+            if [[ "$extra" != *grpc* ]]; then
+              selection=(-k 'not grpc')
+            fi
+            # Exercise every profile. Isolated imports above verify the wheel;
+            # the suite also needs tests.harness and the checkout's README fixtures.
+            (cd python && "$py" -m pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py' "${selection[@]}" -q)
           done
-          cd python
-          "$py" -m pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py' -q

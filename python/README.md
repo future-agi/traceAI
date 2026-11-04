@@ -6,16 +6,21 @@ OpenTelemetry instrumentation for AI applications. Install the core and the inst
 
 ## Supported Python versions
 
-The core package supports Python 3.10–3.14, including the optional `grpc` and
-`evaluation` extras (and their combination). Install only the extras you need:
-`pip install 'fi-instrumentation-otel[grpc,evaluation]'`.
+Core tracing supports Python 3.10–3.15, with either the default HTTP exporter
+or the optional `grpc` exporter:
 
-Python 3.15 is not currently supported by the evaluation dependency chain. The
-package's `Requires-Python` guard therefore excludes 3.15 for **all installs**,
-including core-only installs; Python packaging cannot express a separate
-`Requires-Python` for an extra. This avoids silently skipping evaluation
-libraries or failing later during a native dependency build. Framework
-instrumentors have their own runtime constraints.
+```bash
+pip install fi-instrumentation-otel         # HTTP tracing, Python 3.10–3.15
+pip install 'fi-instrumentation-otel[grpc]' # gRPC tracing, Python 3.10–3.15
+```
+
+The optional `evaluation` extra (including `[grpc,evaluation]`) supports Python
+3.10–3.14. Its dependency chain, including LiteLLM/fastuuid, is not yet compatible
+with Python 3.15. Use Python 3.14 or earlier for
+`pip install 'fi-instrumentation-otel[evaluation]'`; installing this extra on
+3.15 can fail while resolving or building those dependencies. It is never
+silently omitted, and it does not restrict core-only or `[grpc]` installs.
+Framework instrumentors have their own runtime constraints.
 
 ## Quickstart
 
