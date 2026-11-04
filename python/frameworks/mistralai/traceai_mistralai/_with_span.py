@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 
+from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import Attributes
 
@@ -62,12 +63,27 @@ class _WithSpan:
     ) -> None:
         if self._is_finished:
             return
+        # Python's bounded attribute map evicts older entries. Response metadata
+        # is extracted before optional tool-call leaves, so restore it alongside
+        # request attribution after every flattened payload has been recorded.
+        priority_attributes = dict(self._priority_attributes or {})
+        for mapping in (attributes, extra_attributes):
+            if not mapping:
+                continue
+            for key in (
+                SpanAttributes.GEN_AI_RESPONSE_MODEL,
+                SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS,
+                SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
+                SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS,
+            ):
+                if (value := mapping.get(key)) is not None:
+                    priority_attributes[key] = value
         for mapping in (
             attributes,
             self._context_attributes,
             self._extra_attributes,
             extra_attributes,
-            self._priority_attributes,
+            priority_attributes,
         ):
             if not mapping:
                 continue
