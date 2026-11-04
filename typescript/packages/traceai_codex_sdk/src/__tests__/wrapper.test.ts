@@ -578,13 +578,22 @@ describe("patching", () => {
     expect(byName(exporter.getFinishedSpans(), "codex.turn")).toHaveLength(2);
   });
 
-  it("wrapCodex() keeps no reference per thread it starts", async () => {
+  it("wrapCodex() keeps client cleanup count constant as threads are started", async () => {
     const { provider } = memoryProvider();
     const mod = fakeModule();
     const instrumentation = new CodexSDKInstrumentation({ tracerProvider: provider });
     const codex = instrumentation.wrapCodex(new mod.Codex([]));
-    for (let i = 0; i < 5000; i += 1) codex.startThread();
-    expect((instrumentation as unknown as { undo: unknown[] }).undo).toHaveLength(2);
+    const undo = (instrumentation as unknown as { undo: unknown[] }).undo;
+    const clientCleanupCount = undo.length;
+    expect(clientCleanupCount).toBeGreaterThan(0);
+    try {
+      for (let i = 0; i < 5000; i += 1) codex.startThread();
+      expect(undo).toHaveLength(clientCleanupCount);
+    } finally {
+      instrumentation.unpatch();
+      await provider.shutdown();
+    }
+    expect(undo).toHaveLength(0);
   });
 
   it("a wrapThread() thread passes events through untraced after unpatch()", async () => {

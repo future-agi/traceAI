@@ -26,6 +26,7 @@ for version in "$pinned" "$floor"; do
   echo "=== Codex SDK $version ==="
   CODEX_SDK_VERSION="$version" pnpm test --runInBand
   node contract/run_real_sdk.mjs
+  node contract/client_lifecycle.mjs
   node contract/otlp_wire.mjs
   node contract/real_binary.mjs
   node --expose-gc contract/weak_lifecycle.mjs

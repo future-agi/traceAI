@@ -5,6 +5,7 @@
  */
 import { TracerProvider, diag, trace } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { patchCodex } from "./codexWrapper";
 import { ContentPolicy } from "./spans";
 import { TurnTracingContext, patchThread } from "./threadWrapper";
 import { CodexModuleLike, ThreadLike } from "./types";
@@ -127,28 +128,8 @@ export class CodexSDKInstrumentation {
   wrapCodex<T extends object>(codex: T): T {
     if (!codex || typeof codex !== "object") return codex;
     this.enabled = true;
-    const target = codex as Record<string, unknown>;
-    // Held weakly: a wrapped client the app drops can be collected before unpatch().
-    const ref = new WeakRef(target);
-    for (const method of ["startThread", "resumeThread"] as const) {
-      const original = target[method] as ((...args: unknown[]) => object) | undefined;
-      if (typeof original !== "function") continue;
-      const hadOwn = Object.prototype.hasOwnProperty.call(codex, method);
-      const self = this;
-      Object.defineProperty(codex, method, {
-        value: function tracedThreadFactory(this: unknown, ...args: unknown[]) {
-          return self.wrapThread(original.apply(this, args));
-        },
-        writable: true,
-        configurable: true,
-      });
-      this.undo.push(() => {
-        const live = ref.deref();
-        if (!live) return;
-        if (hadOwn) Object.defineProperty(live, method, { value: original, writable: true, configurable: true });
-        else delete live[method];
-      });
-    }
+    const undo = patchCodex(codex as Record<string | symbol, unknown>, (thread) => this.wrapThread(thread));
+    if (undo) this.undo.push(undo);
     return codex;
   }
 

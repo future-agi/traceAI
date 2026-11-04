@@ -40,3 +40,35 @@ assert.equal(survivor.runStreamedInternal, original);
 assert.equal(isPatched(survivor), false);
 assert.equal(instrumentation.threadUndo.size, 0);
 console.log("PASS weak lifecycle: 1000 bound-method threads collected, live thread restored, undo bookkeeping reclaimed");
+
+function droppedClients() {
+  return Array.from({ length: 1000 }, () => {
+    const client = {
+      startThread() { return { async *runStreamedInternal() {} }; },
+      resumeThread() { return this.startThread(); },
+    };
+    client.startThread = client.startThread.bind(client);
+    client.resumeThread = client.resumeThread.bind(client);
+    instrumentation.wrapCodex(client);
+    return new WeakRef(client);
+  });
+}
+const clients = droppedClients();
+const liveClient = { startThread() { return {}; }, resumeThread() { return {}; } };
+const descriptors = Object.getOwnPropertyDescriptors(liveClient);
+instrumentation.wrapCodex(liveClient);
+try {
+  let collected = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await delay(20);
+    global.gc();
+    await delay(20);
+    collected = clients.every((ref) => ref.deref() === undefined);
+    if (collected) break;
+  }
+  assert.equal(collected, true, "wrapped dropped clients with bound factories must remain collectable");
+} finally {
+  instrumentation.unpatch();
+}
+assert.deepEqual(Object.getOwnPropertyDescriptors(liveClient), descriptors);
+console.log("PASS weak client lifecycle: 1000 bound-factory clients collected, live client descriptors restored");
