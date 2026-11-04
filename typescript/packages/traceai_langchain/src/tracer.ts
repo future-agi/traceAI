@@ -31,6 +31,8 @@ type RunWithSpan = {
   run: Run;
   span: Span;
   unregisterStream: () => void;
+  startedAt: number;
+  firstTokenRecorded: boolean;
 };
 
 /**
@@ -152,6 +154,19 @@ export class LangChainTracer extends BaseTracer {
     }
   }
 
+  async onLLMNewToken(run: Run): Promise<void> {
+    this.recordFirstToken(run.id);
+  }
+
+  private recordFirstToken(runId: string): void {
+    const state = this.runs[runId];
+    if (state == null || state.firstTokenRecorded) return;
+    state.firstTokenRecorded = true;
+    // Seconds, matching the traceAI streaming response-latency convention. No
+    // token text is inspected or retained; this survives all content privacy modes.
+    state.span.setAttribute("gen_ai.response.time_to_first_token", (performance.now() - state.startedAt) / 1000);
+  }
+
   async handleLLMError(
     error: unknown,
     runId: string,
@@ -248,7 +263,9 @@ export class LangChainTracer extends BaseTracer {
       activeContext,
     );
 
-    const runWithSpan: RunWithSpan = { run, span, unregisterStream: () => {} };
+    const runWithSpan: RunWithSpan = {
+      run, span, unregisterStream: () => {}, startedAt: performance.now(), firstTokenRecorded: false,
+    };
     this.runs[run.id] = runWithSpan;
     runWithSpan.unregisterStream = registerStreamRun(run.id, async () => {
       if (this.runs[run.id] == null) return;
@@ -258,8 +275,11 @@ export class LangChainTracer extends BaseTracer {
       // run map. This does not synthesize callbacks for other integrations.
       const error = new Error("Stream closed before completion");
       error.name = "AbortError";
-      await this.handleLLMError(error, run.id);
-    });
+      if (run.run_type === "llm") await this.handleLLMError(error, run.id);
+      else if (run.run_type === "tool") await this.handleToolError(error, run.id);
+      else if (run.run_type === "retriever") await this.handleRetrieverError(error, run.id);
+      else await this.handleChainError(error, run.id);
+    }, run.parent_run_id, run.run_type === "llm" ? () => this.recordFirstToken(run.id) : undefined);
   }
 
   protected async _endTrace(run: Run) {
@@ -270,9 +290,10 @@ export class LangChainTracer extends BaseTracer {
       return;
     }
     const { span } = runWithSpan;
-    if (isStreamCancelled(run.id)) span.setAttribute("langchain.stream.cancelled", true);
+    const cancelled = isStreamCancelled(run.id);
+    if (cancelled) span.setAttribute("langchain.stream.cancelled", true);
     const bubbleUp =
-      run.error != null
+      !cancelled && run.error != null
         ? getGraphBubbleUpName(this.runErrors[run.id], run.error)
         : undefined;
     if (bubbleUp != null) {
@@ -285,21 +306,29 @@ export class LangChainTracer extends BaseTracer {
       span.setStatus({ code: SpanStatusCode.OK });
     } else if (run.error != null) {
       recordRunError(span, this.runErrors[run.id], run.error);
+    } else if (cancelled) {
+      // An adapter may swallow abort and emit handle*End from a finally block.
+      // A returned partial stream is still not a successful generation.
+      const error = new Error("Stream closed before completion");
+      error.name = "AbortError";
+      recordRunError(span, error, error.message);
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
     const attributes = safelyFlattenAttributes({
       ...safelyFormatIO({ io: run.inputs, ioType: "input" }),
-      ...safelyFormatIO({ io: run.outputs, ioType: "output" }),
       ...safelyFormatInputMessages(run.inputs),
-      ...safelyFormatOutputMessages(run.outputs),
-      ...safelyFormatRetrievalDocuments(run),
       ...safelyFormatLLMParams(run.extra),
       ...safelyFormatPromptTemplate(run),
-      ...safelyFormatTokenCounts(run.outputs),
-      ...safelyFormatFunctionCalls(run.outputs),
-      ...safelyFormatToolCalls(run),
+      ...(!cancelled ? {
+        ...safelyFormatIO({ io: run.outputs, ioType: "output" }),
+        ...safelyFormatOutputMessages(run.outputs),
+        ...safelyFormatRetrievalDocuments(run),
+        ...safelyFormatTokenCounts(run.outputs),
+        ...safelyFormatFunctionCalls(run.outputs),
+        ...safelyFormatToolCalls(run),
+      } : {}),
       ...safelyFormatMetadata(run),
       ...safelyFormatSessionId(run),
     });

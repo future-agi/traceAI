@@ -37,6 +37,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import * as CallbackManagerModule from "@langchain/core/callbacks/manager";
 import * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import * as RunnableModule from "@langchain/core/runnables";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
@@ -57,7 +58,7 @@ registerInstrumentations({
 });
 
 // 3. Manually instrument LangChain (required as it doesn't have a traditional module structure)
-lcInstrumentation.manuallyInstrument(CallbackManagerModule, ChatModelModule);
+lcInstrumentation.manuallyInstrument(CallbackManagerModule, ChatModelModule, RunnableModule);
 
 // 4. Use LangChain as normal
 const chatModel = new ChatOpenAI({
@@ -91,13 +92,19 @@ For a long-running service, leave the provider running between requests. When th
 service stops, finish in-flight chains, await `awaitAllCallbacks()`, then shut down
 the provider. Before an explicit `forceFlush()`, drain callbacks in the same order.
 
-Pass both modules to `manuallyInstrument()` when using chat-model streams. The
-chat-model patch also handles `break`, iterator `return()`, and cancellation:
-unfinished spans end with an error and `langchain.stream.cancelled=true`, rather
-than reporting a partial response as successful. The original one-argument form
-still instruments callbacks, but cannot detect an early iterator return on
-LangChain versions that omit the terminal callback. Fully consume or explicitly
-close every stream; an iterator abandoned without `return()` cannot be observed.
+Pass all three modules to `manuallyInstrument()` when using composed streams.
+The chat-model and Runnable patches handle `break`, iterator `return()`, and
+cancellation for models, nested `RunnableSequence` chains, and streaming Runnable
+transforms. Unfinished spans end with an error and `langchain.stream.cancelled=true`,
+without reporting partial output or usage as a successful response. The two-module
+form covers model streams only; the original one-module form covers callbacks
+only. Fully consume or explicitly close every stream; an iterator abandoned
+without `return()` cannot be observed.
+
+Streaming LLM spans record `gen_ai.response.time_to_first_token` in **seconds**
+from run start to the first token callback or delivered model chunk. It is recorded
+once, including for streams later cancelled, and remains available when input and
+output content are hidden. Runs with no observed streaming token/chunk omit it.
 
 ## Features
 

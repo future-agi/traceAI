@@ -1,5 +1,6 @@
 import type * as CallbackManagerModuleV02 from "@langchain/core/callbacks/manager";
 import type * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import type * as RunnableModule from "@langchain/core/runnables";
 import { randomUUID } from "crypto";
 import { wrapModelStream } from "./streamLifecycle";
 import {
@@ -38,6 +39,15 @@ export function _resetPatchedStateForTesting(): void {
 }
 
 type CallbackManagerModule = typeof CallbackManagerModuleV02;
+// The streaming helper is protected in LangChain's declarations, but is the
+// shared terminal boundary for Lambda/Map/Assign/Pick streaming transforms.
+type RunnableStreamPrototype = Record<string, (...args: unknown[]) => AsyncGenerator<unknown>>;
+function runnableStreamMethods(module: typeof RunnableModule) {
+  return [
+    [module?.Runnable?.prototype, "_transformStreamWithConfig", 2],
+    [module?.RunnableSequence?.prototype, "_streamIterator", 1],
+  ] as const;
+}
 
 /**
  * @param instrumentationConfig The config for the instrumentation @see {@link InstrumentationConfig}
@@ -49,6 +59,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
   private traceConfig?: TraceConfigOptions;
   private manualModule?: CallbackManagerModule;
   private modelModules?: Set<typeof ChatModelModule>;
+  private runnableModules?: Set<typeof RunnableModule>;
 
   constructor({
     instrumentationConfig,
@@ -87,8 +98,12 @@ export class LangChainInstrumentation extends InstrumentationBase {
     });
   }
 
-  /** Pass chatModels as well to close spans when a model stream is returned early. */
-  manuallyInstrument(module: CallbackManagerModule, chatModels?: typeof ChatModelModule) {
+  /** Pass chatModels and runnables to close model and composed-chain streams on early return. */
+  manuallyInstrument(
+    module: CallbackManagerModule,
+    chatModels?: typeof ChatModelModule,
+    runnables?: typeof RunnableModule,
+  ) {
     if (module == null) {
       return;
     }
@@ -96,6 +111,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
     diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
     if (chatModels != null) this.patchChatModels(chatModels);
+    if (runnables != null) this.patchRunnables(runnables);
   }
 
   protected init(): InstrumentationModuleDefinition[] {
@@ -112,6 +128,12 @@ export class LangChainInstrumentation extends InstrumentationBase {
         this.patchChatModels.bind(this),
         this.unpatchChatModels.bind(this),
       ),
+      new InstrumentationNodeModuleDefinition(
+        "@langchain/core/dist/runnables/base.cjs",
+        ["^0.2.0", "^0.3.0", "^1.0.0"],
+        this.patchRunnables.bind(this),
+        this.unpatchRunnables.bind(this),
+      ),
     ];
   }
 
@@ -119,12 +141,14 @@ export class LangChainInstrumentation extends InstrumentationBase {
     super.enable();
     if (this.manualModule != null) this.patch(this.manualModule);
     this.modelModules?.forEach((module) => this.patchChatModels(module));
+    this.runnableModules?.forEach((module) => this.patchRunnables(module));
   }
 
   disable(): void {
     super.disable();
     if (this.manualModule != null) this.unpatch(this.manualModule);
     this.modelModules?.forEach((module) => this.unpatchChatModels(module));
+    this.runnableModules?.forEach((module) => this.unpatchRunnables(module));
   }
 
   private patchChatModels(module: typeof ChatModelModule) {
@@ -143,7 +167,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
         return wrapModelStream((signal) => {
           args[1] = { ...options, runId, signal };
           return original.apply(this, args);
-        }, runId, options?.signal);
+        }, runId, options?.signal, options?.timeout);
       };
     });
     return module;
@@ -153,6 +177,34 @@ export class LangChainInstrumentation extends InstrumentationBase {
     const prototype = module?.BaseChatModel?.prototype;
     if (prototype != null && isWrapped(prototype._streamIterator)) {
       this._unwrap(prototype, "_streamIterator");
+    }
+    return module;
+  }
+
+  private patchRunnables(module: typeof RunnableModule) {
+    (this.runnableModules ??= new Set()).add(module);
+    for (const [prototype, method, optionsIndex] of runnableStreamMethods(module)) {
+      const target = prototype as unknown as RunnableStreamPrototype | undefined;
+      if (typeof target?.[method] !== "function" || isWrapped(target[method])) continue;
+      this._wrap(target, method, (original) => {
+        return function (this: unknown, ...args: unknown[]) {
+          const options = args[optionsIndex] as { runId?: string; signal?: AbortSignal } | undefined;
+          const runId = options?.runId ?? randomUUID();
+          // Do not inject a signal into chain options: an older core's models
+          // interpret a supplied signal as overriding their own request timeout.
+          args[optionsIndex] = { ...options, runId };
+          return wrapModelStream(() => original.apply(this, args), runId, options?.signal);
+        };
+      });
+    }
+    return module;
+  }
+
+  private unpatchRunnables(module?: typeof RunnableModule) {
+    if (module == null) return module;
+    for (const [prototype, method] of runnableStreamMethods(module)) {
+      const target = prototype as unknown as RunnableStreamPrototype | undefined;
+      if (target != null && isWrapped(target[method])) this._unwrap(target, method);
     }
     return module;
   }
