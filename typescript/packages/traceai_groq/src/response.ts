@@ -27,9 +27,20 @@ interface Stream extends AsyncIterable<Completion> {
   controller: AbortController;
 }
 type Result = Completion | Stream;
-interface ResponsePromise extends Promise<Result> {
+interface ResponsePromise<T> extends Promise<T> {
   asResponse?(): Promise<unknown>;
-  withResponse?(): Promise<{ data: Result; [key: string]: unknown }>;
+  withResponse?(): Promise<{ data: T; [key: string]: unknown }>;
+}
+
+/** Audio returns either JSON (including verbose segments) or a plain text transcript. */
+export function audioResponseAttributes(result: unknown): Attributes {
+  const text = typeof result === "string";
+  const output = text ? result : safelyJSONStringify(result) ?? undefined;
+  return {
+    [S.OUTPUT_VALUE]: output,
+    [S.OUTPUT_MIME_TYPE]: text ? MimeType.TEXT : MimeType.JSON,
+    [S.RAW_OUTPUT]: output,
+  };
 }
 
 function usageAttributes(usage?: Usage | null): Attributes {
@@ -112,7 +123,10 @@ class Accumulator {
 }
 
 /** Observe only consumption requested by the application, keeping SDK helpers and brands. */
-export function observeResponse(promise: ResponsePromise, span: Span, execContext: Context): ResponsePromise {
+export function observeResponse<T>(
+  promise: ResponsePromise<T>, span: Span, execContext: Context,
+  attributes?: (result: T) => Attributes,
+): ResponsePromise<T> {
   let ended = false;
   const end = (attributes: Attributes = {}, error?: unknown, cancelled = false) => {
     if (ended) return;
@@ -128,19 +142,24 @@ export function observeResponse(promise: ResponsePromise, span: Span, execContex
     span.end();
   };
   const fail = (error: unknown): never => { end({}, error); throw error; };
-  const observed = new WeakMap<object, Result>();
-  const observe = (result: Result): Result => {
-    if (observed.has(result)) return observed.get(result)!;
-    if (Symbol.asyncIterator in result) {
-      const stream = observeStream(result, execContext, end);
-      observed.set(result, stream);
+  const observed = new WeakMap<object, T>();
+  const observe = (result: T): T => {
+    if (attributes) {
+      end(attributes(result));
+      return result;
+    }
+    const completion = result as Result;
+    if (observed.has(completion)) return observed.get(completion)!;
+    if (Symbol.asyncIterator in completion) {
+      const stream = observeStream(completion, execContext, end) as T;
+      observed.set(completion, stream);
       return stream;
     }
-    end(completionAttributes(result));
-    observed.set(result, result);
+    end(completionAttributes(completion));
+    observed.set(completion, result);
     return result;
   };
-  let parsed: Promise<Result> | undefined;
+  let parsed: Promise<T> | undefined;
   let parsingRequested = false;
   const parse = () => {
     parsingRequested = true;
@@ -150,9 +169,9 @@ export function observeResponse(promise: ResponsePromise, span: Span, execContex
     get(target, key) {
       // Calling then here (rather than when create returns) preserves the SDK's
       // lazy JSON parsing and prevents an unrequested background stream reader.
-      if (key === "then") return (...args: Parameters<Promise<Result>["then"]>) => parse().then(...args);
-      if (key === "catch") return (...args: Parameters<Promise<Result>["catch"]>) => parse().catch(...args);
-      if (key === "finally") return (...args: Parameters<Promise<Result>["finally"]>) => parse().finally(...args);
+      if (key === "then") return (...args: Parameters<Promise<T>["then"]>) => parse().then(...args);
+      if (key === "catch") return (...args: Parameters<Promise<T>["catch"]>) => parse().catch(...args);
+      if (key === "finally") return (...args: Parameters<Promise<T>["finally"]>) => parse().finally(...args);
       if (key === "withResponse" && target.withResponse) {
         return () => {
           parsingRequested = true;
