@@ -143,21 +143,93 @@ function instrumentAPIPromise(
   return instrumented;
 }
 
-async function processInstrumentationStream(
+/** Record only events the application consumed; never drain a background tee. */
+function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<MessageStreamEvent> {
+  const chunks: MessageStreamEvent[] = [];
+  let sawMessageStop = false;
+  let ended = false;
+  let pending = 0;
+  const signal = stream.controller?.signal;
+  const finish = (canceled = false, error?: unknown) => {
+    if (ended) return;
+    ended = true;
+    signal?.removeEventListener("abort", onAbort);
+    try {
+      finishInstrumentationStream(span, chunks, sawMessageStop, canceled, error);
+    } catch {
+      // A processor/exporter failure must not replace an SDK iterator result.
+    } finally {
+      chunks.length = 0;
+    }
+  };
+  // The SDK also aborts in its generator's finally on an API error. Wait for
+  // an in-flight operation before deciding whether this was cancellation.
+  const onAbort = () => { if (!pending) finish(true); };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) finish(true);
+
+  const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = () => {
+    const iterator = originalIterator();
+    return {
+      async next(...args: [] | [undefined]) {
+        pending++;
+        try {
+          const result = await iterator.next(...args);
+          if (result.done) {
+            finish(signal?.aborted === true);
+          } else if (!ended) {
+            chunks.push(result.value);
+            if (result.value.type === "message_stop") sawMessageStop = true;
+          }
+          return result;
+        } catch (error) {
+          const canceled = signal?.aborted === true &&
+            ["AbortError", "APIUserAbortError"].includes((error as Error)?.name);
+          finish(canceled, error);
+          throw error;
+        } finally {
+          pending--;
+          if (!pending && signal?.aborted) finish(true);
+        }
+      },
+      async return(value?: unknown) {
+        pending++;
+        try {
+          return iterator.return ? await iterator.return(value) : { done: true as const, value };
+        } catch (error) {
+          finish(false, error);
+          throw error;
+        } finally {
+          pending--;
+          finish(true);
+        }
+      },
+      async throw(error?: unknown) {
+        pending++;
+        try {
+          if (iterator.throw) return await iterator.throw(error);
+          throw error;
+        } finally {
+          pending--;
+          finish(true);
+        }
+      },
+    };
+  };
+  // The original object keeps its controller, tee() and toReadableStream().
+  // Those helpers all obtain their iterator through the method above.
+  return stream;
+}
+
+function finishInstrumentationStream(
   span: Span,
-  receivedStream: Stream<Anthropic.MessageStreamEvent>,
-  streamForInstrumentation: AsyncIterable<MessageStreamEvent>,
+  chunks: MessageStreamEvent[],
+  sawMessageStop: boolean,
+  canceled: boolean,
+  error?: unknown,
 ) {
   try {
-    const chunks: MessageStreamEvent[] = [];
-    let sawMessageStop = false;
-    for await (const chunk of streamForInstrumentation) {
-      chunks.push(chunk);
-      if (chunk.type === "message_stop") sawMessageStop = true;
-    }
-    // The SDK ends an aborted stream quietly (no error), whether the application called
-    // stream.controller.abort() or the request signal fired. tee() shares the controller.
-    const canceled = !sawMessageStop && receivedStream.controller?.signal?.aborted === true;
     const { reconstructedMessage } = aggregateAnthropicStreamEvents(chunks);
 
     // Build output message as JSON blob
@@ -206,31 +278,25 @@ async function processInstrumentationStream(
     }
 
     if (reconstructedMessage.usage) {
-        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = reconstructedMessage.usage.input_tokens;
-        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = reconstructedMessage.usage.output_tokens;
-        streamSpanAttributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = reconstructedMessage.usage.input_tokens + reconstructedMessage.usage.output_tokens;
+        Object.assign(streamSpanAttributes, getAnthropicUsageAttributes(reconstructedMessage));
     }
 
     span.setAttributes({
         ...streamSpanAttributes,
         [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(reconstructedMessage) ?? "",
     });
-    // A cancellation is not a failure and not a completed call: leave the status unset,
-    // as the SDK's native tracing does. The attributes hold what arrived before it.
-    // A stream that ends before message_stop without a cancellation was cut short: the
-    // application sees a normal end, so only the span records the failure.
-    if (canceled) {
-      // Leave the status unset.
-    } else if (!sawMessageStop) {
-      span.setStatus({ code: SpanStatusCode.ERROR, message: "The stream ended before message_stop." });
-    } else {
-      span.setStatus({ code: SpanStatusCode.OK });
-    }
-  } catch (streamProcessingError: unknown) {
-    diag.error("Error processing Anthropic stream for attributes", streamProcessingError);
-    span.recordException(streamProcessingError as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (streamProcessingError as Error).message || "Error processing stream" });
+  } catch (attributeError: unknown) {
+    diag.error("Error recording Anthropic stream attributes", attributeError);
   } finally {
+    if (error !== undefined && !canceled) {
+      span.recordException(error as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error)?.message });
+    } else if (sawMessageStop) {
+      span.setStatus({ code: SpanStatusCode.OK });
+    } else if (!canceled) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "The stream ended before message_stop." });
+    }
+    // Explicit cancellation is neither a completed message nor a provider error.
     span.end();
   }
 }
@@ -340,10 +406,8 @@ export class AnthropicInstrumentation extends InstrumentationBase{
             if (ended) return result;
             if (params.stream === true) {
               const receivedStream = result as Stream<Anthropic.MessageStreamEvent>;
-              const [streamForInstrumentation, streamForUser] = receivedStream.tee();
               ended = true;
-              processInstrumentationStream(span, receivedStream, streamForInstrumentation);
-              return streamForUser;
+              return observeStream(span, receivedStream);
             }
             ended = true;
             const messageResponse = result as Anthropic.Message;

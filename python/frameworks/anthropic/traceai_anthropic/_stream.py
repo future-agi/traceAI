@@ -57,6 +57,9 @@ class _StreamLifecycle(ObjectProxy):
         self._self_lock = threading.RLock()
         self._self_active = 0
         self._self_terminal = False
+        self._self_exhausted = False
+        self._self_closing = False
+        self._self_saw_message_stop = False
         self._self_error = None
         self._self_finalizing = False
         # Items are extracted outside the lock, possibly concurrently; tickets
@@ -76,6 +79,11 @@ class _StreamLifecycle(ObjectProxy):
         with self._self_lock:
             self._self_active += 1
 
+    def _begin_close(self):
+        with self._self_lock:
+            self._self_closing = True
+            self._self_active += 1
+
     def _end_operation(self, *, terminal=False, error=None, item=None, has_item=False):
         ticket = values = None
         try:
@@ -84,6 +92,13 @@ class _StreamLifecycle(ObjectProxy):
                     ticket = self._self_next_ticket
                     self._self_next_ticket += 1
                     self._self_extracting.add(ticket)
+                # Completion is protocol state, not successful content extraction.
+                try:
+                    if getattr(item, "type", None) == "message_stop":
+                        with self._self_lock:
+                            self._self_saw_message_stop = True
+                except Exception:
+                    pass
                 values = self._extract(item)
         finally:
             try:
@@ -192,16 +207,26 @@ class _StreamLifecycle(ObjectProxy):
                     if final_error is not None:
                         self._finish_error(final_error)
                     else:
-                        self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+                        self._finish_tracing(self._terminal_status())
                 except BaseException:
                     # Telemetry must not replace the native operation's outcome.
                     pass
+
+    def _terminal_status(self):
+        return trace_api.Status(trace_api.StatusCode.OK)
+
+    def _mark_exhausted(self):
+        with self._self_lock:
+            # An EOF caused by an explicit close is cancellation, not truncation.
+            if not self._self_terminal and not self._self_closing:
+                self._self_exhausted = True
 
     def _advance(self, iterator):
         self._begin_operation()
         try:
             item = next(iterator)
         except StopIteration:
+            self._mark_exhausted()
             self._end_operation(terminal=True)
             raise
         except BaseException as exc:
@@ -215,6 +240,7 @@ class _StreamLifecycle(ObjectProxy):
         try:
             item = await iterator.__anext__()
         except StopAsyncIteration:
+            self._mark_exhausted()
             self._end_operation(terminal=True)
             raise
         except BaseException as exc:
@@ -228,7 +254,7 @@ class _StreamLifecycle(ObjectProxy):
         # starts when it is awaited, just as the underlying close does.
         if inspect.iscoroutinefunction(self.__wrapped__.close):
             async def close_async():
-                self._begin_operation()
+                self._begin_close()
                 try:
                     result = await self.__wrapped__.close()
                 except BaseException as exc:
@@ -237,7 +263,7 @@ class _StreamLifecycle(ObjectProxy):
                 self._end_operation(terminal=True)
                 return result
             return close_async()
-        self._begin_operation()
+        self._begin_close()
         try:
             result = self.__wrapped__.close()
         except BaseException as exc:
@@ -261,7 +287,7 @@ class _StreamLifecycle(ObjectProxy):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self._begin_operation()
+        self._begin_close()
         try:
             result = self.__wrapped__.__exit__(exc_type, exc, tb)
         except BaseException as error:
@@ -275,7 +301,7 @@ class _StreamLifecycle(ObjectProxy):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        self._begin_operation()
+        self._begin_close()
         try:
             result = await self.__wrapped__.__aexit__(exc_type, exc, tb)
         except BaseException as error:
@@ -408,6 +434,13 @@ class _MessagesStream(_StreamLifecycle):  # type: ignore
         "_is_finished",
     )
 
+    def _terminal_status(self):
+        if self._self_saw_message_stop:
+            return trace_api.Status(trace_api.StatusCode.OK)
+        if self._self_exhausted:
+            return trace_api.Status(trace_api.StatusCode.ERROR, "The stream ended before message_stop.")
+        return trace_api.Status(trace_api.StatusCode.UNSET)
+
     def __del__(self):
         # Preserve the prior best-effort cleanup for abandoned message streams.
         try:
@@ -463,8 +496,11 @@ class _MessagesStream(_StreamLifecycle):  # type: ignore
         )
 
 
-def _token_count(value: Any) -> Optional[str]:
-    return None if value is None else str(value)
+def _usage_counts(usage: Any) -> Dict[str, str]:
+    # Message deltas are cumulative snapshots, not additive token increments.
+    return {key: str(value) for key in (
+        "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"
+    ) if (value := getattr(usage, key, None)) is not None}
 
 
 def _plain(value: Any) -> Any:
@@ -517,6 +553,8 @@ class _MessageResponseAccumulator:
                     stop_reason=_SimpleStringReplace(),
                     input_tokens=_SimpleStringReplace(),
                     output_tokens=_SimpleStringReplace(),
+                    cache_creation_input_tokens=_SimpleStringReplace(),
+                    cache_read_input_tokens=_SimpleStringReplace(),
                 ),
             ),
         )
@@ -538,7 +576,7 @@ class _MessageResponseAccumulator:
             # The SDK accepts events whose usage is null; keep the rest of the event.
             usage = getattr(chunk.message, "usage", None)
             return ("message_start", chunk.message.role,
-                    _token_count(getattr(usage, "input_tokens", None)))
+                    _usage_counts(usage))
         if isinstance(chunk, RawContentBlockStartEvent):
             block = chunk.content_block
             if isinstance(block, TextBlock):
@@ -556,20 +594,20 @@ class _MessageResponseAccumulator:
         if isinstance(chunk, RawMessageDeltaEvent):
             usage = getattr(chunk, "usage", None)
             return ("message_delta", chunk.delta.stop_reason,
-                    _token_count(getattr(usage, "output_tokens", None)))
+                    _usage_counts(usage))
         return ("other",)
 
     def merge(self, event: Tuple[Any, ...]) -> None:
         self._is_null = False
         kind = event[0]
         if kind == "message_start":
-            _, role, input_tokens = event
+            _, role, usage = event
             self._current_message_idx += 1
             self._values += {
                 "messages": {
                     "index": str(self._current_message_idx),
                     "role": role,
-                    "input_tokens": input_tokens,
+                    **usage,
                 }
             }
         elif kind == "block_start":
@@ -595,12 +633,12 @@ class _MessageResponseAccumulator:
                 }
             }
         elif kind == "message_delta":
-            _, stop_reason, output_tokens = event
+            _, stop_reason, usage = event
             self._values += {
                 "messages": {
                     "index": str(self._current_message_idx),
                     "stop_reason": stop_reason,
-                    "output_tokens": output_tokens,
+                    **usage,
                 }
             }
 
@@ -650,6 +688,8 @@ class _MessageResponseExtractor:
         idx = 0
         total_completion_token_count = 0
         total_prompt_token_count = 0
+        cache_write = cache_read = 0
+        has_cache_write = has_cache_read = False
         # TODO(harrison): figure out if we should always assume messages is 1.
         # The current non streaming implementation assumes the same
         for message in messages:
@@ -662,6 +702,13 @@ class _MessageResponseExtractor:
                 total_completion_token_count += int(output_tokens)
             if input_tokens := message.get("input_tokens"):
                 total_prompt_token_count += int(input_tokens)
+
+            if "cache_creation_input_tokens" in message:
+                has_cache_write = True
+                cache_write += int(message["cache_creation_input_tokens"])
+            if "cache_read_input_tokens" in message:
+                has_cache_read = True
+                cache_read += int(message["cache_read_input_tokens"])
 
             # TODO(harrison): figure out if we should always assume the first message
             #  will always be a message output generally this block feels really
@@ -685,6 +732,11 @@ class _MessageResponseExtractor:
                     )
                     tool_idx += 1
             idx += 1
+        total_prompt_token_count += cache_write + cache_read
+        if has_cache_write:
+            yield SpanAttributes.GEN_AI_USAGE_CACHE_WRITE_TOKENS, cache_write
+        if has_cache_read:
+            yield SpanAttributes.GEN_AI_USAGE_CACHE_READ_TOKENS, cache_read
         yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, total_completion_token_count
         yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, total_prompt_token_count
         yield (
