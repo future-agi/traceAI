@@ -191,6 +191,26 @@ it("bounds wide/deep conversations and skips malformed steps without failing the
   expect(one(spans(), "Cursor Agent run").status.code).toBe(1);
 });
 
+it("bounds cyclic, wide and deep protobuf tasks without losing valid siblings", async () => {
+  const taskStep = (callId: string, steps: unknown[]) => ({ toolCall: {
+    callId, taskToolCall: { result: { success: { conversationSteps: steps } } },
+  } });
+  let deep: unknown[] = [{ toolCall: { callId: "bottom", readToolCall: { args: { path: input }, result: { success: output } } } }];
+  for (let i = 0; i < 100; i++) deep = [taskStep(`deep-${i}`, deep)];
+  const steps: unknown[] = [null, { toolCall: { unknownToolCall: {} } }];
+  steps.push(taskStep("cycle", steps), taskStep("deep", deep));
+  for (let i = 0; i < 2000; i++) steps.push({ toolCall: {
+    callId: `wide-${i}`, readToolCall: { args: { path: input }, result: { success: output } },
+  } });
+  await traceTask("task", nested(steps));
+  expect(spans().some(span => span.attributes["gen_ai.tool.call.id"] === "wide-0")).toBe(true);
+  expect(spans().some(span => span.attributes["gen_ai.tool.call.id"] === "bottom")).toBe(false);
+  expect(spans().length).toBeLessThan(1050);
+  expect(exportedText(spans())).not.toContain(input);
+  expect(exportedText(spans())).not.toContain(output);
+  expect(one(spans(), "Cursor Agent run").status.code).toBe(1);
+});
+
 it.each([true, false])("handles real SDK idless onStep snapshots (deltas=%s) without duplicate tools", async deltas => {
   const message = { type: "read", args: { path: input }, result: { status: "success", value: output } };
   const agent = instrument().wrapAgent({ async send(_message: string, options?: Options) {

@@ -10,23 +10,60 @@ export function isTask(name: unknown): boolean {
   return typeof name === "string" && /^(task|agent)$/i.test(name);
 }
 
-function toolEvent(value: unknown, callId?: unknown, status?: string): SDKMessageLike | undefined {
+// Known protobuf JSON oneofs corresponding to the SDK's ToolCall union. Do
+// not infer arbitrary *ToolCall fields or walk unknown objects as transcripts.
+const PROTO_TOOL_TYPES = {
+  shellToolCall: "shell", writeToolCall: "write", deleteToolCall: "delete",
+  globToolCall: "glob", grepToolCall: "grep", readToolCall: "read",
+  editToolCall: "edit", lsToolCall: "ls", readLintsToolCall: "readLints",
+  mcpToolCall: "mcp", generateImageToolCall: "generateImage",
+  recordScreenToolCall: "recordScreen", computerUseToolCall: "computerUse",
+  semSearchToolCall: "semSearch", createPlanToolCall: "createPlan",
+  updateTodosToolCall: "updateTodos", taskToolCall: "task",
+} as const;
+
+function normalizeResult(value: unknown): unknown {
+  const result = record(value);
+  if (!result || result.status === "success" || result.status === "error") return value;
+  // Prefer an error if a malformed oneof supplies both variants. Never mutate
+  // the result object returned to the caller by the SDK.
+  if (Object.prototype.hasOwnProperty.call(result, "error")) return { status: "error", error: result.error };
+  if (Object.prototype.hasOwnProperty.call(result, "success")) return { status: "success", value: result.success };
+  return value;
+}
+
+function normalizeTool(value: unknown): Record<string, unknown> | undefined {
   const tool = record(value);
+  if (!tool || typeof tool.type === "string") return tool;
+  for (const [field, type] of Object.entries(PROTO_TOOL_TYPES)) {
+    const body = record(tool[field]);
+    if (body) return { type, callId: tool.callId ?? body.callId, args: body.args, result: body.result };
+  }
+  return undefined;
+}
+
+function toolEvent(value: unknown, callId?: unknown, status?: string): SDKMessageLike | undefined {
+  const tool = normalizeTool(value);
   if (!tool || typeof tool.type !== "string") return undefined;
-  const result = record(tool.result);
+  const result = normalizeResult(tool.result);
   return {
     type: "tool_call", name: tool.type,
     call_id: typeof callId === "string" ? callId : typeof tool.callId === "string" ? tool.callId : undefined,
-    status: status === "running" ? status : result?.status === "error" ? "error" : "completed",
-    args: tool.args, result: tool.result,
+    status: status === "running" ? status : record(result)?.status === "error" ? "error" : "completed",
+    args: tool.args, result,
   };
 }
 
 export function stepEvent(value: unknown): SDKMessageLike | undefined {
   const step = record(value);
-  const message = record(step?.message);
-  if (!step || !message) return undefined;
-  switch (step.type) {
+  if (!step) return undefined;
+  // TaskSuccess.conversationSteps is unknown[]: unlike onStep callbacks it
+  // can retain protobuf JSON oneofs instead of { type, message } envelopes.
+  const type = typeof step.type === "string" ? step.type
+    : ["toolCall", "assistantMessage", "thinkingMessage"].find(key => record(step[key]));
+  const message = record(typeof step.type === "string" ? step.message : type ? step[type] : undefined);
+  if (!message) return undefined;
+  switch (type) {
     case "toolCall": return toolEvent(message);
     case "assistantMessage":
       return typeof message.text === "string"

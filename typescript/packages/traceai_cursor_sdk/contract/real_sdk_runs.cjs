@@ -20,6 +20,9 @@ const SDK = require('@cursor/sdk');
 const marker = 'private-real-sdk-contract-content';
 const apiKey = 'synthetic_cursor_key_not_real';
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 2, totalTokens: 20 };
+const privateError = 'private-nested-error /home/private/path';
+const toolInput = 'private-nested-tool-input';
+const toolOutput = 'permitted-nested-tool-output';
 
 async function setup(t, initialStatus = 'RUNNING', options = {}) {
   const requests = [];
@@ -184,4 +187,76 @@ for (const taskName of ['task', 'Task', 'Agent']) {
     assert.ok(!exported.includes(marker));
     assert.equal(counts().started, counts().ended);
   });
+}
+
+// TaskSuccess.conversationSteps is unknown[] in the SDK contract. Test both
+// normalized steps and protobuf JSON oneofs through its real HTTP/SSE parser.
+for (const shape of ['normalized', 'protobuf-json']) {
+  for (const hideInputs of [true, false]) {
+    for (const hideOutputs of [true, false]) {
+      for (const hideErrorDetails of [true, false]) {
+        test(`real SDK ${shape} nested hierarchy and privacy (${hideInputs}, ${hideOutputs}, ${hideErrorDetails})`, { timeout: 10000 }, async t => {
+          const taskResult = steps => ({ status: 'success', value: { conversationSteps: steps } });
+          const tool = (type, callId, result) => shape === 'normalized'
+            ? { type: 'toolCall', message: { type, callId, args: { value: toolInput }, result } }
+            : { toolCall: { callId, [`${type}ToolCall`]: {
+              args: { value: toolInput }, result: result.status === 'error' ? { error: result.error } : { success: result.value },
+            } } };
+          const message = (type, body) => shape === 'normalized' ? { type, message: body } : { [type]: body };
+          const shell = tool('shell', 'same-id', { status: 'success', value: { stdout: toolOutput } });
+          const toolResult = taskResult([
+            shell, shell,
+            tool('read', 'failed', { status: 'error', error: { message: privateError } }),
+            tool('task', 'nested-task', taskResult([shell])),
+            message('assistantMessage', { text: toolOutput }),
+            message('thinkingMessage', { text: toolOutput, thinkingDurationMs: 7 }),
+            { toolCall: { unknownToolCall: { args: { value: toolInput }, result: { success: toolOutput } } } },
+          ]);
+          const { agent, exporter, counts } = await setup(t, 'RUNNING', {
+            taskName: 'task', toolResult, traceConfig: { hideInputs, hideOutputs, hideErrorDetails },
+          });
+          const run = await agent.send(marker);
+          const events = [];
+          for await (const event of run.stream()) events.push(event);
+          await run.wait();
+          assert.deepEqual(events.find(event => event.type === 'tool_call' && event.status === 'completed').result, toolResult,
+            'instrumentation must not change the snapshot delivered by the real SDK');
+          const spans = exporter.getFinishedSpans();
+          const outer = spans.find(span => span.attributes['gen_ai.tool.call.id'] === 'tool-1');
+          const subagents = spans.filter(span => span.name === 'Cursor subagent');
+          assert.equal(subagents.length, 2);
+          const parent = subagents.find(span => span.parentSpanContext.spanId === outer.spanContext().spanId);
+          assert.ok(parent);
+          const nestedTask = spans.find(span => span.attributes['gen_ai.tool.call.id'] === 'nested-task');
+          assert.equal(nestedTask.parentSpanContext.spanId, parent.spanContext().spanId);
+          const nestedAgent = subagents.find(span => span.parentSpanContext.spanId === nestedTask.spanContext().spanId);
+          assert.ok(nestedAgent);
+          const shells = spans.filter(span => span.name === 'Cursor tool: shell');
+          assert.equal(shells.length, 2, 'deduplicate call IDs within each task, not across tasks');
+          assert.deepEqual(new Set(shells.map(span => span.parentSpanContext.spanId)),
+            new Set([parent.spanContext().spanId, nestedAgent.spanContext().spanId]));
+          assert.ok(spans.some(span => span.name === 'Cursor assistant message' && span.parentSpanContext.spanId === parent.spanContext().spanId));
+          const thinking = spans.find(span => span.name === 'Cursor thinking');
+          assert.equal(thinking.parentSpanContext.spanId, parent.spanContext().spanId);
+          assert.equal(thinking.attributes['cursor.thinking.duration_ms'], 7);
+          assert.ok(!spans.some(span => span.name.includes('unknown')));
+          const failed = spans.find(span => span.name === 'Cursor tool: read');
+          assert.equal(failed.parentSpanContext.spanId, parent.spanContext().spanId);
+          assert.equal(failed.status.code, 2);
+          assert.equal(failed.attributes['cursor.tool.status'], 'error');
+          const exported = JSON.stringify(spans.map(({ name, attributes, events, status }) => ({ name, attributes, events, status })));
+          assert.equal(exported.includes(toolInput), !hideInputs);
+          assert.equal(exported.includes(toolOutput), !hideOutputs);
+          const redact = hideInputs || hideOutputs || hideErrorDetails;
+          assert.equal(exported.includes(privateError), !redact);
+          if (redact) assert.equal(failed.attributes['output.value'], undefined);
+          else {
+            assert.ok(failed.attributes['output.value'].includes(privateError));
+            assert.ok(failed.status.message.includes(privateError));
+          }
+          assert.equal(counts().started, counts().ended);
+        });
+      }
+    }
+  }
 }

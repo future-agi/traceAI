@@ -50,11 +50,11 @@ export interface ContentPolicy {
 /**
  * Error text is content: messages, stack traces and Cursor's run-error text
  * can carry local paths, usernames and prompt fragments. Unless both inputs
- * and outputs are opted in, errors are exported as their class name and
- * structural fields only.
+ * and outputs are opted in and the error policy permits details, errors are
+ * exported as their class name and structural fields only.
  */
 export function redactsErrors(policy: ContentPolicy): boolean {
-  return policy.hideInputs || policy.hideOutputs;
+  return policy.hideInputs || policy.hideOutputs || policy.hideErrorDetails === true;
 }
 
 /** How a run ended, as far as the wrapper could observe it. */
@@ -746,7 +746,7 @@ export class RunTracer {
       this.applyToolAttributes(state.span, e);
       this.traceTask(state, nowMs, depth);
       if (e.status === "error") {
-        const message = !this.policy.hideOutputs && !this.policy.hideErrorDetails && e.result !== undefined
+        const message = !redactsErrors(this.policy) && e.result !== undefined
           ? truncate(safeJson(this.toolOutput(e)), ERROR_MESSAGE_MAX) : `${state.name} failed`;
         state.span.setStatus({ code: SpanStatusCode.ERROR, message });
       } else {
@@ -870,7 +870,7 @@ export class RunTracer {
       attributes[S.INPUT_VALUE] = safeJson(e.args);
       attributes[S.INPUT_MIME_TYPE] = typeof e.args === "string" ? MimeType.TEXT : MimeType.JSON;
     }
-    if (e.result !== undefined && !this.policy.hideOutputs && !(e.status === "error" && this.policy.hideErrorDetails)) {
+    if (e.result !== undefined && !this.policy.hideOutputs && !(e.status === "error" && redactsErrors(this.policy))) {
       attributes[S.OUTPUT_VALUE] = safeJson(this.toolOutput(e));
       attributes[S.OUTPUT_MIME_TYPE] = typeof e.result === "string" ? MimeType.TEXT : MimeType.JSON;
     }
