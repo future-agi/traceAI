@@ -38,7 +38,9 @@ trace_provider = register(
 ```
 
 ### Configure Litellm Instrumentation
-Instrument the Litellm client to enable telemetry collection. This step ensures that all interactions with the Litellm SDK are tracked and monitored.
+Instrument the LiteLLM client to trace `completion` / `acompletion`, `completion_with_retries`, `embedding` / `aembedding`, and `image_generation` / `aimage_generation`. On LiteLLM versions that expose them, `responses` / `aresponses` are also traced. Completion and Responses streams are traced as you consume them; other SDK endpoints are not covered.
+
+Exhaust streams or explicitly call `close()` / `await aclose()` to finish telemetry and release provider resources promptly. Discarding a stream finalizes its span on garbage collection, but does not guarantee immediate transport cleanup.
 
 ```python
 from traceai_litellm import LiteLLMInstrumentor

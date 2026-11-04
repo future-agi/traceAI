@@ -1,5 +1,6 @@
 import json
 import inspect
+import weakref
 from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
@@ -50,6 +51,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.util.types import AttributeValue
+from traceai_litellm._responses import ResponseEvents, as_dict, response_messages
 from traceai_litellm.package import _instruments
 from traceai_litellm.version import __version__
 from wrapt import wrap_function_wrapper
@@ -57,6 +59,11 @@ from wrapt import wrap_function_wrapper
 _REQUEST_FIELDS = frozenset(
     {
         "model",
+        "custom_llm_provider",
+        "instructions",
+        "max_output_tokens",
+        "reasoning",
+        "text",
         "messages",
         "input",
         "prompt",
@@ -230,7 +237,7 @@ def _instrument_func_type_completion(
             _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
 
         for index, input_message in list(enumerate(messages)):
-            for key, value in _get_attributes_from_message_param(input_message):
+            for key, value in _message_attributes(input_message, config, output=False):
                 _set_span_attribute(
                     span, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
                 )
@@ -243,6 +250,82 @@ def _instrument_func_type_completion(
         SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
         safe_json_dumps(invocation_params),
     )
+
+
+def _message_attributes(message, config=None, *, output=True):
+    hide_text = config and (config.hide_output_text if output else config.hide_input_text)
+    for key, value in _get_attributes_from_message_param(message):
+        # Released core masks message text, but not tool/function argument strings.
+        if hide_text and key.endswith((
+            ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON,
+            MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON,
+        )):
+            continue
+        yield key, value
+
+
+def _instrument_func_type_responses(span, kwargs, config=None):
+    messages = response_messages(kwargs.get("input"))
+    if kwargs.get("instructions"):
+        messages.insert(0, {"role": "system", "content": kwargs["instructions"]})
+    request = {k: v for k, v in kwargs.items() if k not in ("input", "instructions")}
+    request["messages"] = messages
+    _instrument_func_type_completion(span, request, config)
+
+
+def _set_provider(span, request=None, result=None):
+    # Read only normalized routing fields. Never serialize hidden metadata, which
+    # can contain API keys/headers. Do not pass credentials to the resolver.
+    hidden = as_dict(getattr(result, "_hidden_params", None))
+    provider = hidden.get("custom_llm_provider") or getattr(result, "custom_llm_provider", None)
+    if not provider and request:
+        provider = request.get("custom_llm_provider")
+        if not provider and request.get("model"):
+            _, provider, _, _ = litellm.get_llm_provider(model=request["model"])
+    if isinstance(provider, str):
+        _set_span_attribute(span, SpanAttributes.GEN_AI_PROVIDER_NAME, provider)
+
+
+def _set_result_metadata(span, result):
+    data = as_dict(result)
+    _set_span_attribute(span, SpanAttributes.GEN_AI_RESPONSE_MODEL, data.get("model"))
+    _observe(_set_provider, span, None, result)
+    _set_usage(span, data.get("usage"))
+    # LiteLLM may supply a cost computed by its own accounting. Record what it
+    # reports, but never invoke pricing/cost estimation from instrumentation.
+    usage = as_dict(data.get("usage"))
+    if usage.get("cost") is None:
+        hidden = as_dict(getattr(result, "_hidden_params", None))
+        _set_span_attribute(span, SpanAttributes.GEN_AI_COST_TOTAL, hidden.get("response_cost"))
+
+
+def _private_response(data, config):
+    """Do not leak echoed Responses inputs/metadata through raw output."""
+    hide_error = config and getattr(config, "hide_error_details", False)
+    kind = data.get("type", "")
+    if kind == "error" and hide_error:
+        return {"type": "error"}
+    if data.get("object") == "response":
+        # Responses snapshots echo instructions, tools and arbitrary metadata.
+        # Inputs already have their own privacy-filtered attributes.
+        fields = {"id", "object", "model", "status", "output", "usage", "error", "created_at"}
+        data = {key: value for key, value in data.items() if key in fields}
+        if hide_error:
+            data.pop("error", None)
+    elif kind.startswith("response."):
+        data = dict(data)
+        if hide_error:
+            data.pop("error", None)
+        if isinstance(data.get("response"), Mapping):
+            response = {"object": "response", **data["response"]}
+            data["response"] = _private_response(response, config)
+    return data
+
+
+def _set_response_messages(span, messages, config=None):
+    for index, message in enumerate(messages):
+        for key, value in _message_attributes(message, config):
+            _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value)
 
 
 def _instrument_func_type_embedding(
@@ -321,10 +404,8 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
     # Embedding vectors and private message content must not reappear in the
     # independent raw response aggregate after core filters semantic attributes.
     hide_message_output = bool(config and (config.hide_output_text or config.hide_output_messages))
-    if not isinstance(result, EmbeddingResponse) and not (
-        hide_message_output and isinstance(result, (ModelResponse, ImageResponse))
-    ):
-        _set_raw_output(span, result)
+    if not isinstance(result, EmbeddingResponse) and not hide_message_output:
+        _set_raw_output(span, _private_response(as_dict(result), config) or result)
     if isinstance(result, ModelResponse):
         choices = result.choices or []
         for position, choice in enumerate(choices):
@@ -339,7 +420,7 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
                         span, SpanAttributes.OUTPUT_VALUE, choice.message.content
                     )
                 index = choice.index if choice.index is not None else position
-                for key, value in _get_attributes_from_message_param(choice.message):
+                for key, value in _message_attributes(choice.message, config):
                     _set_span_attribute(
                         span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
                     )
@@ -384,7 +465,16 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
                     )
                     if not hide_message_output:
                         _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
-    _set_usage(span, getattr(result, "usage", None))
+    elif as_dict(result).get("object") == "response":
+        _set_response_messages(span, response_messages(as_dict(result).get("output")), config)
+    _set_result_metadata(span, result)
+
+
+def _response_status(result):
+    return (
+        trace_api.StatusCode.ERROR if as_dict(result).get("status") == "failed"
+        else trace_api.StatusCode.OK
+    )
 
 
 class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
@@ -418,6 +508,9 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "aembedding": self._aembedding_wrapper,
             "image_generation": self._image_generation_wrapper,
             "aimage_generation": self._aimage_generation_wrapper,
+            # Guarded below: Responses APIs do not exist at the 1.43.0 floor.
+            "responses": self._responses_wrapper,
+            "aresponses": self._aresponses_wrapper,
         }
         if Protect is not None:
             self._original_protect = inspect.getattr_static(Protect, "protect")
@@ -473,6 +566,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
                 "acompletion_with_retries": "completion",
                 "aembedding": "embedding",
                 "aimage_generation": "image_generation",
+                "aresponses": "responses",
             }.get(name)
             for key, param in signature.parameters.items():
                 if param.kind is inspect.Parameter.VAR_POSITIONAL and key in request:
@@ -498,13 +592,15 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             name, attributes=dict(get_attributes_from_context())
         )
         _observe(annotate, span, request, self._config)
+        _observe(_set_provider, span, request)
         try:
             with _provider_context(span):
                 result = original(*args, **kwargs)
+            _observe(_set_provider, span, None, result)
             if request.get("stream") and hasattr(result, "__next__"):
                 return StreamingIteratorWrapper(result, span, config=self._config)
+            span.set_status(_observe(_response_status, result) or trace_api.StatusCode.OK)
             _observe(_finalize_span, span, result, self._config)
-            span.set_status(trace_api.StatusCode.OK)
         except BaseException as error:
             _record_error(span, error)
             span.end()
@@ -521,13 +617,15 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             name, attributes=dict(get_attributes_from_context())
         )
         _observe(annotate, span, request, self._config)
+        _observe(_set_provider, span, request)
         try:
             with _provider_context(span):
                 result = await original(*args, **kwargs)
+            _observe(_set_provider, span, None, result)
             if request.get("stream") and hasattr(result, "__anext__"):
                 return AsyncStreamingIteratorWrapper(result, span, config=self._config)
+            span.set_status(_observe(_response_status, result) or trace_api.StatusCode.OK)
             _observe(_finalize_span, span, result, self._config)
-            span.set_status(trace_api.StatusCode.OK)
         except BaseException as error:
             _record_error(span, error)
             span.end()
@@ -579,6 +677,12 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "aimage_generation", _instrument_func_type_image_generation, args, kwargs
         )
 
+    def _responses_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call("responses", _instrument_func_type_responses, args, kwargs)
+
+    async def _aresponses_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._acall("aresponses", _instrument_func_type_responses, args, kwargs)
+
     def _set_wrapper_attr(self, func_wrapper: Any) -> None:
         func_wrapper.__func__.is_wrapper = True
 
@@ -586,7 +690,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
 def _observe(function, *args):
     """Telemetry extraction must not change a successful SDK operation."""
     try:
-        function(*args)
+        return function(*args)
     except Exception:
         # Do not log request, response, or exception content (which can include secrets).
         logger.debug("Could not extract LiteLLM telemetry")
@@ -613,17 +717,40 @@ def _record_error(span, error):
     span.record_exception(error)
 
 
+def _first_present(*values):
+    return next((value for value in values if value is not None), None)
+
+
 def _set_usage(span, usage):
-    if hasattr(usage, "model_dump"):
-        usage = usage.model_dump()
-    if not isinstance(usage, Mapping):
-        return
-    for key, attribute in (
-        ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
-        ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
-        ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+    usage = as_dict(usage)
+    inputs = as_dict(_first_present(
+        usage.get("prompt_tokens_details"), usage.get("input_tokens_details")
+    ))
+    outputs = as_dict(_first_present(
+        usage.get("completion_tokens_details"), usage.get("output_tokens_details")
+    ))
+    for attribute, value in (
+        (SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, _first_present(
+            usage.get("prompt_tokens"), usage.get("input_tokens")
+        )),
+        (SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, _first_present(
+            usage.get("completion_tokens"), usage.get("output_tokens")
+        )),
+        (SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, usage.get("total_tokens")),
+        (SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, _first_present(
+            inputs.get("cached_tokens"), inputs.get("cache_read_tokens"),
+            usage.get("cache_read_input_tokens")
+        )),
+        (SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE, _first_present(
+            inputs.get("cache_creation_tokens"), inputs.get("cache_write_tokens"),
+            usage.get("cache_creation_input_tokens")
+        )),
+        (SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, outputs.get("reasoning_tokens")),
+        (SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_AUDIO, inputs.get("audio_tokens")),
+        (SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO, outputs.get("audio_tokens")),
+        (SpanAttributes.GEN_AI_COST_TOTAL, usage.get("cost")),
     ):
-        _set_span_attribute(span, attribute, usage.get(key))
+        _set_span_attribute(span, attribute, value)
 
 
 class _StreamState:
@@ -634,22 +761,33 @@ class _StreamState:
         self.processed_chunks = []
         self.content_by_choice = {}
         self.has_tool_context = False
+        self.tools_by_choice = {}
+        self.functions_by_choice = {}
+        self.responses = ResponseEvents()
         self._ended = False
-        self._closed = False
 
     def _process(self, chunk):
-        if hasattr(chunk, "to_dict"):
-            chunk = chunk.to_dict()
-        elif hasattr(chunk, "__dict__"):
-            chunk = chunk.__dict__
-        if not isinstance(chunk, Mapping):
+        _set_result_metadata(self.span, chunk)
+        chunk = as_dict(chunk)
+        self.processed_chunks.append(_private_response(chunk, self.config))
+        if chunk.get("type", "").startswith("response.") or chunk.get("type") == "error":
+            response = self.responses.add(chunk)
+            _set_result_metadata(self.span, response)
             return
-        self.processed_chunks.append(chunk)
         choices = chunk.get("choices") or []
         for position, choice in enumerate(choices):
             index = choice.get("index", position)
             delta = choice.get("delta") or {}
             self.has_tool_context |= _has_tool_context(delta)
+            tools = self.tools_by_choice.setdefault(index, {})
+            for tool_position, tool in enumerate(delta.get("tool_calls") or []):
+                tool_index = tool.get("index", tool_position)
+                target = tools.setdefault(tool_index, {"function": {}})
+                if tool.get("id"):
+                    target["id"] = tool["id"]
+                _join_function(target["function"], tool.get("function") or {})
+            if delta.get("function_call"):
+                _join_function(self.functions_by_choice.setdefault(index, {}), delta["function_call"])
             self.content_by_choice.setdefault(index, "")
             content = delta.get("content")
             if isinstance(content, str):
@@ -659,12 +797,8 @@ class _StreamState:
                 f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}",
                 delta.get("role"),
             )
-        _set_usage(self.span, chunk.get("usage"))
-        _set_span_attribute(
-            self.span, SpanAttributes.GEN_AI_RESPONSE_MODEL, chunk.get("model")
-        )
 
-    def _finish(self, error=None):
+    def _finish(self, error=None, abandoned=False):
         if self._ended:
             return
         self._ended = True
@@ -688,12 +822,24 @@ class _StreamState:
                     f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}",
                     text,
                 )
-            if error is None:
-                self.span.set_status(trace_api.StatusCode.OK)
-            else:
+            for index, tools in self.tools_by_choice.items():
+                # Preserve both choice and tool indices even when interleaved.
+                for tool_index, tool in tools.items():
+                    for key, value in _message_attributes({"tool_calls": [tool]}, self.config):
+                        key = key.replace(f"{MessageAttributes.MESSAGE_TOOL_CALLS}.0.", f"{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_index}.", 1)
+                        _set_span_attribute(self.span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value)
+            for index, function in self.functions_by_choice.items():
+                for key, value in _message_attributes({"function_call": function}, self.config):
+                    _set_span_attribute(self.span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value)
+            _set_response_messages(self.span, self.responses.messages(), self.config)
+            if error is not None:
                 _record_error(self.span, error)
+            elif self.responses.failed:
+                self.span.set_status(trace_api.StatusCode.ERROR)
+            elif not abandoned:
+                self.span.set_status(trace_api.StatusCode.OK)
         finally:
-            if self.span_cm is not None:
+            if self.span_cm is not None and not abandoned:
                 self.span_cm.__exit__(
                     type(error) if error else None,
                     error,
@@ -701,6 +847,36 @@ class _StreamState:
                 )
             else:
                 self.span.end()
+
+
+def _join_function(target, delta):
+    for field in ("name", "arguments"):
+        if isinstance(delta.get(field), str):
+            target[field] = target.get(field, "") + delta[field]
+
+
+class _StreamWrapper:
+    def __init__(self, span, span_cm=None, config=None):
+        self.span = span
+        self._state = _StreamState(span, span_cm, config)
+        self._closed = False
+        # The callback owns only the state, not this wrapper or the SDK iterator.
+        # It cannot keep an unread/partly read stream alive. No async I/O or
+        # application-context detach is attempted during garbage collection.
+        self._finalizer = weakref.finalize(self, self._state._finish, None, True)
+
+    @property
+    def _ended(self):
+        return self._state._ended
+
+    def _process(self, chunk):
+        self._state._process(chunk)
+
+    def _finish(self, error=None):
+        try:
+            self._state._finish(error)
+        finally:
+            self._finalizer.detach()
 
 
 def _stream_close_method(stream, *, asynchronous=False):
@@ -718,7 +894,7 @@ def _stream_close_method(stream, *, asynchronous=False):
     return None
 
 
-class StreamingIteratorWrapper(_StreamState):
+class StreamingIteratorWrapper(_StreamWrapper):
     def __init__(self, iterator: Iterator[Any], span: trace_api.Span, span_cm=None, config=None):
         super().__init__(span, span_cm, config)
         self.iterator = iterator
@@ -765,7 +941,7 @@ class StreamingIteratorWrapper(_StreamState):
         self.close()
 
 
-class AsyncStreamingIteratorWrapper(_StreamState):
+class AsyncStreamingIteratorWrapper(_StreamWrapper):
     def __init__(
         self, async_iterator: AsyncIterator[Any], span: trace_api.Span, span_cm=None, config=None
     ):

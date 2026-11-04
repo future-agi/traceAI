@@ -127,27 +127,22 @@ class TestLiteLLMInstrumentor:
         assert len(dependencies) >= 1
 
     def test_instrument_basic(self, tracer_provider, config, mock_litellm):
-        """Test basic instrumentation setup."""
+        """Store exactly the supported endpoints present in this SDK version."""
+        import litellm
+
         instrumentor = LiteLLMInstrumentor()
-        
-        # Mock the original functions before instrumentation
-        instrumentor.original_litellm_funcs["completion"] = mock_litellm["completion"]
-        instrumentor.original_litellm_funcs["acompletion"] = mock_litellm["acompletion"]
-        instrumentor.original_litellm_funcs["completion_with_retries"] = mock_litellm["completion_with_retries"]
-        instrumentor.original_litellm_funcs["acompletion_with_retries"] = mock_litellm["acompletion_with_retries"]
-        instrumentor.original_litellm_funcs["embedding"] = mock_litellm["embedding"]
-        instrumentor.original_litellm_funcs["aembedding"] = mock_litellm["aembedding"]
-        instrumentor.original_litellm_funcs["image_generation"] = mock_litellm["image_generation"]
-        instrumentor.original_litellm_funcs["aimage_generation"] = mock_litellm["aimage_generation"]
-        
-        instrumentor._instrument(tracer_provider=tracer_provider, config=config)
-        
-        # Verify tracer was created
-        assert hasattr(instrumentor, '_tracer')
-        assert isinstance(instrumentor._tracer, FITracer)
-        
-        # Verify original functions were stored
-        assert len(instrumentor.original_litellm_funcs) == 8
+        instrumentor.original_litellm_funcs.clear()
+        expected = set(mock_litellm) - {"acompletion_with_retries"}
+        expected.update(name for name in ("responses", "aresponses") if hasattr(litellm, name))
+        originals = {name: getattr(litellm, name) for name in expected}
+        try:
+            instrumentor._instrument(tracer_provider=tracer_provider, config=config)
+            assert isinstance(instrumentor._tracer, FITracer)
+            assert instrumentor.original_litellm_funcs == originals
+        finally:
+            instrumentor._uninstrument()
+        for name, original in originals.items():
+            assert getattr(litellm, name) is original
 
     def test_instrument_without_tracer_provider(self, config, mock_litellm):
         """Test instrumentation without explicit tracer provider."""
