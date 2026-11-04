@@ -8,7 +8,7 @@ const { createClient } = require('./transport.cjs');
 
 for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
   for (const disposal of ['forceFlush', 'shutdown']) {
-    for (const location of ['after notification', 'onDisconnected', 'onBotReady']) {
+    for (const location of ['after notification', 'onDisconnected', 'onBotReady', 'onTransportStateChanged']) {
       test(`${name}: autonomous drop ${disposal} from ${location} includes every attempt`, async t => {
         const exported = [];
         let closed = false;
@@ -35,6 +35,9 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
         };
         const { client, transport } = createClient(sdk, {
           onDisconnected() { if (location === 'onDisconnected') disposed = provider[disposal](); },
+          onTransportStateChanged(state) {
+            if (location === 'onTransportStateChanged' && state === 'disconnected') disposed = provider[disposal]();
+          },
           onBotReady() {
             if (location === 'onBotReady' && !dropped) {
               drop();

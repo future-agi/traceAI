@@ -112,7 +112,7 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     assert.deepEqual(connects(exporter.getFinishedSpans()).map(s => s.status.code), [SpanStatusCode.OK]);
   });
 
-  test(`${name}: lifecycle callbacks are restored after every completion path without changing application listeners`, async t => {
+  test(`${name}: lifecycle callbacks observe the connected interval and restore on close without changing application listeners`, async t => {
     const sdk = require(name);
     const { client, transport, exporter, instrumentation } = setup(t, sdk);
     const appReady = () => {};
@@ -122,15 +122,22 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     const callbacks = client._options.callbacks;
     const originalReady = callbacks.onBotReady;
     const originalDisconnected = callbacks.onDisconnected;
+    const originalStateChanged = callbacks.onTransportStateChanged;
     const assertDetached = () => {
       assert.deepEqual(client.listeners('botReady'), [appReady]);
       assert.deepEqual(client.listeners('disconnected'), [appDisconnected]);
       assert.equal(callbacks.onBotReady, originalReady);
       assert.equal(callbacks.onDisconnected, originalDisconnected);
+      assert.equal(callbacks.onTransportStateChanged, originalStateChanged);
+      assert.equal(instrumentation.pendingConnections.has(client), false);
     };
     await client.connect();
-    assertDetached();
+    // The empty attempt set must still observe the NEXT transport-state event:
+    // its application callbacks can start a retry before onDisconnected arrives.
+    assert.notEqual(callbacks.onTransportStateChanged, originalStateChanged);
+    assert.equal(instrumentation.pendingConnections.get(client).attempts.size, 0);
     await client.disconnect();
+    assertDetached();
     transport.connectError = new Error('synthetic transport failure');
     await assert.rejects(client.connect());
     assertDetached();
@@ -156,8 +163,9 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     instrumentation.enable();
     transport.sendReadyMessage = sendReady;
     await client.connect();
-    assertDetached();
+    assert.notEqual(callbacks.onTransportStateChanged, originalStateChanged);
     await client.disconnect();
+    assertDetached();
     assert.equal(connects(exporter.getFinishedSpans()).length, 4);
   });
 }

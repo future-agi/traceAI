@@ -35,6 +35,9 @@ type FinishSpan = (code: SpanStatusCode) => void;
 type PendingConnections = {
   attempts: Map<FinishSpan, ConnectionScope>;
   claimedResolvers: WeakSet<object>;
+  connected: boolean;
+  successes: number;
+  disconnections: Map<FinishSpan, ConnectionScope>[];
   detach: () => void;
 };
 const CONNECTION_SCOPE = createContextKey("traceai.pipecat.connection-scope");
@@ -143,8 +146,19 @@ export class PipecatInstrumentation extends InstrumentationBase {
     for (const [client, pending] of this.pendingConnections ?? []) {
       if (Object.prototype.isPrototypeOf.call(prototype, client)) {
         for (const finish of pending.attempts.keys()) finish(SpanStatusCode.ERROR);
+        pending.connected = false;
+        pending.disconnections.length = 0;
+        this.releaseConnections(client, pending);
       }
     }
+  }
+
+  private releaseConnections(client: object, pending: PendingConnections): void {
+    // A connected client still needs the state boundary even with no pending
+    // spans: a later disconnected-state callback can start a new handshake.
+    if (pending.attempts.size || pending.connected || pending.disconnections.length) return;
+    pending.detach();
+    if (this.pendingConnections.get(client) === pending) this.pendingConnections.delete(client);
   }
 
   private followDelegation(original: ClientMethod, instance: unknown, args: unknown[], method: "startBotAndConnect" | "startBot"): unknown {
@@ -186,7 +200,8 @@ export class PipecatInstrumentation extends InstrumentationBase {
       // This internal SDK contract is exercised with the real floor/latest clients.
       const callbacks = (client as { _options?: { callbacks?: Record<string, ClientMethod> } })._options?.callbacks;
       if (!callbacks) return detach;
-      for (const name of ["onBotReady", "onDisconnected"] as const) {
+      const instrumentation = this;
+      for (const name of ["onBotReady", "onDisconnected", "onTransportStateChanged"] as const) {
         const original = callbacks[name];
         if (typeof original !== "function") continue;
         const wrapped: ClientMethod = function (this: unknown, ...args: unknown[]) {
@@ -199,8 +214,20 @@ export class PipecatInstrumentation extends InstrumentationBase {
             for (const [finish, scope] of pending.attempts) {
               if (scope.resolver && scope.resolver === resolver) finish(SpanStatusCode.OK);
             }
-          } else {
-            PipecatInstrumentation.cancelConnections(new Map(pending.attempts));
+          } else if (name === "onTransportStateChanged" && args[0] === "disconnected") {
+            // The state event precedes onDisconnected. Capture even an EMPTY
+            // set before application callbacks can install a replacement resolver.
+            const disconnected = new Map(pending.attempts);
+            pending.connected = false;
+            pending.disconnections.push(disconnected);
+            PipecatInstrumentation.cancelConnections(disconnected);
+          } else if (name === "onDisconnected") {
+            // Nested synchronous closes notify in stack order. Transports that
+            // notify without a state event still cancel the current attempts.
+            const disconnected = pending.disconnections.pop();
+            if (!disconnected) pending.connected = false;
+            PipecatInstrumentation.cancelConnections(disconnected ?? new Map(pending.attempts));
+            instrumentation.releaseConnections(client, pending);
           }
           return original.apply(this, args);
         };
@@ -261,8 +288,11 @@ export class PipecatInstrumentation extends InstrumentationBase {
     }
     // Only successful disconnects (or actual transport notifications) cancel
     // attempts. A rejected disconnect can leave the handshake running normally.
+    const disconnectOwner = operation === "client.disconnect" && client
+      ? this.pendingConnections.get(client) : undefined;
+    const disconnectSuccesses = disconnectOwner?.successes;
     const disconnect = operation === "client.disconnect" && client
-      ? new Map(this.pendingConnections.get(client)?.attempts) : undefined;
+      ? new Map(disconnectOwner?.attempts) : undefined;
     let span: Span;
     try {
       span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
@@ -286,9 +316,12 @@ export class PipecatInstrumentation extends InstrumentationBase {
       if (scope) {
         const pending = this.pendingConnections.get(scope.instance);
         pending?.attempts.delete(finish);
-        if (pending && !pending.attempts.size) {
-          pending.detach();
-          this.pendingConnections.delete(scope.instance);
+        if (pending) {
+          if (code === SpanStatusCode.OK) {
+            pending.connected = true;
+            pending.successes++;
+          }
+          this.releaseConnections(scope.instance, pending);
         }
       }
       try {
@@ -303,7 +336,10 @@ export class PipecatInstrumentation extends InstrumentationBase {
     if (scope) {
       let pending = this.pendingConnections.get(scope.instance);
       if (!pending) {
-        pending = { attempts: new Map(), claimedResolvers: new WeakSet(), detach: () => {} };
+        pending = {
+          attempts: new Map(), claimedResolvers: new WeakSet(),
+          connected: false, successes: 0, disconnections: [], detach: () => {},
+        };
         this.pendingConnections.set(scope.instance, pending);
         pending.detach = this.observeConnections(scope.instance, pending);
       }
@@ -312,7 +348,18 @@ export class PipecatInstrumentation extends InstrumentationBase {
     }
     const settle = (code: SpanStatusCode) => {
       if (disconnect) {
-        if (code === SpanStatusCode.OK) PipecatInstrumentation.cancelConnections(disconnect);
+        if (code === SpanStatusCode.OK) {
+          PipecatInstrumentation.cancelConnections(disconnect);
+          if (client && disconnectOwner && this.pendingConnections.get(client) === disconnectOwner) {
+            // Also release observers when a successful disconnect omits callbacks,
+            // but never retire a connection completed by a reentrant retry.
+            if (disconnectOwner.successes === disconnectSuccesses) disconnectOwner.connected = false;
+            if (!disconnectOwner.attempts.size && !disconnectOwner.connected) {
+              disconnectOwner.disconnections.length = 0;
+              this.releaseConnections(client, disconnectOwner);
+            }
+          }
+        }
         disconnect.clear();
       }
       // A cancelled endpoint call may still delegate later. Keep its one-use
