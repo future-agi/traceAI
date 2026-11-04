@@ -46,7 +46,7 @@ def is_deepseek_client(instance: Any) -> bool:
 
 
 def _to_dict(obj: Any) -> Dict[str, Any]:
-    """Convert an object to a dictionary."""
+    """Serialize typed provider data, never arbitrary SDK/request internals."""
     if obj is None:
         return {}
     if isinstance(obj, dict):
@@ -55,9 +55,8 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
         return obj.model_dump()
     if hasattr(obj, "dict"):
         return obj.dict()
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    return {"value": str(obj)}
+    # Unknown objects may carry credentials in __dict__ or even their repr.
+    return {}
 
 
 def _flatten(
