@@ -881,28 +881,153 @@ for (const streaming of [false, true]) {
   });
 }
 
-test('embedding captures provider numeric usage before SDK conversion with content hidden', async () => {
-  reset();
-  const ai = client();
-  const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true, hideEmbeddingVectors: true } });
-  handler = (_, res) => json(res, {
-    embeddings: [{ values: [0.123456789] }],
-    usageMetadata: { promptTokenCount: 10, totalTokenCount: 10,
-      promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 }],
-      privateField: 'USAGE_PRIVATE_SENTINEL' },
+for (const spelling of ['promptTokenDetails', 'promptTokensDetails']) {
+  for (const hidden of [false, true]) {
+    test(`embedding captures ${spelling} before SDK conversion; hidden=${hidden}`, async () => {
+      reset();
+      const ai = client();
+      const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden, hideEmbeddingVectors: true } });
+      handler = (_, res) => json(res, {
+        embeddings: [{ values: [0.123456789] }],
+        usageMetadata: { promptTokenCount: 10,
+          [spelling]: [{ modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 }],
+          privateField: 'USAGE_PRIVATE_SENTINEL' },
+      });
+      try {
+        const result = await ai.models.embedContent({ model: 'gemini-embedding-2', contents: [
+          { parts: [{ text: 'INPUT_SENTINEL' }, { inlineData: { mimeType: 'audio/wav', data: 'U1lOVEhFVElD' } }] },
+        ] });
+        assert.deepEqual(result.embeddings[0].values, [0.123456789]);
+        assert.equal(requests.length, 1);
+        assert.equal(attrs()['gen_ai.usage.input_tokens'], 10);
+        assert.equal(attrs()['gen_ai.usage.total_tokens'], 10);
+        assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
+        assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
+        assert.doesNotMatch(JSON.stringify(attrs()), /USAGE_PRIVATE_SENTINEL|0\.123456789|U1lOVEhFVElD|synthetic-google-key/);
+        const wireAttrs = await exported();
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 10);
+        assert.equal(Number(wireAttrs['gen_ai.usage.total_tokens']), 10);
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens.audio']), 8);
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens.text']), 2);
+        if (hidden) assert.doesNotMatch(JSON.stringify(wireAttrs), /INPUT_SENTINEL/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    });
+  }
+}
+
+for (const hidden of [false, true]) {
+  test(`Vertex embedding statistics supply complete input and total usage; hidden=${hidden}`, async () => {
+    reset();
+    const ai = new GoogleGenAI({
+      vertexai: true,
+      apiKey: 'synthetic-vertex-key',
+      httpOptions: { baseUrl, retryOptions: { attempts: 1 } },
+    });
+    const paths = [];
+    handler = (request, res) => {
+      paths.push(request.url);
+      json(res, {
+        predictions: [7, 11].map(token_count => ({
+          embeddings: { statistics: { truncated: false, token_count }, values: [0.123456789] },
+        })),
+        metadata: { billableCharacterCount: 50 },
+      });
+    };
+    const params = { model: 'text-embedding-005', contents: ['INPUT_SENTINEL_ONE', 'INPUT_SENTINEL_TWO'] };
+    const baseline = await ai.models.embedContent(params);
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden } });
+    try {
+      const result = await ai.models.embedContent(params);
+      assert.deepEqual(result, baseline);
+      assert.deepEqual(result.embeddings.map(e => e.statistics.tokenCount), [7, 11]);
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0], requests[1]);
+      assert.equal(paths[0], paths[1]);
+      assert.match(paths[1], /:predict/);
+      assert.equal(attrs()['embedding.count'], 2);
+      assert.equal(attrs()['gen_ai.usage.input_tokens'], 18);
+      assert.equal(attrs()['gen_ai.usage.total_tokens'], 18);
+      assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined);
+      const wireAttrs = await exported();
+      assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 18);
+      assert.equal(Number(wireAttrs['gen_ai.usage.total_tokens']), 18);
+      assert.doesNotMatch(JSON.stringify(wireAttrs), /0\.123456789|synthetic-vertex-key/);
+      if (hidden) assert.doesNotMatch(JSON.stringify(wireAttrs), /INPUT_SENTINEL/);
+    } finally { h.dispose(); await provider.forceFlush(); }
   });
-  try {
-    const result = await ai.models.embedContent({ model: 'gemini-embedding-test', contents: 'INPUT_SENTINEL' });
-    assert.deepEqual(result.embeddings[0].values, [0.123456789]);
-    assert.equal(requests.length, 1);
-    assert.equal(attrs()['gen_ai.usage.input_tokens'], 10);
-    assert.equal(attrs()['gen_ai.usage.total_tokens'], 10);
-    assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
-    assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
-    assert.doesNotMatch(JSON.stringify(attrs()), /INPUT_SENTINEL|USAGE_PRIVATE_SENTINEL|0\.123456789/);
-    const wireAttrs = await exported();
-    assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 10);
-  } finally { h.dispose(); }
+}
+
+test('embedding statistics fallback prefers aggregates and never invents partial totals', async () => {
+  const cases = [
+    { label: 'complete', counts: [7, 11], input: 18, total: 18 },
+    { label: 'zero', counts: [0, 0], input: 0, total: 0 },
+    { label: 'empty', counts: [] },
+    ...[undefined, null, '11', -1, NaN, Infinity].map(count => ({
+      label: `invalid ${String(count)}`, counts: [7, count],
+    })),
+    { label: 'overflow', counts: [Number.MAX_VALUE, Number.MAX_VALUE] },
+    { label: 'aggregate input', counts: [7, 11], usage: { promptTokenCount: 30 }, input: 30, total: 30 },
+    { label: 'aggregate zero', counts: [7, 11], usage: { promptTokenCount: 0 }, input: 0, total: 0 },
+    { label: 'explicit total', counts: [7, 11], usage: { totalTokenCount: 40 }, input: 18, total: 40 },
+    { label: 'aggregate both', counts: [7, 11], usage: { promptTokenCount: 30, totalTokenCount: 40 }, input: 30, total: 40 },
+    { label: 'partial stats with aggregate', counts: [7, undefined], usage: { promptTokenCount: 30 }, input: 30, total: 30 },
+    { label: 'partial stats with only total', counts: [7, undefined], usage: { totalTokenCount: 40 }, total: 40 },
+  ];
+  // Older SDKs discard aggregate metadata; newer SDKs may expose it again on the
+  // public result. Neither path may add that snapshot to per-embedding counts.
+  for (const retainUsage of [false, true]) {
+    for (const c of cases) {
+      reset();
+      const raw = { usageMetadata: c.usage };
+      let reads = 0;
+      const response = { async json() { reads++; return raw; } };
+      const apiClient = { async request() { return response; } };
+      const result = {
+        embeddings: c.counts.map(tokenCount => ({ values: [0.123456789], statistics: { tokenCount } })),
+        ...(retainUsage ? { usageMetadata: c.usage } : {}),
+      };
+      const ai = { models: { apiClient, async embedContent() {
+        await (await apiClient.request({ path: 'models/test:predict' })).json();
+        return result;
+      } } };
+      const h = instrumentGoogleGenAI(ai);
+      try {
+        assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+        assert.equal(reads, 1);
+        assert.equal(attrs()['gen_ai.usage.input_tokens'], c.input, c.label);
+        assert.equal(attrs()['gen_ai.usage.total_tokens'], c.total, c.label);
+        assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined, c.label);
+        assert.doesNotMatch(JSON.stringify(attrs()), /0\.123456789/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    }
+  }
+});
+
+test('embedding modality aliases are alternatives with numeric allowlisted counts only', async () => {
+  for (const both of [false, true]) {
+    reset();
+    const ai = client();
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true } });
+    const details = [
+      { modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 },
+      { modality: 'IMAGE', tokenCount: 0 }, { modality: 'PRIVATE_MODALITY', tokenCount: 100 },
+      { modality: 'AUDIO', tokenCount: -1 }, { modality: 'AUDIO', tokenCount: '100' },
+      { modality: 'VIDEO', tokenCount: null },
+    ];
+    handler = (_, res) => json(res, {
+      embeddings: [{ values: [0.123456789] }],
+      usageMetadata: { promptTokenCount: 10, promptTokenDetails: details,
+        ...(both ? { promptTokensDetails: details } : {}) },
+    });
+    try {
+      await ai.models.embedContent({ model: 'gemini-embedding-2', contents: 'INPUT_SENTINEL' });
+      assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.image'], 0);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.video'], undefined);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_MODALITY|INPUT_SENTINEL|0\.123456789/);
+    } finally { h.dispose(); await provider.forceFlush(); }
+  }
 });
 
 test('embedding parse scope isolates concurrent clients and survives disposal until calls drain', { timeout: 15000 }, async () => {

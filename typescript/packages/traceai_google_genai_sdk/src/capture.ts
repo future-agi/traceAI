@@ -18,6 +18,8 @@ export class Capture {
   private firstContent = false;
   private truncated = false;
   private generation = false;
+  private embedding = false;
+  private embeddingUsageSnapshot = new Map<string, number>();
   private hops = 0;
   private capturedTools = false;
   private usageTotals = new Map<string, number>();
@@ -111,8 +113,9 @@ export class Capture {
   input(params: RecordValue, operation: string): void {
     this.generation =
       operation === "generateContent" || operation === "generateContentStream";
+    this.embedding = operation === "embedContent";
     this.string(S.LLM_MODEL_NAME, params.model);
-    if (operation === "embedContent") {
+    if (this.embedding) {
       this.string(S.EMBEDDING_MODEL_NAME, params.model);
       // Text batch semantics. Multimodal embedding models group parts differently;
       // omit a speculative input count for those shapes.
@@ -240,7 +243,9 @@ export class Capture {
     // These are numeric cost inputs, not media content. Keep them even when all
     // content is hidden. Fixed modality names avoid provider-controlled keys.
     for (const [prefix, details] of [
-      [S.LLM_TOKEN_COUNT_PROMPT, usage.promptTokensDetails ?? usage.input_tokens_by_modality],
+      // EmbeddingUsageMetadata uses singular Token; generation uses Tokens.
+      // These are aliases of one snapshot, not independent counts to add.
+      [S.LLM_TOKEN_COUNT_PROMPT, usage.promptTokensDetails ?? usage.promptTokenDetails ?? usage.input_tokens_by_modality],
       [S.LLM_TOKEN_COUNT_COMPLETION, usage.candidatesTokensDetails ?? usage.output_tokens_by_modality],
       [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, usage.cacheTokensDetails ?? usage.cached_tokens_by_modality],
     ] as const) {
@@ -261,8 +266,24 @@ export class Capture {
   }
   /** Only numeric, allowlisted billing fields from the SDK-owned JSON parse. */
   embeddingUsage(value: unknown): void {
-    for (const [key, count] of this.usage(record(record(value).usageMetadata)))
+    for (const [key, count] of this.usage(record(record(value).usageMetadata))) {
+      this.embeddingUsageSnapshot.set(key, count);
       this.span.setAttribute(key, count);
+    }
+  }
+  /** Vertex exposes billing counts on the converted embeddings, not usageMetadata.
+   * Missing or invalid statistics must not turn a partial sum into a call total.
+   */
+  private embeddingTokens(embeddings: unknown): number | undefined {
+    if (!Array.isArray(embeddings) || embeddings.length === 0) return undefined;
+    let total = 0;
+    for (const embedding of embeddings) {
+      const count = record(record(embedding).statistics).tokenCount;
+      if (typeof count !== "number" || !Number.isFinite(count) || count < 0)
+        return undefined;
+      total += count;
+    }
+    return Number.isFinite(total) ? total : undefined;
   }
   response(value: unknown): void {
     const response = record(value);
@@ -292,8 +313,21 @@ export class Capture {
           response.usage ??
           record(response.metadata).total_usage,
       );
-      for (const [key, count] of this.usage(usage))
-        this.span.setAttribute(key, count);
+      const counts = this.usage(usage);
+      if (this.embedding) {
+        // The parse hook and public result describe the same response. Preserve
+        // aggregate fields stripped by SDK conversion, without adding snapshots.
+        for (const [key, count] of this.embeddingUsageSnapshot)
+          if (!counts.has(key)) counts.set(key, count);
+        if (!counts.has(S.LLM_TOKEN_COUNT_PROMPT)) {
+          const input = this.embeddingTokens(response.embeddings);
+          if (input !== undefined) counts.set(S.LLM_TOKEN_COUNT_PROMPT, input);
+        }
+        const input = counts.get(S.LLM_TOKEN_COUNT_PROMPT);
+        if (input !== undefined && !counts.has(S.LLM_TOKEN_COUNT_TOTAL))
+          counts.set(S.LLM_TOKEN_COUNT_TOTAL, input);
+      }
+      for (const [key, count] of counts) this.span.setAttribute(key, count);
     }
     const candidates = list(response.candidates);
     const reasons = candidates
