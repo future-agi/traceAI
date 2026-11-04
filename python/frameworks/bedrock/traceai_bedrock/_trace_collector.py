@@ -346,6 +346,16 @@ class TraceCollector:
 
         # Extract event type, chunk type and generate trace ID
         event_type = AttributeExtractor.get_event_type(trace_data)
+        if event_type == "guardrailTrace":
+            # Each guardrail event is a complete assessment, not a model input/output
+            # pair or a new chain. Do not change the stack or current_span: a model
+            # output arriving after this event must still attach to its model input.
+            guardrail_span = TraceSpan(event_type)
+            guardrail_span.add_chunk(trace_data)
+            guardrail_span.set_parent_node(parent_trace_node)
+            parent_trace_node.spans.append(guardrail_span)
+            return parent_trace_node
+
         node_trace_id = generate_unique_trace_id(
             event_type, AttributeExtractor.extract_trace_id(trace_data)
         )

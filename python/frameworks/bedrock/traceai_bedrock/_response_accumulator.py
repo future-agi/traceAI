@@ -58,6 +58,7 @@ class _Attributes:
         self.output_attributes: Dict[str, Any] = {}
         self.metadata: Dict[str, Any] = {}
         self.span_kind: FiSpanKindValues = span_kind
+        self.status_code: StatusCode = StatusCode.OK
         self.requires_agent_span: bool = False
 
 
@@ -405,7 +406,7 @@ class _ResponseAccumulator:
             # Create span with appropriate timing
             start_time = self._fetch_span_start_time(attributes, trace_span)
             span = self._create_chain_span(parent_span, attributes, start_time)
-            span.set_status(Status(StatusCode.OK))
+            span.set_status(Status(attributes.status_code))
 
             # Process child spans recursively
             if isinstance(trace_span, TraceNode):
@@ -462,6 +463,8 @@ class _ResponseAccumulator:
                 cls._process_rationale(event_data, _attributes)
             if trace_event == "failureTrace":
                 cls._process_failure_trace(event_data, _attributes)
+            if trace_event == "guardrailTrace":
+                cls._process_guardrail_trace(event_data, _attributes)
         return _attributes
 
     @classmethod
@@ -556,6 +559,18 @@ class _ResponseAccumulator:
             AttributeExtractor.get_attributes_from_observation(observation)
         )
         attributes.metadata.update(AttributeExtractor.get_metadata_from_observation(observation))
+
+    @classmethod
+    def _process_guardrail_trace(cls, event_data: Dict[str, Any], attributes: _Attributes) -> None:
+        attributes.name = "Guardrails"
+        attributes.span_kind = FiSpanKindValues.GUARDRAIL
+        attributes.output_attributes.update(
+            AttributeExtractor.get_guardrail_trace_attributes(event_data)
+        )
+        if event_data.get("action") == "INTERVENED":
+            # Flag the intervention without treating it as an invoke_agent exception
+            # or putting potentially sensitive assessment text in the status message.
+            attributes.status_code = StatusCode.ERROR
 
     @classmethod
     def _process_failure_trace(cls, event_data: Dict[str, Any], attributes: _Attributes) -> None:
