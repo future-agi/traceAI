@@ -21,7 +21,7 @@ const marker = 'private-real-sdk-contract-content';
 const apiKey = 'synthetic_cursor_key_not_real';
 const usage = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 2, totalTokens: 20 };
 
-async function setup(t, initialStatus = 'RUNNING') {
+async function setup(t, initialStatus = 'RUNNING', options = {}) {
   const requests = [];
   const runs = new Map();
   const server = http.createServer(async (req, res) => {
@@ -53,8 +53,10 @@ async function setup(t, initialStatus = 'RUNNING') {
       if (path.endsWith('/stream')) {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
         const emit = (type, value) => res.write(`event: ${type}\ndata: ${JSON.stringify(value)}\n\n`);
-        emit('tool_call', { callId: 'tool-1', name: 'read', status: 'running', args: { path: marker } });
-        emit('tool_call', { callId: 'tool-1', name: 'read', status: 'completed', result: marker });
+        const name = options.taskName ?? 'read';
+        emit('tool_call', { callId: 'tool-1', name, status: 'running', args: { path: marker } });
+        const toolResult = options.toolResult ?? marker;
+        emit('tool_call', { callId: 'tool-1', name, status: 'completed', result: toolResult });
         emit('assistant', { text: marker });
         emit('interaction_update', { type: 'turn-ended', usage });
         emit('result', { status: 'FINISHED', result: marker, durationMs: 12 });
@@ -80,7 +82,7 @@ async function setup(t, initialStatus = 'RUNNING') {
     new SimpleSpanProcessor(exporter),
     { onStart() { started++; }, onEnd() { ended++; }, async forceFlush() {}, async shutdown() {} },
   ] });
-  const instrumentation = new CursorSDKInstrumentation({ tracerProvider: provider, runEndGraceMs: 10 });
+  const instrumentation = new CursorSDKInstrumentation({ tracerProvider: provider, runEndGraceMs: 10, traceConfig: options.traceConfig });
   instrumentation.manuallyInstrument(SDK);
   let agent;
   t.after(async () => {
@@ -116,7 +118,8 @@ test('already-terminal real SDK run closes without stream, wait or flush', { tim
 for (const consumption of ['stream', 'wait']) {
   test(`real SDK ${consumption}: cache-inclusive normalized total, preserved raw usage`, { timeout: 10000 }, async (t) => {
     const { agent, exporter, counts, requests } = await setup(t);
-    const run = await agent.send(marker);
+    const callbacks = [];
+    const run = await agent.send(marker, { onDelta({ update }) { callbacks.push(update.type); } });
     if (consumption === 'stream') {
       for await (const event of run.stream()) assert.ok(event.type);
     }
@@ -133,7 +136,10 @@ for (const consumption of ['stream', 'wait']) {
     assert.equal(root.attributes['cursor.usage.input_tokens'], 10);
     assert.equal(root.attributes['gen_ai.provider.name'], 'cursor');
     assert.equal(root.attributes['gen_ai.request.model'], 'auto');
-    assert.equal(spans.length, consumption === 'stream' ? 3 : 1);
+    // Cloud callback dispatch differs by SDK version. Capture what the real
+    // client exposes, without claiming local-runtime tools were exercised here.
+    assert.equal(spans.length, consumption === 'stream' ? 3 : callbacks.includes('text-delta') ? 2 : 1);
+    if (callbacks.includes('text-delta')) assert.equal(spans.filter(span => span.name === 'Cursor assistant message').length, 1);
     for (const child of spans.filter((span) => span !== root)) {
       assert.equal(child.parentSpanContext.spanId, root.spanContext().spanId);
     }
@@ -142,5 +148,40 @@ for (const consumption of ['stream', 'wait']) {
     assert.ok(!exported.includes(marker));
     assert.ok(!exported.includes(apiKey));
     assert.ok(requests.some((request) => request.endsWith('/stream')), 'exercise the real SDK SSE parser');
+  });
+}
+
+for (const taskName of ['task', 'Task', 'Agent']) {
+  test(`real SDK transport reconstructs ${taskName} subagent tree`, { timeout: 10000 }, async t => {
+    const inner = { type: 'toolCall', message: { type: 'read', callId: 'inner-read', args: { path: marker }, result: { status: 'success', value: marker } } };
+    const toolResult = { status: 'success', value: { conversationSteps: [
+      inner, inner, { type: 'assistantMessage', message: { text: marker } },
+    ] } };
+    const { agent, exporter, counts } = await setup(t, 'RUNNING', { taskName, toolResult });
+    const run = await agent.send(marker);
+    const events = [];
+    for await (const event of run.stream()) events.push(event);
+    await run.wait();
+    assert.deepEqual(events.find(event => event.type === 'tool_call' && event.status === 'completed').result, toolResult);
+    const spans = exporter.getFinishedSpans();
+    const root = spans.find(span => span.name === 'Cursor Agent run');
+    const task = spans.find(span => span.attributes['gen_ai.tool.call.id'] === 'tool-1');
+    const subagent = spans.find(span => span.name === 'Cursor subagent');
+    const reads = spans.filter(span => span.attributes['gen_ai.tool.call.id'] === 'inner-read');
+    assert.equal(reads.length, 1, 'nested tool survives real SDK transport exactly once');
+    assert.equal(subagent.attributes['fi.span.kind'], 'AGENT');
+    assert.equal(subagent.parentSpanContext.spanId, task.spanContext().spanId);
+    assert.equal(reads[0].parentSpanContext.spanId, subagent.spanContext().spanId);
+    assert.equal(task.parentSpanContext.spanId, root.spanContext().spanId);
+    const ms = time => time[0] * 1000 + time[1] / 1e6;
+    for (const span of spans) {
+      assert.equal(span.spanContext().traceId, root.spanContext().traceId);
+      assert.equal(span.instrumentationScope.name, '@traceai/cursor-sdk');
+      assert.ok(ms(span.startTime) >= ms(root.startTime));
+      assert.ok(ms(span.endTime) <= ms(root.endTime));
+    }
+    const exported = JSON.stringify(spans.map(({ name, attributes, events, status }) => ({ name, attributes, events, status })));
+    assert.ok(!exported.includes(marker));
+    assert.equal(counts().started, counts().ended);
   });
 }

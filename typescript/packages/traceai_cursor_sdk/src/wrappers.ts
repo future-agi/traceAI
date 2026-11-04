@@ -13,11 +13,12 @@
  * Nothing is wrapped in a Proxy: callers get the SDK's own agent and run
  * objects back, and `run.stream()` yields the SDK's own event objects
  * unchanged, forwarding `return()` / `throw()`. The local runtime's stream is a
- * single-consumer queue, so the wrapper never reads it on its own: tool spans
- * exist only for events the application reads through `run.stream()`.
+ * single-consumer queue, so the wrapper never reads it on its own. Per-send
+ * callbacks observe available steps even when the application only waits.
  */
 import { Context, Tracer, context as otelContext, diag } from "@opentelemetry/api";
 import { SpanNames } from "./attributes";
+import { deltaEvent, record, stepEvent } from "./events";
 import {
   ContentPolicy,
   RunTracer,
@@ -196,6 +197,36 @@ export function wrapAgent<T>(agent: T, getContext: GetContext): T {
   return agent;
 }
 
+/** No async wrapper: preserve synchronous throws and the exact returned promise. */
+function observeSend(args: unknown[], tracer: RunTracer): unknown[] {
+  const options = args[1];
+  // Invalid options still belong to the SDK to validate.
+  if (options !== undefined && !record(options)) return args;
+  const descriptors = options ? Object.getOwnPropertyDescriptors(options) : {};
+  const observed = Object.create(options ? Object.getPrototypeOf(options) : Object.prototype);
+  for (const name of ["onDelta", "onStep"] as const) {
+    const original = (options as SendOptionsLike | undefined)?.[name];
+    if (original !== undefined && typeof original !== "function") continue;
+    descriptors[name] = {
+      configurable: true, enumerable: true, writable: true,
+      value: function(this: unknown, ...callbackArgs: unknown[]) {
+        safe(() => {
+          const payload = record(callbackArgs[0]);
+          const event = name === "onDelta" ? deltaEvent(payload?.update) : stepEvent(payload?.step);
+          if (event) tracer.onEvent(event, name);
+        });
+        if (typeof original === "function") {
+          return original.apply(this === observed ? options : this, callbackArgs);
+        }
+      },
+    };
+  }
+  Object.defineProperties(observed, descriptors);
+  const forwarded = args.slice();
+  forwarded[1] = observed;
+  return forwarded;
+}
+
 function traceAgentRun(
   receiver: AgentLike,
   target: AgentLike,
@@ -224,6 +255,7 @@ function traceAgentRun(
   }
   if (!tracer) return invoke();
   const runTracer = tracer;
+  if (operation === "send") safe(() => { args = observeSend(args, runTracer); });
   let pending: Promise<RunLike>;
   try {
     pending = invoke();
