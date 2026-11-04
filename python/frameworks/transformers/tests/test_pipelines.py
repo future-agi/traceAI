@@ -611,6 +611,112 @@ def test_otlp_wire_and_privacy(generation, telemetry, receiver, monkeypatch, pri
         assert all("exception.message" not in str(e) and "exception.stacktrace" not in str(e) for e in decoded[-1].events)
 
 
+@pytest.mark.parametrize("privacy", ["pii_config", "pii_env", "hide_config", "hide_env", "default", "pii_override"])
+def test_streamer_error_privacy_otlp(generation, telemetry, receiver, monkeypatch, privacy):
+    from transformers.generation.streamers import BaseStreamer
+
+    endpoint, received = receiver
+    provider = telemetry[1]
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    config = None
+    if privacy == "pii_config":
+        config = TraceConfig(pii_redaction=True)
+    elif privacy in ("pii_env", "pii_override"):
+        monkeypatch.setenv("FI_PII_REDACTION", "true")
+        if privacy == "pii_override":
+            config = TraceConfig(pii_redaction=False)
+    elif privacy == "hide_config":
+        config = TraceConfig(hide_error_details=True)
+    elif privacy == "hide_env":
+        monkeypatch.setenv("FI_HIDE_ERROR_DETAILS", "true")
+    instrument(telemetry, config=config, capture_content=True)
+    sentinel = "customer@example.com"
+    original = RuntimeError("failed to deliver token to " + sentinel)
+    cause = ValueError("cause@example.com")
+    if hasattr(original, "add_note"):
+        original.add_note("note@example.com")
+    original_args = original.args
+
+    class FailingStreamer(BaseStreamer):
+        def put(self, value):
+            raise original from cause
+
+    prompt = "hello" if privacy in ("hide_config", "hide_env") else sentinel
+    with pytest.raises(RuntimeError) as caught:
+        generation(prompt, max_new_tokens=1, streamer=FailingStreamer())
+    assert caught.value is original
+    assert original.args == original_args
+    assert original.__cause__ is cause
+    assert original.__traceback__ is not None
+    if hasattr(original, "__notes__"):
+        assert original.__notes__ == ["note@example.com"]
+    provider.force_flush()
+    assert len(received) == 1
+    path, _, request = received[0]
+    assert path == "/tracer/v1/traces"
+    [span] = [span for resource in request.resource_spans
+              for scope in resource.scope_spans for span in scope.spans]
+    assert span.name == "transformers.text-generation"
+    assert span.status.code == 2
+    assert span.end_time_unix_nano >= span.start_time_unix_nano
+    [event] = span.events
+    assert event.name == "exception"
+    attributes = {entry.key: entry.value.string_value for entry in event.attributes}
+    assert attributes["exception.type"] == "RuntimeError"
+    assert attributes["exception.escaped"] == "False"
+    if privacy in ("default", "pii_override"):
+        assert sentinel in attributes["exception.message"]
+        assert sentinel in attributes["exception.stacktrace"]
+        assert "cause@example.com" in attributes["exception.stacktrace"]
+        assert sentinel in span.status.message
+    else:
+        assert not span.status.message
+        assert "exception.message" not in attributes
+        assert "exception.stacktrace" not in attributes
+        for private in (sentinel, "cause@example.com", "note@example.com"):
+            assert private not in str(request)
+
+
+@pytest.mark.parametrize("mode", ["config", "env"])
+@pytest.mark.parametrize("source_type", ["generator", "dataset"])
+def test_lazy_error_pii_redaction(features, telemetry, monkeypatch, mode, source_type):
+    if mode == "env":
+        monkeypatch.setenv("FI_PII_REDACTION", "true")
+    config = TraceConfig(pii_redaction=True) if mode == "config" else None
+    exporter = instrument(telemetry, config=config, capture_content=True)
+    original = ValueError("customer@example.com")
+
+    def source():
+        yield "hello"
+        raise original
+
+    class Data(torch.utils.data.Dataset):
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, index):
+            if index == 0:
+                return "hello"
+            raise original
+
+    iterator = features(source() if source_type == "generator" else Data(), num_workers=0)
+    # An in-flight lazy invocation must retain its original privacy config.
+    telemetry[0].uninstrument()
+    next(iterator)
+    with pytest.raises(ValueError) as caught:
+        next(iterator)
+    assert caught.value is original
+    assert original.args == ("customer@example.com",)
+    [span] = spans(exporter)
+    assert span.status.status_code.name == "ERROR"
+    assert span.status.description is None
+    [event] = span.events
+    assert event.attributes["exception.type"] == "ValueError"
+    assert "exception.message" not in event.attributes
+    assert "exception.stacktrace" not in event.attributes
+    assert "customer@example.com" not in str(span.attributes) + str(span.events)
+
+
 def test_lazy_dataset_otlp_traversals(features, telemetry, receiver):
     class Data(torch.utils.data.Dataset):
         def __len__(self):
