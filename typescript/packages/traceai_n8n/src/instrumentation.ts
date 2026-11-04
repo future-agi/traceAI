@@ -23,7 +23,7 @@ import {
 import type { WorkflowExecute } from "n8n-core";
 import type { IRun, Workflow } from "n8n-workflow";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.0"; // x-release-please-version
 const SUPPORTED_VERSIONS = [">=2.16.1 <3"];
 const EXECUTION = createContextKey("traceai.n8n.execution");
 
