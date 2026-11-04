@@ -58,6 +58,14 @@ def _response_status(response: Any) -> Status:
     return Status(StatusCode.OK)
 
 
+def _raw_response_status(body: Any) -> Status:
+    """Raw HTTP success alone does not establish a completed generation."""
+    status = body.get("status") if isinstance(body, Mapping) else None
+    if isinstance(status, str) and status in {"completed", "failed", "cancelled", "incomplete"}:
+        return _response_status(body)
+    return Status(StatusCode.UNSET)
+
+
 class _ResponsesAccumulator:
     __slots__ = (
         "_config",

@@ -28,6 +28,7 @@ from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
     _CompletionAccumulator,
     _ResponsesAccumulator,
+    _raw_response_status,
     _response_status,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
@@ -265,6 +266,7 @@ class _WithOpenAI(ABC):
                     SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
                 )
             telemetry_output = parsed
+            status = _response_status(parsed)
             if cast_to is self._openai.types.responses.response.Response:
                 if isinstance(parsed, Mapping):
                     telemetry_output = response_output(parsed, self._config)
@@ -274,9 +276,17 @@ class _WithOpenAI(ABC):
                     # opaque output rather than bypass the response allowlist;
                     # never parse again or change the application's return value.
                     telemetry_output = None
+                if hasattr(response, "http_response"):
+                    # Inspect only the already-consumed envelope, independently of
+                    # parse(to=...) and post_parser. Never call SDK parse twice.
+                    try:
+                        body = response.http_response.json()
+                    except Exception:
+                        body = None
+                    status = _raw_response_status(body)
             add_io_to_span_attributes(with_span, None, telemetry_output, config=self._config)
             _finish_tracing(
-                status=_response_status(parsed),
+                status=status,
                 with_span=with_span,
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,

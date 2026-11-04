@@ -131,7 +131,9 @@ def test_scalar_parse_preserves_values_laziness_and_input_privacy(
         assert len(reads) == 1
         assert closes
         (span,) = exporter.get_finished_spans()
-        assert span.status.status_code is StatusCode.OK
+        assert span.status.status_code is (
+            StatusCode.OK if body_kind == "response" else StatusCode.UNSET
+        )
         assert PRIVATE not in span.to_json()
         # Opaque scalar parses cannot safely be classified as assistant output.
         assert "output.value" not in span.attributes

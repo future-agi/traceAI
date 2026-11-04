@@ -1,10 +1,15 @@
+import json
 import logging
 from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, Protocol, Tuple
 
 from openai.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
-from traceai_openai._response_accumulator import _response_status
+from traceai_openai._response_accumulator import (
+    _ResponsesAccumulator,
+    _raw_response_status,
+    _response_status,
+)
 from traceai_openai._utils import _finish_tracing
 from traceai_openai._with_span import _WithSpan
 from wrapt import ObjectProxy
@@ -75,6 +80,42 @@ class _ResponseCloseProxy(ObjectProxy):
             _finish_on_exit(self._self_stream, error)
 
 
+class _RawBodyBuffer:
+    """Bounded inspection of chunks the caller consumed, never an extra HTTP read.
+
+    HTTPX iterators do not populate response.content. Retain at most 64 KiB for
+    status inspection, then discard it: an oversized/opaque body has unknown
+    generation status, not an affirmative success. No body is exported.
+    """
+
+    _LIMIT = 64 * 1024
+
+    def __init__(self) -> None:
+        self._body: Optional[bytearray] = bytearray()
+
+    def add(self, chunk: Any) -> None:
+        if self._body is None:
+            return
+        # Check character count before encoding so a huge text chunk cannot
+        # allocate an unbounded temporary copy. Then enforce the byte limit too.
+        remaining = self._LIMIT - len(self._body)
+        if len(chunk) > remaining:
+            self._body = None
+            return
+        data = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        if len(data) > remaining:
+            self._body = None
+        else:
+            self._body.extend(data)
+
+    def take(self) -> Any:
+        body, self._body = self._body, None
+        try:
+            return json.loads(body) if body is not None else None
+        except (ValueError, UnicodeError):
+            return None
+
+
 class _RawResponse(ObjectProxy):
     """Trace every parse-cache entry without eagerly reading a lazy envelope."""
 
@@ -92,7 +133,16 @@ class _RawResponse(ObjectProxy):
         self._self_parsed = {}
         self._self_body_status: Optional[trace_api.Status] = None
 
-    def _record_body_consumption(self) -> None:
+    def _body_buffer(self) -> Optional[_RawBodyBuffer]:
+        if (
+            isinstance(self._self_response_accumulator, _ResponsesAccumulator)
+            and not self._self_is_finished
+            and not getattr(self.__wrapped__, "_is_sse_stream", False)
+        ):
+            return _RawBodyBuffer()
+        return None
+
+    def _record_body_consumption(self, buffer: Optional[_RawBodyBuffer] = None) -> None:
         # read/text/json consume a non-SSE envelope without calling parse().
         # Do not force SDK parsing (or its post_parser) on a raw-body caller.
         # SSE still needs a terminal event from the traced iterator.
@@ -103,10 +153,14 @@ class _RawResponse(ObjectProxy):
         ):
             return
         try:
-            body = self.__wrapped__.http_response.json()
+            body = buffer.take() if buffer is not None else self.__wrapped__.http_response.json()
         except Exception:
             body = None  # Successful raw reads need not contain JSON.
-        self._self_body_status = _response_status(body)
+        self._self_body_status = (
+            _raw_response_status(body)
+            if isinstance(self._self_response_accumulator, _ResponsesAccumulator)
+            else _response_status(body)
+        )
 
     def _consume_body(self, method: str, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -127,15 +181,20 @@ class _RawResponse(ObjectProxy):
         return self._consume_body("json", *args, **kwargs)
 
     def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        buffer = self._body_buffer()
         try:
             for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                if buffer is not None:
+                    buffer.add(chunk)
+                    if method == "iter_lines":
+                        buffer.add(b"\n")
                 yield chunk
         except BaseException as exc:
             _finish_on_exit(self, exc)
             raise
         else:
             # The caller may stop iteration early; only exhaustion consumes it.
-            self._record_body_consumption()
+            self._record_body_consumption(buffer)
 
     def iter_bytes(self, *args: Any, **kwargs: Any) -> Iterator[bytes]:
         return self._consume_iterator("iter_bytes", *args, **kwargs)
@@ -257,14 +316,19 @@ class _AsyncRawResponse(_RawResponse):
         return await self._consume_body("json", *args, **kwargs)
 
     async def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        buffer = self._body_buffer()
         try:
             async for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
+                if buffer is not None:
+                    buffer.add(chunk)
+                    if method == "iter_lines":
+                        buffer.add(b"\n")
                 yield chunk
         except BaseException as exc:
             _finish_on_exit(self, exc)
             raise
         else:
-            self._record_body_consumption()
+            self._record_body_consumption(buffer)
 
     async def iter_bytes(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
         async for chunk in self._consume_iterator("iter_bytes", *args, **kwargs):
