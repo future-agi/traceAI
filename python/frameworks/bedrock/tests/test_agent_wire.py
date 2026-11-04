@@ -1,4 +1,4 @@
-"""Guardrail contracts through real boto3 HTTP and binary AWS EventStream decoding."""
+"""Agent privacy and guardrails through real boto3 HTTP and AWS EventStream decoding."""
 
 import base64
 import json
@@ -11,6 +11,7 @@ from threading import Thread
 import boto3
 import pytest
 from botocore.config import Config
+from botocore.exceptions import ClientError, EventStreamError
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -23,14 +24,16 @@ from traceai_bedrock import BedrockInstrumentor
 
 
 TRACE_ID = "11111111-2222-3333-4444-555555555555-0"
+ERROR_MESSAGE = "PRIVATE-ERROR user@example.com"
 
 
-def event_frame(event_type, body):
+def event_frame(event_type, body, *, message_type="event"):
     """Encode the headers, length and CRCs consumed by botocore's real parser."""
+    type_header = ":event-type" if message_type == "event" else ":exception-type"
     headers = b""
     for name, value in {
-        ":message-type": "event",
-        ":event-type": event_type,
+        ":message-type": message_type,
+        type_header: event_type,
         ":content-type": "application/json",
     }.items():
         key, val = name.encode(), value.encode()
@@ -57,14 +60,14 @@ def output_frame():
     return event_frame("chunk", {"bytes": base64.b64encode(b"answer").decode()})
 
 
-def model_input_frame():
+def model_input_frame(text="prompt"):
     return trace_frame(
         "orchestrationTrace",
         {
             "modelInvocationInput": {
                 "traceId": TRACE_ID,
                 "foundationModel": "amazon.nova-lite-v1:0",
-                "text": "prompt",
+                "text": text,
                 "type": "ORCHESTRATION",
             }
         },
@@ -122,18 +125,25 @@ def wire_client(monkeypatch):
     for name in list(os.environ):
         if name.startswith("FI_HIDE_") or name == "FI_PII_REDACTION":
             monkeypatch.delenv(name)
-    state = {"wire": b"", "requests": []}
+    state = {"wire": b"", "requests": [], "http_error": False}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             state["requests"].append(
                 json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             )
-            self.send_response(200)
-            self.send_header("Content-Type", "application/vnd.amazon.eventstream")
-            self.send_header("Content-Length", str(len(state["wire"])))
+            if state["http_error"]:
+                payload = json.dumps({"message": ERROR_MESSAGE}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("x-amzn-errortype", "ValidationException")
+            else:
+                payload = state["wire"]
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.amazon.eventstream")
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(state["wire"])
+            self.wfile.write(payload)
 
         def log_message(self, *args):
             pass
@@ -149,12 +159,17 @@ def wire_client(monkeypatch):
     provider.add_span_processor(tracker)
     clients = []
 
-    def invoke(frames, *, consumed=None, privacy="visible"):
+    def invoke(frames, *, consumed=None, privacy="visible", error=None):
         config = TraceConfig()
         if privacy == "env_hidden":
             monkeypatch.setenv("FI_HIDE_INPUTS", "true")
             monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
             config = TraceConfig()
+        elif privacy == "env_errors":
+            monkeypatch.setenv("FI_HIDE_ERROR_DETAILS", "true")
+            config = TraceConfig()
+        elif privacy == "errors":
+            config = TraceConfig(hide_error_details=True)
         elif privacy == "env_pii":
             monkeypatch.setenv("FI_PII_REDACTION", "true")
             config = TraceConfig()
@@ -166,6 +181,7 @@ def wire_client(monkeypatch):
                 hide_outputs=privacy in ("outputs", "both"),
             )
         state["wire"] = b"".join(frames)
+        state["http_error"] = error == "request"
         BedrockInstrumentor().instrument(tracer_provider=provider, config=config)
         client = boto3.session.Session().client(
             "bedrock-agent-runtime",
@@ -176,25 +192,41 @@ def wire_client(monkeypatch):
             config=Config(retries={"max_attempts": 0}),
         )
         clients.append(client)
-        with provider.get_tracer("test").start_as_current_span("caller") as caller:
-            stream = client.invoke_agent(
+
+        def request():
+            return client.invoke_agent(
                 agentId="AGENT00001",
                 agentAliasId="ALIAS00001",
                 sessionId="session001",
                 inputText="prompt",
                 enableTrace=True,
             )["completion"]
-            assert not exporter.get_finished_spans()
-            iterator = iter(stream)
-            if consumed is None:
-                received = list(iterator)
+
+        received = []
+        with provider.get_tracer("test").start_as_current_span("caller") as caller:
+            if error == "request":
+                with pytest.raises(ClientError) as caught:
+                    request()
+                assert caught.value.response["Error"]["Message"] == ERROR_MESSAGE
             else:
-                received = [next(iterator) for _ in range(consumed)]
-                assert not exporter.get_finished_spans()
-            stream.close()
-            spans = exporter.get_finished_spans()
-            stream.close()
-            assert exporter.get_finished_spans() == spans
+                stream = request()
+                try:
+                    assert not exporter.get_finished_spans()
+                    iterator = iter(stream)
+                    if error == "stream":
+                        with pytest.raises(EventStreamError) as caught:
+                            received.extend(iterator)
+                        assert caught.value.response["Error"]["Message"] == ERROR_MESSAGE
+                    elif consumed is None:
+                        received = list(iterator)
+                    else:
+                        received = [next(iterator) for _ in range(consumed)]
+                        assert not exporter.get_finished_spans()
+                finally:
+                    stream.close()
+                spans = exporter.get_finished_spans()
+                stream.close()
+                assert exporter.get_finished_spans() == spans
             assert (
                 trace.get_current_span().get_span_context() == caller.get_span_context()
             )
@@ -359,3 +391,138 @@ def test_guardrail_only_stream_close_exports_only_consumed_events(
         agent = next(s for s in spans if s.name == "bedrock_agent.invoke_agent")
         assert guards[0].parent.span_id == agent.context.span_id
         assert guards[0].status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.parametrize("privacy", ["visible", "both", "env_hidden"])
+@pytest.mark.parametrize("kind", ["tool", "retrieval"])
+def test_tool_and_retrieval_content_privacy(wire_client, privacy, kind):
+    if kind == "tool":
+        invocation = {
+            "invocationInput": {
+                "traceId": TRACE_ID,
+                "invocationType": "ACTION_GROUP",
+                "actionGroupInvocationInput": {
+                    "actionGroupName": "weather",
+                    "function": "lookup",
+                    "executionType": "LAMBDA",
+                    "parameters": [
+                        {"name": "city", "type": "string", "value": "PRIVATE-CITY"}
+                    ],
+                },
+            }
+        }
+        observation = {
+            "observation": {
+                "traceId": TRACE_ID,
+                "type": "ACTION_GROUP",
+                "actionGroupInvocationOutput": {"text": "PRIVATE-TOOL-RESULT"},
+            }
+        }
+        span_kind = "TOOL"
+        markers = ("PRIVATE-CITY", "PRIVATE-TOOL-RESULT")
+        content_key = "gen_ai.tool.parameters"
+    else:
+        invocation = {
+            "invocationInput": {
+                "traceId": TRACE_ID,
+                "invocationType": "KNOWLEDGE_BASE",
+                "knowledgeBaseLookupInput": {
+                    "knowledgeBaseId": "KB00000001",
+                    "text": "PRIVATE-QUERY",
+                },
+            }
+        }
+        observation = {
+            "observation": {
+                "traceId": TRACE_ID,
+                "type": "KNOWLEDGE_BASE",
+                "knowledgeBaseLookupOutput": {
+                    "retrievedReferences": [
+                        {
+                            "content": {"type": "TEXT", "text": "PRIVATE-DOCUMENT"},
+                            "location": {
+                                "type": "S3",
+                                "s3Location": {"uri": "s3://public/document"},
+                            },
+                        }
+                    ]
+                },
+            }
+        }
+        span_kind = "RETRIEVER"
+        markers = ("PRIVATE-QUERY", "PRIVATE-DOCUMENT")
+        content_key = "retrieval.documents.0.document.content"
+
+    spans, received = wire_client(
+        [
+            model_input_frame(
+                json.dumps({"messages": [{"role": "user", "content": "prompt"}]})
+            ),
+            model_output_frame(),
+            trace_frame("orchestrationTrace", invocation),
+            trace_frame("orchestrationTrace", observation),
+            output_frame(),
+        ],
+        privacy=privacy,
+    )
+    # Redaction is only for telemetry, not the events delivered to the application.
+    assert received[2]["trace"]["trace"]["orchestrationTrace"] == invocation
+    assert received[3]["trace"]["trace"]["orchestrationTrace"] == observation
+    assert received[4]["chunk"]["bytes"] == b"answer"
+    assert len(spans) == 5
+    (child,) = [
+        span
+        for span in spans
+        if span.attributes.get(SpanAttributes.GEN_AI_SPAN_KIND) == span_kind
+    ]
+    chain = next(s for s in spans if s.name == "orchestrationTrace")
+    llm = next(s for s in spans if s.name == "LLM")
+    assert child.parent.span_id == chain.context.span_id
+    assert llm.attributes[SpanAttributes.GEN_AI_PROVIDER_NAME] == "aws"
+    assert llm.attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] == 11
+    assert all(s.status.status_code != StatusCode.ERROR for s in spans)
+    serialized = "".join(s.to_json() for s in spans)
+    if privacy == "visible":
+        assert content_key in child.attributes
+        for marker in markers:
+            assert marker in serialized
+    else:
+        leaks = [marker for marker in markers if marker in serialized]
+        assert not leaks, (content_key, leaks)
+
+
+@pytest.mark.parametrize("privacy", ["visible", "errors", "env_errors", "env_hidden"])
+@pytest.mark.parametrize("error", ["request", "stream"])
+def test_request_and_stream_error_privacy(wire_client, privacy, error):
+    frames = [
+        model_input_frame(),
+        model_output_frame(),
+        output_frame(),
+        event_frame(
+            "internalServerException",
+            {"message": ERROR_MESSAGE},
+            message_type="exception",
+        ),
+    ]
+    spans, received = wire_client(frames, privacy=privacy, error=error)
+    agent = next(s for s in spans if s.name == "bedrock_agent.invoke_agent")
+    caller = next(s for s in spans if s.name == "caller")
+    assert agent.parent.span_id == caller.context.span_id
+    assert agent.status.status_code == StatusCode.ERROR
+    assert len(agent.events) == 1
+    assert agent.events[0].attributes["exception.type"].endswith(
+        "ValidationException" if error == "request" else "EventStreamError"
+    )
+    assert len(spans) == (2 if error == "request" else 4)
+    if error == "stream":
+        assert received[-1]["chunk"]["bytes"] == b"answer"
+        llm = next(s for s in spans if s.name == "LLM")
+        assert llm.attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] == 11
+    if privacy == "visible":
+        assert ERROR_MESSAGE in agent.status.description
+        assert ERROR_MESSAGE in agent.events[0].attributes["exception.message"]
+    else:
+        # Include attributes, exception message/stacktrace, and status descriptions.
+        serialized = "".join(s.to_json() for s in spans)
+        assert "PRIVATE-ERROR" not in serialized
+        assert "user@example.com" not in serialized
