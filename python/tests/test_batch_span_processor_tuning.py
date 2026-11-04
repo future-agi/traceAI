@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 from opentelemetry.sdk.trace import SpanLimits
+from opentelemetry.sdk.trace import TracerProvider as OTelTracerProvider
+from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
@@ -126,18 +128,46 @@ class TestBatchSpanProcessorTuning:
 class TestExporterTuning:
     """timeout must reach the default OTLP exporter (both processors)."""
 
+    @staticmethod
+    def _assert_http_timeout(processor, expected):
+        """Observe the request budget, not a version-specific exporter field."""
+        provider = OTelTracerProvider()
+        span = provider.get_tracer(__name__).start_span("timeout-probe")
+        span.end()
+        try:
+            with patch("requests.Session.send") as send:
+                send.return_value.ok = True
+                send.return_value.status_code = 200
+                assert _exporter_of(processor).export([span]) is SpanExportResult.SUCCESS
+                send.assert_called_once()
+                # Exporters subtract serialization time from the total budget.
+                assert send.call_args.kwargs["timeout"] == pytest.approx(expected, abs=0.1)
+        finally:
+            processor.shutdown()
+            provider.shutdown()
+
     def test_batch_forwards_timeout(self):
-        p = BatchSpanProcessor(timeout=42)
-        assert _exporter_of(p)._timeout == 42
+        self._assert_http_timeout(BatchSpanProcessor(timeout=42), 42)
 
     def test_simple_forwards_timeout(self):
-        p = SimpleSpanProcessor(timeout=7)
-        assert p.span_exporter._timeout == 7
+        self._assert_http_timeout(SimpleSpanProcessor(timeout=7), 7)
 
-    def test_unset_timeout_uses_upstream_default(self, clean_exporter_env):
+    @pytest.mark.parametrize("processor", [BatchSpanProcessor, SimpleSpanProcessor])
+    def test_unset_timeout_uses_upstream_default(self, clean_exporter_env, processor):
         """Backward-compat: no timeout -> upstream default (10s)."""
-        p = BatchSpanProcessor(span_exporter=None)
-        assert _exporter_of(p)._timeout == 10
+        self._assert_http_timeout(processor(), 10)
+
+    @pytest.mark.parametrize("processor", [BatchSpanProcessor, SimpleSpanProcessor])
+    @pytest.mark.parametrize("traces_timeout", [None, "19"])
+    @pytest.mark.parametrize("explicit_timeout", [None, 23])
+    def test_timeout_env_precedence(
+        self, clean_exporter_env, monkeypatch, processor, traces_timeout, explicit_timeout
+    ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "17")
+        if traces_timeout is not None:
+            monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", traces_timeout)
+        expected = explicit_timeout or float(traces_timeout or "17")
+        self._assert_http_timeout(processor(timeout=explicit_timeout), expected)
 
     def test_prebuilt_span_exporter_is_used_as_is(self):
         """A caller-supplied exporter is used verbatim; timeout ignored."""
