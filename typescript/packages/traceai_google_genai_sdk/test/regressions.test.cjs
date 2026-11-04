@@ -880,3 +880,215 @@ for (const streaming of [false, true]) {
     } finally { h.dispose(); await provider.forceFlush(); }
   });
 }
+
+test('embedding captures provider numeric usage before SDK conversion with content hidden', async () => {
+  reset();
+  const ai = client();
+  const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true, hideEmbeddingVectors: true } });
+  handler = (_, res) => json(res, {
+    embeddings: [{ values: [0.123456789] }],
+    usageMetadata: { promptTokenCount: 10, totalTokenCount: 10,
+      promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 }],
+      privateField: 'USAGE_PRIVATE_SENTINEL' },
+  });
+  try {
+    const result = await ai.models.embedContent({ model: 'gemini-embedding-test', contents: 'INPUT_SENTINEL' });
+    assert.deepEqual(result.embeddings[0].values, [0.123456789]);
+    assert.equal(requests.length, 1);
+    assert.equal(attrs()['gen_ai.usage.input_tokens'], 10);
+    assert.equal(attrs()['gen_ai.usage.total_tokens'], 10);
+    assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
+    assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
+    assert.doesNotMatch(JSON.stringify(attrs()), /INPUT_SENTINEL|USAGE_PRIVATE_SENTINEL|0\.123456789/);
+    const wireAttrs = await exported();
+    assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 10);
+  } finally { h.dispose(); }
+});
+
+test('embedding parse scope isolates concurrent clients and survives disposal until calls drain', { timeout: 15000 }, async () => {
+  reset();
+  const { context } = req('@opentelemetry/api');
+  const { suppressTracing } = req('@opentelemetry/core');
+  const a = client(), b = client(), untraced = client();
+  const originalA = a.models.apiClient.request;
+  const originalB = b.models.apiClient.request;
+  const originalUntraced = untraced.models.apiClient.request;
+  const h = instrumentGoogleGenAI(a), other = instrumentGoogleGenAI(b);
+  const waiting = [];
+  let allArrived;
+  const arrived = new Promise(resolve => { allArrived = resolve; });
+  handler = (request, res) => {
+    const tokens = request.url.includes('alpha') ? 11 : request.url.includes('beta') ? 22 : 99;
+    waiting.push(() => json(res, { embeddings: [{ values: [0.9] }],
+      usageMetadata: { promptTokenCount: tokens, totalTokenCount: tokens } }));
+    if (waiting.length === 4) allArrived();
+  };
+  const embed = (ai, model) => ai.models.embedContent({ model, contents: 'private text' });
+  try {
+    const pending = [embed(a, 'alpha'), embed(b, 'beta'), embed(untraced, 'untraced'),
+      context.with(suppressTracing(context.active()), () => embed(a, 'suppressed'))];
+    await arrived;
+    h.dispose();
+    assert.notEqual(a.models.apiClient.request, originalA, 'in-flight parse must remain observed');
+    waiting.reverse().forEach(respond => respond());
+    await Promise.all(pending);
+    assert.equal(requests.length, 4);
+    assert.equal(spans().length, 2);
+    const byModel = Object.fromEntries(spans().map(s => [s.attributes['gen_ai.request.model'], s.attributes['gen_ai.usage.input_tokens']]));
+    assert.deepEqual(byModel, { alpha: 11, beta: 22 });
+    assert.equal(a.models.apiClient.request, originalA);
+    assert.equal(untraced.models.apiClient.request, originalUntraced);
+    handler = (_, res) => json(res, { embeddings: [{ values: [0.9] }], usageMetadata: { promptTokenCount: 55 } });
+    other.disable();
+    await embed(b, 'disabled');
+    await embed(a, 'disposed');
+    assert.equal(spans().length, 2);
+    other.enable();
+    await embed(b, 'enabled');
+    assert.equal(spans().length, 3);
+    assert.equal(spans()[2].attributes['gen_ai.usage.input_tokens'], 55);
+  } finally {
+    waiting.forEach(respond => { try { respond(); } catch {} });
+    h.dispose(); other.dispose();
+    assert.equal(b.models.apiClient.request, originalB);
+  }
+});
+
+test('embedding parse observation preserves identity and errors, reads once, and allowlists numbers only', async () => {
+  reset();
+  let reads = 0, clones = 0, calls = 0, result, parsedValue, failure;
+  const vectors = { get embeddings() { throw new Error('must never inspect raw vectors'); } };
+  const raw = Object.assign(vectors, { usageMetadata: {
+    promptTokenCount: 7, totalTokenCount: 9, candidatesTokenCount: 'PRIVATE_STRING',
+    cachedContentTokenCount: Infinity, thoughtsTokenCount: NaN,
+    promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 5 }, { modality: 'PRIVATE_MODALITY', tokenCount: 100 }],
+    credential: 'PRIVATE_USAGE',
+  } });
+  const response = {
+    json() { reads++; return failure ? Promise.reject(failure) : Promise.resolve(raw); },
+    clone() { clones++; throw new Error('must never clone'); },
+  };
+  const originalParse = response.json;
+  const apiClient = { async request() { calls++; return response; } };
+  const originalRequest = apiClient.request;
+  const ai = { models: {
+    apiClient,
+    async embedContent() {
+      const received = await apiClient.request({ path: 'models/test:batchEmbedContents' });
+      assert.equal(received, response);
+      parsedValue = await received.json();
+      assert.equal(parsedValue, raw);
+      return result;
+    },
+  } };
+  result = { embeddings: [{ values: [1, 2] }] };
+  const h = instrumentGoogleGenAI(ai);
+  try {
+    assert.equal(await ai.models.embedContent({ model: 'test', contents: 'hi' }), result);
+    assert.equal(response.json, originalParse);
+    assert.equal(reads, 1); assert.equal(clones, 0); assert.equal(calls, 1);
+    assert.equal(attrs()['gen_ai.usage.input_tokens'], 7);
+    assert.equal(attrs()['gen_ai.usage.total_tokens'], 9);
+    assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 5);
+    assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_STRING|PRIVATE_MODALITY|PRIVATE_USAGE/);
+    assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined);
+    memory.reset();
+    failure = new Error('PROVIDER_PRIVATE_ERROR');
+    await assert.rejects(ai.models.embedContent({ model: 'test' }), e => e === failure);
+    assert.equal(reads, 2); assert.equal(clones, 0); assert.equal(calls, 2);
+    assert.equal(response.json, originalParse);
+    assert.equal(spans()[0].status.code, 2);
+    assert.doesNotMatch(JSON.stringify(attrs()), /PROVIDER_PRIVATE_ERROR/);
+  } finally {
+    h.dispose();
+    assert.equal(apiClient.request, originalRequest);
+  }
+});
+
+test('embedding observation fails open on frozen boundaries and capture getters', async () => {
+  for (const frozen of ['request', 'json', 'usage']) {
+    reset();
+    const raw = frozen === 'usage' ? { get usageMetadata() { throw new Error('PRIVATE_GETTER'); } }
+      : { usageMetadata: { promptTokenCount: 4 } };
+    const response = { json: async () => raw };
+    const apiClient = { request: async () => response };
+    if (frozen === 'request') Object.freeze(apiClient);
+    if (frozen === 'json') Object.freeze(response);
+    const result = { embeddings: [{ values: [0.8] }] };
+    const ai = { models: { apiClient, async embedContent() {
+      const httpResponse = await apiClient.request({ path: 'models/test:embedContent' });
+      assert.equal(await httpResponse.json(), raw);
+      return result;
+    } } };
+    const h = instrumentGoogleGenAI(ai);
+    try {
+      assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+      assert.equal(spans().length, 1);
+      assert.notEqual(spans()[0].status.code, 2);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_GETTER/);
+    } finally { h.dispose(); }
+  }
+});
+
+test('embedding response hooks drain correctly when a client is re-instrumented in flight', { timeout: 15000 }, async () => {
+  reset();
+  const ai = client();
+  const originalRequest = ai.models.apiClient.request;
+  const originalEmbed = ai.models.embedContent;
+  const h = instrumentGoogleGenAI(ai);
+  const waiting = [];
+  let arrived;
+  const firstArrival = new Promise(resolve => { arrived = resolve; });
+  handler = (request, res) => {
+    const count = request.url.includes('old') ? 13 : 27;
+    waiting.push(() => json(res, { embeddings: [{ values: [0.6] }],
+      usageMetadata: { promptTokenCount: count, totalTokenCount: count } }));
+    arrived();
+  };
+  let replacement;
+  try {
+    const old = ai.models.embedContent({ model: 'old', contents: 'INPUT_SENTINEL' });
+    await firstArrival;
+    h.dispose();
+    replacement = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true } });
+    const secondArrival = new Promise(resolve => { arrived = resolve; });
+    const next = ai.models.embedContent({ model: 'new', contents: 'INPUT_SENTINEL' });
+    await secondArrival;
+    waiting[0](); await old;
+    assert.notEqual(ai.models.apiClient.request, originalRequest, 'new handle still owns request hook');
+    waiting[1](); await next;
+    assert.equal(spans().length, 2);
+    assert.deepEqual(spans().map(s => s.attributes['gen_ai.usage.input_tokens']), [13, 27]);
+    assert.match(JSON.stringify(spans()[0].attributes), /INPUT_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(spans()[1].attributes), /INPUT_SENTINEL/);
+    replacement.dispose();
+    assert.equal(ai.models.apiClient.request, originalRequest);
+    assert.equal(ai.models.embedContent, originalEmbed);
+  } finally { h.dispose(); replacement?.dispose(); }
+});
+
+test('embedding hook ignores unrelated paths and tolerates capture-only path getters', async () => {
+  for (const path of ['models/test:generateContent', 'models/test:predictLongRunning', undefined]) {
+    reset();
+    const raw = { usageMetadata: { promptTokenCount: 999 } };
+    let parsed = 0;
+    const response = { async json() { parsed++; return raw; } };
+    const originalParse = response.json;
+    const apiClient = { async request() { return response; } };
+    const params = path ? { path } : { get path() { throw new Error('PRIVATE_PATH_GETTER'); } };
+    const result = { embeddings: [{ values: [1] }] };
+    const ai = { models: { apiClient, async embedContent() {
+      const received = await apiClient.request(params);
+      assert.equal(received.json, originalParse);
+      assert.equal(await received.json(), raw);
+      return result;
+    } } };
+    const h = instrumentGoogleGenAI(ai);
+    try {
+      assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+      assert.equal(parsed, 1);
+      assert.equal(attrs()['gen_ai.usage.input_tokens'], undefined);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_PATH_GETTER/);
+    } finally { h.dispose(); }
+  }
+});

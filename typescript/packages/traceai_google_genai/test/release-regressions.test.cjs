@@ -217,3 +217,54 @@ test('one instance tracks independent module copies and finishes in-flight spans
     assert.equal(memory.getFinishedSpans().length, 2);
   });
 });
+
+for (const option of ['hideOutputText', 'hideOutputMessages', 'hideOutputs', 'hideInputImages', 'hideEmbeddingVectors']) {
+  for (const environment of [false, true]) {
+    test(`published-core granular privacy: ${option} (${environment ? 'environment' : 'config'})`, async () => {
+      const key = 'FI_' + option.replace(/[A-Z]/g, c => '_' + c).toUpperCase();
+      const previous = process.env[key];
+      if (environment) process.env[key] = 'true';
+      try {
+        await fixture(environment ? {} : { [option]: true }, async (instrumentation, model) => {
+          instrumentation.manuallyInstrument(google);
+          response = { ...answer, candidates: [{ content: { role: 'model', parts: [
+            { text: 'OUTPUT_SENTINEL' }, { functionCall: { name: 'lookup', args: { query: 'TOOL_OUTPUT_SENTINEL' } } },
+          ] }, finishReason: 'STOP' }] };
+          const input = { contents: [{ role: 'user', parts: [
+            { text: 'INPUT_SENTINEL' }, { inlineData: { mimeType: 'image/png', data: 'IMAGE_SENTINEL' } },
+          ] }] };
+          const baseline = await model.generateContent(input);
+          assert.equal(baseline.response.text(), 'OUTPUT_SENTINEL');
+          assert.match(JSON.stringify(bodies), /IMAGE_SENTINEL/);
+          if (option.startsWith('hideOutput')) {
+            assert.doesNotMatch(telemetry(), /OUTPUT_SENTINEL|TOOL_OUTPUT_SENTINEL/);
+          }
+          if (option === 'hideInputImages') {
+            assert.doesNotMatch(telemetry(), /IMAGE_SENTINEL/);
+            const embeddingInput = { content: input.contents[0] };
+            await model.embedContent(embeddingInput);
+            await model.batchEmbedContents({ requests: [embeddingInput] });
+            assert.doesNotMatch(telemetry(), /IMAGE_SENTINEL/);
+            assert.match(JSON.stringify(bodies[1]), /IMAGE_SENTINEL/);
+            assert.match(JSON.stringify(bodies[2]), /IMAGE_SENTINEL/);
+          }
+          const attributes = memory.getFinishedSpans()[0].attributes;
+          assert.equal(attributes['gen_ai.usage.input_tokens'], 5);
+          assert.equal(attributes['gen_ai.usage.output_tokens'], 3);
+          assert.equal(attributes['gen_ai.response.model'], model.model);
+          if (option === 'hideEmbeddingVectors' || option === 'hideOutputs') {
+            memory.reset();
+            const single = await model.embedContent('INPUT_SENTINEL');
+            const batch = await model.batchEmbedContents({ requests: [{ content: { parts: [{ text: 'INPUT_SENTINEL' }] } }] });
+            assert.deepEqual(single.embedding.values, [0.2]);
+            assert.deepEqual(batch.embeddings[0].values, [0.2]);
+            assert.doesNotMatch(telemetry(), /0\.2/);
+            assert.equal(memory.getFinishedSpans().length, 2);
+          }
+        });
+      } finally {
+        if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+      }
+    });
+  }
+}

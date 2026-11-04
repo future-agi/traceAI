@@ -259,6 +259,11 @@ export class Capture {
     }
     return result;
   }
+  /** Only numeric, allowlisted billing fields from the SDK-owned JSON parse. */
+  embeddingUsage(value: unknown): void {
+    for (const [key, count] of this.usage(record(record(value).usageMetadata)))
+      this.span.setAttribute(key, count);
+  }
   response(value: unknown): void {
     const response = record(value);
     const interaction = record(response.interaction);

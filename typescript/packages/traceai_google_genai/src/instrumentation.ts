@@ -208,9 +208,10 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
               // Normalize only for capture. The SDK always receives the original arguments.
               const request = args[0];
               const config = generateTraceConfig(instrumentation._traceConfig);
-              // Suppress all duplicate content surfaces, including tools/schema
-              // text, independently of the installed fi-core masking version.
-              if (config.hideInputs || config.hideInputText || config.hideInputMessages) return {};
+              // Opaque legacy payloads can duplicate media/text in raw/value/tools.
+              // Hide the whole input surface before serialization, independently of
+              // the installed fi-core masking version. Never modify the SDK request.
+              if (config.hideInputs || config.hideInputText || config.hideInputMessages || config.hideInputImages) return {};
               if (method === "generateContent") {
                 const normalized = normalizeGeneration(request);
                 return {
@@ -241,20 +242,27 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
               };
             },
             result => {
+              const config = generateTraceConfig(instrumentation._traceConfig);
               if (method === "generateContent") {
                 const response = result as GenerateContentResponse;
+                const metadata = {
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: this.model || "unknown",
+                  ...getUsageAttributes(response),
+                };
+                if (config.hideOutputs || config.hideOutputText || config.hideOutputMessages) return metadata;
                 // SDK text() throws on SAFETY / blocked responses, although the call resolved.
                 const text = response.response?.candidates?.[0]?.content?.parts
                   ?.map(part => part.text ?? "").join("") ?? "";
                 return {
                   [SemanticConventions.OUTPUT_VALUE]: text,
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: this.model || "unknown",
+                  ...metadata,
                   ...getLLMOutputMessagesAttributes(response),
-                  ...getUsageAttributes(response),
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(response) ?? "",
                 };
               }
+              // Vectors also occur inside raw.output, not only embedding.vector.
+              if (config.hideOutputs || config.hideEmbeddingVectors) return {};
               return {
                 ...(method === "embedContent"
                   ? { [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_VECTOR}`]:
