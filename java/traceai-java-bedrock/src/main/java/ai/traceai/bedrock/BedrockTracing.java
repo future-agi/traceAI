@@ -20,12 +20,17 @@ import software.amazon.awssdk.core.SdkResponse;
 import software.amazon.awssdk.core.document.Document;
 import software.amazon.awssdk.services.bedrockruntime.model.ConverseRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.ConverseResponse;
+import software.amazon.awssdk.services.bedrockruntime.model.ConverseStreamRequest;
+import software.amazon.awssdk.services.bedrockruntime.model.InferenceConfiguration;
+import software.amazon.awssdk.services.bedrockruntime.model.SystemContentBlock;
+import software.amazon.awssdk.services.bedrockruntime.model.ToolConfiguration;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelResponse;
 import software.amazon.awssdk.services.bedrockruntime.model.Message;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
 
 /** Shared extraction for the legacy facade and the SDK execution hook. */
@@ -41,8 +46,10 @@ final class BedrockTracing {
     }
 
     Span start(SdkRequest request) {
-        boolean converse = request instanceof ConverseRequest;
-        String model = converse ? ((ConverseRequest) request).modelId() : ((InvokeModelRequest) request).modelId();
+        boolean converse = request instanceof ConverseRequest || request instanceof ConverseStreamRequest;
+        String model = request instanceof ConverseRequest ? ((ConverseRequest) request).modelId()
+            : request instanceof ConverseStreamRequest ? ((ConverseStreamRequest) request).modelId()
+            : ((InvokeModelRequest) request).modelId();
         Span span = tracer.startSpan(converse ? "Bedrock Converse" : "Bedrock Invoke Model", FISpanKind.LLM);
         span.setAttribute(SemanticConventions.LLM_PROVIDER, "aws.bedrock");
         span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, converse ? "chat" : "text_completion");
@@ -51,7 +58,10 @@ final class BedrockTracing {
         if (provider != null) span.setAttribute("gen_ai.bedrock.model_provider", provider);
         // Telemetry extraction must never prevent an SDK operation from running.
         try {
-            if (converse) captureInput(span, (ConverseRequest) request);
+            if (request instanceof ConverseStreamRequest) {
+                ConverseStreamRequest stream = (ConverseStreamRequest) request;
+                captureConverseInput(span, stream.inferenceConfig(), stream.system(), stream.messages(), stream.toolConfig(), stream);
+            } else if (converse) captureInput(span, (ConverseRequest) request);
             else captureInput(span, (InvokeModelRequest) request, provider);
         } catch (RuntimeException ignored) {
             // Malformed/unknown provider payloads still get a lifecycle span.
@@ -94,32 +104,33 @@ final class BedrockTracing {
     }
 
     private void captureInput(Span span, ConverseRequest request) {
-        if (request.inferenceConfig() != null) {
-            var config = request.inferenceConfig();
+        captureConverseInput(span, request.inferenceConfig(), request.system(), request.messages(), request.toolConfig(), request);
+    }
+
+    private void captureConverseInput(Span span, InferenceConfiguration config, List<SystemContentBlock> system,
+                                     List<Message> input, ToolConfiguration tools, SdkRequest request) {
+        if (config != null) {
             if (config.maxTokens() != null) span.setAttribute(SemanticConventions.LLM_REQUEST_MAX_TOKENS, config.maxTokens().longValue());
             if (config.temperature() != null) span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, config.temperature().doubleValue());
             if (config.topP() != null) span.setAttribute(SemanticConventions.LLM_REQUEST_TOP_P, config.topP().doubleValue());
         }
         if (tracer.getConfig().isHideInputs()) return;
         JsonArray messages = new JsonArray();
-        if (!request.system().isEmpty()) {
-            messages.add(message("system", sdkJson(request.system(), 0).getAsJsonArray()));
+        if (!system.isEmpty()) {
+            messages.add(message("system", sdkJson(system, 0).getAsJsonArray()));
         }
-        for (Message msg : request.messages()) messages.add(message(msg.roleAsString(), sdkJson(msg.content(), 0).getAsJsonArray()));
+        for (Message msg : input) messages.add(message(msg.roleAsString(), sdkJson(msg.content(), 0).getAsJsonArray()));
         setMessages(span, messages, true);
         tracer.setInputValue(span, messagesText(messages));
-        if (request.toolConfig() != null) {
-            setJson(span, SemanticConventions.GEN_AI_TOOL_DEFINITIONS, sdkJson(request.toolConfig().tools(), 0));
+        if (tools != null) {
+            setJson(span, SemanticConventions.GEN_AI_TOOL_DEFINITIONS, sdkJson(tools.tools(), 0));
         }
         setJson(span, SemanticConventions.RAW_INPUT, sdkJson(request, 0));
     }
 
     private void captureOutput(Span span, ConverseResponse response) {
         if (response.usage() != null) {
-            var usage = response.usage();
-            setCount(span, SemanticConventions.LLM_TOKEN_COUNT_PROMPT, usage.inputTokens());
-            setCount(span, SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, usage.outputTokens());
-            setCount(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL, usage.totalTokens());
+            captureUsage(span, sdkJson(response.usage(), 0).getAsJsonObject());
         }
         if (response.stopReasonAsString() != null) {
             span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, response.stopReasonAsString());
@@ -160,12 +171,21 @@ final class BedrockTracing {
         if (response.body() == null) return;
         JsonObject json = JsonParser.parseString(response.body().asUtf8String()).getAsJsonObject();
         if (json.has("usage") && json.get("usage").isJsonObject()) {
-            JsonObject usage = json.getAsJsonObject("usage");
-            Integer input = integer(usage, "input_tokens");
-            Integer output = integer(usage, "output_tokens");
-            setCount(span, SemanticConventions.LLM_TOKEN_COUNT_PROMPT, input);
-            setCount(span, SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, output);
-            if (input != null && output != null) span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, (long) input + output);
+            captureUsage(span, json.getAsJsonObject("usage"));
+        } else {
+            Long input = count(json, "inputTextTokenCount", "prompt_token_count");
+            Long output = count(json, "generation_token_count");
+            if (json.has("results") && json.get("results").isJsonArray()) {
+                long sum = 0;
+                boolean known = !json.getAsJsonArray("results").isEmpty();
+                for (JsonElement result : json.getAsJsonArray("results")) {
+                    Long tokens = result.isJsonObject() ? count(result.getAsJsonObject(), "tokenCount") : null;
+                    if (tokens == null) { known = false; break; }
+                    sum += tokens;
+                }
+                if (known) output = sum;
+            }
+            setCounts(span, input, output, null);
         }
         if (json.has("stop_reason") && json.get("stop_reason").isJsonPrimitive()) {
             span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, json.get("stop_reason").getAsString());
@@ -173,7 +193,15 @@ final class BedrockTracing {
         if (tracer.getConfig().isHideOutputs()) return;
         json = redactBinary(json);
         setJson(span, SemanticConventions.RAW_OUTPUT, json);
-        if (json.has("content") && json.get("content").isJsonArray()) {
+        if (json.has("output") && json.get("output").isJsonObject()
+            && json.getAsJsonObject("output").has("message")) {
+            JsonObject output = json.getAsJsonObject("output").getAsJsonObject("message");
+            JsonArray messages = new JsonArray();
+            messages.add(message(output.has("role") ? output.get("role").getAsString() : "assistant",
+                output.getAsJsonArray("content")));
+            setMessages(span, messages, false);
+            tracer.setOutputValue(span, messagesText(messages));
+        } else if (json.has("content") && json.get("content").isJsonArray()) {
             JsonArray messages = new JsonArray();
             messages.add(message("assistant", json.getAsJsonArray("content")));
             setMessages(span, messages, false);
@@ -191,12 +219,52 @@ final class BedrockTracing {
         }
     }
 
-    private static Integer integer(JsonObject object, String key) {
-        return object.has(key) && object.get(key).isJsonPrimitive() ? object.get(key).getAsInt() : null;
+    /** SDK metadata includes newer cache fields without linking to methods absent at the SDK floor. */
+    void captureUsage(Span span, JsonObject usage) {
+        setCounts(span, count(usage, "input_tokens", "inputTokens"),
+            count(usage, "output_tokens", "outputTokens"), count(usage, "total_tokens", "totalTokens"));
+        setCount(span, SemanticConventions.GEN_AI_USAGE_CACHE_READ_TOKENS,
+            count(usage, "cache_read_input_tokens", "cacheReadInputTokens"));
+        setCount(span, SemanticConventions.GEN_AI_USAGE_CACHE_WRITE_TOKENS,
+            count(usage, "cache_creation_input_tokens", "cacheWriteInputTokens"));
     }
 
-    private static void setCount(Span span, String key, Integer value) {
-        if (value != null) span.setAttribute(key, value.longValue());
+    private static void setCounts(Span span, Long input, Long output, Long total) {
+        setCount(span, SemanticConventions.LLM_TOKEN_COUNT_PROMPT, input);
+        setCount(span, SemanticConventions.LLM_TOKEN_COUNT_COMPLETION, output);
+        setCount(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
+            total != null ? total : input != null && output != null ? input + output : null);
+    }
+
+    private static Long count(JsonObject object, String... keys) {
+        for (String key : keys) {
+            JsonElement value = object.get(key);
+            if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
+                return value.getAsLong();
+            }
+        }
+        return null;
+    }
+
+    private static void setCount(Span span, String key, Long value) {
+        if (value != null) span.setAttribute(key, value);
+    }
+
+    boolean hideStreamOutput() {
+        return tracer.getConfig().isHideOutputs();
+    }
+
+    void captureStreamOutput(Span span, String role, JsonArray content, boolean truncated) {
+        if (hideStreamOutput()) return;
+        JsonArray messages = new JsonArray();
+        messages.add(message(role, content));
+        setMessages(span, messages, false);
+        tracer.setOutputValue(span, messagesText(messages));
+        // This is an assembled message, not a copy of the wire event stream.
+        JsonObject output = new JsonObject();
+        output.add("message", messages.get(0));
+        if (truncated) output.addProperty("truncated", true);
+        setJson(span, SemanticConventions.RAW_OUTPUT, output);
     }
 
     private void setMessages(Span span, JsonArray messages, boolean input) {
@@ -247,7 +315,7 @@ final class BedrockTracing {
     }
 
     /** Use the SDK's public model metadata, not Gson reflection or SDK toString(). */
-    private static JsonElement sdkJson(Object value, int depth) {
+    static JsonElement sdkJson(Object value, int depth) {
         if (value == null) return JsonNull.INSTANCE;
         if (depth > 32) return omitted();
         if (value instanceof SdkBytes) {
@@ -348,7 +416,7 @@ final class BedrockTracing {
     }
 
     /** Bound traversal even for deeply nested user JSON; primitives are immutable. */
-    private static JsonElement boundedCopy(JsonElement value, int depth) {
+    static JsonElement boundedCopy(JsonElement value, int depth) {
         if (depth > 32) return omitted();
         if (value.isJsonArray()) {
             JsonArray result = new JsonArray();
