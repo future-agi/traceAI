@@ -22,6 +22,7 @@ from traceai_crewai._standalone import (
     _AgentKickoffWrapper,
     _AsyncAgentKickoffWrapper,
     _AsyncFlowKickoffWrapper,
+    _AsyncFlowMethodWrapper,
 )
 from traceai_crewai._privacy import _CrewAITraceConfig
 from traceai_crewai._tracer import _CrewAITracer
@@ -88,7 +89,7 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         # These entry points do not exist on the supported 0.41.1 floor.
         # kickoff_async delegates to kickoff; wrapping both would double-count.
         self._optional_originals = []
-        modern_agent = Version(package_version("crewai")) >= Version("1.15.0")
+        modern_runtime = Version(package_version("crewai")) >= Version("1.15.0")
         for module_name, class_name, method_name, wrapper_type in (
             ("crewai", "Crew", "akickoff", _AsyncKickoffWrapper),
             ("crewai", "Task", "_aexecute_core", _AsyncExecuteCoreWrapper),
@@ -113,7 +114,7 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         ):
             # Earlier Agent.kickoff versions use LiteAgent instead of the
             # coroutine-factory contract covered by these public wrappers.
-            if class_name == "Agent" and not modern_agent:
+            if class_name == "Agent" and not modern_runtime:
                 continue
             try:
                 module = import_module(module_name)
@@ -146,14 +147,23 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
                 raise
         else:
             flow = getattr(flow_module, "Flow", None)
-            for cls in flow.__mro__ if flow is not None else ():
-                original = vars(cls).get("kickoff_async")
-                if original is not None:
-                    cls.kickoff_async = FunctionWrapper(
-                        original, _AsyncFlowKickoffWrapper(tracer=self._tracer)
-                    )
-                    self._optional_originals.append((cls, "kickoff_async", original))
-                    break
+            hooks = [("kickoff_async", _AsyncFlowKickoffWrapper)]
+            # 1.15+ executes nodes through the async runtime method, returning
+            # (application result, event ID). Earlier Flow versions have a
+            # different return contract; never infer it from a user's tuple.
+            if modern_runtime:
+                hooks.append(("_execute_method", _AsyncFlowMethodWrapper))
+            for method_name, wrapper_type in hooks:
+                for cls in flow.__mro__ if flow is not None else ():
+                    original = vars(cls).get(method_name)
+                    if original is not None:
+                        setattr(
+                            cls,
+                            method_name,
+                            FunctionWrapper(original, wrapper_type(tracer=self._tracer)),
+                        )
+                        self._optional_originals.append((cls, method_name, original))
+                        break
 
     def _uninstrument(self, **kwargs: Any) -> None:
         for cls, method_name, original in self._optional_originals:

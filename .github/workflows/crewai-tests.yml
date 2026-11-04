@@ -29,7 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.10', '3.12']
-        crewai: ['0.41.1', 'latest']
+        # Exercise the Flow-node contract floor as well as the package floor.
+        crewai: ['0.41.1', '1.15.0', 'latest']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

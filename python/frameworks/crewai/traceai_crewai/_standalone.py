@@ -98,7 +98,63 @@ class _AsyncFlowKickoffWrapper(_AsyncAgentKickoffWrapper):
             # AgentExecutor is itself a private Flow. Task/Agent spans already
             # own that execution; user-created nested Flows still get children.
             or getattr(type(instance), "is_crewai_internal", False)
+            # Early 1.15 releases predate that marker. Match the defining
+            # framework class, not a user Flow that happens to share its name.
+            or any(
+                cls.__module__ == "crewai.experimental.agent_executor"
+                and cls.__name__ == "AgentExecutor"
+                for cls in type(instance).__mro__
+            )
             # Streaming factories call kickoff_async again in the consuming
             # worker with stream=False, just like Crew's lazy stream factories.
             or getattr(instance, "stream", False)
         )
+
+
+class _AsyncFlowMethodWrapper(_AsyncFlowKickoffWrapper):
+    """Trace the awaited 1.15+ node execution, not its listener dispatch.
+
+    The native runtime propagates the current context into synchronous worker
+    threads and awaits coroutine results. Keeping that execution untouched also
+    preserves cancellation, branching and nested Agent/Flow parentage.
+    """
+
+    async def __call__(self, wrapped, instance, args, kwargs):
+        if self._suppressed(instance):
+            return await wrapped(*args, **kwargs)
+        bound = _bound_call(wrapped, args, kwargs)
+        name = bound["method_name"]
+        definition = instance._definition.methods[name]
+        node_type = "listen"
+        if definition.router:
+            node_type = "router"
+        elif definition.is_start:
+            node_type = "start"
+        content = "__REDACTED__"
+        if not _hide_input_content(self._tracer):
+            # Name only the application's arguments, never the callable, Flow
+            # state/definition, event IDs, persistence or executor configuration.
+            inputs = _bound_call(
+                bound["method"], bound.get("args", ()), bound.get("kwargs", {})
+            )
+            inputs.pop("self", None)
+            content = json.dumps(_safe_data(inputs))
+        with self._tracer.start_as_current_span(
+            f"{type(instance).__name__}.{name}",
+            attributes={
+                SpanAttributes.GEN_AI_SPAN_KIND: self._kind,
+                "flow.node.name": name,
+                "flow.node.type": node_type,
+                SpanAttributes.INPUT_VALUE: content,
+            },
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                result = await wrapped(*args, **kwargs)
+                # The second element is CrewAI's event ID, not user output.
+                self._finish(span, result[0])
+                return result
+            except BaseException:
+                span.set_status(trace_api.StatusCode.ERROR)
+                raise

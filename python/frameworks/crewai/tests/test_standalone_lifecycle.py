@@ -115,8 +115,11 @@ def test_flow_lifecycle_and_explicit_projection(provider_composition, api, hidde
         )
         assert result == baseline
         spans = memory.get_finished_spans()
-        assert len(spans) == 1
-        span = spans[0]
+        assert len(spans) == 2
+        span = next(s for s in spans if s.name == "ApplicationFlow.kickoff_async")
+        node = next(s for s in spans if s.attributes.get("flow.node.name") == "run")
+        assert node.parent.span_id == span.context.span_id
+        assert node.attributes["flow.node.type"] == "start"
         assert span.name.startswith("ApplicationFlow.")
         assert span.attributes["gen_ai.span.kind"] == "CHAIN"
         assert span.parent.span_id == parent.get_span_context().span_id
@@ -128,7 +131,7 @@ def test_flow_lifecycle_and_explicit_projection(provider_composition, api, hidde
         assert "synthetic-output-key" not in payload
     inst.uninstrument()
     for cls, attrs in originals.items():
-        for name in ("kickoff", "kickoff_async", "akickoff"):
+        for name in ("kickoff", "kickoff_async", "akickoff", "_execute_method"):
             assert vars(cls).get(name) is attrs.get(name)
 
 
@@ -152,9 +155,10 @@ def test_flow_failure_suppression_and_restoration(provider_composition, api):
                 execute(FailingFlow(), api)
             assert caught.value is marker
         spans = memory.get_finished_spans()
-        assert len(spans) == (0 if suppressed else 1)
-    assert spans[0].status.status_code is StatusCode.ERROR
-    assert spans[0].end_time and not spans[0].events and not spans[0].status.description
+        assert len(spans) == (0 if suppressed else 2)
+    for span in spans:
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.end_time and not span.events and not span.status.description
     inst.uninstrument()
     memory.clear()
     with pytest.raises(ValueError):
@@ -180,14 +184,17 @@ def test_flow_agent_auto_async_parentage_and_internal_dedup(provider_composition
     llm_inst.instrument(tracer_provider=provider)
     assert "positive-output" in UserFlow().kickoff().raw
     spans = memory.get_finished_spans()
-    flows = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "CHAIN"]
+    flows = [s for s in spans if s.name == "UserFlow.kickoff_async"]
+    nodes = [s for s in spans if "flow.node.name" in s.attributes]
     agents = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
     llms = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
-    assert len(flows) == len(agents) == len(llms) == len(calls) == 1
-    assert agents[0].parent.span_id == flows[0].context.span_id
+    assert len(flows) == len(nodes) == len(agents) == len(llms) == len(calls) == 1
+    assert len(spans) == 4  # No private AgentExecutor root or node spans.
+    assert nodes[0].parent.span_id == flows[0].context.span_id
+    assert agents[0].parent.span_id == nodes[0].context.span_id
     assert llms[0].parent.span_id == agents[0].context.span_id
-    assert flows[0].start_time <= agents[0].start_time <= llms[0].start_time
-    assert llms[0].end_time <= agents[0].end_time <= flows[0].end_time
+    assert flows[0].start_time <= nodes[0].start_time <= agents[0].start_time <= llms[0].start_time
+    assert llms[0].end_time <= agents[0].end_time <= nodes[0].end_time <= flows[0].end_time
 
 
 @modern
@@ -209,10 +216,14 @@ def test_nested_user_flows_are_not_deduplicated(provider_composition):
     inst.instrument(tracer_provider=provider)
     assert Parent().kickoff() == "positive-output"
     spans = memory.get_finished_spans()
-    assert len(spans) == 2
-    child = next(s for s in spans if s.name.startswith("Child."))
-    parent = next(s for s in spans if s.name.startswith("Parent."))
-    assert child.parent.span_id == parent.context.span_id
+    assert len(spans) == 4
+    child = next(s for s in spans if s.name == "Child.kickoff_async")
+    parent = next(s for s in spans if s.name == "Parent.kickoff_async")
+    parent_node = next(s for s in spans if s.name == "Parent.run")
+    child_node = next(s for s in spans if s.name == "Child.run")
+    assert parent_node.parent.span_id == parent.context.span_id
+    assert child.parent.span_id == parent_node.context.span_id
+    assert child_node.parent.span_id == child.context.span_id
 
 
 @modern
@@ -240,9 +251,13 @@ def test_cancelled_async_flow_ends_span(provider_composition):
 
     asyncio.run(scenario())
     spans = memory.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].status.status_code is StatusCode.ERROR
-    assert not spans[0].events and spans[0].end_time
+    assert len(spans) == 2
+    node = next(s for s in spans if s.attributes.get("flow.node.name") == "run")
+    root = next(s for s in spans if s.name == "WaitingFlow.kickoff_async")
+    assert node.parent.span_id == root.context.span_id
+    for span in spans:
+        assert span.status.status_code is StatusCode.ERROR
+        assert not span.events and span.end_time
 
 
 @modern
@@ -282,11 +297,15 @@ def test_lazy_flow_uses_consuming_context(provider_composition, api, suppressed)
                 for s in memory.get_finished_spans()
                 if s.attributes.get("gen_ai.span.kind")
             ]
-            assert len(spans) == (0 if suppressed else 1)
+            assert len(spans) == (0 if suppressed else 2)
             if spans:
-                assert spans[0].parent.span_id == parent.get_span_context().span_id
-                assert spans[0].status.status_code is StatusCode.OK
-                assert "positive-output" in spans[0].attributes["output.value"]
+                root = next(s for s in spans if s.name == "StreamingFlow.kickoff_async")
+                node = next(s for s in spans if s.attributes.get("flow.node.name") == "run")
+                assert root.parent.span_id == parent.get_span_context().span_id
+                assert node.parent.span_id == root.context.span_id
+                for span in spans:
+                    assert span.status.status_code is StatusCode.OK
+                    assert "positive-output" in span.attributes["output.value"]
         assert executed == [True] and flow.stream is True
 
     asyncio.run(scenario())
