@@ -5,6 +5,7 @@
  */
 import { TracerProvider, diag, trace } from "@opentelemetry/api";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { patchCodex } from "./codexWrapper";
 import { ContentPolicy } from "./spans";
 import { TurnTracingContext, patchThread } from "./threadWrapper";
 import { CodexModuleLike, ThreadLike } from "./types";
@@ -69,9 +70,20 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
 export class CodexSDKInstrumentation {
   private tracerProvider?: TracerProvider;
   private readonly traceConfig?: TraceConfigOptions;
-  /** Undo functions for the class patch and wrapCodex() factories (never one per thread). */
+  /** Undo functions for class patches. */
   private readonly undo: Array<() => void> = [];
-  /** False after unpatch(): instance patches stay in place but pass events through untraced. */
+  /** Client undo functions hold only WeakRefs; collected clients release their bookkeeping. */
+  private readonly clientUndo = new Set<() => void>();
+  private readonly clientFinalizer = new FinalizationRegistry<() => void>((undo) => {
+    // Deactivate the owner too: saved factories must remain inert after collection.
+    undo();
+    this.clientUndo.delete(undo);
+  });
+  /** Thread undo functions hold only WeakRefs; collected threads release their bookkeeping. */
+  private readonly threadUndo = new Set<() => void>();
+  private readonly threadFinalizer = new FinalizationRegistry<() => void>((undo) => {
+    this.threadUndo.delete(undo);
+  });
   private enabled = true;
 
   constructor(config: CodexSDKInstrumentationConfig = {}) {
@@ -106,13 +118,16 @@ export class CodexSDKInstrumentation {
   }
 
   /**
-   * Patch one Thread instance. Returns the same instance. No reference to the
-   * thread is kept: after `unpatch()` the patched method passes events through
-   * untraced instead of being removed.
+   * Patch one Thread instance. Returns the same instance. Only a weak reference
+   * is kept, so `unpatch()` can restore live threads without retaining dropped ones.
    */
   wrapThread<T extends object>(thread: T): T {
     this.enabled = true;
-    patchThread(thread as ThreadLike, () => this.tracingContext());
+    const undo = patchThread(thread as ThreadLike, () => this.tracingContext());
+    if (undo) {
+      this.threadUndo.add(undo);
+      this.threadFinalizer.register(thread, undo, undo);
+    }
     return thread;
   }
 
@@ -120,27 +135,10 @@ export class CodexSDKInstrumentation {
   wrapCodex<T extends object>(codex: T): T {
     if (!codex || typeof codex !== "object") return codex;
     this.enabled = true;
-    const target = codex as Record<string, unknown>;
-    // Held weakly: a wrapped client the app drops can be collected before unpatch().
-    const ref = new WeakRef(target);
-    for (const method of ["startThread", "resumeThread"] as const) {
-      const original = target[method] as ((...args: unknown[]) => object) | undefined;
-      if (typeof original !== "function") continue;
-      const hadOwn = Object.prototype.hasOwnProperty.call(codex, method);
-      const self = this;
-      Object.defineProperty(codex, method, {
-        value: function tracedThreadFactory(this: unknown, ...args: unknown[]) {
-          return self.wrapThread(original.apply(this, args));
-        },
-        writable: true,
-        configurable: true,
-      });
-      this.undo.push(() => {
-        const live = ref.deref();
-        if (!live) return;
-        if (hadOwn) Object.defineProperty(live, method, { value: original, writable: true, configurable: true });
-        else delete live[method];
-      });
+    const undo = patchCodex(codex as Record<string | symbol, unknown>, (thread) => this.wrapThread(thread));
+    if (undo) {
+      this.clientUndo.add(undo);
+      this.clientFinalizer.register(codex, undo, undo);
     }
     return codex;
   }
@@ -148,6 +146,20 @@ export class CodexSDKInstrumentation {
   /** Remove every patch this instrumentation applied. */
   unpatch(): void {
     this.enabled = false;
+    for (const undo of this.threadUndo) {
+      this.threadFinalizer.unregister(undo);
+      undo();
+    }
+    this.threadUndo.clear();
+    for (const undo of this.clientUndo) {
+      this.clientFinalizer.unregister(undo);
+      try {
+        undo();
+      } catch (error) {
+        diag.debug(`${INSTRUMENTATION_NAME}: unpatch failed: ${error}`);
+      }
+    }
+    this.clientUndo.clear();
     while (this.undo.length) {
       const fn = this.undo.pop();
       try {

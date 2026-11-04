@@ -17,6 +17,8 @@ const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
 
 function codex(scenario) {
+  // Older SDKs inherit process.env rather than accepting CodexOptions.env.
+  process.env.FAKE_CODEX_SCENARIO = scenario;
   return new CodexSDK.Codex({ codexPathOverride: FAKE, env: { PATH: process.env.PATH ?? "", FAKE_CODEX_SCENARIO: scenario } });
 }
 const turns = () => exporter.getFinishedSpans().filter((s) => s.name === "codex.turn");
