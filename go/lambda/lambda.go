@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -121,6 +122,11 @@ type resultCapture struct {
 func (c *resultCapture) record(_ context.Context, value any) {
 	c.seen, c.mime = true, contentTypeJSON
 	if _, ok := value.(io.Reader); !ok {
+		return
+	}
+	// encoding/json emits null for nil pointers without calling MarshalJSON.
+	// Preserve that decision without invoking any methods on the nil reader.
+	if v := reflect.ValueOf(value); v.Kind() == reflect.Ptr && v.IsNil() {
 		return
 	}
 	c.mime = contentTypeBytes

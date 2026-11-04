@@ -57,6 +57,15 @@ func (r *rawMarshalResponse) MarshalJSON() ([]byte, error) {
 }
 
 func init() {
+	runtimeCases["nil-reader"] = sdkCase(func() (io.Reader, error) {
+		return (*strings.Reader)(nil), nil
+	})
+	runtimeCases["nil-typed-reader"] = sdkCase(func() (io.Reader, error) {
+		return (*closingResponse)(nil), nil
+	})
+	runtimeCases["nil-marshaling-reader"] = sdkCase(func() (io.Reader, error) {
+		return (*singleMarshalResponse)(nil), nil
+	})
 	runtimeCases["close-mime"] = sdkCase(func() (io.Reader, error) {
 		return &closingResponse{data: strings.NewReader("{\"statusCode\":200}\x00\x00\x00\x00\x00\x00\x00\x00hello")}, nil
 	})
@@ -72,6 +81,23 @@ func init() {
 	runtimeCases["json-shaped-typed"] = sdkCase(func() (io.Reader, error) {
 		return &typedResponse{Reader: bytes.NewReader([]byte(`{"answer":"ok"}`)), contentType: "application/x-ndjson"}, nil
 	})
+}
+
+// A nil pointer is JSON null even when its type implements io.Reader or
+// json.Marshaler. Neither the SDK nor MIME capture should call its methods.
+func TestRuntimeNilReaderResponse(t *testing.T) {
+	for _, name := range []string{"nil-reader", "nil-typed-reader", "nil-marshaling-reader"} {
+		t.Run(name, func(t *testing.T) {
+			plain := runThroughRuntime(t, name+"/plain", "{}")
+			wrapped := runThroughRuntime(t, name+"/wrapped", "{}")
+			if plain.endpoint != "response" || plain.contentType != contentTypeJSON || plain.body != "null" {
+				t.Fatalf("invalid baseline: %+v", plain)
+			}
+			if plain != wrapped {
+				t.Fatalf("nil reader changed response: plain=%+v wrapped=%+v", plain, wrapped)
+			}
+		})
+	}
 }
 
 func TestContentTypeBeforeReaderClose(t *testing.T) {
