@@ -130,5 +130,6 @@
   "typescript/packages/traceai_elevenlabs": "0.1.0",
   "go/bedrock": "0.1.0",
   "typescript/packages/traceai_huggingface_transformers": "0.1.0",
+  "python/frameworks/transformers": "0.1.0",
   "typescript/packages/traceai_n8n": "0.1.0"
 }

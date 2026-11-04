@@ -1,1 +1,1 @@
-_instruments = ("lancedb >= 0.4.0",)
+_instruments = ("lancedb >= 0.25.0",)

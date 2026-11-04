@@ -1105,6 +1105,14 @@
         "src/version.ts"
       ]
     },
+    "python/frameworks/transformers": {
+      "release-type": "python",
+      "component": "traceai-transformers",
+      "package-name": "traceAI-transformers",
+      "extra-files": [
+        "traceai_transformers/version.py"
+      ]
+    },
     "typescript/packages/traceai_n8n": {
       "release-type": "node",
       "component": "npm-traceai-n8n",
