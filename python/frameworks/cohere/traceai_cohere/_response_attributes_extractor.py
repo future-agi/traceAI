@@ -4,10 +4,17 @@ from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
+    RerankerAttributes,
     SpanAttributes,
 )
 from opentelemetry.util.types import AttributeValue
 
+from traceai_cohere._content import (
+    MAX_DOCUMENTS,
+    _document_attributes,
+    _hide_input_content,
+    _hide_output_content,
+)
 from traceai_cohere._utils import _message_attributes
 
 logger = logging.getLogger(__name__)
@@ -72,6 +79,13 @@ class _ChatResponseAttributesExtractor:
         # v1 reports meta; v2 reports usage. Prefer actual tokens over billed
         # units, and compute the total from the same source (including zeroes).
         usage = response.get("usage") or response.get("meta") or {}
+        # Cache reads are a subset of prompt usage, not additional tokens and
+        # not billed units. Keep numeric usage independent of content privacy.
+        if usage.get("cached_tokens") is not None:
+            yield (
+                SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ,
+                usage["cached_tokens"],
+            )
         tokens = usage.get("tokens") or usage.get("billed_units") or {}
         for field, attribute in (
             ("input_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
@@ -231,26 +245,45 @@ class _RerankResponseAttributesExtractor:
         results = response.get("results", [])
         yield "cohere.results_count", len(results)
 
-        # Extract relevance scores
+        # Output documents are also copies of input content. Apply both
+        # directions explicitly for the declared core floor.
+        capture_documents = not (
+            _hide_input_content(self._config) or _hide_output_content(self._config)
+        )
+        documents = request_parameters.get("documents")
+        replayable = isinstance(documents, (list, tuple))
         scores = []
-        for i, result in enumerate(results[:10]):  # Limit to 10
-            index = result.get("index", i)
+        for i, result in enumerate(results[:MAX_DOCUMENTS]):
+            index = result.get("index")
             score = result.get("relevance_score", 0.0)
             scores.append(score)
-            yield f"cohere.rerank.{i}.index", index
+            if index is not None:
+                yield f"cohere.rerank.{i}.index", index
             yield f"cohere.rerank.{i}.relevance_score", score
+            if capture_documents:
+                document = None
+                if replayable:
+                    # Reject negative, bool, non-integer and out-of-range indices;
+                    # never fabricate an input association from result position.
+                    if type(index) is int and 0 <= index < len(documents):
+                        document = documents[index]
+                else:
+                    document = result.get("document")
+                if document is not None:
+                    yield from _document_attributes(
+                        document, f"{RerankerAttributes.RERANKER_OUTPUT_DOCUMENTS}.{i}"
+                    )
 
         if scores:
             yield "cohere.rerank.scores", safe_json_dumps(scores)
+        yield "cohere.rerank.output_documents_truncated", len(results) > MAX_DOCUMENTS
 
-        # return_documents echoes the submitted input. Preserve the ranking
-        # metadata in telemetry without changing the SDK response for callers.
-        if self._config.hide_inputs:
-            response = dict(response)
-            response["results"] = [
-                {key: value for key, value in result.items() if key != "document"}
-                if isinstance(result, dict)
-                else result
-                for result in results
-            ]
+        # Canonical fields above hold the bounded document copy. Omit echoed
+        # documents from raw JSON so neither privacy nor the cap can be bypassed.
+        # Copy telemetry only; leave the actual SDK response untouched.
+        response = dict(response)
+        response["results"] = [
+            {key: value for key, value in result.items() if key != "document"}
+            for result in results[:MAX_DOCUMENTS]
+        ]
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)

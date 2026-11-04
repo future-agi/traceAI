@@ -3,6 +3,7 @@ from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
+    EmbeddingAttributes,
     FiMimeTypeValues,
     FiSpanKindValues,
     ImageAttributes,
@@ -10,9 +11,12 @@ from fi_instrumentation.fi_types import (
     MessageContentAttributes,
     RerankerAttributes,
     SpanAttributes,
+    ToolAttributes,
 )
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from opentelemetry.util.types import AttributeValue
 
+from traceai_cohere._content import MAX_DOCUMENTS, _document_attributes, _hide_input_content
 from traceai_cohere._utils import _message_attributes, _to_dict
 
 logger = logging.getLogger(__name__)
@@ -113,7 +117,19 @@ class _ChatRequestAttributesExtractor:
         # Tools
         if "tools" in request_parameters:
             tools = request_parameters.get("tools") or []
-            yield "cohere.tools_count", len(tools)
+            if isinstance(tools, (list, tuple)):
+                yield "cohere.tools_count", len(tools)
+                # Schemas are input/invocation content, even on core 1.2.2.
+                if not (
+                    _hide_input_content(self._config)
+                    or self._config.hide_llm_invocation_parameters
+                ):
+                    for i, tool in enumerate(tools):
+                        yield (
+                            f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}."
+                            f"{ToolAttributes.TOOL_JSON_SCHEMA}",
+                            safe_json_dumps(_to_dict(tool)),
+                        )
 
     def _extract_invocation_parameters(
         self, request_parameters: Mapping[str, Any]
@@ -138,6 +154,9 @@ class _ChatRequestAttributesExtractor:
 
 class _EmbedRequestAttributesExtractor:
     """Extract span attributes from Cohere embed request."""
+
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
 
     def get_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
@@ -200,10 +219,21 @@ class _EmbedRequestAttributesExtractor:
                 {"texts_count": text_count, "images_count": image_count,
                  "inputs_count": input_count}
             )
+        elif _hide_input_content(self._config):
+            # Guard both raw and canonical copies before export: core 1.2.2
+            # does not mask embedding.text under the selective input flags.
+            yield SpanAttributes.INPUT_VALUE, REDACTED_VALUE
         elif isinstance(texts, (list, tuple)):
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(texts[:5])  # Limit
-        elif texts is not None:
-            yield SpanAttributes.INPUT_VALUE, str(texts)
+            for i, text in enumerate(texts[:5]):
+                if isinstance(text, str):
+                    yield (
+                        f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{i}."
+                        f"{EmbeddingAttributes.EMBEDDING_TEXT}",
+                        text,
+                    )
+        elif isinstance(texts, str):
+            yield SpanAttributes.INPUT_VALUE, texts
 
 
 class _RerankRequestAttributesExtractor:
@@ -234,11 +264,23 @@ class _RerankRequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
         query = request_parameters.get("query", "")
-        # This semantic alias is not covered by older core mask tables.
+        # These aliases are not covered by older core mask tables.
+        if _hide_input_content(self._config):
+            query = REDACTED_VALUE
         masked_query = self._config.mask(SpanAttributes.INPUT_VALUE, query)
         if masked_query is not None:
             yield RerankerAttributes.RERANKER_QUERY, masked_query
         yield SpanAttributes.INPUT_VALUE, query
 
-        documents = request_parameters.get("documents") or []
+        documents = request_parameters.get("documents")
+        # Never drain a one-shot iterable before the SDK receives it.
+        if not isinstance(documents, (list, tuple)):
+            return
         yield "cohere.documents_count", len(documents)
+        if _hide_input_content(self._config):
+            return
+        yield "cohere.rerank.input_documents_truncated", len(documents) > MAX_DOCUMENTS
+        for i, document in enumerate(documents[:MAX_DOCUMENTS]):
+            yield from _document_attributes(
+                document, f"{RerankerAttributes.RERANKER_INPUT_DOCUMENTS}.{i}"
+            )

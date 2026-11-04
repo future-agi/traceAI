@@ -1,10 +1,12 @@
 """Pass-through stream lifecycles and v1/v2 event accumulation."""
 
 import logging
+from time import perf_counter
 from typing import Any, Dict, Mapping, Optional
 from weakref import finalize
 
 from fi_instrumentation import TraceConfig
+from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace
 
 from traceai_cohere._response_attributes_extractor import (
@@ -24,11 +26,18 @@ class _Accumulator:
         self.citations = []
         self.v2 = False
 
-    def add(self, event: Any) -> None:
+    def add(self, event: Any) -> bool:
+        """Accumulate an event and report actual generated text/tool content."""
+        generated = False
         data = _to_dict(event)
         kind = data.get("type") or data.get("event_type")
         if kind == "text-generation":
-            self.text.append(data.get("text") or "")
+            text = data.get("text") or ""
+            self.text.append(text)
+            generated = bool(text)
+        elif kind == "tool-calls-generation":
+            tools = data.get("tool_calls") or []
+            generated = any(tool.get("name") or tool.get("parameters") for tool in tools)
         elif kind == "stream-end":
             self.response.update(data.get("response") or {})
             if data.get("finish_reason"):
@@ -49,7 +58,9 @@ class _Accumulator:
                 if data.get("id"):
                     self.response["id"] = data["id"]
             elif kind in ("content-start", "content-delta"):
-                self.text.append((message.get("content") or {}).get("text") or "")
+                text = (message.get("content") or {}).get("text") or ""
+                self.text.append(text)
+                generated = bool(text)
             elif kind == "citation-start":
                 citation = message.get("citations")
                 if isinstance(citation, dict):
@@ -63,11 +74,13 @@ class _Accumulator:
                     if incoming.get(key) is not None:
                         tool[key] = incoming[key]
                 function = incoming.get("function") or {}
+                generated = bool(function.get("name") or function.get("arguments"))
                 if function.get("name") is not None:
                     tool["function"]["name"] = function["name"]
                 tool["function"]["arguments"] += function.get("arguments") or ""
             elif kind == "message-end":
                 self.response.update(delta)
+        return generated
 
     def result(self) -> Dict[str, Any]:
         result = dict(self.response)
@@ -91,7 +104,10 @@ class _StreamBase:
         span: _WithSpan,
         request: Mapping[str, Any],
         config: Optional[TraceConfig] = None,
+        started_at: Optional[float] = None,
     ) -> None:
+        self._started_at = perf_counter() if started_at is None else started_at
+        self._first_token_recorded = False
         self._response = response
         self._span = span
         self._request = request
@@ -113,7 +129,15 @@ class _StreamBase:
 
     def _add(self, event: Any) -> Any:
         try:
-            self._accumulator.add(event)
+            generated = self._accumulator.add(event)
+            if generated and not self._first_token_recorded:
+                self._first_token_recorded = True
+                # Core convention is milliseconds. Measure from the SDK call
+                # to first non-empty text/tool delta, not metadata/empty starts.
+                self._span._span.set_attribute(
+                    SpanAttributes.GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
+                    (perf_counter() - self._started_at) * 1000,
+                )
         except Exception:
             logger.debug("Could not extract Cohere stream event", exc_info=True)
         return event

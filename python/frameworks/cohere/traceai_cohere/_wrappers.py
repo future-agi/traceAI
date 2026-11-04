@@ -1,6 +1,7 @@
 import logging
 from abc import ABC
 from contextlib import contextmanager
+from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, Tuple
 
 import opentelemetry.context as context_api
@@ -213,6 +214,7 @@ class _ChatStreamWrapper(_WithTracer):
             ),
         ) as span:
             try:
+                started_at = perf_counter()
                 response = wrapped(*args, **kwargs)
             except BaseException as exception:
                 span.record_exception(exception)
@@ -223,17 +225,25 @@ class _ChatStreamWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
-            return self._handle_streaming_response(span, response, request_parameters)
+            return self._handle_streaming_response(
+                span, response, request_parameters, started_at
+            )
 
-    def _handle_streaming_response(self, span, response, request_parameters):
-        return _Stream(response, span, request_parameters, config=self._config)
+    def _handle_streaming_response(self, span, response, request_parameters, started_at):
+        return _Stream(
+            response, span, request_parameters,
+            config=self._config, started_at=started_at,
+        )
 
 
 class _AsyncChatStreamWrapper(_ChatStreamWrapper):
     """Async SDK streams return an async iterator directly, not an awaitable."""
 
-    def _handle_streaming_response(self, span, response, request_parameters):
-        return _AsyncStream(response, span, request_parameters, config=self._config)
+    def _handle_streaming_response(self, span, response, request_parameters, started_at):
+        return _AsyncStream(
+            response, span, request_parameters,
+            config=self._config, started_at=started_at,
+        )
 
 
 class _EmbedWrapper(_WithTracer):
@@ -241,7 +251,7 @@ class _EmbedWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _EmbedRequestAttributesExtractor()
+        self._request_extractor = _EmbedRequestAttributesExtractor(config=self._config)
         self._response_extractor = _EmbedResponseAttributesExtractor()
 
     def __call__(
@@ -299,7 +309,7 @@ class _AsyncEmbedWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _EmbedRequestAttributesExtractor()
+        self._request_extractor = _EmbedRequestAttributesExtractor(config=self._config)
         self._response_extractor = _EmbedResponseAttributesExtractor()
 
     async def __call__(
