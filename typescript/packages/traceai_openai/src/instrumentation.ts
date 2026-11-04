@@ -61,14 +61,25 @@ import {
 
 const MODULE_NAME = "openai";
 
-// Key by the concrete SDK class, not its mutable/immutable module namespace.
-// CJS and ESM exports can be distinct classes in the same process.
-const patchOwners = new WeakMap<object, OpenAIInstrumentation>();
-let patchedSDKCount = 0;
+// Both public package entry points (and duplicate package installations) must
+// agree on the owner. A module-local WeakMap lets one build overwrite another's
+// wrappers. Key by SDK class, without writing to immutable module namespaces.
+const patchRegistryKey = Symbol.for("@traceai/openai/patch-registry/v1");
+interface PatchRegistry {
+  owners: WeakMap<object, OpenAIInstrumentation>;
+  count: number;
+}
+const registryHost = globalThis as typeof globalThis & {
+  [patchRegistryKey]?: PatchRegistry;
+};
+const patchRegistry = (registryHost[patchRegistryKey] ??= {
+  owners: new WeakMap<object, OpenAIInstrumentation>(),
+  count: 0,
+});
 
-/** Whether any SDK class is currently patched by this module. */
+/** Whether any SDK class is currently patched across the package entry points. */
 export function isPatched() {
-  return patchedSDKCount > 0;
+  return patchRegistry.count > 0;
 }
 
 /**
@@ -163,7 +174,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   ) {
     // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
     const sdk = module?.OpenAI;
-    if (sdk && patchOwners.has(sdk)) {
+    if (sdk && patchRegistry.owners.has(sdk)) {
       return module;
     }
     const resources = [
@@ -593,9 +604,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     // Keep the legacy diagnostic property, but never use it as the guard.
     // Immutable class exports still work via the identity map.
     try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = true; } catch { /* immutable SDK */ }
-    patchOwners.set(sdk, this);
+    patchRegistry.owners.set(sdk, this);
     (this.patchedModules ??= new Set()).add(module);
-    patchedSDKCount++;
+    patchRegistry.count++;
 
     return module;
   }
@@ -604,18 +615,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    */
   private unpatch(moduleExports: typeof openai, moduleVersion?: string) {
     const sdk = moduleExports?.OpenAI;
-    if (!sdk || patchOwners.get(sdk) !== this) return;
+    if (!sdk || patchRegistry.owners.get(sdk) !== this) return;
     this._unwrap(sdk.Chat.Completions.prototype, "create");
     this._unwrap(sdk.Completions.prototype, "create");
     this._unwrap(sdk.Embeddings.prototype, "create");
     if (sdk.Responses) this._unwrap(sdk.Responses.prototype, "create");
     try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = false; } catch { /* immutable SDK */ }
-    patchOwners.delete(sdk);
+    patchRegistry.owners.delete(sdk);
     // An automatic require hook may use a different namespace for this class.
     for (const module of this.patchedModules ?? []) {
       if (module.OpenAI === sdk) this.patchedModules!.delete(module);
     }
-    patchedSDKCount--;
+    patchRegistry.count--;
   }
 
 }

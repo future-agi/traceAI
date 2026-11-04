@@ -3,11 +3,18 @@
 import logging
 import sys
 from abc import ABC
+from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
+from fi_instrumentation.fi_types import (
+    FiSpanKindValues,
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
+    SpanAttributes,
+)
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
@@ -78,6 +85,25 @@ class _WithTracer(ABC):
             yield span
 
 
+def _get_field(value: Any, name: str) -> Any:
+    """Read both SDK models and unmodeled extensions (dicts on older SDKs)."""
+    return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+
+
+def _get_usage_attributes(usage: Any) -> Dict[str, AttributeValue]:
+    attributes: Dict[str, AttributeValue] = {}
+    for field, key in (
+        ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+        ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+        ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+    ):
+        count = _get_field(usage, field)
+        # Token counts are non-negative integers, not booleans or numeric strings.
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            attributes[key] = count
+    return attributes
+
+
 def _get_input_attributes(
     model: str,
     messages: list,
@@ -116,17 +142,29 @@ def _get_input_attributes(
     # Add input messages
     for i, message in enumerate(messages):
         prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-        if isinstance(message, dict):
-            if "role" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-            if "content" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message["content"]) if message["content"] else ""
-        else:
-            # Handle message objects
-            if hasattr(message, "role"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
-            if hasattr(message, "content"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
+        role = _get_field(message, "role")
+        if isinstance(role, str):
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = role
+        content = _get_field(message, "content")
+        if isinstance(content, str) or content is None:
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = content or ""
+        elif isinstance(content, (list, tuple)):
+            # Never stringify multimodal parts into a text attribute: that hides
+            # image URLs from FITracer's image-specific privacy boundary. Keep
+            # typed copies only; the SDK receives the original message unchanged.
+            for j, part in enumerate(content):
+                part_prefix = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}.{j}"
+                part_type = _get_field(part, "type")
+                if part_type == "text":
+                    text = _get_field(part, "text")
+                    if isinstance(text, str):
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"] = "text"
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}"] = text
+                elif part_type == "image_url":
+                    url = _get_field(_get_field(part, "image_url"), "url")
+                    if isinstance(url, str):
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"] = "image"
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"] = url
 
     # Project semantic fields only. Transport options (headers, query, body,
     # timeout and future SDK kwargs) must never enter telemetry. The original
@@ -162,14 +200,7 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
                 attributes[SpanAttributes.OUTPUT_VALUE] = message.content
 
     # Get usage metrics
-    if hasattr(response, "usage") and response.usage:
-        usage = response.usage
-        if hasattr(usage, "prompt_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-        if hasattr(usage, "completion_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-        if hasattr(usage, "total_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+    attributes.update(_get_usage_attributes(_get_field(response, "usage")))
 
     # Add raw output
     try:
@@ -200,14 +231,7 @@ def _get_stream_output_attributes(
         if hasattr(last_chunk, "model"):
             attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] = last_chunk.model
 
-        if hasattr(last_chunk, "usage") and last_chunk.usage:
-            usage = last_chunk.usage
-            if hasattr(usage, "prompt_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-            if hasattr(usage, "completion_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-            if hasattr(usage, "total_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+        attributes.update(_get_usage_attributes(_get_field(last_chunk, "usage")))
 
     # Add raw output
     try:

@@ -13,11 +13,11 @@ const { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } = req('
 const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
 const instances = [];
-writeFileSync(base + '/mixed-sdk.mjs', 'import OpenAI from "openai"; export { OpenAI };\n');
+writeFileSync(base + '/mixed-sdk.mjs', 'import OpenAI from "openai"; export { OpenAI }; export { OpenAIInstrumentation, isPatched } from "@traceai/openai";\n');
 const load = () => import(pathToFileURL(base + '/mixed-sdk.mjs').href);
 
-function instrument() {
-  const inst = new OpenAIInstrumentation({ instrumentationConfig: { enabled: false } });
+function instrument(Instrumentation = OpenAIInstrumentation) {
+  const inst = new Instrumentation({ instrumentationConfig: { enabled: false } });
   inst.setTracerProvider(provider);
   instances.push(inst);
   return inst;
@@ -83,3 +83,41 @@ test('disabling one owner leaves the other SDK and its tracer intact', async () 
   owner.disable();
   assert.equal(isPatched(), false);
 });
+
+for (const reverse of [false, true]) {
+  for (const sdkFormat of ['cjs', 'esm']) {
+    test(`public CJS/ESM instrumentors share ownership (${sdkFormat}, reverse=${reverse})`, async () => {
+      const esm = await load();
+      assert.notEqual(esm.OpenAIInstrumentation, OpenAIInstrumentation, 'exercise both public entry points');
+      const constructors = [OpenAIInstrumentation, esm.OpenAIInstrumentation];
+      if (reverse) constructors.reverse();
+      const owner = instrument(constructors[0]);
+      const other = instrument(constructors[1]);
+      const module = sdkFormat === 'cjs' ? CJS : esm; // Includes immutable ESM namespace.
+      const SDK = module.OpenAI;
+      const original = SDK.Chat.Completions.prototype.create;
+      owner.manuallyInstrument(module);
+      other.manuallyInstrument(module);
+      await call(SDK);
+      assert.equal(exporter.getFinishedSpans().length, 1, 'no duplicate spans');
+      other.disable();
+      await call(SDK);
+      assert.equal(exporter.getFinishedSpans().length, 2, 'non-owner disable must retain the first owner');
+      assert.equal(isPatched(), true);
+      assert.equal(esm.isPatched(), true);
+      owner.disable();
+      assert.equal(SDK.Chat.Completions.prototype.create, original);
+      assert.equal(isPatched(), false);
+      assert.equal(esm.isPatched(), false);
+      await call(SDK);
+      assert.equal(exporter.getFinishedSpans().length, 2);
+      // Either entry point can acquire ownership after the original owner leaves.
+      other.manuallyInstrument(module);
+      await call(SDK);
+      assert.equal(exporter.getFinishedSpans().length, 3);
+      owner.disable();
+      await call(SDK);
+      assert.equal(exporter.getFinishedSpans().length, 4, 'former owner cannot unwrap the new owner');
+    });
+  }
+}

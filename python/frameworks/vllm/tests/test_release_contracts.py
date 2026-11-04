@@ -17,6 +17,7 @@ else:
     import httpx
 
 INPUT = "PRIVATE_INPUT_SENTINEL"
+IMAGE = "https://images.example.invalid/SYNTHETIC_PRIVATE_IMAGE.png"
 OUTPUT = "PRIVATE_OUTPUT_SENTINEL"
 SECRET = "SYNTHETIC_TRANSPORT_SECRET"
 PARAMS = {"model": "test", "messages": [{"role": "user", "content": INPUT}]}
@@ -180,3 +181,72 @@ def test_cancel_preserves_exception_and_finishes_once(tracing, hide, phase):
     assert len(spans) == 1
     assert spans[0].status.status_code.name == "ERROR"
     assert (SECRET not in spans[0].to_json()) == hide
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("privacy", ["visible", "hide_input_images", "env", "hide_input_text"])
+def test_multimodal_privacy_preserves_provider_request(tracing, monkeypatch, use_async, stream, privacy):
+    if privacy == "env":
+        monkeypatch.setenv("FI_HIDE_INPUT_IMAGES", "true")
+    exporter = tracing(**({privacy: True} if privacy.startswith("hide_") else {}))
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": INPUT},
+        {"type": "image_url", "image_url": {"url": IMAGE}},
+    ]}]
+    seen = []
+
+    def handle(request):
+        seen.append(json.loads(request.content))
+        return response(request)
+
+    params = {"model": "test", "messages": messages, "stream": stream}
+
+    async def run():
+        async with openai.AsyncOpenAI(**OPTIONS, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))) as client:
+            result = await client.chat.completions.create(**params)
+            if stream:
+                assert [chunk async for chunk in result]
+
+    if use_async:
+        asyncio.run(run())
+    else:
+        with openai.OpenAI(**OPTIONS, http_client=httpx.Client(transport=httpx.MockTransport(handle))) as client:
+            result = client.chat.completions.create(**params)
+            if stream:
+                assert list(result)
+    assert seen == [params]
+    assert messages[0]["content"][1]["image_url"]["url"] == IMAGE
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    serialized = spans[0].to_json()
+    assert (IMAGE in serialized) == (privacy not in ("hide_input_images", "env"))
+    assert (INPUT in serialized) == (privacy != "hide_input_text")
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_reported_stream_usage_exported_at_sdk_floor_and_latest(tracing, use_async):
+    exporter = tracing()
+
+    async def run():
+        async with openai.AsyncOpenAI(**OPTIONS, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response))) as client:
+            result = await client.chat.completions.create(**PARAMS, stream=True)
+            return [chunk async for chunk in result]
+
+    if use_async:
+        chunks = asyncio.run(run())
+    else:
+        with openai.OpenAI(**OPTIONS, http_client=httpx.Client(transport=httpx.MockTransport(response))) as client:
+            chunks = list(client.chat.completions.create(**PARAMS, stream=True))
+    # OpenAI 1.0 retains this extension as a dict; newer SDKs model CompletionUsage.
+    usage = chunks[-1].usage
+    reported = usage if isinstance(usage, dict) else usage.model_dump()
+    assert {key: reported[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")} == {
+        "prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5,
+    }
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    attributes = spans[0].attributes
+    assert attributes.get("gen_ai.usage.input_tokens") == 2
+    assert attributes.get("gen_ai.usage.output_tokens") == 3
+    assert attributes.get("gen_ai.usage.total_tokens") == 5
