@@ -2545,6 +2545,34 @@ importers:
         specifier: ^5.7.2
         version: 5.8.3
 
+  packages/traceai_openrouter:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.1
+    devDependencies:
+      '@openrouter/sdk':
+        specifier: 1.5.34
+        version: 1.5.34
+      '@openrouter/sdk-floor':
+        specifier: npm:@openrouter/sdk@1.5.33
+        version: '@openrouter/sdk@1.5.33'
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.1)
+      '@types/node':
+        specifier: ^22.15.29
+        version: 22.15.33
+      eslint:
+        specifier: ^9.39.1
+        version: 9.39.5
+      typescript:
+        specifier: ^5.7.3
+        version: 5.8.3
+      typescript-eslint:
+        specifier: ^8.46.2
+        version: 8.72.1(eslint@9.39.5)(typescript@5.8.3)
+
 packages:
 
   "@emnapi/runtime@1.11.3":
@@ -12774,6 +12802,12 @@ packages:
   uuid@11.1.1:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
+
+  '@openrouter/sdk@1.5.33':
+    resolution: {integrity: sha512-hbg4q/tZHOnggBk7Sjkel6COExpbe1+2p4Mt2YyvAloDXtNNaFkMab0SgVfoBdTgzweBlrJJ4jUHwHt5rFiadA==}
+
+  '@openrouter/sdk@1.5.34':
+    resolution: {integrity: sha512-LAcWpwGXD2xdQDDrC+flHRWHHNgkh7rFpptQfRsABuOGkUfsiyKcEdCgQsKb2L59kluTMuxBGMTmlLh91qfScw==}
 
 snapshots:
 
@@ -25681,3 +25715,11 @@ snapshots:
       '@esbuild/win32-x64': 0.25.12
 
   uuid@11.1.1: {}
+
+  '@openrouter/sdk@1.5.33':
+    dependencies:
+      zod: 3.25.76
+
+  '@openrouter/sdk@1.5.34':
+    dependencies:
+      zod: 3.25.76

@@ -1104,6 +1104,14 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "typescript/packages/traceai_openrouter": {
+      "release-type": "node",
+      "component": "npm-traceai-openrouter",
+      "package-name": "@traceai/openrouter",
+      "extra-files": [
+        "src/index.ts"
+      ]
     }
   }
 }
