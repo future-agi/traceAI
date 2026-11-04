@@ -44,19 +44,24 @@ jobs:
           java-version: '21'
           cache: maven
           cache-dependency-path: 'java/**/pom.xml'
-      - name: Build and install the same SDK JAR and resolve test dependencies
+      - name: Compile the SDK and package tests at the default target, then resolve runtime dependencies
         run: |
+          # -DskipTests still compiles the package tests at the SDK's intended 1.1.8 target.
           mvn -B -ntp -f java/pom.xml -pl traceai-spring-ai -am install -DskipTests
+          mvn -B -ntp -f java/pom.xml -pl traceai-spring-ai dependency:resolve -DincludeScope=test -Dspring-ai.version=${{ matrix.spring }}
           mvn -B -ntp -f java/compatibility/spring-ai/pom.xml test -DskipTests -Dspring-ai.version=${{ matrix.spring }} ${{ matrix.profile }}
           mvn -B -ntp -f java/compatibility/spring-ai/pom.xml dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
           mvn -B -ntp -f java/compatibility/spring-ai/pom.xml dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.12.2
-      - name: Run module and installed-JAR tests with loopback-only networking
+      - name: Run compiled package and installed-JAR tests on the selected runtime with loopback-only networking
         run: |
+          # Invoke Surefire directly: the test lifecycle would recompile against the selected
+          # runtime, but the floor lacks the newer accessor supported by the distributable JAR.
           sudo --preserve-env=JAVA_HOME,PATH unshare --net sh -c 'ip link set lo up; exec "$@"' sh \
-            mvn -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" -f java/pom.xml -pl traceai-spring-ai test
+            mvn -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" -f java/pom.xml -pl traceai-spring-ai surefire:test \
+            -Dspring-ai.version=${{ matrix.spring }} -DfailIfNoTests=true
           sudo --preserve-env=JAVA_HOME,PATH unshare --net sh -c 'ip link set lo up; exec "$@"' sh \
             mvn -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" -f java/compatibility/spring-ai/pom.xml test \
-            -Dspring-ai.version=${{ matrix.spring }} ${{ matrix.profile }}
+            -Dspring-ai.version=${{ matrix.spring }} ${{ matrix.profile }} -DfailIfNoTests=true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
