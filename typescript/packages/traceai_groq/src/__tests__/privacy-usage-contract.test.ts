@@ -34,6 +34,13 @@ let wire: Buffer[];
 let requests: unknown[];
 let usage: Record<string, unknown>;
 let usageChunks: Record<string, unknown>[] | undefined;
+let streamChunks: Record<string, unknown>[] | undefined;
+function responseChunks() {
+  return streamChunks ?? [
+    chunk({ choices: [{ index: 0, delta: { role: "assistant", content: "private-answer" }, finish_reason: "stop" }] }),
+    ...(usageChunks ?? [usage]).map(chunk),
+  ];
+}
 
 function instrument(traceConfig?: TraceConfigOptions) {
   instrumentation?.disable();
@@ -42,14 +49,11 @@ function instrument(traceConfig?: TraceConfigOptions) {
   instrumentation.enable();
   instrumentation.manuallyInstrument(sdk);
 }
-async function request(stream: boolean, withTools = false) {
-  const body = { ...params, stream, ...(withTools ? { tools } : {}) };
+async function request(stream: boolean, withTools = false, extra: Record<string, unknown> = {}) {
+  const body = { ...params, stream, ...(withTools ? { tools } : {}), ...extra };
   const snapshot = JSON.parse(JSON.stringify(body));
   const result = await new sdk.Groq({ apiKey: "synthetic-not-a-key", maxRetries: 0, baseURL }).chat.completions.create(body);
-  const expected = stream ? [
-    chunk({ choices: [{ index: 0, delta: { role: "assistant", content: "private-answer" }, finish_reason: "stop" }] }),
-    ...(usageChunks ?? [usage]).map(chunk),
-  ] : { ...completion, ...usage };
+  const expected = stream ? responseChunks() : { ...completion, ...usage };
   if (stream) {
     const received = [];
     for await (const item of result) received.push(item);
@@ -64,6 +68,8 @@ async function request(stream: boolean, withTools = false) {
   const spans = decoded.resourceSpans[0].scopeSpans[0].spans;
   expect(spans).toHaveLength(1);
   return {
+    span: exporter.getFinishedSpans()[0],
+    wireSpan: spans[0],
     attributes: exporter.getFinishedSpans()[0].attributes,
     wireAttributes: Object.fromEntries(spans[0].attributes.map((a: { key: string; value: unknown }) => [a.key, a.value])),
     exported: JSON.stringify(proto.toObject(decoded)),
@@ -79,7 +85,7 @@ beforeAll(async () => {
       requests.push(body);
       if (body.stream) {
         res.setHeader("content-type", "text/event-stream");
-        const chunks = [chunk({ choices: [{ index: 0, delta: { role: "assistant", content: "private-answer" }, finish_reason: "stop" }] }), ...(usageChunks ?? [usage]).map(chunk)];
+        const chunks = responseChunks();
         res.end(chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n");
       } else {
         res.setHeader("content-type", "application/json");
@@ -97,7 +103,7 @@ beforeAll(async () => {
   provider.register();
 });
 beforeEach(() => {
-  wire = []; requests = []; usage = {}; usageChunks = undefined; exporter.reset(); instrument();
+  wire = []; requests = []; usage = {}; usageChunks = undefined; streamChunks = undefined; exporter.reset(); instrument();
 });
 afterEach(async () => { await provider.forceFlush(); instrumentation.disable(); });
 afterAll(async () => { await provider.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); });
@@ -129,6 +135,84 @@ it("retains tool schemas by default", async () => {
   const result = await request(false, true);
   expect(JSON.parse(result.attributes[S.LLM_TOOLS] as string)).toEqual(tools);
   expect(JSON.parse(result.wireAttributes[S.LLM_TOOLS].stringValue)).toEqual(tools);
+});
+
+describe.each<TraceConfigOptions>([{}, { piiRedaction: true }, { hideInputs: true }])("Compound credentials with %j", config => {
+  it.each([false, true])("never exports Wolfram authorization with stream=%s", async stream => {
+    instrument(config);
+    const credential = "synthetic-wolfram-credential-not-a-real-key";
+    // Freeze each nested object: sanitizing telemetry must not mutate provider arguments.
+    const wolfram = Object.freeze({ authorization: credential, query: "public-query" });
+    const compound = Object.freeze({ tools: Object.freeze({
+      enabled_tools: ["wolfram_alpha"], wolfram_settings: wolfram,
+    }) });
+    const result = await request(stream, false, { compound_custom: compound });
+    expect(result.exported).not.toContain(credential);
+    expect(JSON.stringify(result.attributes)).not.toContain(credential);
+    if (!config.hideInputs) {
+      for (const key of [S.INPUT_VALUE, S.RAW_INPUT]) {
+        const input = JSON.parse(result.wireAttributes[key].stringValue);
+        expect(input.compound_custom.tools.wolfram_settings.authorization).toBeUndefined();
+        expect(input.compound_custom.tools.wolfram_settings.query).toBe("public-query");
+        expect(input.compound_custom.tools.enabled_tools).toEqual(["wolfram_alpha"]);
+      }
+    }
+  });
+});
+
+const errorPolicies: Array<[string, TraceConfigOptions, string?]> = [
+  ["default", {}],
+  ["hideErrorDetails", { hideErrorDetails: true }],
+  ["hideInputs", { hideInputs: true }],
+  ["hideOutputs", { hideOutputs: true }],
+  ["FI_HIDE_ERROR_DETAILS", {}, "FI_HIDE_ERROR_DETAILS"],
+];
+describe.each(errorPolicies)("provider-stopped stream with %s", (name, config, env) => {
+  it("records ERROR through FISpan while preserving chunks, partial output and usage", async () => {
+    const previous = env ? process.env[env] : undefined;
+    if (env) process.env[env] = "true";
+    try {
+      instrument(config);
+      const error = "synthetic-provider-stopped-early";
+      streamChunks = [
+        chunk({ choices: [{ index: 0, delta: { role: "assistant", content: "partial-answer" }, finish_reason: null }] }),
+        chunk({ x_groq: { error, usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } } }),
+        // Empty later metadata must not erase a previously observed provider error.
+        chunk({ x_groq: { error: null } }),
+      ];
+      const result = await request(true);
+      expect(result.span.status.code).toBe(2);
+      expect(result.wireSpan.status.code).toBe(2);
+      expect(result.span.events).toHaveLength(1);
+      expect(result.span.events[0].name).toBe("exception");
+      expect(result.wireSpan.events).toHaveLength(1);
+      expect(result.attributes[S.LLM_TOKEN_COUNT_TOTAL]).toBe(17);
+      expect(Number(result.wireAttributes[S.LLM_TOKEN_COUNT_TOTAL].intValue)).toBe(17);
+      if (config.hideOutputs) expect(result.exported).not.toContain("partial-answer");
+      else {
+        expect(result.attributes[S.OUTPUT_VALUE]).toBe("partial-answer");
+        expect(result.wireAttributes[S.RAW_OUTPUT].stringValue).toContain("partial-answer");
+      }
+      if (name === "default") {
+        expect(result.span.status.message).toBe(error);
+        expect(result.span.events[0].attributes?.["exception.message"]).toBe(error);
+        expect(result.exported).toContain(error);
+      } else {
+        expect(result.span.status.message).toBeUndefined();
+        expect(result.span.events[0].attributes?.["exception.message"]).toBeUndefined();
+        expect(result.exported).not.toContain(error);
+      }
+    } finally {
+      if (env) { if (previous === undefined) delete process.env[env]; else process.env[env] = previous; }
+    }
+  });
+});
+it.each([undefined, null, ""])('does not fail a normal stream for x_groq.error=%s', async error => {
+  usage = { x_groq: { error } };
+  const result = await request(true);
+  expect(result.span.status.code).toBe(1);
+  expect(result.wireSpan.status.code).toBe(1);
+  expect(result.span.events).toHaveLength(0);
 });
 
 const metrics = (zero: boolean) => ({

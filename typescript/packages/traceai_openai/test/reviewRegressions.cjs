@@ -364,7 +364,7 @@ test("parallel streamed function deltas remain separate by tool index", async ()
 });
 
 if (OpenAI.Responses) {
-  for (const config of [{}, { hideInputs: true, hideOutputs: true }]) {
+  for (const config of [{}, { hideInputs: true, hideOutputs: true }, { hideInputText: true }]) {
     test(`MCP telemetry is credential-free without changing transport: ${JSON.stringify(config)}`, async () => {
       const marker = "SYNTHETIC-MCP-SECRET";
       const tool = {
@@ -404,7 +404,12 @@ if (OpenAI.Responses) {
           server_url: "https://example.invalid",
         },
       ];
-      assert.deepEqual(JSON.parse(attrs["gen_ai.tool.definitions"]), expected);
+      // Definitions are input content, while invocation metadata stays sanitized.
+      if (config.hideInputs || config.hideInputText) {
+        assert.equal(attrs["gen_ai.tool.definitions"], undefined);
+      } else {
+        assert.deepEqual(JSON.parse(attrs["gen_ai.tool.definitions"]), expected);
+      }
       assert.deepEqual(
         JSON.parse(attrs["gen_ai.request.parameters"]).tools,
         expected,

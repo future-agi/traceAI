@@ -98,6 +98,26 @@ function invocationParameters(body: Record<string, unknown>): Record<string, unk
   return parameters;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Compound's Wolfram authorization is an API key, never input content to capture. */
+function chatInput(body: Record<string, unknown>): Record<string, unknown> {
+  const compound = body.compound_custom;
+  if (!isRecord(compound) || !isRecord(compound.tools)) return body;
+  const tools = compound.tools;
+  if (!isRecord(tools.wolfram_settings)) return body;
+  // Copy only the affected path. The SDK still receives the original arguments,
+  // including credentials, even if the caller freezes or reuses the request.
+  const settings = { ...tools.wolfram_settings };
+  delete settings.authorization;
+  return {
+    ...body,
+    compound_custom: { ...compound, tools: { ...tools, wolfram_settings: settings } },
+  };
+}
+
 /** Audio files belong to the SDK/user: never serialize, inspect, or read them for telemetry. */
 function audioInput(body: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = {};
@@ -195,7 +215,7 @@ export class GroqInstrumentation extends InstrumentationBase {
       const body = args[0] as Record<string, unknown> | undefined;
       // Preserve SDK validation/error behavior for invalid arguments.
       if (!body || typeof body !== "object") return original.apply(this, args);
-      const input = operation === "chat" ? body : audioInput(body);
+      const input = operation === "chat" ? chatInput(body) : audioInput(body);
       const parameters = operation === "chat" ? invocationParameters(body) : { ...input };
       if (operation !== "chat") { delete parameters.prompt; delete parameters.input; }
       const span = instrumentation.fiTracer.startSpan(

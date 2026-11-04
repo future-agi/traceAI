@@ -29,7 +29,7 @@ interface Completion {
   model?: string;
   choices: Choice[];
   usage?: Usage | null;
-  x_groq?: { usage?: Usage | null };
+  x_groq?: { usage?: Usage | null; error?: string | null };
 }
 interface Stream extends AsyncIterable<Completion> {
   controller: AbortController;
@@ -112,8 +112,14 @@ class Accumulator {
   private id?: string;
   private model?: string;
   private usage?: Usage;
+  error?: string;
 
   add(chunk: Completion) {
+    // Groq yields provider-stopped streams normally. Keep the diagnostic out of
+    // output payloads and route it through FISpan's error-detail policy at end.
+    if (typeof chunk.x_groq?.error === "string" && chunk.x_groq.error.length > 0) {
+      this.error = chunk.x_groq.error;
+    }
     this.id = chunk.id ?? this.id;
     this.model = chunk.model ?? this.model;
     this.usage = mergeUsage(this.usage, responseUsage(chunk));
@@ -244,7 +250,7 @@ function observeStream(
     if (finished) return;
     finished = true;
     stream.controller.signal.removeEventListener("abort", onAbort);
-    end(acc.attributes(), error, cancelled);
+    end(acc.attributes(), error === undefined ? acc.error : error, cancelled);
   };
   const onAbort = () => {
     // SDK iterators abort in their error cleanup too. Let the pending next()
