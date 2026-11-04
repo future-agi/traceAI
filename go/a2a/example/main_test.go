@@ -106,8 +106,15 @@ func TestExampleExportsOneStitchedTraceToFutureAGI(t *testing.T) {
 		t.Errorf("want one trace, got %d", len(traces))
 	}
 	root := byName["trip-planner"]
-	calls := byName["a2a.SendStreamingMessage"]
-	remote := byName["trip-helper"]
+	var calls, remote []*tracepb.Span
+	for _, span := range byName["a2a.SendStreamingMessage"] {
+		if span.Kind == tracepb.Span_SPAN_KIND_CLIENT {
+			calls = append(calls, span)
+		}
+		if span.Kind == tracepb.Span_SPAN_KIND_SERVER {
+			remote = append(remote, span)
+		}
+	}
 	if len(root) != 1 || len(calls) != 2 || len(remote) != 2 {
 		t.Fatalf("spans: %d root, %d a2a, %d remote", len(root), len(calls), len(remote))
 	}

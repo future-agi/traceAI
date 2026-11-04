@@ -17,6 +17,7 @@
  */
 import { Attributes, Context, HrTime, Span, SpanKind, SpanStatusCode, Tracer, diag, trace } from "@opentelemetry/api";
 import { getAttributesFromContext } from "@traceai/fi-core";
+import { isTask, record, stepEvent } from "./events";
 import { MimeType } from "@traceai/fi-semantic-conventions";
 import {
   AGENT_NAME,
@@ -42,16 +43,18 @@ export interface ContentPolicy {
   hideInputs: boolean;
   /** Drop assistant text, thinking text, task summaries and tool results. */
   hideOutputs: boolean;
+  /** Resolved fi-core error policy, also applied to tool error results. */
+  hideErrorDetails?: boolean;
 }
 
 /**
  * Error text is content: messages, stack traces and Cursor's run-error text
  * can carry local paths, usernames and prompt fragments. Unless both inputs
- * and outputs are opted in, errors are exported as their class name and
- * structural fields only.
+ * and outputs are opted in and the error policy permits details, errors are
+ * exported as their class name and structural fields only.
  */
 export function redactsErrors(policy: ContentPolicy): boolean {
-  return policy.hideInputs || policy.hideOutputs;
+  return policy.hideInputs || policy.hideOutputs || policy.hideErrorDetails === true;
 }
 
 /** How a run ended, as far as the wrapper could observe it. */
@@ -231,6 +234,7 @@ export function safeContextAttributes(ctx: Context): Attributes {
 
 interface ToolState {
   span: Span;
+  startMs: number;
   name: string;
   last: SDKMessageLike;
 }
@@ -277,6 +281,13 @@ export class RunTracer {
   private readonly assistantText: string[] = [];
   private readonly usageSum: TokenUsageLike = {};
   private usageEvents = 0;
+  // Delta, completed-step and stream feeds overlap. Pick one per non-tool kind;
+  // tools are instead reconciled by call id so completion-only feeds also work.
+  private readonly eventSources = new Map<string, string>();
+  private identifiedTools = false;
+  private idlessStepTools = false;
+  private nestedSteps = 0;
+  private readonly activeConversations = new WeakSet<object>();
 
   constructor(args: RunTracerArgs) {
     this.tracer = args.tracer;
@@ -329,11 +340,31 @@ export class RunTracer {
   }
 
   /** Record one stream event. Never throws and never mutates the event. */
-  onEvent(event: unknown): void {
+  onEvent(event: unknown, source: "stream" | "onDelta" | "onStep" = "stream"): void {
     if (this.finished || !event || typeof event !== "object") return;
     try {
       const nowMs = clockMs();
       const e = event as SDKMessageLike;
+      // turn-ended can omit usage; it must not claim the feed and hide a
+      // subsequent valid stream usage event.
+      if (e.type === "usage" && !hasUsage(e.usage)) return;
+      if (e.type === "tool_call") {
+        // SDK ConversationStep.toolCall has no callId, unlike onDelta/stream.
+        // Do not turn its completed snapshot into an anonymous duplicate. A
+        // step-only runtime uses that feed exclusively for tools instead.
+        if (source === "onStep" && !e.call_id) {
+          if (this.identifiedTools) return;
+          this.idlessStepTools = true;
+        } else {
+          if (this.idlessStepTools) return;
+          this.identifiedTools = true;
+        }
+      }
+      if (e.type === "assistant" || e.type === "thinking" || e.type === "usage") {
+        const selected = this.eventSources.get(e.type);
+        if (selected && selected !== source) return;
+        this.eventSources.set(e.type, source);
+      }
       if (typeof e.agent_id === "string" && e.agent_id && e.agent_id !== this.agentId) this.setAgentId(e.agent_id);
       if (typeof e.run_id === "string" && e.run_id && !this.runId) {
         this.runId = e.run_id;
@@ -700,24 +731,33 @@ export class RunTracer {
       state = this.startTool(e, startedEvent ? nowMs : this.lastEventMs, startedEvent);
       this.tools.set(key, state);
     }
-    state.last = e;
+    // Completion/step callbacks can omit args supplied by the start event.
+    state.last = { ...state.last, ...e, args: e.args ?? state.last.args, name: e.name ?? state.name };
     if (e.status === "completed" || e.status === "error") {
       this.tools.delete(key);
       this.endedToolIds.add(key);
+      this.endTool(state, nowMs);
+    }
+  }
+
+  private endTool(state: ToolState, nowMs: number, depth = 0): void {
+    const e = state.last;
+    try {
       this.applyToolAttributes(state.span, e);
+      this.traceTask(state, nowMs, depth);
       if (e.status === "error") {
-        // A tool's error result can carry tool output: only with outputs visible.
-        const message =
-          !this.policy.hideOutputs && e.result !== undefined ? truncate(safeJson(e.result), ERROR_MESSAGE_MAX) : `${state.name} failed`;
+        const message = !redactsErrors(this.policy) && e.result !== undefined
+          ? truncate(safeJson(this.toolOutput(e)), ERROR_MESSAGE_MAX) : `${state.name} failed`;
         state.span.setStatus({ code: SpanStatusCode.ERROR, message });
       } else {
         state.span.setStatus({ code: SpanStatusCode.OK });
       }
+    } finally {
       state.span.end(toHrTime(nowMs));
     }
   }
 
-  private startTool(e: SDKMessageLike, startMs: number, startedEvent: boolean): ToolState {
+  private startTool(e: SDKMessageLike, startMs: number, startedEvent: boolean, parent = this.runContext): ToolState {
     const name = typeof e.name === "string" && e.name ? e.name : "unknown";
     const attributes = this.childAttributes("TOOL");
     attributes[S.TOOL_NAME] = name;
@@ -730,9 +770,92 @@ export class RunTracer {
     const span = this.tracer.startSpan(
       `${SpanNames.TOOL_PREFIX}${name}`,
       { kind: SpanKind.INTERNAL, startTime: toHrTime(startMs), attributes },
-      this.runContext,
+      parent,
     );
-    return { span, name, last: e };
+    return { span, startMs, name, last: e };
+  }
+
+  /** Reconstruct completed task snapshots, never guessed live child activity. */
+  private traceTask(state: ToolState, endMs: number, depth: number): void {
+    if (!isTask(state.name) || depth >= 8 || this.nestedSteps >= 1000) return;
+    const steps = record(record(state.last.result)?.value)?.conversationSteps;
+    if (!Array.isArray(steps) || !steps.length || this.activeConversations.has(steps)) return;
+    this.activeConversations.add(steps);
+    const span = this.tracer.startSpan(
+      SpanNames.SUBAGENT,
+      { kind: SpanKind.INTERNAL, startTime: toHrTime(state.startMs), attributes: {
+        ...this.childAttributes("AGENT"), [S.AGENT_NAME]: "cursor", [S.PROVIDER]: PROVIDER_NAME,
+      } },
+      trace.setSpan(this.runContext, state.span),
+    );
+    const parent = trace.setSpan(this.runContext, span);
+    const seen = new WeakSet<object>();
+    const callIds = new Set<string>();
+    try {
+      for (const step of steps) {
+        // Count malformed and duplicate steps too: an untrusted snapshot is bounded.
+        if (this.nestedSteps >= 1000) break;
+        this.nestedSteps++;
+        if (!step || typeof step !== "object" || seen.has(step)) continue;
+        seen.add(step);
+        try {
+          const e = stepEvent(step);
+          if (!e) continue;
+          if (e.type === "tool_call") {
+            if (e.call_id && callIds.has(e.call_id)) continue;
+            if (e.call_id) callIds.add(e.call_id);
+            const child = this.startTool(e, state.startMs, false, parent);
+            if (e.status === "completed" || e.status === "error") this.endTool(child, endMs, depth + 1);
+            else {
+              this.applyToolAttributes(child.span, e);
+              child.span.setAttribute(C.TOOL_INCOMPLETE, true);
+              child.span.end(toHrTime(endMs));
+            }
+          } else {
+            const text = e.type === "thinking" ? e.text
+              : typeof e.message === "object" ? e.message?.content?.[0]?.text : undefined;
+            const value = typeof text === "string" ? text : "";
+            const attributes = this.childAttributes(e.type === "thinking" ? "CHAIN" : "LLM");
+            attributes[C.TEXT_LENGTH] = value.length;
+            if (e.type === "assistant") {
+              attributes[S.PROVIDER] = PROVIDER_NAME;
+              if (this.modelName) attributes[S.MODEL_NAME] = this.modelName;
+            }
+            if (finite(e.thinking_duration_ms) !== undefined) attributes[C.THINKING_DURATION_MS] = e.thinking_duration_ms;
+            if (!this.policy.hideOutputs) {
+              attributes[S.OUTPUT_VALUE] = truncate(value, CONTENT_MAX);
+              attributes[S.OUTPUT_MIME_TYPE] = MimeType.TEXT;
+            }
+            const child = this.tracer.startSpan(e.type === "thinking" ? SpanNames.THINKING : SpanNames.ASSISTANT_MESSAGE,
+              { kind: SpanKind.INTERNAL, startTime: toHrTime(state.startMs), attributes }, parent);
+            child.setStatus({ code: SpanStatusCode.OK });
+            child.end(toHrTime(endMs));
+          }
+        } catch {
+          // Skip a malformed step without losing its siblings or failing the run.
+        }
+      }
+      span.setStatus({ code: state.last.status === "error" ? SpanStatusCode.ERROR : SpanStatusCode.OK });
+    } finally {
+      this.activeConversations.delete(steps);
+      span.end(toHrTime(endMs));
+    }
+  }
+
+  /** Never serialize a nested transcript as its parent's output: it also contains
+   * inputs and error text, bypassing the independent privacy gates on children. */
+  private toolOutput(e: SDKMessageLike): unknown {
+    if (isTask(e.name) && record(record(e.result)?.value)?.conversationSteps !== undefined) {
+      const result = record(e.result)!;
+      const value = record(result.value)!;
+      const output: Record<string, unknown> = {};
+      for (const key of ["agentId", "isBackground", "durationMs", "resultSuffix", "backgroundReason", "transcriptPath", "summary"]) {
+        const item = value[key];
+        if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") output[key] = item;
+      }
+      return { status: result.status, value: output };
+    }
+    return e.result;
   }
 
   /** Structural fields always; arguments and results only when the policy allows them. */
@@ -747,8 +870,8 @@ export class RunTracer {
       attributes[S.INPUT_VALUE] = safeJson(e.args);
       attributes[S.INPUT_MIME_TYPE] = typeof e.args === "string" ? MimeType.TEXT : MimeType.JSON;
     }
-    if (e.result !== undefined && !this.policy.hideOutputs) {
-      attributes[S.OUTPUT_VALUE] = safeJson(e.result);
+    if (e.result !== undefined && !this.policy.hideOutputs && !(e.status === "error" && redactsErrors(this.policy))) {
+      attributes[S.OUTPUT_VALUE] = safeJson(this.toolOutput(e));
       attributes[S.OUTPUT_MIME_TYPE] = typeof e.result === "string" ? MimeType.TEXT : MimeType.JSON;
     }
     span.setAttributes(attributes);
@@ -757,10 +880,11 @@ export class RunTracer {
   /**
    * Token counts: the run's cumulative usage from the SDK (`RunResult.usage`
    * / `run.usage`) when present, else the sum of this run's `usage` events.
-   * Cursor's `inputTokens` excludes cache reads and writes (its `totalTokens`
-   * is input + output + cache read + cache write, without `reasoningTokens`,
-   * a subset of output), so the promoted input count adds them back, as the
-   * GenAI semantic conventions ask; `cursor.usage.*` keeps Cursor's numbers.
+   * Cursor's `inputTokens` excludes cache reads and writes, so the promoted
+   * input count adds them back, as the GenAI semantic conventions ask. The SDK
+   * includes caches in `totalTokens` in 1.0.37, but not in 1.2.0 / 1.3.1.
+   * Normalize complete totals to input + output under either convention;
+   * reasoning is already a subset of output. `cursor.usage.*` keeps raw counts.
    */
   private usageAttributes(runUsage: TokenUsageLike | undefined): Attributes {
     let usage: TokenUsageLike | undefined;
@@ -790,11 +914,12 @@ export class RunTracer {
       attributes[S.OUTPUT_TOKENS] = output;
       attributes[C.USAGE_OUTPUT_TOKENS] = output;
     }
-    if (total !== undefined) {
-      attributes[S.TOTAL_TOKENS] = total;
-      attributes[C.USAGE_TOTAL_TOKENS] = total;
-    } else if (promptTokens !== undefined && output !== undefined) {
+    if (total !== undefined) attributes[C.USAGE_TOTAL_TOKENS] = total;
+    if (promptTokens !== undefined && output !== undefined) {
       attributes[S.TOTAL_TOKENS] = promptTokens + output;
+    } else if (total !== undefined) {
+      // Partial usage cannot be recomputed safely; retain the reported total.
+      attributes[S.TOTAL_TOKENS] = total;
     }
     if (cacheRead !== undefined) {
       attributes[S.CACHE_READ_TOKENS] = cacheRead;

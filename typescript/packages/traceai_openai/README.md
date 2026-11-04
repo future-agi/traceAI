@@ -98,7 +98,7 @@ try {
 Use Perplexity's [OpenAI-compatible Responses API](https://docs.perplexity.ai/docs/agent-api/openai-compatibility) with the shared instrumentor. This route does not instrument the native Perplexity SDK or its Search and Embeddings resources.
 
 ```bash
-npm install @traceai/openai @traceai/fi-core@1.1.0 openai@7.47.0
+npm install @traceai/openai @traceai/fi-core openai@7.47.0
 export PERPLEXITY_API_KEY="your-perplexity-api-key"
 export PERPLEXITY_MODEL="your-perplexity-model-id"
 export FI_API_KEY="your-futureagi-api-key"
@@ -154,7 +154,7 @@ For ESM, explicitly instrument the imported SDK as above. For CommonJS automatic
 Use the same instrumentor for the gateway's OpenAI-compatible client; do not add a second gateway instrumentor. This non-streaming Chat Completions recipe uses `openai@5.23.2`. The instrumentor supports OpenAI 4.x through 7.x. For applications using `ai` instead of `openai`, use the [Vercel AI SDK integration](https://docs.futureagi.com/docs/integrations/traceai/vercel).
 
 ```bash
-npm install @traceai/openai @traceai/fi-core@1.1.0 openai@5.23.2
+npm install @traceai/openai @traceai/fi-core openai@5.23.2
 export AI_GATEWAY_API_KEY="your-vercel-gateway-key"
 export AI_GATEWAY_MODEL="provider/model"
 export FI_API_KEY="your-futureagi-api-key"
@@ -221,7 +221,9 @@ const response = await client.chat.completions.create({
 
 Choose a model available to your gateway account. `gen_ai.provider.name` comes from the configured API hostname, not the model name: `api.anannas.ai` and `anannas.ai` produce `anannas`, including failed and streamed requests. The gateway's downstream routing is not inferred. Unknown proxies and local servers retain the historical `openai` fallback; this does not establish which provider they route to. URL credentials, paths and query strings are not added as provider attributes.
 
-Streaming spans finish when you consume the stream, encounter an iteration error or leave the loop early. Consume or close streams before shutting down the tracer provider. Request and response content is captured by default; use the instrumentation's `traceConfig` input/output and error-detail hiding options for sensitive data.
+Streaming spans finish when you consume the stream, encounter an iteration error, leave the loop early or abort the stream's controller—even before iteration starts. A request signal aborted with a `TimeoutError` records an error without changing the SDK's cancellation behavior. An intentional early exit is not recorded as a successful generation. Consume or abort streams before shutting down the tracer provider. Reported streaming usage is recorded when the stream completes; absent usage is not zero.
+
+Request and response content is captured by default. Upgrade `@traceai/openai` and `@traceai/fi-core` together for shared privacy controls. `FI_HIDE_INPUTS` also hides embedding input text. Granular input text/image/message flags redact the opaque `input.value` and `raw.input` copies; output text/message and embedding-vector flags redact `output.value` and `raw.output`. Structured attributes retain the fields allowed by their respective settings. Responses instructions are treated as input, not invocation parameters, and echoed request fields are excluded from output payloads. Tool definitions and custom attributes still require their own privacy review.
 
 ## Fireworks AI
 

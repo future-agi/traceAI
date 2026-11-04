@@ -1,84 +1,131 @@
-"""
-TraceAI LanceDB Instrumentation
+"""OpenTelemetry instrumentation for local, remote and async LanceDB operations."""
 
-Provides OpenTelemetry instrumentation for LanceDB vector database operations.
-"""
-
+import importlib
+import inspect
 import logging
-from typing import Any, Collection
+from collections.abc import Collection
+from typing import Any
 
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from wrapt import wrap_function_wrapper
+from wrapt import FunctionWrapper
 
-from traceai_lancedb.version import __version__
+from traceai_lancedb._wrappers import OperationWrapper, remember_parent
 from traceai_lancedb.package import _instruments
-from traceai_lancedb._wrappers import (
-    SearchWrapper,
-    AddWrapper,
-    UpdateWrapper,
-    DeleteWrapper,
-    CreateTableWrapper,
-    DropTableWrapper,
-    OpenTableWrapper,
-)
+from traceai_lancedb.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+_QUERY_METHODS = (
+    "to_list",
+    "to_arrow",
+    "to_batches",
+    "to_pandas",
+    "to_df",
+    "to_pydantic",
+    "to_polars",
+)
+_TARGETS = (
+    ("lancedb.table", ("LanceTable", "AsyncTable"), ("add", "update", "delete")),
+    (
+        "lancedb.db",
+        ("LanceDBConnection", "AsyncConnection"),
+        ("create_table", "open_table", "drop_table"),
+    ),
+    ("lancedb.remote.table", ("RemoteTable",), ("add", "update", "delete")),
+    (
+        "lancedb.remote.db",
+        ("RemoteDBConnection",),
+        ("create_table", "open_table", "drop_table"),
+    ),
+)
+
 
 class LanceDBInstrumentor(BaseInstrumentor):
-    """OpenTelemetry instrumentor for LanceDB vector database."""
-
-    __slots__ = ("_originals",)
+    """Trace query materialization and database writes without capturing content."""
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
+    def _patch(self, cls: type, method: str, wrapper: Any) -> None:
+        # Patch the defining class only: inherited implementations must not be
+        # shadowed with persistent wrappers when instrumentation is disabled.
+        original = vars(cls).get(method)
+        if original is None:
+            return
+        replacement = FunctionWrapper(original, wrapper)
+        setattr(cls, method, replacement)
+        self._originals.append((cls, method, original, replacement))
+
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
-
-        self._originals = {}
-
+        tracer = trace_api.get_tracer(
+            __name__, __version__, kwargs.get("tracer_provider")
+        )
+        self._originals = []
         try:
-            # LanceDB table operations
-            import lancedb
-            from lancedb.table import LanceTable
-            from lancedb.db import LanceDBConnection
-            from lancedb.query import LanceVectorQueryBuilder
+            for module_name, names, methods in _TARGETS:
+                try:
+                    module = importlib.import_module(module_name)
+                except ImportError as error:
+                    logger.debug(
+                        "LanceDB surface unavailable: %s (%s)",
+                        module_name,
+                        type(error).__name__,
+                    )
+                    # Optional remote/async surfaces are absent on old versions.
+                    continue
+                for name in names:
+                    cls = getattr(module, name, None)
+                    if cls is None:
+                        continue
+                    for method in methods:
+                        wrapper = OperationWrapper(tracer, method, method)
+                        original = vars(cls).get(method)
+                        self._patch(
+                            cls,
+                            method,
+                            wrapper.asynchronous
+                            if inspect.iscoroutinefunction(original)
+                            else wrapper,
+                        )
 
-            # Table operations
-            self._originals["add"] = LanceTable.add
-            self._originals["update"] = LanceTable.update
-            self._originals["delete"] = LanceTable.delete
-
-            # Database operations
-            self._originals["create_table"] = LanceDBConnection.create_table
-            self._originals["drop_table"] = LanceDBConnection.drop_table
-            self._originals["open_table"] = LanceDBConnection.open_table
-
-            # Search operations - wrap the to_list/to_arrow methods of query builder
-            self._originals["query_to_list"] = LanceVectorQueryBuilder.to_list
-            self._originals["query_to_arrow"] = LanceVectorQueryBuilder.to_arrow
-
-            wrap_function_wrapper("lancedb.table", "LanceTable.add", AddWrapper(tracer))
-            wrap_function_wrapper("lancedb.table", "LanceTable.update", UpdateWrapper(tracer))
-            wrap_function_wrapper("lancedb.table", "LanceTable.delete", DeleteWrapper(tracer))
-            wrap_function_wrapper("lancedb.db", "LanceDBConnection.create_table", CreateTableWrapper(tracer))
-            wrap_function_wrapper("lancedb.db", "LanceDBConnection.drop_table", DropTableWrapper(tracer))
-            wrap_function_wrapper("lancedb.db", "LanceDBConnection.open_table", OpenTableWrapper(tracer))
-            wrap_function_wrapper("lancedb.query", "LanceVectorQueryBuilder.to_list", SearchWrapper(tracer, "to_list"))
-            wrap_function_wrapper("lancedb.query", "LanceVectorQueryBuilder.to_arrow", SearchWrapper(tracer, "to_arrow"))
-
-            logger.debug("LanceDB instrumentation enabled")
-        except ImportError as e:
-            logger.warning(f"Could not instrument LanceDB: {e}")
+            query = importlib.import_module("lancedb.query")
+            roots = tuple(
+                getattr(query, name)
+                for name in ("LanceQueryBuilder", "AsyncQueryBase", "BaseQueryBuilder")
+                if hasattr(query, name)
+            )
+            for cls in vars(query).values():
+                if (
+                    not inspect.isclass(cls)
+                    or cls.__module__ != query.__name__
+                    or not issubclass(cls, roots)
+                ):
+                    continue
+                self._patch(cls, "__init__", remember_parent)
+                for method in _QUERY_METHODS:
+                    wrapper = OperationWrapper(tracer, "search", method)
+                    original = vars(cls).get(method)
+                    self._patch(
+                        cls,
+                        method,
+                        wrapper.asynchronous
+                        if inspect.iscoroutinefunction(original)
+                        else wrapper,
+                    )
+        except Exception:
+            # An unsupported API must not leave a half-instrumented process.
+            self._uninstrument()
+            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        pass
+        for cls, method, original, replacement in reversed(
+            getattr(self, "_originals", [])
+        ):
+            if vars(cls).get(method) is replacement:
+                setattr(cls, method, original)
+        self._originals = []
 
 
 __all__ = ["LanceDBInstrumentor", "__version__"]
