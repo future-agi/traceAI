@@ -65,6 +65,36 @@ jobs:
       - name: Render package documentation
         run: go doc .
 
+  genkit-privacy:
+    name: genkit / Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25.0', stable]
+    defaults:
+      run:
+        working-directory: go/genkit
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/genkit/go.sum
+      - name: Check standalone module
+        run: |
+          test "$(go list -m)" = github.com/future-agi/traceAI/go/genkit
+          go mod tidy -diff
+      - name: Vet and test real native Genkit OTLP spans
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
   genai-sdk-compatibility:
     name: genai / SDK ${{ matrix.sdk }}
     runs-on: ubuntu-latest

@@ -1097,6 +1097,13 @@
         }
       ]
     },
+    "go/genkit": {
+      "release-type": "go",
+      "component": "go/genkit",
+      "package-name": "github.com/future-agi/traceAI/go/genkit",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
     "typescript/packages/traceai_huggingface_transformers": {
       "release-type": "node",
       "component": "npm-traceai-huggingface-transformers",

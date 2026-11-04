@@ -4,7 +4,7 @@ OpenTelemetry instrumentation for Go model clients and agents. Keep your existin
 
 ## Choose a module
 
-Each directory is an independent Go module. All require **Go 1.26.0 or later**.
+Each directory is an independent Go module. All require **Go 1.26.0 or later**, except Genkit, which supports Genkit's Go 1.25 floor.
 
 | Module | Package | Integration point | Traces |
 | --- | --- | --- | --- |
@@ -12,6 +12,7 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 | [Anthropic](anthropic/README.md) | `traceaianthropic` | `anthropic-sdk-go` middleware | Messages, including streaming and tool calls |
 | [Amazon Bedrock](bedrock/README.md) | `traceaibedrock` | AWS SDK v2 typed client adapter | Converse sync/stream; Anthropic Messages InvokeModel sync/stream |
 | [Google Gen AI](genai/README.md) | `traceaigenai` | HTTP transport | Gemini Developer API content generation and streaming |
+| [Genkit Go](genkit/README.md) | `traceaigenkit` | Native Genkit OTel exporter privacy adapter | Genkit's model, flow, and tool spans (without adding spans) |
 | [Eino](eino/README.md) | `traceaieino` | Eino callbacks | Agents, graphs, models, tools, retrieval and embedding components |
 | [A2A](a2a/README.md) | `traceaia2a` | `a2a-go/v2` client interceptor | Remote-agent calls over JSON-RPC, REST and gRPC |
 | [AWS Lambda](lambda/README.md) | `traceailambda` | Maintained `otellambda` adapter | Invocation spans, HTTP-v2 parents and bounded flushing |
@@ -33,6 +34,7 @@ go get github.com/future-agi/traceAI/go/openai@latest
 go get github.com/future-agi/traceAI/go/anthropic@latest
 go get github.com/future-agi/traceAI/go/bedrock@latest
 go get github.com/future-agi/traceAI/go/genai@latest
+go get github.com/future-agi/traceAI/go/genkit@latest
 go get github.com/future-agi/traceAI/go/eino@latest
 go get github.com/future-agi/traceAI/go/a2a@latest
 go get github.com/future-agi/traceAI/go/lambda@latest
@@ -150,6 +152,7 @@ Each module has its own semantic version. The first planned release is **v0.1.0*
 | Bedrock | `go/bedrock/v0.1.0` |
 | Eino | `go/eino/v0.1.0` |
 | Gen AI | `go/genai/v0.1.0` |
+| Genkit Go | `go/genkit/v0.1.0` |
 | Lambda | `go/lambda/v0.1.0` |
 | OpenAI | `go/openai/v0.1.0` |
 
