@@ -21,6 +21,7 @@
     "build:esm": "tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest --config jest.config.js",
     "test:streams": "node --test test/streams.test.cjs",
+    "test:contracts": "node --test test/*.test.cjs",
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist"
   },

@@ -30,16 +30,20 @@ import {
 
 const MODULE_NAME = "ollama";
 
-/**
- * Flag to check if the ollama module has been patched
- */
-let _isFIPatched = false;
+// Identify our exact wrappers, including when inherited by the default singleton.
+// This is not an admission flag: separate CJS/ESM constructors need separate patches.
+const patchedFunctions = new WeakSet<object>();
+let activePatchCount = 0;
 
-/**
- * Function to check if instrumentation is enabled / disabled
- */
+interface MethodPatch {
+  owner: Record<string, unknown>;
+  name: string;
+  wrapped: object;
+}
+
+/** Whether any Ollama methods are currently tracked as instrumented. */
 export function isPatched() {
-  return _isFIPatched;
+  return activePatchCount > 0;
 }
 
 /**
@@ -181,6 +185,8 @@ interface OllamaAbortableAsyncIterator<T> extends AsyncIterable<T> {
 export class OllamaInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  // Lazily initialized: InstrumentationBase can patch already-loaded modules in super().
+  private _modulePatches?: WeakMap<object, MethodPatch[]>;
 
   constructor({
     instrumentationConfig,
@@ -206,7 +212,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
 
   protected init() {
     const module = new InstrumentationNodeModuleDefinition(
-      "ollama",
+      MODULE_NAME,
       [">=0.4.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
@@ -224,114 +230,40 @@ export class OllamaInstrumentation extends InstrumentationBase {
   /**
    * Patches the Ollama module
    */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
-    }
+  private patch(module: Record<string, unknown>) {
+    // A module namespace can be immutable. Keep ownership outside the SDK exports.
+    this._modulePatches ??= new WeakMap();
+    const patches = this._modulePatches.get(module) ?? [];
+    this._modulePatches.set(module, patches);
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this._traceConfig,
+    });
 
-    const instrumentation: OllamaInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the Ollama class
-    const Ollama = module.Ollama as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (Ollama?.prototype) {
-      // Patch chat method
-      if (typeof Ollama.prototype.chat === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "chat",
-          this.createChatWrapper(instrumentation),
-        );
-      }
-
-      // Patch generate method
-      if (typeof Ollama.prototype.generate === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "generate",
-          this.createGenerateWrapper(instrumentation),
-        );
-      }
-
-      // Patch embed method (new API)
-      if (typeof Ollama.prototype.embed === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "embed",
-          this.createEmbedWrapper(instrumentation),
-        );
-      }
-
-      // Patch embeddings method (legacy API)
-      if (typeof Ollama.prototype.embeddings === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "embeddings",
-          this.createEmbeddingsWrapper(instrumentation),
-        );
+    const Ollama = module.Ollama as { prototype: Record<string, unknown> } | undefined;
+    const defaultOllama = module.default as Record<string, unknown> | undefined;
+    const wrappers = {
+      chat: this.createChatWrapper(this),
+      generate: this.createGenerateWrapper(this),
+      embed: this.createEmbedWrapper(this),
+      embeddings: this.createEmbeddingsWrapper(this),
+    };
+    for (const owner of [Ollama?.prototype, defaultOllama]) {
+      if (!owner) continue;
+      for (const [name, wrapper] of Object.entries(wrappers)) {
+        const original = owner[name];
+        if (typeof original !== "function" || patchedFunctions.has(original)) continue;
+        // _wrap unwraps an already-wrapped inherited method before replacing it.
+        // In particular, never rewrap the singleton's inherited class wrapper.
+        this._wrap(owner, name, wrapper);
+        const wrapped = owner[name];
+        if (typeof wrapped === "function" && wrapped !== original) {
+          patches.push({ owner, name, wrapped });
+          patchedFunctions.add(wrapped);
+          activePatchCount++;
+        }
       }
     }
-
-    // Also patch the default export if it exists (for direct imports)
-    const defaultOllama = module.default as {
-      chat?: unknown;
-      generate?: unknown;
-      embed?: unknown;
-      embeddings?: unknown;
-    } | undefined;
-
-    if (defaultOllama) {
-      if (typeof defaultOllama.chat === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "chat",
-          this.createChatWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.generate === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "generate",
-          this.createGenerateWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.embed === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "embed",
-          this.createEmbedWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.embeddings === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "embeddings",
-          this.createEmbeddingsWrapper(instrumentation),
-        );
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
     return module;
   }
 
@@ -421,7 +353,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaGenerateRequest,
       ) {
-        const { prompt: _prompt, ...invocationParameters } = request;
+        const invocationParameters = getGenerateInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Generate`,
@@ -622,51 +554,23 @@ export class OllamaInstrumentation extends InstrumentationBase {
   /**
    * Un-patches the Ollama module
    */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const Ollama = moduleExports.Ollama as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (Ollama?.prototype) {
-      if (typeof Ollama.prototype.chat === "function") {
-        this._unwrap(Ollama.prototype, "chat");
+  private unpatch(moduleExports: Record<string, unknown>) {
+    const patches = this._modulePatches?.get(moduleExports);
+    if (!patches) return;
+    const retained: MethodPatch[] = [];
+    for (const patch of patches) {
+      // A different instrumentor may have replaced/wrapped this function since
+      // we installed it. Never invoke that instrumentor's __unwrap hook.
+      if (patch.owner[patch.name] !== patch.wrapped) {
+        retained.push(patch);
+        continue;
       }
-      if (typeof Ollama.prototype.generate === "function") {
-        this._unwrap(Ollama.prototype, "generate");
-      }
-      if (typeof Ollama.prototype.embed === "function") {
-        this._unwrap(Ollama.prototype, "embed");
-      }
-      if (typeof Ollama.prototype.embeddings === "function") {
-        this._unwrap(Ollama.prototype, "embeddings");
-      }
+      this._unwrap(patch.owner, patch.name);
+      patchedFunctions.delete(patch.wrapped);
+      activePatchCount--;
     }
-
-    const defaultOllama = moduleExports.default as Record<string, unknown> | undefined;
-    if (defaultOllama) {
-      if (typeof defaultOllama.chat === "function") {
-        this._unwrap(defaultOllama, "chat");
-      }
-      if (typeof defaultOllama.generate === "function") {
-        this._unwrap(defaultOllama, "generate");
-      }
-      if (typeof defaultOllama.embed === "function") {
-        this._unwrap(defaultOllama, "embed");
-      }
-      if (typeof defaultOllama.embeddings === "function") {
-        this._unwrap(defaultOllama, "embeddings");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
+    if (retained.length) this._modulePatches?.set(moduleExports, retained);
+    else this._modulePatches?.delete(moduleExports);
   }
 }
 
@@ -934,6 +838,45 @@ function getChatUsageAttributes(response: OllamaChatResponse): Attributes {
   }
 
   return attributes;
+}
+
+// Content-bearing fields (including stop sequences, JSON schemas and context
+// tokens) belong only in the privacy-governed input attributes, never parameters.
+const GENERATE_NUMERIC_OPTIONS = [
+  "num_keep", "seed", "num_predict", "top_k", "top_p", "tfs_z", "typical_p",
+  "repeat_last_n", "temperature", "repeat_penalty", "presence_penalty",
+  "frequency_penalty", "mirostat", "mirostat_tau", "mirostat_eta", "num_ctx",
+  "num_batch", "num_gpu", "main_gpu", "rope_frequency_base", "rope_frequency_scale",
+  "num_thread",
+] as const;
+const GENERATE_BOOLEAN_OPTIONS = [
+  "penalize_newline", "numa", "low_vram", "f16_kv", "vocab_only", "use_mmap",
+  "use_mlock", "embedding_only",
+] as const;
+
+function getGenerateInvocationParameters(request: OllamaGenerateRequest): Record<string, unknown> {
+  const parameters: Record<string, unknown> = { model: request.model };
+  if (typeof request.stream === "boolean") parameters.stream = request.stream;
+  if (typeof request.raw === "boolean") parameters.raw = request.raw;
+  if (request.format === "json") parameters.format = request.format;
+  const keepAlive = request.keep_alive;
+  if ((typeof keepAlive === "number" && Number.isFinite(keepAlive)) ||
+      (typeof keepAlive === "string" && /^-?\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h)?$/.test(keepAlive))) {
+    parameters.keep_alive = keepAlive;
+  }
+  if (request.options) {
+    const options: Record<string, number | boolean> = {};
+    for (const key of GENERATE_NUMERIC_OPTIONS) {
+      const value = request.options[key];
+      if (typeof value === "number" && Number.isFinite(value)) options[key] = value;
+    }
+    for (const key of GENERATE_BOOLEAN_OPTIONS) {
+      const value = request.options[key];
+      if (typeof value === "boolean") options[key] = value;
+    }
+    parameters.options = options;
+  }
+  return parameters;
 }
 
 /**
