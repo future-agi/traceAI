@@ -11,6 +11,16 @@ test('published privacy contract warns about unmasked literal kinds', () => {
   assert.doesNotMatch(readme, /Literal values remain masked/);
 });
 
+test('published lifecycle contract distinguishes total and inactivity timeouts', () => {
+  const packageRoot = path.dirname(path.dirname(require.resolve('@traceai/apollo-graphql')));
+  const readme = fs.readFileSync(path.join(packageRoot, 'README.md'), 'utf8');
+  assert.match(readme, /3-second total export deadline/);
+  assert.match(readme, /destroys.*owned HTTP\(S\) agents/);
+  assert.match(readme, /underlying.*socket inactivity timeout/);
+  assert.match(readme, /batch processor.*4-second export timeout/);
+  assert.doesNotMatch(readme, /not a wall-clock deadline/);
+});
+
 test('unsupported GraphQL versions fail before loading GraphQL or registering tracing', () => {
   // Exercise range boundaries without installing a different dependency for each
   // case. The standalone GraphQL-17 probe also runs against the real package.

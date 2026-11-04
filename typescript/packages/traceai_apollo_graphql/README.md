@@ -74,7 +74,7 @@ A static import beside Apollo imports is not a substitute for preloading. Apollo
 
 The destination is `{baseUrl}/tracer/v1/traces`, with `X-Api-Key` and `X-Secret-Key` headers. Unset `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` before `configure()`; otherwise startup refuses to forward another collector's credentials. `project_name`, `project_type=observe` and `service.name` are resource attributes. No automatic host/process/environment resource detection, metrics exporter or log exporter is enabled.
 
-`forceFlush()` waits for completed spans, including in-flight background exports. Call `shutdown()` **after** `server.stop()` to drain requests before flushing. Both resolve to `false` when export fails and do not log the error payload. Shutdown is idempotent. There are no automatic signal handlers in this package. The HTTP exporter's 3-second timeout is a socket inactivity timeout, not a wall-clock deadline; the batch processor has a 4-second export timeout.
+`forceFlush()` waits for completed spans, including in-flight background exports. Call `shutdown()` **after** `server.stop()` to drain requests before flushing. Both resolve to `false` when export fails and do not log the error payload. Shutdown is idempotent. There are no automatic signal handlers in this package. The adapter enforces a 3-second total export deadline per batch, including retries. At the deadline it cancels the export and destroys that batch's owned HTTP(S) agents, releasing their sockets even if the collector keeps sending bytes. This is separate from the underlying HTTP exporter's 3-second socket inactivity timeout and the batch processor's 4-second export timeout.
 
 ## Trace shape and privacy
 
