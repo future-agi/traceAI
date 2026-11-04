@@ -8,6 +8,8 @@ import com.openai.models.ChatCompletionCreateParams;
 import com.openai.models.CompletionUsage;
 import com.openai.models.EmbeddingCreateParams;
 import io.opentelemetry.api.trace.Span;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -56,6 +58,22 @@ final class LegacyOpenAITrace {
             tracer.setRawInput(span, ObjectMappers.jsonMapper().writeValueAsString(body));
         } catch (JsonProcessingException | RuntimeException ignored) {
             // Never fall back to params.toString(), nor log a payload-bearing serialization error.
+            span.setAttribute("traceai.capture.skipped", true);
+        }
+    }
+
+    static void output(FITracer tracer, Span span, Object response) {
+        if (tracer.getConfig().isHideOutputs() || tracer.getConfig().isHideOutputMessages()) return;
+        try {
+            // Use the SDK's serializers for response unions too. Bound the serialization buffer,
+            // not just the final attribute, and never export a partial JSON document on overflow.
+            OpenAITrace.Capture capture = new OpenAITrace.Capture();
+            ObjectMappers.jsonMapper().writeValue(capture, response);
+            byte[] bytes = capture.completeBytes();
+            if (bytes == null) span.setAttribute("traceai.capture.truncated", true);
+            else tracer.setRawOutput(span, new String(bytes, StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException ignored) {
+            // Instrumentation must neither replace a usable SDK response nor leak SDK internals.
             span.setAttribute("traceai.capture.skipped", true);
         }
     }

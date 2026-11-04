@@ -5,6 +5,9 @@ import ai.traceai.TraceConfig;
 import com.openai.client.OpenAIClientImpl;
 import com.openai.client.okhttp.OkHttpClient;
 import com.openai.core.ClientOptions;
+import com.google.gson.JsonParser;
+import io.opentelemetry.api.common.AttributeKey;
+import org.junit.jupiter.api.Test;
 import com.openai.models.ChatCompletionCreateParams;
 import com.openai.models.ChatCompletionMessageParam;
 import com.openai.models.ChatCompletionUserMessageParam;
@@ -64,9 +67,76 @@ class LegacyPrivacyTest {
         assertThat(span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.longKey("gen_ai.usage.total_tokens"))).isEqualTo(15);
     }
 
+    @ParameterizedTest @ValueSource(strings = {"chat", "embedding"})
+    void rawOutputContainsResponseDataInsteadOfSdkInternals(String operation) throws Exception {
+        var span = call(operation, TraceConfig.builder().build());
+        String raw = attr(span, "fi.raw_output");
+        assertThat(raw).doesNotContain("hashCode$delegate", "additionalProperties", "validated");
+        var json = JsonParser.parseString(raw).getAsJsonObject();
+        assertThat(json.get("model").getAsString()).isEqualTo("served-model");
+        assertThat(json.getAsJsonObject("usage").get("total_tokens").getAsInt()).isEqualTo(operation.equals("chat") ? 15 : 10);
+        if (operation.equals("chat")) {
+            assertThat(json.get("id").getAsString()).isEqualTo("chat-test");
+            assertThat(json.getAsJsonArray("choices").get(0).getAsJsonObject().getAsJsonObject("message").get("content").getAsString())
+                .isEqualTo("private-answer");
+        } else {
+            var values = json.getAsJsonArray("data").get(0).getAsJsonObject().getAsJsonArray("embedding");
+            assertThat(values).hasSize(2);
+            assertThat(values.get(0).getAsDouble()).isEqualTo(0.1);
+            assertThat(values.get(1).getAsDouble()).isEqualTo(0.2);
+        }
+    }
+
+    @Test void rawOutputContainsToolNamesAndArguments() throws Exception {
+        String reply = OpenAILoopback.CHAT.replace("\"content\":\"private-answer\"", "\"content\":\"private-answer\","
+            + "\"tool_calls\":[{\"type\":\"function\",\"id\":\"call-test\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}]");
+        var span = call("chat", TraceConfig.builder().build(), reply);
+        var tool = JsonParser.parseString(attr(span, "fi.raw_output")).getAsJsonObject().getAsJsonArray("choices")
+            .get(0).getAsJsonObject().getAsJsonObject("message").getAsJsonArray("tool_calls").get(0).getAsJsonObject();
+        assertThat(tool.get("id").getAsString()).isEqualTo("call-test");
+        assertThat(tool.getAsJsonObject("function").get("name").getAsString()).isEqualTo("lookup");
+        assertThat(tool.getAsJsonObject("function").get("arguments").getAsString()).isEqualTo("{\"city\":\"Paris\"}");
+    }
+
+    @ParameterizedTest @CsvSource({"chat,false", "chat,true", "embedding,false", "embedding,true"})
+    void rawOutputHonorsBothOutputHidingFlags(String operation, boolean messages) throws Exception {
+        var span = call(operation, TraceConfig.builder().hideOutputs(!messages).hideOutputMessages(messages).build());
+        assertThat(attr(span, "fi.raw_output")).isNull();
+    }
+
+    @Test void oversizedRawOutputIsOmittedWithoutChangingTheSdkResponse() throws Exception {
+        String reply = OpenAILoopback.CHAT.replace("\"model\":\"served-model\"", "\"model\":\"served-model\",\"padding\":\"" + "x".repeat(70_000) + "\"");
+        var span = call("chat", TraceConfig.builder().build(), reply);
+        assertThat(attr(span, "fi.raw_output")).isNull();
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("traceai.capture.truncated"))).isTrue();
+    }
+
+    @Test void rawOutputSerializationFailureIsFailOpenAndNeverFallsBackToToString() {
+        var exporter = InMemorySpanExporter.create();
+        try (var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+            var tracer = new FITracer(provider.get("serialization"));
+            var span = tracer.startSpan("serialization", ai.traceai.FISpanKind.LLM);
+            LegacyOpenAITrace.output(tracer, span, new UnserializableResponse());
+            span.end();
+            var data = exporter.getFinishedSpanItems().get(0);
+            assertThat(data.getAttributes().get(AttributeKey.booleanKey("traceai.capture.skipped"))).isTrue();
+            assertThat(attr(data, "fi.raw_output")).isNull();
+            assertThat(data.toString()).doesNotContain("private-serialization-error", "sdk-internals");
+        }
+    }
+
+    public static class UnserializableResponse {
+        public String getContent() { throw new IllegalStateException("private-serialization-error"); }
+        @Override public String toString() { return "sdk-internals"; }
+    }
+
     private SpanData call(String operation, TraceConfig config) throws Exception {
         String reply = operation.equals("stream") ? OpenAILoopback.CHAT_SSE
             : operation.equals("embedding") ? OpenAILoopback.EMBEDDING : OpenAILoopback.CHAT;
+        return call(operation, config, reply);
+    }
+
+    private SpanData call(String operation, TraceConfig config, String reply) throws Exception {
         var exporter = InMemorySpanExporter.create();
         try (var server = new OpenAILoopback(operation.equals("stream") ? "text/event-stream" : "application/json", reply);
              var provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {

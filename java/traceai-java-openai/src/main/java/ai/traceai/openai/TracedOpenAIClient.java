@@ -116,7 +116,7 @@ public class TracedOpenAIClient {
             // Token usage — usage() returns Optional<CompletionUsage>
             result.usage().ifPresent(usage -> LegacyOpenAITrace.usage(tracer, span, usage));
 
-            if (!tracer.getConfig().isHideOutputMessages()) tracer.setRawOutput(span, result);
+            LegacyOpenAITrace.output(tracer, span, result);
             span.setStatus(StatusCode.OK);
             return result;
 
@@ -160,7 +160,7 @@ public class TracedOpenAIClient {
                     result.usage().totalTokens());
             }
 
-            if (!tracer.getConfig().isHideOutputMessages()) tracer.setRawOutput(span, result);
+            LegacyOpenAITrace.output(tracer, span, result);
             span.setStatus(StatusCode.OK);
             return result;
 

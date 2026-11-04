@@ -28,6 +28,7 @@ final class OpenAITrace {
     final Context context;
     private final AtomicBoolean ended = new AtomicBoolean();
     private final StringBuilder text = new StringBuilder();
+    private final ResponsesToolTrace tools;
     private boolean failed;
     private boolean complete;
 
@@ -35,12 +36,13 @@ final class OpenAITrace {
         this.tracer = tracer;
         Context parent = Context.current();
         Map<String, String> attributes = parent.get(FI_ATTRIBUTES);
+        if (attributes == null) attributes = ai.traceai.ContextAttributes.getAttributesFromContext();
         span = tracer.startSpan("OpenAI " + operation,
-            "embeddings".equals(operation) ? FISpanKind.EMBEDDING : FISpanKind.LLM, parent,
-            attributes != null ? attributes : ai.traceai.ContextAttributes.getAttributesFromContext());
+            "embeddings".equals(operation) ? FISpanKind.EMBEDDING : FISpanKind.LLM, parent, attributes);
         span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
         span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, operation);
-        context = Context.current().with(span);
+        context = parent.with(span);
+        tools = new ResponsesToolTrace(tracer, span, context, attributes);
     }
 
     Scope makeCurrent() { return context.makeCurrent(); }
@@ -66,7 +68,7 @@ final class OpenAITrace {
     synchronized boolean response(byte[] bytes) {
         if (bytes == null || ended.get()) return false;
         try {
-            json(JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject());
+            json(JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(), true);
             return true;
         } catch (RuntimeException ignored) {
             // A partial or invalid capture cannot establish a successful response.
@@ -76,6 +78,7 @@ final class OpenAITrace {
     }
 
     synchronized void event(String data) {
+        if (ended.get()) return;
         if ("[DONE]".equals(data)) {
             complete = true;
             return;
@@ -90,10 +93,10 @@ final class OpenAITrace {
                 span.setAttribute(SemanticConventions.ERROR_TYPE, "openai.stream_error");
             }
             if ("response.incomplete".equals(type)) incomplete();
-            if (type != null && (type.equals("response.completed") || type.equals("response.failed")
-                    || type.equals("response.incomplete"))) complete = true;
+            boolean terminal = "response.completed".equals(type) || "response.failed".equals(type) || "response.incomplete".equals(type);
+            if (terminal) complete = true;
             json(event.has("response") && event.get("response").isJsonObject()
-                ? event.getAsJsonObject("response") : event);
+                ? event.getAsJsonObject("response") : event, terminal);
         });
     }
 
@@ -103,18 +106,25 @@ final class OpenAITrace {
         span.setAttribute(SemanticConventions.ERROR_TYPE, "openai.response_incomplete");
     }
 
-    private void json(JsonObject json) {
+    private void json(JsonObject json, boolean terminal) {
         attribute(json, "model", SemanticConventions.LLM_RESPONSE_MODEL);
         attribute(json, "id", SemanticConventions.LLM_RESPONSE_ID);
         if ("incomplete".equals(string(json, "status"))) incomplete();
-        if (json.has("error") && !json.get("error").isJsonNull()) {
+        if ("failed".equals(string(json, "status")) || (json.has("error") && !json.get("error").isJsonNull())) {
             failed = true;
             span.setStatus(StatusCode.ERROR);
             span.setAttribute(SemanticConventions.ERROR_TYPE, "openai.api_error");
-            // Error payloads are not model output; never leak them through raw-output capture.
-            return;
         }
+        // Failed/incomplete responses can still be billed. Metadata is independent of content
+        // capture, and malformed optional telemetry must not mask the response's error status.
+        safely(() -> usage(json));
+        if (terminal) safely(() -> tools.record(json));
         if (failed) return;
+        // Error payloads are never model output. Apply tool privacy to parent capture as well.
+        output(tools.redact(json));
+    }
+
+    private void usage(JsonObject json) {
         if (json.has("usage") && json.get("usage").isJsonObject()) {
             JsonObject usage = json.getAsJsonObject("usage");
             count(usage, "prompt_tokens", SemanticConventions.LLM_TOKEN_COUNT_PROMPT);
@@ -128,6 +138,9 @@ final class OpenAITrace {
             detail(usage, "completion_tokens_details", "reasoning_tokens", SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING);
             detail(usage, "output_tokens_details", "reasoning_tokens", SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING);
         }
+    }
+
+    private void output(JsonObject json) {
         if (json.has("choices") && json.get("choices").isJsonArray()) {
             List<Map<String, String>> output = new ArrayList<>();
             for (JsonElement item : json.getAsJsonArray("choices")) {
