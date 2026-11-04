@@ -8,7 +8,7 @@ const { createClient } = require('./transport.cjs');
 
 for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
   for (const disposal of ['forceFlush', 'shutdown']) {
-    for (const location of ['after notification', 'onDisconnected', 'onBotReady', 'onTransportStateChanged']) {
+    for (const location of ['after notification', 'onDisconnected', 'onBotReady', 'terminal notification after state']) {
       test(`${name}: autonomous drop ${disposal} from ${location} includes every attempt`, async t => {
         const exported = [];
         let closed = false;
@@ -33,10 +33,20 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
           transport.state = 'disconnected';
           transport.callbacks.onDisconnected();
         };
+        let sawProvisionalState = false;
         const { client, transport } = createClient(sdk, {
-          onDisconnected() { if (location === 'onDisconnected') disposed = provider[disposal](); },
+          onDisconnected() {
+            if (location === 'terminal notification after state') assert.ok(sawProvisionalState);
+            if (location === 'onDisconnected' || location === 'terminal notification after state') disposed = provider[disposal]();
+          },
           onTransportStateChanged(state) {
-            if (location === 'onTransportStateChanged' && state === 'disconnected' && dropped) disposed = provider[disposal]();
+            if (location === 'terminal notification after state' && state === 'disconnected' && dropped) {
+              sawProvisionalState = true;
+              // State changes can be relay retries: dispose only at the terminal
+              // notification, not before the instrumentation can know it closed.
+              assert.deepEqual(exported.filter(s => s.attributes['pipecat.operation'] === 'client.connect')
+                .map(s => s.status.code), [SpanStatusCode.OK]);
+            }
           },
           onBotReady() {
             if (location === 'onBotReady' && !dropped) {

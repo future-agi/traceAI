@@ -97,8 +97,9 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
         const onState = state => {
           if (armed && state === 'disconnected') {
             armed = false;
-            // Cancellation must already be visible inside the earliest public callback.
-            assert.deepEqual(connects(exporter.getFinishedSpans()).map(s => s.status.code), [SpanStatusCode.ERROR]);
+            // A disconnected state alone may recover. Capture ownership now,
+            // but wait for the terminal notification before cancelling the old dial.
+            assert.deepEqual(connects(exporter.getFinishedSpans()), []);
             retry = client.connect();
           }
         };

@@ -235,12 +235,21 @@ export class PipecatInstrumentation extends InstrumentationBase {
                 if (scope.resolver && scope.resolver === resolver) finish(SpanStatusCode.OK);
               }
             } else if (name === "onTransportStateChanged" && args[0] === "disconnected" && !initializing) {
-              // The state event precedes onDisconnected. Capture even an EMPTY
-              // set before application callbacks can install a replacement resolver.
-              disconnected = new Map(pending.attempts);
+              // Capture before application callbacks can install a retry, but do
+              // not cancel yet: MoQ also emits this state during recoverable dials,
+              // without onDisconnected. Only the terminal notification cancels.
+              const boundary = disconnected = new Map(pending.attempts);
               pending.connected = false;
-              pending.disconnections.push(disconnected);
-              PipecatInstrumentation.cancelConnections(disconnected);
+              pending.disconnections.push(boundary);
+              // Paired close notifications share a synchronous dispatch. Retire
+              // state-only boundaries so they neither retain settled clients nor
+              // mask a later notification-only close. Pending dials stay observed.
+              queueMicrotask(() => {
+                const index = pending.disconnections.indexOf(boundary);
+                if (index === -1) return;
+                pending.disconnections.splice(index, 1);
+                instrumentation.releaseConnections(client, pending);
+              });
             } else if (name === "onDisconnected") {
               // Nested synchronous closes notify in stack order. Transports that
               // notify without a state event still cancel the current attempts.
@@ -252,8 +261,10 @@ export class PipecatInstrumentation extends InstrumentationBase {
             return original.apply(this, args);
           } catch (error) {
             if (disconnected) {
-              // A throwing callback/listener aborts transport dispatch before
-              // onDisconnected. Retire only this boundary, preserving live retries.
+              // A throwing callback/listener is an actual dispatch failure, not
+              // a recoverable state. Finish only its captured attempts and retire
+              // this aborted boundary, preserving any reentrant retry.
+              PipecatInstrumentation.cancelConnections(disconnected);
               const index = pending.disconnections.indexOf(disconnected);
               if (index !== -1) pending.disconnections.splice(index, 1);
               instrumentation.releaseConnections(client, pending);
