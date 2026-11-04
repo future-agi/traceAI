@@ -84,6 +84,12 @@ def test_all_native_content_uses_shared_pii_policy(monkeypatch, pii, capture, hi
     'openai//opt/models/llama-3.2.gguf', '/models/.cache/llama-3.2',
     './models/llama-3.2', '../models/llama-3.2', 'openai/./models/llama-3.2',
     '/' + 'a' * 255, 'openai//' + 'a' * 248,
+    pytest.param('openai/模型', id='unicode-model'),
+    pytest.param('openai//models/模型/llama-3.2', id='unicode-prefixed-path'),
+    pytest.param('/home/andré/models/llama-3.2', id='unicode-home-path'),
+    pytest.param('模型:版本2', id='unicode-tag'),
+    pytest.param('供应商//models/模型:版本2', id='unicode-provider-and-tag'),
+    pytest.param('模' * 256, id='unicode-length-bound'),
 ])
 def test_valid_model_identifiers_survive(source_span, key, capture, model):
     native = source_span({key: model})
@@ -105,6 +111,15 @@ def test_valid_model_identifiers_survive(source_span, key, capture, model):
     'openai//models/llama?api_key=synthetic-secret', 'openai//models/llama#synthetic-secret',
     'openai///models/llama-3.2', '/models//llama-3.2', '/models/llama-3.2/',
     'openai//models/llama\n', '/' + 'a' * 256, 'openai//' + 'a' * 249,
+    pytest.param('https://host.invalid/模型', id='unicode-url'),
+    pytest.param('openai//user:synthetic-secret@host.invalid/模型', id='unicode-userinfo'),
+    pytest.param('模型?api_key=synthetic-secret', id='unicode-query'),
+    pytest.param('模型#synthetic-secret', id='unicode-fragment'),
+    pytest.param('模型' + chr(0x00A0) + 'secret', id='unicode-whitespace'),
+    pytest.param('模型' + chr(0x200B) + 'secret', id='unicode-zero-width-space'),
+    pytest.param('/models//模型', id='unicode-empty-segment'),
+    pytest.param('模型:版本/secret', id='unicode-nonterminal-tag'),
+    pytest.param('模' * 257, id='unicode-over-length'),
 ])
 def test_model_validation_rejects_urls_and_unbounded_content(source_span, key, capture, model):
     projected = project(source_span({key: model}), 'models', capture)

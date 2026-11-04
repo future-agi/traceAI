@@ -24,10 +24,12 @@ _MODEL_KEYS = frozenset({'gen_ai.request.model', 'gen_ai.response.model'})
 # Model IDs may be local paths, including a provider-prefixed absolute path
 # (openai//models/llama-3.2). Only that boundary allows a double slash; reject
 # URL schemes, userinfo, query/fragment material and other empty path segments.
+# Unicode \w preserves str.isalnum() plus underscore; [^\W_] is alphanumeric
+# only, keeping provider prefixes and tags from starting with punctuation.
 _MODEL_ID = re.compile(
-    r'(?:/|[A-Za-z0-9][A-Za-z0-9._-]*//)?'
-    r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*'
-    r'(?::[A-Za-z0-9][A-Za-z0-9._-]*)?'
+    r'(?:/|[^\W_][\w.-]*//)?'
+    r'[\w.-]+(?:/[\w.-]+)*'
+    r'(?::[^\W_][\w.-]*)?'
 )
 
 def _wire_number(value):

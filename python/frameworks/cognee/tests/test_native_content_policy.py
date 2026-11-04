@@ -56,7 +56,10 @@ def test_native_tagged_model_without_content(pii):
     'openai//models/llama-3.2',
     'openai//opt/.cache/llama-3.2.gguf',
     'openai/./models/llama-3.2',
+    pytest.param('openai/模型', id='unicode-model'),
+    pytest.param('openai//models/模型/llama-3.2', id='unicode-prefixed-path'),
+    pytest.param('openai//home/andré/models/llama-3.2', id='unicode-home-path'),
 ])
-def test_native_local_path_model(capture, model):
+def test_native_model_identifiers(capture, model):
     # Real OpenAIAdapter requests (including SSE) must keep their attribution.
     run_native('openai', pii=False, hidden=None, capture=capture, model=model)
