@@ -10,17 +10,56 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
-// Client preserves the SDK client's API and observes stream completion. Create
+// Client preserves the SDK client's API and observes call completion. Create
 // the SDK client with [NewInterceptor], then call [WrapClient]. The wrapper does
-// not create spans: it completes the interceptor's existing span at clean EOF,
-// including snapshots with no terminal event, or on early iterator abandonment.
-// All non-streaming methods are delegated unchanged to the embedded client.
+// not create spans: it completes the interceptor's existing span when unary calls
+// return, at clean stream EOF, or on early iterator abandonment. Unary completion
+// observes the final result after all response policies, including rejections
+// that cause the SDK to skip the tracing After callback.
 type Client struct{ *a2aclient.Client }
 
-// WrapClient adds iterator-completion handling to an instrumented SDK client.
-// Use the returned client for streaming calls; calling its embedded Client
+// WrapClient adds call-completion handling to an instrumented SDK client.
+// Use the returned client for all traced calls; calling its embedded Client
 // directly bypasses completion handling. Install [NewInterceptor] only once.
 func WrapClient(client *a2aclient.Client) *Client { return &Client{Client: client} }
+
+// SendMessage observes the final accepted result or returned policy error.
+func (c *Client) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
+	return observeUnary(ctx, "SendMessage", func(ctx context.Context) (a2a.SendMessageResult, error) {
+		return c.Client.SendMessage(ctx, req)
+	})
+}
+
+// GetTask observes completion even when a response policy rejects the snapshot.
+func (c *Client) GetTask(ctx context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error) {
+	return observeUnary(ctx, "GetTask", func(ctx context.Context) (*a2a.Task, error) {
+		return c.Client.GetTask(ctx, req)
+	})
+}
+
+// CancelTask observes completion without changing the SDK's result or error.
+func (c *Client) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	return observeUnary(ctx, "CancelTask", func(ctx context.Context) (*a2a.Task, error) {
+		return c.Client.CancelTask(ctx, req)
+	})
+}
+
+func observeUnary[T any](ctx context.Context, method string, call func(context.Context) (T, error)) (T, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	completion := &streamCompletion{method: method}
+	result, err := call(context.WithValue(ctx, clientCompletionKey, completion))
+	completion.mu.Lock()
+	st := completion.state
+	completion.mu.Unlock()
+	if st != nil {
+		// After deliberately defers recording to here: policies registered on
+		// either side of tracing can still replace or reject the response.
+		st.recordResponse(result, err)
+	}
+	return result, err
+}
 
 // SendStreamingMessage observes completion without changing events or errors.
 func (c *Client) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
@@ -67,7 +106,7 @@ const (
 	serverCompletionKey
 )
 
-// Each iteration owns a slot. Only its first matching Before can claim it, so
+// Each call or iteration owns a slot. Only its first matching Before can claim it, so
 // nested calls inheriting this context cannot overwrite the outer call's state.
 // Separate keys isolate inbound and outbound calls on the same context.
 type streamCompletion struct {
