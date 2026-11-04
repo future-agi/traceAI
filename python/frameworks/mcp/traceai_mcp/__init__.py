@@ -177,6 +177,10 @@ class _ContextIterator:
 
     async def __anext__(self) -> Any:
         if self._closed:
+            # Another Context can close this iterator without restoring the
+            # owner's tokens. Finish cleanup when the owner observes EOF,
+            # but do not detach an attachment from a newer iterator.
+            self._reader._restore_context(self._key)
             raise StopAsyncIteration
         # A caller may start a fresh async-for after breaking out of the last
         # one. Its previous message is finished even if its iterator was lost.

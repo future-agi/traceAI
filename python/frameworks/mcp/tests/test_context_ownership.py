@@ -132,6 +132,78 @@ def test_other_task_close_does_not_steal_context_cleanup(reader_type, caplog, ba
 
 
 @pytest.mark.parametrize("reader_type", [InstrumentedStreamReader, ContextAttachingStreamReader])
+@pytest.mark.parametrize("close_task", ["owner", "child"])
+def test_closed_iterator_owner_next_restores_parent(reader_type, close_task, caplog, backend):
+    async def run():
+        tracer = TracerProvider().get_tracer("iterator-lifecycle")
+        send, receive = anyio.create_memory_object_stream(1)
+        reader = reader_type(receive)
+        await send.send(message(reader_type))
+        with tracer.start_as_current_span("outer") as outer:
+            original = context.get_current()
+            iterator = reader.__aiter__()
+            try:
+                await anext(iterator)
+                assert trace.get_current_span().get_span_context().trace_id == REMOTE_TRACE
+                if close_task == "child":
+                    async with anyio.create_task_group() as group:
+                        group.start_soon(iterator.aclose)
+                    # A foreign Context cannot reset the owner's tokens.
+                    assert trace.get_current_span().get_span_context().trace_id == REMOTE_TRACE
+                else:
+                    await iterator.aclose()
+                    assert context.get_current() is original
+                with pytest.raises(StopAsyncIteration):
+                    await anext(iterator)
+                # End-of-stream must restore the parent without reader/transport cleanup.
+                with tracer.start_as_current_span("independent") as independent:
+                    assert independent.get_span_context().trace_id == outer.get_span_context().trace_id
+                    assert independent.parent.span_id == outer.get_span_context().span_id
+                assert context.get_current() is original
+                with tracer.start_as_current_span("later") as later:
+                    with pytest.raises(StopAsyncIteration):
+                        await anext(iterator)
+                    assert trace.get_current_span() is later
+            finally:
+                await iterator.aclose()
+                await reader.aclose()
+                await send.aclose()
+    anyio.run(run, backend=backend)
+    assert "Failed to detach context" not in caplog.text
+
+
+@pytest.mark.parametrize("reader_type", [InstrumentedStreamReader, ContextAttachingStreamReader])
+def test_closed_iterator_cannot_detach_new_iterator_context(reader_type, caplog, backend):
+    async def run():
+        send, receive = anyio.create_memory_object_stream(2)
+        reader = reader_type(receive)
+        await send.send(message(reader_type))
+        await send.send(message(reader_type))
+        original = context.get_current()
+        first = reader.__aiter__()
+        second = reader.__aiter__()
+        try:
+            await anext(first)
+            async with anyio.create_task_group() as group:
+                group.start_soon(first.aclose)
+            await anext(second)
+            current = context.get_current()
+            assert trace.get_current_span().get_span_context().trace_id == REMOTE_TRACE
+            with pytest.raises(StopAsyncIteration):
+                await anext(first)
+            assert context.get_current() is current
+            await first.aclose()
+            assert context.get_current() is current
+            await second.aclose()
+            assert context.get_current() is original
+        finally:
+            await reader.aclose()
+            await send.aclose()
+    anyio.run(run, backend=backend)
+    assert "Failed to detach context" not in caplog.text
+
+
+@pytest.mark.parametrize("reader_type", [InstrumentedStreamReader, ContextAttachingStreamReader])
 def test_next_receive_cancellation_and_explicit_iterator_close(reader_type, caplog, backend):
     async def run():
         send, receive = anyio.create_memory_object_stream(2)
