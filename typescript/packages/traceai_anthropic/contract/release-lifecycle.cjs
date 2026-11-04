@@ -169,6 +169,36 @@ async function main() {
         if (!native) assert.equal(attributes["gen_ai.usage.total_tokens"], 14);
       });
     }
+    if (!native) {
+      await check("rejected second iterator does not finish the active stream", async () => {
+        memory.reset();
+        const stream = await client.messages.create({ ...params, stream: true });
+        const active = stream[Symbol.asyncIterator]();
+        const received = [(await active.next()).value];
+        assert.equal(received[0].type, "message_start");
+        const rejected = stream[Symbol.asyncIterator]();
+        await assert.rejects(rejected.next(), /Cannot iterate over a consumed stream/);
+        assert.equal(memory.getFinishedSpans().length, 0);
+        for (;;) {
+          const result = await active.next();
+          if (result.done) break;
+          received.push(result.value);
+        }
+        assert.deepEqual(received.map(event => event.type), events.map(event => event.type));
+        const spans = memory.getFinishedSpans();
+        assert.equal(spans.length, 1);
+        const span = spans[0];
+        assert.equal(span.status.code, SpanStatusCode.OK);
+        assert.equal(span.attributes["gen_ai.usage.input_tokens"], 12);
+        assert.equal(span.attributes["gen_ai.usage.output_tokens"], 2);
+        assert.equal(span.attributes["gen_ai.usage.total_tokens"], 14);
+        assert.equal(span.events.length, 0);
+        assert.equal(JSON.stringify(span.attributes).includes("OUTPUT_CANARY"), !privacy);
+        // Further operations on the rejected iterator cannot export again.
+        await rejected.return();
+        assert.equal(memory.getFinishedSpans().length, 1);
+      });
+    }
     await check("instrumented early break cancels transport", async () => {
       const result = await cancellation("instrumented-cancellation");
       assert.equal(result.aborted, true);

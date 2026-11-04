@@ -169,8 +169,13 @@ function observeStream(span: Span, stream: Stream<MessageStreamEvent>): Stream<M
   if (signal?.aborted) finish(true);
 
   const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+  let iteratorObserved = false;
   stream[Symbol.asyncIterator] = () => {
     const iterator = originalIterator();
+    // Only the first iterator owns the span. The SDK rejects subsequent consumers;
+    // their errors must not end the active iterator's span or discard its output.
+    if (iteratorObserved) return iterator;
+    iteratorObserved = true;
     return {
       async next(...args: [] | [undefined]) {
         pending++;

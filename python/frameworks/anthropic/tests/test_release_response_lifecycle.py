@@ -49,10 +49,12 @@ def harness():
                 mime = "application/json"
             self.send_response(200)
             self.send_header("Content-Type", mime)
-            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Content-Length", str(len(payload) + (100 if body["model"] == "broken-body" else 0)))
             self.send_header("request-id", "synthetic-request")
             self.end_headers()
             self.wfile.write(payload)
+            self.wfile.flush()
+            self.close_connection = True
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -250,6 +252,135 @@ def test_raw_parse_error_preserved_and_finalized(harness, async_):
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.parametrize("async_", [False, True])
+@pytest.mark.parametrize("method", ["parse", "read", "text", "json", "iter_bytes", "iter_text", "iter_lines"])
+def test_raw_body_transport_failure_is_error(harness, async_, method):
+    provider, exporter, instrumentor, kwargs = harness
+    instrumentor.instrument(tracer_provider=provider)
+    params = {**PARAMS, "model": "broken-body"}
+
+    def assert_error_span(error):
+        # SDK 2.4 uses httpx2; older versions use httpx. Both expose this error.
+        assert type(error).__name__ == "RemoteProtocolError"
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status.status_code == StatusCode.ERROR
+        exceptions = [event for event in span.events if event.name == "exception"]
+        assert len(exceptions) == 1
+        assert exceptions[0].attributes["exception.message"] == str(error)
+        return span
+
+    async def request():
+        async with anthropic.AsyncAnthropic(**kwargs) as client:
+            async with client.messages.with_streaming_response.create(**params) as raw:
+                assert not raw.http_response.is_stream_consumed
+                with pytest.raises(Exception, match="peer closed connection") as caught:
+                    result = getattr(raw, method)()
+                    if method.startswith("iter_"):
+                        # Obtaining an iterator must not consume the response.
+                        assert not raw.http_response.is_stream_consumed
+                        assert not exporter.get_finished_spans()
+                        async for _ in result:
+                            pass
+                    else:
+                        await result
+                span = assert_error_span(caught.value)
+                await raw.close()
+            assert exporter.get_finished_spans() == (span,)
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with anthropic.Anthropic(**kwargs) as client:
+            with client.messages.with_streaming_response.create(**params) as raw:
+                assert not raw.http_response.is_stream_consumed
+                with pytest.raises(Exception, match="peer closed connection") as caught:
+                    result = getattr(raw, method)()
+                    if method.startswith("iter_"):
+                        assert not raw.http_response.is_stream_consumed
+                        assert not exporter.get_finished_spans()
+                        list(result)
+                span = assert_error_span(caught.value)
+                raw.close()
+            assert exporter.get_finished_spans() == (span,)
+    assert len(exporter.get_finished_spans()) == 1
+    assert exporter.get_finished_spans()[0].status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.parametrize("async_", [False, True])
+@pytest.mark.parametrize("method", ["read", "text", "json", "iter_bytes", "iter_text", "iter_lines"])
+def test_raw_body_readers_preserve_success(harness, async_, method):
+    provider, exporter, instrumentor, kwargs = harness
+    instrumentor.instrument(tracer_provider=provider)
+
+    def assert_body(value):
+        if method == "iter_bytes":
+            value = b"".join(value)
+        elif method.startswith("iter_"):
+            value = "".join(value)
+        assert (value if method == "json" else json.loads(value)) == MESSAGE
+        # Raw reads do not parse a message or finalize the span as successful.
+        assert not exporter.get_finished_spans()
+
+    async def request():
+        async with anthropic.AsyncAnthropic(**kwargs) as client:
+            async with client.messages.with_streaming_response.create(**PARAMS) as raw:
+                result = getattr(raw, method)()
+                if method.startswith("iter_"):
+                    assert not raw.http_response.is_stream_consumed
+                    value = [chunk async for chunk in result]
+                else:
+                    value = await result
+                assert_body(value)
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with anthropic.Anthropic(**kwargs) as client:
+            with client.messages.with_streaming_response.create(**PARAMS) as raw:
+                result = getattr(raw, method)()
+                if method.startswith("iter_"):
+                    assert not raw.http_response.is_stream_consumed
+                    result = list(result)
+                assert_body(result)
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.UNSET
+    assert not spans[0].events
+
+
+@pytest.mark.parametrize("async_", [False, True])
+def test_raw_text_preserves_legacy_property_and_modern_method(harness, async_):
+    provider, exporter, instrumentor, kwargs = harness
+    instrumentor.instrument(tracer_provider=provider)
+
+    async def request():
+        async with anthropic.AsyncAnthropic(**kwargs) as client:
+            raw = await client.messages.with_raw_response.create(**PARAMS)
+            # Older SDKs expose text as a property, even for async clients.
+            assert callable(raw.text) == callable(raw.__wrapped__.text)
+            text = raw.text() if callable(raw.text) else raw.text
+            if inspect.isawaitable(text):
+                text = await text
+            assert json.loads(text) == MESSAGE
+            parsed = raw.parse()
+            if inspect.isawaitable(parsed):
+                parsed = await parsed
+            assert parsed.id == MESSAGE["id"]
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with anthropic.Anthropic(**kwargs) as client:
+            raw = client.messages.with_raw_response.create(**PARAMS)
+            assert callable(raw.text) == callable(raw.__wrapped__.text)
+            text = raw.text() if callable(raw.text) else raw.text
+            assert json.loads(text) == MESSAGE
+            assert raw.parse().id == MESSAGE["id"]
+    assert_usage(exporter)
 
 
 @pytest.mark.parametrize("async_", [False, True])
