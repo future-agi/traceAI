@@ -23,7 +23,8 @@ const caseExists = file => {
 };
 const changed = ['python/fi_instrumentation/instrumentation/config.py', 'python/frameworks/openai/traceai_openai/instrumentation.py',
   'typescript/packages/traceai_openai/src/index.ts', 'java/traceai-java-core/src/Example.java',
-  'go/openai/example.go', 'go/bedrock/client.go', 'csharp/src/FIInstrumentation/Example.cs'];
+  'go/openai/example.go', 'go/bedrock/client.go', 'csharp/src/FIInstrumentation/Example.cs',
+  'ruby/traceai-openai/lib/traceai/openai.rb'];
 const scm = {
   repository: {owner: 'future-agi', repo: 'traceAI', defaultBranch: 'main'},
   async getFileJson(file) { return JSON.parse(fs.readFileSync(path.join(root, file))); },
@@ -55,7 +56,7 @@ const scm = {
     if (value !== undefined) updates.set(u.path, value);
   }
   const next = JSON.parse(updates.get('.release-please-manifest.json'));
-  for (const p of ['python', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'go/bedrock', 'csharp/src/FIInstrumentation']) {
+  for (const p of ['python', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'go/bedrock', 'csharp/src/FIInstrumentation', 'ruby/traceai-openai']) {
     assert.equal(next[p], featureVersion(baseline[p]), `${p}: feature bumps patch before 1.0, minor after 1.0`);
   }
   assert(updates.get('python/frameworks/openai/traceai_openai/version.py').includes(`__version__ = "${next['python/frameworks/openai']}"`));
@@ -64,6 +65,8 @@ const scm = {
   assert(!updates.has('python/frameworks/anthropic/traceai_anthropic/version.py'), 'core release must not rewrite untouched sibling SDK runtime versions');
   assert.equal(JSON.parse(updates.get('typescript/packages/traceai_openai/package.json')).version, next['typescript/packages/traceai_openai']);
   assert(updates.get('csharp/src/FIInstrumentation/FIInstrumentation.csproj').includes(`<Version>${next['csharp/src/FIInstrumentation']}</Version>`));
+  assert(updates.get('ruby/traceai-openai/traceai-openai.gemspec').includes(`spec.version = '${next['ruby/traceai-openai']}'`));
+  assert(updates.get('ruby/traceai-openai/lib/traceai/openai.rb').includes(`VERSION = '${next['ruby/traceai-openai']}'`));
   assert(!next.java.includes('SNAPSHOT'), 'one release PR, no Maven snapshot PR');
   assert(updates.get('go/bedrock/client.go').includes(`Version   = "${next['go/bedrock']}"`), 'Bedrock runtime instrumentation version follows release');
   assert.match(updates.get('java/pom.xml'), new RegExp(`<version>${next.java.replaceAll('.', '\\.')}</version>`));

@@ -168,3 +168,31 @@ class NotesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RubyReleaseTests(unittest.TestCase):
+    def test_rubygems_versions_and_missing_package(self):
+        package = {"ecosystem": "ruby", "name": "traceai-openai", "version": "0.1.0"}
+        with patch.object(release_plan, "_get_json", return_value=[{"number": "0.1.0"}, {"number": "0.1.1"}]) as get:
+            self.assertEqual(release_plan.published_versions(package), {"0.1.0", "0.1.1"})
+            get.assert_called_once_with("https://rubygems.org/api/v1/versions/traceai-openai.json")
+        with patch.object(release_plan, "_get_json", return_value=None):
+            self.assertIsNone(release_plan.published_versions(package))
+
+    def test_ruby_package_is_not_skipped_from_live_release(self):
+        root = Path(__file__).resolve().parents[2]
+        config = release_plan.load_config()
+        package = next(p for p in release_plan.other_packages(root) if p["name"] == "traceai-openai")
+        with patch.object(release_plan, "published_versions", return_value=None):
+            plan = release_plan.plan([package], config)
+        self.assertEqual([p["name"] for p in plan["ruby"]], ["traceai-openai"])
+        self.assertEqual(plan["skipped"], [])
+
+    def test_ruby_release_workflow_has_build_verify_publish_and_tag(self):
+        root = Path(__file__).resolve().parents[2]
+        parent = (root / ".github/workflows/release.yml").read_text()
+        lane = (root / ".github/workflows/release-ruby.yml").read_text()
+        self.assertIn("needs.plan.outputs.ruby", parent)
+        self.assertIn("RUBYGEMS_API_KEY", parent)
+        for required in ("gem build", "gem install", "gem push", "github_release.py", "registry_published"):
+            self.assertIn(required, lane)

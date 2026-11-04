@@ -96,6 +96,11 @@ Sources: [PyPI publisher setup](https://docs.pypi.org/trusted-publishers/adding-
 
 Sources: [namespace verification](https://central.sonatype.org/register/namespace/) and [Central publishing Maven plugin](https://central.sonatype.org/publish/publish-portal-maven/).
 
+### RubyGems: official OpenAI Ruby adapter
+
+- [ ] Configure the repository secret **`RUBYGEMS_API_KEY`** with permission to push `traceai-openai` (and create it on its first release). No RubyGems credential is currently configured; without this secret the workflow builds but does not upload, verify or tag the gem. Never put this key into the gem, repository, or build artifacts.
+- The Ruby lane builds the gem on Ruby 3.3, installs it locally, and, on non-dry-run main releases with the secret present, uploads via `gem push`. It installs the exact version from the public registry before tagging. An existing registry version skips upload and still verifies/tag-reconciles. Do not advertise `gem install traceai-openai` to customers before registry publication is verified.
+
 ### NuGet
 
 - [ ] Add **`NUGET_API_KEY`** with push rights for **`fi-instrumentation-otel`** and track its expiration. Grant new-package creation only if needed for a future package, not by default.

@@ -1,0 +1,47 @@
+name: Ruby OpenAI instrumentation
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'ruby/traceai-openai/**'
+      - 'release-please-config.json'
+      - '.release-please-manifest.json'
+      - '.github/workflows/openai-ruby-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'ruby/traceai-openai/**'
+      - 'release-please-config.json'
+      - '.release-please-manifest.json'
+      - '.github/workflows/openai-ruby-tests.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.3', '3.4']
+        openai: ['0.115.0', 'latest']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      - name: Install pinned floor or latest official SDK
+        env:
+          OPENAI_VERSION: ${{ matrix.openai }}
+        run: |
+          if [ "$OPENAI_VERSION" = latest ]; then gem install openai --no-document; else gem install openai -v "$OPENAI_VERSION" --no-document; fi
+          gem install opentelemetry-sdk minitest --no-document
+          gem install opentelemetry-instrumentation-openai -v 0.1.0 --no-document
+      - name: Build and run isolated contract tests
+        run: |
+          cd ruby/traceai-openai
+          gem build traceai-openai.gemspec
+          ruby -Ilib test/instrumentation_test.rb
+          ruby -Ilib test/late_instrumentation_test.rb
