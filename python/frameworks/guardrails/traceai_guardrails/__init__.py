@@ -39,6 +39,7 @@ class GuardrailsInstrumentor(BaseInstrumentor):
                 NativeTraceAPI,
                 add_call_attributes,
                 add_step_attributes,
+                add_validator_attributes,
             )
 
             config = kwargs.get("config")
@@ -62,6 +63,8 @@ class GuardrailsInstrumentor(BaseInstrumentor):
                     # never execution methods or the framework's span lifecycle.
                     self._bind(module, "add_call_attributes", add_call_attributes)
                     self._bind(module, "add_step_attributes", add_step_attributes)
+                elif name == "validator_tracing":
+                    self._bind(module, "add_validator_attributes", add_validator_attributes)
         except Exception:
             self._uninstrument()
             raise

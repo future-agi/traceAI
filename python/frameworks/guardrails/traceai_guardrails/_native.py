@@ -5,9 +5,10 @@ Guard/Runner execution method, contextvars module or validator is patched.
 """
 
 from contextlib import contextmanager
+from inspect import signature
 from typing import Any, Mapping
 
-from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation import FITracer, TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace
 from wrapt import ObjectProxy
@@ -23,7 +24,8 @@ _STRUCTURAL = frozenset(
         "execution_id",
         "token_consumption",
         "number_of_reasks",
-        "number_of_llm_calls",
+        # Native number_of_llm_calls is inferred from iterations, including
+        # validation-only steps. Omit it rather than inventing model usage.
         "step.index",
         "validator.name",
         "validator.on_fail",
@@ -228,8 +230,22 @@ def add_call_attributes(call_span, response, *args, **kwargs):
     call_span.set_attribute("type", "guardrails/guard/step/call")
     if response is None:
         return
+    # Runner.call also wraps a caller's parse/validate candidate in LLMResponse
+    # without invoking an API. Bind the installed signature (sync and async,
+    # positional and keyword) rather than guessing from the returned value.
+    arguments = kwargs
+    if args:
+        runner = args[0]
+        method = getattr(runner, "async_call", None) or getattr(runner, "call", None)
+        try:
+            arguments = signature(method).bind(*args[1:], **kwargs).arguments
+        except (TypeError, ValueError):
+            arguments = {}  # Unknown provenance: do not export raw content.
     if isinstance(response.output, str):
-        call_span.set_attribute(SpanAttributes.OUTPUT_VALUE, response.output)
+        if arguments.get("output") is not None:
+            call_span.set_attribute("input", response.output)
+        elif callable(arguments.get("api")):
+            call_span.set_attribute(SpanAttributes.OUTPUT_VALUE, response.output)
     for field, key in (
         ("prompt_token_count", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
         ("response_token_count", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
@@ -237,3 +253,40 @@ def add_call_attributes(call_span, response, *args, **kwargs):
         value = getattr(response, field, None)
         if isinstance(value, int):
             call_span.set_attribute(key, value)
+
+
+def add_validator_attributes(
+    *args,
+    validator_span,
+    validator_name,
+    obj_id,
+    on_fail_descriptor=None,
+    result=None,
+    init_kwargs=None,
+    validation_session_id=None,
+    **kwargs,
+):
+    """Project the typed verdict before upstream serialization erases its enum.
+
+    Never serialize result metadata, init kwargs, or the generic result dump.
+    Keep the SDK's validator execution and returned result untouched.
+    """
+    validator_span.set_attribute("type", "guardrails/guard/step/validator")
+    validator_span.set_attribute("validator.name", validator_name or "unknown")
+    descriptor = getattr(on_fail_descriptor, "value", on_fail_descriptor)
+    if isinstance(descriptor, str):
+        validator_span.set_attribute("validator.on_fail", descriptor)
+    if isinstance(obj_id, int):
+        validator_span.set_attribute("validator.instance_id", str(obj_id))
+    if isinstance(validation_session_id, str):
+        validator_span.set_attribute("validation_session_id", validation_session_id)
+    value = args[0] if args else kwargs.get("value")
+    if value is not None:
+        validator_span.set_attribute(
+            "validator.validate.input.value",
+            value if isinstance(value, str) else safe_json_dumps(value),
+        )
+    outcome = getattr(result, "outcome", None)
+    outcome = getattr(outcome, "value", outcome)
+    if outcome in ("pass", "fail"):
+        validator_span.set_attribute("validator.validate.output.outcome", outcome)
