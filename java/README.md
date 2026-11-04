@@ -278,7 +278,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | MongoDB Atlas | `traceai-java-mongodb` |
 | Retrieval | Redis | `traceai-java-redis` |
 | Retrieval | Azure AI Search (synchronous SDK 11.6.2–11.8.1) | `traceai-java-azure-search` |
-| Retrieval | Azure AI Search (synchronous SDK 12.0.3) | `traceai-java-azure-search-v12` |
+| Retrieval | Azure AI Search (synchronous SDK 12.x; compilation floor 12.0.3, newest validated 12.1.1) | `traceai-java-azure-search-v12` |
 | Retrieval | PostgreSQL pgvector | `traceai-java-pgvector` |
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
 | Framework | LangChain4j | `traceai-langchain4j` |
@@ -299,11 +299,11 @@ Use [Azure's native OpenTelemetry tracing](https://learn.microsoft.com/azure/dev
 | Azure SDK | traceAI artifact | Wrapper import |
 | --- | --- | --- |
 | 11.6.2–11.8.1 | `traceai-java-azure-search` | `ai.traceai.azure.search.TracedSearchClient` |
-| 12.0.3 | `traceai-java-azure-search-v12` | `ai.traceai.azure.search.v12.TracedSearchClient` |
+| 12.x (compilation floor: 12.0.3; validated: 12.0.3 and 12.1.1) | `traceai-java-azure-search-v12` | `ai.traceai.azure.search.v12.TracedSearchClient` |
 
 The SDK 12 adapter is a separate module because Azure changed its public paging types. Do not combine the two adapters on one classpath. The 12.x adapter provides text, vector, filtered-vector, and hybrid retrieval; use `unwrap()` for Azure document operations. Existing 11.x constructors and document-operation methods remain unchanged. Use the SDK 12 artifact only after a release containing it is available, or build it locally with the reactor below.
 
-Search methods return lazy `SearchPagedIterable` results. Consume the results to execute the search. Each requested page has a completed `RETRIEVER` span under the context active when you called the search method. `azure_search.result_scope=page` identifies page-level `db.vector.results.count` and `azure_search.top_score`; these are not totals for the query. The captured FI session, user, metadata, and tags belong to the caller, even if another thread or user consumes the results. With SDK 11, reading metadata or iterating again reuses the first page and its trace. SDK 12 does not cache pages: iterating again requests them again, and count/coverage metadata is read from each `SearchPagedResponse`. Both adapters retain the underlying SDK's continuation tokens and replay behavior. Stopping early does not fetch remaining pages or leave an unfinished retrieval span. Query text and filters respect `hideInputs`, and error details respect `hideErrorDetails`.
+Search methods return lazy `SearchPagedIterable` results. Consume the results to execute the search. Each requested page has a completed `RETRIEVER` span under the context active when you called the search method. `azure_search.result_scope=page` identifies page-level `db.vector.results.count` and `azure_search.top_score`; these are not totals for the query. The captured FI session, user, metadata, and tags belong to the caller, even if another thread or user consumes the results. With SDK 11, reading metadata or iterating again reuses the first page and its trace. SDK 12 does not cache pages: iterating again requests them again, and count/coverage metadata is read from each `SearchPagedResponse`. Both adapters retain the underlying SDK's continuation tokens and replay behavior. Stopping early does not fetch remaining pages or leave an unfinished retrieval span. Query text, filters, and SDK 11 document lookup keys respect `hideInputs`, and error details respect `hideErrorDetails`. These settings apply to traceAI spans; configure Azure's native SDK/HTTP telemetry separately.
 
 ## Build and test
 
