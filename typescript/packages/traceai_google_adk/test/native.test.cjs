@@ -147,3 +147,21 @@ test('configuration validates inputs and refuses to replace an existing provider
   await existing.shutdown();
   trace.disable();
 });
+
+
+test('reported cache reads are independent of content capture and never subtracted from prompt totals', async () => {
+  for (const captureContent of [false, true]) {
+    const c = collect({captureContent});
+    try {
+      for (const cachedContentTokenCount of [60, 0, -1, '60', null]) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {promptTokenCount: 100, cachedContentTokenCount}}),
+        }}).end();
+      }
+      await c.provider.forceFlush();
+      assert.deepEqual(c.spans.map(s => s.attributes['gen_ai.usage.cache_read_tokens']), [60, 0, undefined, undefined, undefined]);
+      assert(c.spans.every(s => s.attributes['gen_ai.usage.input_tokens'] === 100));
+      assert(c.spans.every(s => s.attributes['gen_ai.usage.total_tokens'] === undefined));
+    } finally { await c.provider.shutdown(); }
+  }
+});

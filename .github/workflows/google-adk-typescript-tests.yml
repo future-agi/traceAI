@@ -54,9 +54,12 @@ jobs:
             set -euo pipefail
             ip link set lo up
             "$4" "$1/typescript/node_modules/jest/bin/jest.js" --config "$1/typescript/packages/traceai_google_adk/jest.config.js" --runInBand
-            "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs" "$1/typescript/packages/traceai_google_adk/test/native-privacy.test.cjs"
+            "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs" "$1/typescript/packages/traceai_google_adk/test/native-privacy.test.cjs" "$1/typescript/packages/traceai_google_adk/test/native-errors.test.cjs"
             ADK_RUNTIME="$2" CAPTURE_CONTENT="$3" "$4" "$1/typescript/packages/traceai_google_adk/test/run-adk.cjs"
             if [ "$5" = "2.4.0" ] && [ "$3" = "1" ]; then
+              for mode in default stream tool-error tool-error-hide provider-error provider-error-stream; do
+                "$4" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
+              done
               for mode in default credentials credential-variants hide-inputs hide-outputs hide-input-text hide-output-text hide-input-messages hide-output-messages pii numeric-pii; do
                 "$4" "$1/typescript/packages/traceai_google_adk/test/native-privacy-wire.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
               done
@@ -67,3 +70,20 @@ jobs:
         run: |
           pnpm pack --pack-destination "$RUNNER_TEMP/package"
           git diff --exit-code -- ../../pnpm-lock.yaml
+      - name: Test independently installed packages with real HTTP clients
+        if: matrix.adk == '2.4.0' && matrix.capture == '1'
+        working-directory: typescript
+        run: |
+          for package in fi-core fi-semantic-conventions; do
+            (cd "packages/$package" && pnpm pack --pack-destination "$RUNNER_TEMP/package")
+          done
+          npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/package/"*.tgz @google/adk@2.4.0
+          cp packages/traceai_google_adk/test/native-plugin.types.ts "$RUNNER_TEMP/consumer/"
+          node node_modules/typescript/bin/tsc --noEmit --skipLibCheck --target es2022 --module nodenext --moduleResolution nodenext "$RUNNER_TEMP/consumer/native-plugin.types.ts"
+          sudo unshare --net bash -c '
+            set -euo pipefail
+            ip link set lo up
+            for mode in default stream tool-error tool-error-hide provider-error provider-error-stream; do
+              "$3" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$2/node_modules/@traceai/fi-instrumentation-google-adk" "$2" "$mode"
+            done
+          ' -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP/consumer" "$(command -v node)"

@@ -34,7 +34,7 @@ const METADATA = new Set([
   "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
   "gen_ai.response.finish_reasons", "gen_ai.tool.name", "gen_ai.tool.type",
   "adk.workflow.name", "adk.node.path", "adk.node.attempt", "adk.node.status",
-  "adk.node.interrupt_count", "error.type",
+  "adk.node.interrupt_count", "error.type", "http.response.status_code",
 ]);
 
 function objectFromJson(value: unknown): Record<string, unknown> | undefined {
@@ -73,6 +73,9 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     const thoughts = count(usage?.thoughtsTokenCount);
     const prompt = count(usage?.promptTokenCount);
     const total = count(usage?.totalTokenCount);
+    const cached = count(usage?.cachedContentTokenCount);
+    // Cached input is a subset of promptTokenCount, not additional input.
+    if (cached !== undefined) attributes["gen_ai.usage.cache_read_tokens"] = cached;
     if (prompt !== undefined) attributes["gen_ai.usage.input_tokens"] = prompt;
     if (candidates !== undefined) attributes["gen_ai.usage.output_tokens"] = candidates + (thoughts ?? 0);
     if (thoughts !== undefined) attributes["gen_ai.usage.output_tokens.reasoning"] = thoughts;
@@ -132,7 +135,9 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
 
 /** Wrap the sole export path in an existing OTel SDK. Does not install a provider. */
 export class GoogleADKSpanExporter implements SpanExporter {
-  private readonly config = generateTraceConfig();
+  // Native error details are excluded even with content opt-in. Environment
+  // controls can make capture stricter, never relax this native-route default.
+  private readonly config = { ...generateTraceConfig(), hideErrorDetails: true };
 
   constructor(private readonly exporter: SpanExporter, private readonly options: GoogleADKNativeOptions = {}) {}
 

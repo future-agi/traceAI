@@ -32,6 +32,28 @@ Do not also enable ADK's automatic OTLP exporters or install the legacy `GoogleA
 
 Open **Observe** in Future AGI and select `google-adk-app`. A normal model-and-tool run contains the invocation, agent, model calls and tool calls in one trace.
 
+### Provider error telemetry
+
+ADK 2.4.0 converts provider exceptions into error events without marking its native model span as failed. Exporter configuration alone cannot recover those errors. Register the supported error callback on your runner to mark the **existing** model span as `ERROR`, with model, error type and HTTP status when available:
+
+```javascript
+const { BasePlugin, InMemoryRunner } = require("@google/adk");
+const { recordGoogleADKModelError } = require("@traceai/fi-instrumentation-google-adk");
+
+class ModelErrorTelemetry extends BasePlugin {
+  constructor() { super("traceai_model_errors"); }
+  onModelErrorCallback = recordGoogleADKModelError;
+}
+
+// Use your existing agent and register telemetry before any recovery plugins.
+const runner = new InMemoryRunner({
+  agent,
+  plugins: [new ModelErrorTelemetry()],
+});
+```
+
+The same plugin works with `Runner` or an ADK `App`'s plugin list. It neither creates spans nor changes ADK's error events or recovery behavior. Only the failed model span is marked; invocation and agent status remain as ADK reports them. It never records exception messages or stack traces, including in-process. Register it first: a recovery plugin that returns a response stops later callbacks. This callback requires ADK 2.4.0 and an active OpenTelemetry context (installed by `configure()` or your existing provider).
+
 ## Content and session privacy
 
 By default, the adapter exports span names, operation/model/tool metadata, timing, status and token counts. It removes native request/response payloads, session identifiers, descriptions, arbitrary events, error messages and stack traces from ADK spans. Agent/tool names and workflow paths remain visible; do not put sensitive data in them. Other instrumentation scopes are not redacted by this adapter.
@@ -51,12 +73,13 @@ const tracing = configure({
 - `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS`: redact the corresponding model and tool payloads.
 - `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES`: also redact the full corresponding native payload, since it can contain message history outside its main message field.
 - `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT`: redact all string values in the corresponding payload, including nested messages, system instructions and tool arguments/results.
+- `FI_HIDE_ERROR_DETAILS`: recognized native error envelopes are always redacted, including tool failures copied into later model history. Content opt-in or setting this flag to `false` cannot relax this native-route default. Machine-readable error type/code/status can remain; arbitrary error details do not.
 - `FI_HIDE_INPUT_IMAGES`: redact native inline/file data in inputs.
 - `FI_PII_REDACTION`: apply the shared PII scanner to captured JSON. With older `@traceai/fi-core` versions that do not expose the scanner, the adapter hides the full payload instead.
 
 Set a flag to `true` to enable it. Credential-bearing fields (including nested API keys, authorization headers, passwords and access tokens) and Bearer/Basic authorization values are redacted even when no hide flag is set. This is not a guarantee that arbitrary secrets embedded in prose will be recognized; keep content capture disabled when payloads must remain private. Token counts remain available when ADK reports them. The legacy instrumentor's `traceConfig` object does not configure the native route.
 
-ADK normally captures message content in its in-process spans. This adapter removes it before sending those spans through its exporter. Set `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false` before running ADK if content must not enter in-process spans at all. In that mode, content opt-in cannot recover payloads, and ADK's output-token counter excludes thinking tokens. When native response usage metadata is available, the adapter includes thinking tokens in output counts and preserves the reported total; it does not invent missing totals.
+ADK normally captures message content in its in-process spans. This adapter removes it before sending those spans through its exporter. Set `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false` before running ADK if content must not enter in-process spans at all. In that mode, content opt-in cannot recover payloads, and ADK's output-token counter excludes thinking tokens. When native response usage metadata is available, the adapter includes thinking tokens in output counts, maps `cachedContentTokenCount` to `gen_ai.usage.cache_read_tokens`, and preserves the reported prompt and overall totals. Cached input is a subset of prompt tokens, not an additional count or a reason to subtract from the reported prompt total. It does not invent missing usage, including cached counts when native content capture is disabled.
 
 ## Existing OpenTelemetry applications
 
