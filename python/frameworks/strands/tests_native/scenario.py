@@ -259,6 +259,18 @@ if args.readme:
         for s in ss.spans
     ]
     assert len(spans) == 3, len(spans)
+    attributes = [{a.key: a.value for a in span.attributes} for span in spans]
+    (model,) = [a for a in attributes if a["gen_ai.span.kind"].string_value == "LLM"]
+    # Provider attribution must reach the billable model, not only its agent.
+    assert model["gen_ai.provider.name"].string_value == "openai", model
+    assert model["gen_ai.request.model"].string_value == "gpt-4o-mini"
+    assert model["gen_ai.usage.input_tokens"].int_value == 3
+    assert model["gen_ai.usage.output_tokens"].int_value == 4
+    for attrs in attributes:
+        if attrs["gen_ai.span.kind"].string_value != "LLM":
+            assert not any(key.startswith("gen_ai.usage.") for key in attrs)
+    span_ids = {span.span_id for span in spans}
+    assert all(not span.parent_span_id or span.parent_span_id in span_ids for span in spans)
     assert (
         sum(
             next(
