@@ -23,7 +23,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class LegacyBinaryCompatibility {
     public static void main(String[] args) {
         InMemorySpanExporter exporter = InMemorySpanExporter.create();
-        try (SdkTracerProvider sdk = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build()) {
+        AtomicInteger started = new AtomicInteger();
+        try (SdkTracerProvider sdk = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter))
+                .addSpanProcessor(new io.opentelemetry.sdk.trace.SpanProcessor() {
+                    public void onStart(io.opentelemetry.context.Context parent, io.opentelemetry.sdk.trace.ReadWriteSpan span) {
+                        started.incrementAndGet();
+                    }
+                    public boolean isStartRequired() { return true; }
+                    public void onEnd(io.opentelemetry.sdk.trace.ReadableSpan span) { }
+                    public boolean isEndRequired() { return false; }
+                }).build()) {
             FITracer tracer = new FITracer(sdk.get("offline-legacy"), TraceConfig.builder().hideInputs(true).hideOutputs(true).build());
             AtomicInteger calls = new AtomicInteger();
             ChatCompletionService chat = new ChatCompletionService() {
@@ -61,8 +70,9 @@ public class LegacyBinaryCompatibility {
                 System.out.println("PASS: 6 subscriptions, 10 privacy-safe spans");
 
                 exporter.reset();
+                var echoPlugin = new EchoPlugin();
                 var plugin = com.microsoft.semantickernel.plugin.KernelPluginFactory.createFromObject(
-                    new EchoPlugin(), "local");
+                    echoPlugin, "local");
                 Kernel inputKernel = Kernel.builder().withPlugin(plugin).build();
                 KernelFunction<String> echo = plugin.get("echo");
                 var arguments = KernelFunctionArguments.builder()
@@ -83,6 +93,31 @@ public class LegacyBinaryCompatibility {
                         io.opentelemetry.api.common.AttributeKey.stringKey("fi.raw_input"))))
                     throw new AssertionError("raw arguments not flattened");
                 System.out.println("PASS: identical traced/untraced result and flattened exported inputs");
+
+                exporter.reset();
+                int beforeStarts = started.get();
+                int beforeCalls = echoPlugin.calls.get();
+                java.util.Map<String, Object> cycle = new java.util.LinkedHashMap<>();
+                cycle.put("self", cycle);
+                arguments.put("unused", new com.microsoft.semantickernel.contextvariables.ContextVariable<>(
+                    new com.microsoft.semantickernel.contextvariables.ContextVariableType<>(
+                        new com.microsoft.semantickernel.contextvariables.ContextVariableTypeConverter.NoopConverter<>(java.util.Map.class),
+                        java.util.Map.class), cycle));
+                control = inputKernel.invokeAsync(echo).withArguments(arguments).block().getResult();
+                actual = new TracedKernel(inputKernel, inputTracer).invokeAsync(echo, arguments).block().getResult();
+                if (!"received: synthetic-legacy-question".equals(control) || !control.equals(actual))
+                    throw new AssertionError("cyclic input changed the business result");
+                if (echoPlugin.calls.get() - beforeCalls != 2) throw new AssertionError("cyclic input prevented execution");
+                var cycleSpans = exporter.getFinishedSpanItems();
+                if (started.get() - beforeStarts != 1 || cycleSpans.size() != 1 || !cycleSpans.get(0).hasEnded())
+                    throw new AssertionError("cyclic input leaked a span");
+                var raw = com.google.gson.JsonParser.parseString(cycleSpans.get(0).getAttributes().get(
+                    io.opentelemetry.api.common.AttributeKey.stringKey("fi.raw_input"))).getAsJsonObject();
+                if (!"synthetic-legacy-question".equals(raw.get("question").getAsString())
+                        || !"[circular]".equals(raw.getAsJsonObject("unused").get("self").getAsString()))
+                    throw new AssertionError("cyclic input not safely captured");
+                if (cycle.get("self") != cycle) throw new AssertionError("cyclic argument mutated");
+                System.out.println("PASS: cyclic input, identical result, 2 executions, 1 started/ended span");
             } catch (Throwable failure) {
                 failure.printStackTrace();
                 System.exit(12);
@@ -91,11 +126,13 @@ public class LegacyBinaryCompatibility {
     }
 
     public static class EchoPlugin {
+        final AtomicInteger calls = new AtomicInteger();
         @com.microsoft.semantickernel.semanticfunctions.annotations.DefineKernelFunction(
             name = "echo", returnType = "java.lang.String")
         public String echo(
                 @com.microsoft.semantickernel.semanticfunctions.annotations.KernelFunctionParameter(name = "question")
                 String question) {
+            calls.incrementAndGet();
             return "received: " + question;
         }
     }

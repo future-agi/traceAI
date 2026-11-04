@@ -16,10 +16,17 @@ import com.microsoft.semantickernel.semanticfunctions.annotations.KernelFunction
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.sdk.trace.ReadWriteSpan;
+import io.opentelemetry.sdk.trace.ReadableSpan;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.SpanProcessor;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -35,6 +42,7 @@ class KernelArgumentsTest {
     private InMemorySpanExporter exporter;
     private SdkTracerProvider provider;
     private FITracer tracer;
+    private final AtomicInteger started = new AtomicInteger();
     private EchoPlugin echo;
     private Kernel kernel;
     private KernelFunction<String> function;
@@ -42,7 +50,13 @@ class KernelArgumentsTest {
     @BeforeEach
     void setUp() {
         exporter = InMemorySpanExporter.create();
-        provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter)).build();
+        provider = SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(exporter))
+            .addSpanProcessor(new SpanProcessor() {
+                @Override public void onStart(Context parent, ReadWriteSpan span) { started.incrementAndGet(); }
+                @Override public boolean isStartRequired() { return true; }
+                @Override public void onEnd(ReadableSpan span) { }
+                @Override public boolean isEndRequired() { return false; }
+            }).build();
         tracer = new FITracer(provider.get("kernel-arguments-test"), TraceConfig.builder().build());
         echo = new EchoPlugin();
         var plugin = KernelPluginFactory.createFromObject(echo, "local");
@@ -85,6 +99,115 @@ class KernelArgumentsTest {
     }
 
     @Test
+    void cyclicMapDoesNotAbortTheFunctionOrLeakItsSpan() {
+        var arguments = arguments();
+        Map<String, Object> cycle = new LinkedHashMap<>();
+        cycle.put("self", cycle);
+        arguments.put("unused", variable(cycle, Map.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.get("question").getAsString()).isEqualTo(QUESTION);
+        assertThat(raw.getAsJsonObject("unused").get("self").getAsString()).isEqualTo("[circular]");
+        assertThat(cycle.get("self")).isSameAs(cycle);
+    }
+
+    @Test
+    void indirectMapCycleDoesNotRecurseThroughTheReadableInputFormatter() {
+        var arguments = arguments();
+        Map<String, Object> first = new LinkedHashMap<>();
+        Map<String, Object> second = new LinkedHashMap<>();
+        first.put("next", second);
+        second.put("next", first);
+        arguments.put("unused", variable(first, Map.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        assertThat(attribute(SemanticConventions.INPUT_VALUE)).contains("[circular]", "question: " + QUESTION);
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.getAsJsonObject("unused").getAsJsonObject("next").get("next").getAsString())
+            .isEqualTo("[circular]");
+    }
+
+    @Test
+    void cyclicCollectionsAndArraysAreCapturedWithoutMutation() {
+        var arguments = arguments();
+        List<Object> list = new ArrayList<>();
+        list.add(list);
+        Object[] array = new Object[1];
+        array[0] = array;
+        arguments.put("list", variable(list, List.class));
+        arguments.put("array", variable(array, Object[].class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.getAsJsonArray("list").get(0).getAsString()).isEqualTo("[circular]");
+        assertThat(raw.getAsJsonArray("array").get(0).getAsString()).isEqualTo("[circular]");
+        assertThat(list.get(0)).isSameAs(list);
+        assertThat(array[0]).isSameAs(array);
+    }
+
+    @Test
+    void deeplyNestedAcyclicInputIsBoundedBeforeFormattingOrSerialization() {
+        var arguments = arguments();
+        Object nested = "leaf";
+        for (int i = 0; i < 4096; i++) {
+            nested = Map.of("child", List.of(nested));
+        }
+        arguments.put("unused", variable(nested, Object.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.get("unused").toString()).contains("[max depth]").doesNotContain("leaf");
+        assertThat(raw.get("question").getAsString()).isEqualTo(QUESTION);
+    }
+
+    @Test
+    void sharedValuesAreNotMistakenForCyclesAndKeepTheirJsonTypes() {
+        var arguments = arguments();
+        var shared = Map.of("count", 7, "enabled", true, "items", new int[] {1, 2});
+        arguments.put("shared", variable(List.of(shared, shared), List.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        var values = raw.getAsJsonArray("shared");
+        assertThat(values.get(0)).isEqualTo(values.get(1));
+        assertThat(values.get(0).getAsJsonObject().get("count").getAsJsonPrimitive().isNumber()).isTrue();
+        assertThat(values.get(0).getAsJsonObject().get("enabled").getAsJsonPrimitive().isBoolean()).isTrue();
+        assertThat(values.get(0).getAsJsonObject().getAsJsonArray("items").get(1).getAsInt()).isEqualTo(2);
+    }
+
+    @Test
+    void unsupportedCyclicBeansAndMapKeysAreNeverFormattedOrReflected() {
+        var arguments = arguments();
+        var bean = new CyclicBean();
+        arguments.put("bean", variable(bean, CyclicBean.class));
+        arguments.put("keys", variable(Map.of(bean, "unused", "healthy", true), Map.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.get("bean").getAsString()).isEqualTo("[unsupported]");
+        assertThat(raw.getAsJsonObject("keys").keySet()).containsExactly("healthy");
+        assertThat(raw.getAsJsonObject("keys").get("healthy").getAsBoolean()).isTrue();
+        assertThat(bean.self).isSameAs(bean);
+    }
+
+    @Test
+    void broadSharedGraphsHaveABoundedCaptureBudgetPerArgument() {
+        var arguments = arguments();
+        Object shared = 1;
+        for (int i = 0; i < 20; i++) {
+            shared = List.of(shared, shared);
+        }
+        arguments.put("unused", variable(shared, Object.class));
+        assertSameBusinessResult(arguments, tracer);
+
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.get("unused").toString()).contains("[truncated]");
+        assertThat(raw.get("question").getAsString()).isEqualTo(QUESTION);
+        assertThat(attribute(SemanticConventions.RAW_INPUT).length()).isLessThan(10_000);
+    }
+
+    @Test
     void throwingWrapperFormatterDoesNotAbortAnOtherwiseSuccessfulInvocation() {
         var arguments = arguments();
         arguments.put("unused", new ContextVariable<String>(stringType(), "synthetic-unused") {
@@ -107,7 +230,9 @@ class KernelArgumentsTest {
 
         assertThat(attribute(SemanticConventions.INPUT_VALUE)).contains("question: " + QUESTION)
             .doesNotContain("ContextVariable@", "synthetic-value-formatter-error");
-        assertThat(attribute(SemanticConventions.RAW_INPUT)).isNull();
+        var raw = JsonParser.parseString(attribute(SemanticConventions.RAW_INPUT)).getAsJsonObject();
+        assertThat(raw.get("question").getAsString()).isEqualTo(QUESTION);
+        assertThat(raw.get("unused").getAsString()).isEqualTo("[unsupported]");
     }
 
     @Test
@@ -200,6 +325,9 @@ class KernelArgumentsTest {
         assertThat(echo.calls).hasValue(2);
         assertThat(agent().getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
         assertThat(agent().getEvents()).isEmpty();
+        assertThat(started).hasValue(1);
+        assertThat(exporter.getFinishedSpanItems()).hasSize(started.get());
+        assertThat(agent().hasEnded()).isTrue();
     }
 
     private SpanData agent() {
@@ -232,8 +360,16 @@ class KernelArgumentsTest {
         }
     }
 
+    public static class CyclicBean {
+        final CyclicBean self = this;
+
+        @Override public String toString() {
+            throw new AssertionError("instrumentation must not call arbitrary formatters");
+        }
+    }
+
     public static class ThrowingValue {
-        // Gson cannot serialize Class objects; its map.toString() fallback also fails below.
+        // Neither Gson's unsupported Class adapter nor this throwing formatter should be invoked.
         final Class<?> unsupported = ThrowingValue.class;
 
         @Override public String toString() {

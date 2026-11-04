@@ -167,17 +167,18 @@ public class TracedKernel {
             Map<String, Object> values = new LinkedHashMap<>();
             StringBuilder inputBuilder = new StringBuilder();
             for (Map.Entry<String, ContextVariable<?>> entry : arguments.entrySet()) {
-                ContextVariable<?> variable = entry.getValue();
-                Object value = variable == null ? null : variable.getValue();
-                values.put(entry.getKey(), value);
-
-                String text;
+                Object value;
                 try {
-                    text = value == null ? "" : value.toString();
+                    ContextVariable<?> variable = entry.getValue();
+                    value = ArgumentSnapshot.capture(variable == null ? null : variable.getValue());
                 } catch (RuntimeException ignored) {
-                    // A user-defined formatter must not prevent capture of the other arguments.
+                    // A failing getter must not prevent capture of the other arguments.
                     continue;
                 }
+                values.put(entry.getKey(), value);
+
+                // Only the bounded, cycle-free copy is formatted; never call a user's toString().
+                String text = value == null ? "" : value.toString();
                 if (inputBuilder.length() > 0) {
                     inputBuilder.append("\n");
                 }
