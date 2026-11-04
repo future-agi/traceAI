@@ -13,11 +13,27 @@ from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
+from traceai_fireworks._stream import (
+    _AsyncStream,
+    _Stream,
+    _get_stream_output_attributes as _get_stream_output_attributes,
+)
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 # Fireworks-specific base URL for detection
 FIREWORKS_BASE_URL = "api.fireworks.ai"
+
+# Capture model request data, never SDK transport options. Arbitrary extra_body,
+# extra_headers, extra_query and future unknown kwargs may contain credentials.
+_REQUEST_BODY_FIELDS = frozenset({
+    "audio", "frequency_penalty", "function_call", "functions", "logit_bias",
+    "logprobs", "max_completion_tokens", "max_tokens", "modalities", "n",
+    "parallel_tool_calls", "prediction", "presence_penalty", "reasoning_effort",
+    "response_format", "seed", "service_tier", "stop", "store", "stream_options",
+    "temperature", "tool_choice", "tools", "top_logprobs", "top_p", "user",
+})
 
 
 class _WithTracer(ABC):
@@ -118,9 +134,11 @@ def _get_input_attributes(
             if hasattr(message, "content"):
                 attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
 
-    # Add raw input
+    # Only allow known model request fields into telemetry.
     raw_input = {"model": model, "messages": messages}
-    raw_input.update({k: v for k, v in kwargs.items() if v is not None})
+    raw_input.update({
+        k: v for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS and v is not None
+    })
     attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(raw_input)
 
     return attributes
@@ -169,50 +187,6 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
     return attributes
 
 
-def _get_stream_output_attributes(
-    chunks: list,
-    full_content: str,
-) -> Dict[str, AttributeValue]:
-    """Extract output attributes from streaming response chunks."""
-    attributes: Dict[str, AttributeValue] = {
-        SpanAttributes.OUTPUT_VALUE: full_content,
-        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}": "assistant",
-        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}": full_content,
-    }
-
-    # Get info from last chunk
-    if chunks:
-        last_chunk = chunks[-1]
-        if hasattr(last_chunk, "model"):
-            attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] = last_chunk.model
-
-        if hasattr(last_chunk, "usage") and last_chunk.usage:
-            usage = last_chunk.usage
-            # OpenAI 1.0 exposes Fireworks' extra streaming usage as a dict.
-            for field, attribute in (
-                ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
-                ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
-                ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
-            ):
-                value = (
-                    usage.get(field)
-                    if isinstance(usage, dict)
-                    else getattr(usage, field, None)
-                )
-                if value is not None:
-                    attributes[attribute] = value
-
-    # Add raw output
-    try:
-        attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps([
-            c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks
-        ])
-    except Exception:
-        pass
-
-    return attributes
-
-
 class _CompletionsWrapper(_WithTracer):
     """Wrapper for synchronous chat completions."""
 
@@ -250,38 +224,15 @@ class _CompletionsWrapper(_WithTracer):
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
 
     def _wrap_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap a streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+        """Transfer span ownership to a proxy, including before first iteration."""
+        return _Stream(stream, span)
 
 
 class _AsyncCompletionsWrapper(_WithTracer):
@@ -321,35 +272,12 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
 
-    async def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap an async streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            async for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+    def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
+        """Transfer ownership only after the SDK returns a response."""
+        return _AsyncStream(stream, span)
