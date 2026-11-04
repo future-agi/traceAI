@@ -175,6 +175,55 @@ describe("Mastra serialized credential boundaries", () => {
 });
 
 
+describe("native processor error inputs", () => {
+  const input = {
+    messages: [{ role: "user", content: "keep-input", data: { error: "ordinary user data" } }],
+    error: "PRIVATE_PROCESSOR_ERROR", stepNumber: 0, retryCount: 0, messageId: "message-1",
+  };
+  const aliases = ["mastra.processor_run.input", "input.value", "raw.input"];
+
+  it.each(["hideErrorDetails", "hideOutputs", "hideOutputMessages", "hideOutputText"] as const)(
+    "%s masks only the processor error member in native/FI span and event inputs", flag => {
+      const span = converted({ "mastra.span.type": "processor_run", "error.type": "APIError",
+        ...Object.fromEntries(aliases.map(key => [key, JSON.stringify(input)])) });
+      span.events[0].attributes = { ...span.events[0].attributes, ...span.attributes };
+      const original = JSON.stringify(span);
+      const result = sanitizeSpan(span, generateTraceConfig({ [flag]: true }));
+      for (const attributes of [result.attributes, result.events[0].attributes!]) {
+        for (const key of aliases) {
+          expect(JSON.parse(attributes[key] as string)).toEqual({ ...input, error: REDACTED_VALUE });
+        }
+        expect(attributes["error.type"]).toBe("APIError");
+      }
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+      expect(result.status).toEqual({ code: 2 });
+      expect(result.events[0].attributes?.["exception.type"]).toBe("Error");
+      expect(JSON.stringify(span)).toBe(original);
+    },
+  );
+
+  it.each(["hideOutputs", "hideOutputMessages", "hideOutputText"] as const)(
+    "explicit error-detail false preserves processor errors under %s", flag => {
+      const span = converted({ "mastra.span.type": "processor_run",
+        ...Object.fromEntries(aliases.map(key => [key, JSON.stringify(input)])) });
+      const result = sanitizeSpan(span, generateTraceConfig({ [flag]: true, hideErrorDetails: false }));
+      for (const key of aliases) expect(JSON.parse(result.attributes[key] as string)).toEqual(input);
+    },
+  );
+
+  it("does not interpret unrelated inputs or nested user data as processor errors", () => {
+    for (const type of ["tool_call", "agent_run", "workflow_step"]) {
+      const span = converted({ "mastra.span.type": type, "input.value": JSON.stringify(input) });
+      expect(JSON.parse(sanitizeSpan(span, generateTraceConfig({ hideErrorDetails: true }))
+        .attributes["input.value"] as string)).toEqual(input);
+    }
+    for (const value of [JSON.stringify({ messages: input.messages }), '["safe"]', '"safe"', 'null', 'safe', 42]) {
+      const span = converted({ "mastra.span.type": "processor_run", "input.value": value });
+      expect(sanitizeSpan(span, generateTraceConfig({ hideErrorDetails: true })).attributes["input.value"]).toBe(value);
+    }
+  });
+});
+
 describe("native HTTP response metadata", () => {
   it.each(["hideOutputs", "hideOutputMessages", "hideOutputText"] as const)("%s hides response bodies on spans and events only", flag => {
     const attributes = { "mastra.span.type": "model_step", "mastra.metadata.body": "PRIVATE_RESPONSE",

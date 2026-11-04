@@ -124,6 +124,23 @@ function sanitizeValue(value: AttributeValue, config: TraceConfig): AttributeVal
   return config.piiRedaction ? redactPiiInValue(scrubbed) : scrubbed;
 }
 
+// Mastra's request-error processors serialize the provider message as the
+// top-level `error` string beside messages/retry metadata. This is error detail
+// even though it arrives through an input alias. Do not recursively mask user
+// messages, drop the whole input, or mutate the native span shared by exporters.
+function maskProcessorErrorInput(value: AttributeValue): AttributeValue {
+  if (typeof value !== "string") return value;
+  try {
+    const input: unknown = JSON.parse(value);
+    if (input === null || typeof input !== "object" || Array.isArray(input)) return value;
+    const payload = input as Record<string, unknown>;
+    if (typeof payload.error !== "string") return value;
+    return JSON.stringify({ ...payload, error: REDACTED_VALUE });
+  } catch {
+    return value;
+  }
+}
+
 function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: AttributeValue | undefined): Attributes {
   const embedding = spanType === "rag_embedding";
   const masked: Attributes = {};
@@ -146,9 +163,12 @@ function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: A
       if (!key.endsWith("mime_type")) masked[key] = REDACTED_VALUE;
       continue;
     }
+    const content = config.hideErrorDetails && spanType === "processor_run" && input
+      ? maskProcessorErrorInput(value)
+      : value;
     masked[key] = isCredentialKey(key)
       ? REDACTED_VALUE
-      : sanitizeValue(value, config);
+      : sanitizeValue(content, config);
   }
   return masked;
 }

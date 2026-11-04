@@ -171,6 +171,51 @@ test('real provider failure is not exported as success', {
   assert.ok(spans.some(span => span.status?.code === 2));
 });
 
+// Provider errors also become inputs to Mastra's built-in error processors.
+// Exercise actual HTTP failures, not only span.error() or successful responses.
+for (const flag of ['FI_HIDE_ERROR_DETAILS', 'FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT']) {
+  for (const explicitFalse of [false, true]) {
+    test(`${flag} real provider-error privacy (explicit false: ${explicitFalse})`, async () => {
+      if (explicitFalse) process.env.FI_HIDE_ERROR_DETAILS = 'false';
+      // An explicit false is tested with every implied output-only flag too.
+      setup(flag === 'FI_HIDE_ERROR_DETAILS' && explicitFalse ? undefined : flag);
+      mode = 'error';
+      await assert.rejects(agent.generate('SYNTHETIC_PROMPT'));
+      await flush();
+      assert.equal(requests.length, 1);
+      assert.ok(spans.length > 0);
+      assert.match(JSON.stringify(spans), /SYNTHETIC_PROMPT/);
+      const rawErrors = ended.filter(span => span.type === 'processor_run' && span.input?.error);
+      // The oldest core predates error processors. All newer core/runtime mixes
+      // must exercise these aliases, including observability/converter floors.
+      if (rawErrors.length) {
+        assert.equal(rawErrors.length, 4);
+        for (const native of rawErrors) {
+          assert.equal(native.input.error, 'SYNTHETIC_PROVIDER_ERROR', 'native spans remain unchanged for other exporters');
+          const exported = spans.find(span => span.spanId === Buffer.from(native.id, 'hex').toString('base64'));
+          assert.ok(exported, `missing error processor ${native.name}`);
+          assert.equal(exported.attrs['gen_ai.span.kind'], 'CHAIN');
+          for (const key of ['mastra.processor_run.input', 'input.value']) {
+            assert.deepEqual(JSON.parse(exported.attrs[key]), JSON.parse(JSON.stringify({
+              ...native.input, error: explicitFalse ? native.input.error : '__REDACTED__',
+            })), `${native.name}: only the error member in ${key} may change`);
+          }
+        }
+      } else {
+        // Feature-independent guard: only the actual core peer floor may omit
+        // processor spans; old observability with a new core must not skip this.
+        const fs = require('node:fs');
+        const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(req.resolve('@mastra/core')), '../package.json')));
+        assert.equal(manifest.version, '1.16.0', 'expected real error-processor spans on newer core');
+      }
+      if (currentRuntime) assert.ok(spans.some(span => span.status?.code === 2));
+      if (!explicitFalse) assert.doesNotMatch(JSON.stringify(spans), /SYNTHETIC_PROVIDER_ERROR/);
+      else if (rawErrors.length) assert.match(JSON.stringify(spans), /SYNTHETIC_PROVIDER_ERROR/);
+      if (rawErrors.length) assert.match(JSON.stringify(ended), /SYNTHETIC_PROVIDER_ERROR/);
+    });
+  }
+}
+
 // Exercise the real provider SDK: older runtimes attach response.body to
 // model_step metadata, outside the converter's named output aliases.
 for (const flag of ['FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT',
