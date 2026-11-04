@@ -2,6 +2,12 @@ package ai.traceai.spring.compatibility;
 
 import ai.traceai.spring.SpringAIObservationFilter;
 import ai.traceai.spring.SpringAITracingObservationHandler;
+import ai.traceai.spring.SpringAIToolExecutionExceptionProcessor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
+import org.springframework.ai.tool.observation.ToolCallingObservationConvention;
+import org.springframework.ai.tool.resolution.ToolCallbackResolver;
 import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.otel.bridge.OtelTracer;
 import com.sun.net.httpserver.HttpServer;
@@ -62,6 +68,12 @@ class DocumentedBootSetupTest {
                         .isEqualTo(NativeSpringAITest.OUTPUT);
                     modelServer.replies.add(new NativeSpringAITest.Reply("{\"error\":{\"message\":\"synthetic-boot-secret\",\"type\":\"invalid_request_error\"}}", "application/json", 400));
                     org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> model.call(new Prompt("private-error-prompt")));
+                    modelServer.reply(ToolExecutionFailureTest.TOOL_REPLY);
+                    modelServer.reply(NativeSpringAITest.CHAT);
+                    var manager = context.getBean(org.springframework.ai.model.tool.ToolCallingManager.class);
+                    assertThat(Models.toolChat(modelServer.url(), context.getBean(ObservationRegistry.class),
+                        ToolExecutionFailureTest.failingPrompt(new IllegalStateException(ToolExecutionFailureTest.SENSITIVE_ERROR)),
+                        manager).getResult().getOutput().getText()).isEqualTo(NativeSpringAITest.OUTPUT);
                     assertThat(context.getBean(SdkTracerProvider.class).forceFlush().join(5, TimeUnit.SECONDS).isSuccess()).isTrue();
                 });
             assertThat(headers).isNotEmpty().containsOnly(List.of("synthetic-api-key", "synthetic-secret-key", "spring-ai-test"));
@@ -73,7 +85,27 @@ class DocumentedBootSetupTest {
             var models = resources.stream().flatMap(r -> r.getScopeSpansList().stream())
                 .flatMap(s -> s.getSpansList().stream()).filter(s -> s.getAttributesList().stream()
                     .anyMatch(a -> a.getKey().equals("fi.span.kind") && a.getValue().getStringValue().equals("LLM"))).toList();
-            assertThat(models).hasSize(2);
+            assertThat(models).hasSize(4);
+            assertThat(models.stream().filter(s -> s.getStatus().getCode()
+                == io.opentelemetry.proto.trace.v1.Status.StatusCode.STATUS_CODE_OK).toList()).hasSize(3);
+            var tools = resources.stream().flatMap(r -> r.getScopeSpansList().stream())
+                .flatMap(s -> s.getSpansList().stream()).filter(s -> s.getAttributesList().stream()
+                    .anyMatch(a -> a.getKey().equals("fi.span.kind") && a.getValue().getStringValue().equals("TOOL"))).toList();
+            assertThat(tools).singleElement().satisfies(tool -> {
+                assertThat(tool.getStatus().getCode()).isEqualTo(io.opentelemetry.proto.trace.v1.Status.StatusCode.STATUS_CODE_ERROR);
+                assertThat(tool.getStatus().getMessage()).isEmpty();
+                assertThat(tool.getAttributesList()).anySatisfy(a -> {
+                    assertThat(a.getKey()).isEqualTo("error.type");
+                    assertThat(a.getValue().getStringValue()).isEqualTo(IllegalStateException.class.getName());
+                });
+                assertThat(tool.getEventsList()).singleElement().satisfies(event -> {
+                    assertThat(event.getName()).isEqualTo("exception");
+                    assertThat(event.getAttributesList()).singleElement().satisfies(a -> {
+                        assertThat(a.getKey()).isEqualTo("exception.type");
+                        assertThat(a.getValue().getStringValue()).isEqualTo(IllegalStateException.class.getName());
+                    });
+                });
+            });
             var errors = models.stream().filter(s -> s.getStatus().getCode()
                 == io.opentelemetry.proto.trace.v1.Status.StatusCode.STATUS_CODE_ERROR).toList();
             assertThat(errors).hasSize(1);
@@ -82,13 +114,27 @@ class DocumentedBootSetupTest {
             assertThat(errors.get(0).getEvents(0).getAttributesList()).hasSize(1);
             assertThat(errors.get(0).getEvents(0).getAttributes(0).getKey()).isEqualTo("exception.type");
             assertThat(received.toString()).doesNotContain(NativeSpringAITest.INPUT, NativeSpringAITest.OUTPUT,
-                "synthetic-boot-secret", "private-error-prompt", "exception.message", "exception.stacktrace");
+                "synthetic-boot-secret", "private-error-prompt", "exception.message", "exception.stacktrace",
+                ToolExecutionFailureTest.SENSITIVE_ERROR, "private-tool-city");
         } finally { receiver.stop(0); }
     }
 
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class Application {
+        @Bean
+        DefaultToolCallingManager toolCallingManager(ObservationRegistry registry,
+                ToolCallbackResolver resolver, ToolExecutionExceptionProcessor existingProcessor,
+                ObjectProvider<ToolCallingObservationConvention> convention) {
+            var manager = DefaultToolCallingManager.builder()
+                .observationRegistry(registry)
+                .toolCallbackResolver(resolver)
+                .toolExecutionExceptionProcessor(new SpringAIToolExecutionExceptionProcessor(registry, existingProcessor))
+                .build();
+            convention.ifAvailable(manager::setObservationConvention);
+            return manager;
+        }
+
         @Bean
         DefaultTracingObservationHandler defaultTracingObservationHandler(OtelTracer tracer) {
             return new SpringAITracingObservationHandler(tracer);

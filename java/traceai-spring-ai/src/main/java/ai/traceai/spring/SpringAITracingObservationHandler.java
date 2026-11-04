@@ -14,6 +14,7 @@ import org.springframework.ai.chat.client.advisor.observation.AdvisorObservation
 import org.springframework.ai.chat.client.observation.ChatClientObservationContext;
 import org.springframework.ai.chat.observation.ChatModelObservationContext;
 import org.springframework.ai.embedding.observation.EmbeddingModelObservationContext;
+import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.ai.tool.observation.ToolCallingObservationContext;
 import org.springframework.util.ClassUtils;
 
@@ -28,6 +29,7 @@ public final class SpringAITracingObservationHandler extends DefaultTracingObser
         "org.springframework.ai.chat.client.observation.ChatClientObservationContext",
         SpringAITracingObservationHandler.class.getClassLoader());
 
+    private static final Object RECORDED_TOOL_ERROR = new Object();
     private final boolean hideErrorDetails;
 
     /**
@@ -50,11 +52,23 @@ public final class SpringAITracingObservationHandler extends DefaultTracingObser
 
     @Override
     public void onError(Observation.Context context) {
+        Throwable error = context.getError();
+        if (context instanceof ToolCallingObservationContext && error != null) {
+            Throwable recorded = context.get(RECORDED_TOOL_ERROR);
+            // A rethrowing processor is reported again by observation.observe. Keep the original
+            // tool cause and one event, including when the framework rethrows its wrapper.
+            if (recorded != null && (error == recorded
+                    || (error instanceof ToolExecutionException && error.getCause() == recorded))) {
+                return;
+            }
+            context.put(RECORDED_TOOL_ERROR, error);
+            OtelSpan.toOtel(getRequiredSpan(context))
+                .setAttribute(SemanticConventions.ERROR_TYPE, error.getClass().getName());
+        }
         if (!hideErrorDetails || !isSpringAI(context)) {
             super.onError(context);
             return;
         }
-        Throwable error = context.getError();
         if (error != null) {
             // Never hand the original throwable to Span.error/recordException: both record its stack.
             // Do not mutate the context or throwable; metrics and application code still see the cause.
