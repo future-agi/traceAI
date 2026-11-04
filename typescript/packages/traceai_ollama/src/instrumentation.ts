@@ -2,6 +2,7 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
+  isWrapped,
   safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
@@ -12,6 +13,7 @@ import {
   Attributes,
   SpanStatusCode,
   Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
@@ -187,6 +189,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   // Lazily initialized: InstrumentationBase can patch already-loaded modules in super().
   private _modulePatches?: WeakMap<object, MethodPatch[]>;
+  // Retain manual registrations across disable/enable, just like the automatic hooks.
+  private _manualModules?: Set<Record<string, unknown>>;
+  // A foreign wrapper can retain ours even when it cannot safely be removed.
+  // Explicit manual instrumentation still works with automatic hooks disabled initially.
+  private _wrappersDisabled?: boolean;
 
   constructor({
     instrumentationConfig,
@@ -201,10 +208,28 @@ export class OllamaInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.refreshTracer();
   }
 
   public override enable(): void {
+    this._wrappersDisabled = false;
     super.enable();
+    this.refreshTracer();
+    for (const module of this._manualModules ?? []) this.patch(module);
+  }
+
+  public override disable(): void {
+    this._wrappersDisabled = true;
+    super.disable();
+    for (const module of this._manualModules ?? []) this.unpatch(module);
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
@@ -224,7 +249,9 @@ export class OllamaInstrumentation extends InstrumentationBase {
    * Manually instruments the Ollama module
    */
   manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
+    this._manualModules ??= new Set();
+    this._manualModules.add(module);
+    if (!this._wrappersDisabled) this.patch(module);
   }
 
   /**
@@ -235,10 +262,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
     this._modulePatches ??= new WeakMap();
     const patches = this._modulePatches.get(module) ?? [];
     this._modulePatches.set(module, patches);
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    this.refreshTracer();
 
     const Ollama = module.Ollama as { prototype: Record<string, unknown> } | undefined;
     const defaultOllama = module.default as Record<string, unknown> | undefined;
@@ -252,9 +276,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
       if (!owner) continue;
       for (const [name, wrapper] of Object.entries(wrappers)) {
         const original = owner[name];
-        if (typeof original !== "function" || patchedFunctions.has(original)) continue;
-        // _wrap unwraps an already-wrapped inherited method before replacing it.
-        // In particular, never rewrap the singleton's inherited class wrapper.
+        if (typeof original !== "function" || patchedFunctions.has(original) || isWrapped(original)) continue;
+        // If another owner retained our wrapper, re-enable it in place instead of
+        // wrapping the outer function again (including the singleton's inherited method).
+        if (patches.some(patch => patch.name === name && patch.owner[name] === original)) continue;
+        // _wrap would remove an existing shimmer wrapper; never take that ownership.
         this._wrap(owner, name, wrapper);
         const wrapped = owner[name];
         if (typeof wrapped === "function" && wrapped !== original) {
@@ -277,6 +303,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaChatRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
@@ -354,6 +381,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaGenerateRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
@@ -428,6 +456,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaEmbedRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const inputTexts = Array.isArray(request.input) ? request.input : [request.input];
 
         const span = instrumentation.fiTracer.startSpan(
@@ -496,6 +525,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaEmbeddingsRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Embeddings`,
           {

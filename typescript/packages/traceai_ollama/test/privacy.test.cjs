@@ -102,7 +102,6 @@ for (const stream of [false, true]) {
         }
         assert.equal(parameters.context, undefined, 'prior conversation tokens are content, not tuning parameters');
       } finally {
-        instrumentation.unpatch(module);
         instrumentation.disable();
         await provider.shutdown();
         if (env) { if (oldEnv === undefined) delete process.env[env]; else process.env[env] = oldEnv; }

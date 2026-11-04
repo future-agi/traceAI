@@ -72,7 +72,6 @@ for (const stream of [false, true]) {
         assert.equal(attrs[S.LLM_MODEL_NAME], 'offline-model');
         assert.equal(JSON.parse(attrs[S.LLM_INVOCATION_PARAMETERS]).keep_alive, keep_alive);
       } finally {
-        instrumentation.unpatch(module);
         instrumentation.disable();
         await provider.shutdown();
       }

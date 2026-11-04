@@ -97,7 +97,6 @@ for (const stream of [false, true]) {
           options: { temperature: 0.2, num_predict: 12, use_mmap: true },
         }, 'invocation parameters contain only typed, content-free tuning values, even when input is visible');
       } finally {
-        instrumentation.unpatch(module);
         instrumentation.disable();
         await provider.shutdown();
         if (env) { if (oldEnv === undefined) delete process.env[env]; else process.env[env] = oldEnv; }

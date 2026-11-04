@@ -35,8 +35,7 @@ const mode = process.argv[2];
   const esm = esmExport ? await import(pathToFileURL(path.join(sdkDir,
     typeof esmExport === 'string' ? esmExport : esmExport.default))) : cjs;
   const selected = mode === 'manual-esm' ? esm : cjs;
-  const modules = [];
-  const patch = module => { instrumentation.manuallyInstrument(module); modules.push(module); };
+  const patch = module => instrumentation.manuallyInstrument(module);
   async function invoke(client) {
     for (const method of ['chat', 'generate', 'embed', 'embeddings']) {
       if (typeof client[method] !== 'function') continue; // embed was added after 0.4.
@@ -72,8 +71,8 @@ const mode = process.argv[2];
       replacement.__wrapped = true;
       replacement.__unwrap = () => { foreignUnwraps++; cjs.Ollama.prototype.chat = original; };
       cjs.Ollama.prototype.chat = replacement;
-      instrumentation.unpatch(module);
-      assert.equal(cjs.Ollama.prototype.chat, replacement, 'unpatch must not remove another owner\'s wrapper');
+      instrumentation.disable();
+      assert.equal(cjs.Ollama.prototype.chat, replacement, 'disable must not remove another owner\'s wrapper');
       assert.equal(foreignUnwraps, 0);
     } else {
       if (!['automatic', 'unpatched'].includes(mode)) patch(selected);
@@ -83,8 +82,7 @@ const mode = process.argv[2];
         const other = new OllamaInstrumentation({ instrumentationConfig: { enabled: false } });
         other.setTracerProvider(provider);
         other.manuallyInstrument(selected);
-        other.unpatch(selected); // not the owner of these wrappers
-        other.disable();
+        other.disable(); // not the owner of these wrappers
       }
       selected.default.config.host = host;
       // Assert separately: singleton success must not conceal missing class spans.
@@ -97,7 +95,6 @@ const mode = process.argv[2];
     console.log(JSON.stringify({ mode, sdk: manifest.version, distinctClasses: cjs.Ollama !== esm.Ollama,
       requests, spans: exporter.getFinishedSpans().length }));
   } finally {
-    for (const module of modules) instrumentation.unpatch(module);
     instrumentation.disable();
     await provider.shutdown();
     server.closeAllConnections();
