@@ -54,7 +54,7 @@ class _EmbeddingResponse:
             )
         )
         with_span.finish_tracing(
-            status=trace.Status(trace.StatusCode.OK), attributes=attributes
+            status=trace.Status(trace.StatusCode.OK), extra_attributes=attributes
         )
         return response
 

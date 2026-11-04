@@ -9,7 +9,7 @@ from importlib.metadata import version
 
 import pytest
 from fi_instrumentation import TraceConfig
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
@@ -68,27 +68,45 @@ def server():
         http.server_close()
 
 
+class CreationAttributes(SpanProcessor):
+    def __init__(self):
+        self.attributes = []
+
+    def on_start(self, span, parent_context=None):
+        self.attributes.append(dict(span.attributes))
+
+
 @pytest.mark.parametrize("operation", ["complete", "stream", "embeddings"])
 @pytest.mark.parametrize("async_mode", [False, True])
-@pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("private", [False, "parameters", True])
 @pytest.mark.parametrize("error", [False, True])
-def test_request_and_response_attribution(server, operation, async_mode, private, error):
+@pytest.mark.parametrize("large_request", [False, True])
+def test_request_and_response_attribution(
+    server, operation, async_mode, private, error, large_request
+):
     endpoint, requests = server
     exporter = InMemorySpanExporter()
+    # Keep the SDK's default 128-attribute limit: a long request must not evict
+    # attribution at creation or at export, including when only parameters hide.
     provider = TracerProvider()
+    creation = CreationAttributes()
+    provider.add_span_processor(creation)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = MistralAIInstrumentor()
     config = TraceConfig(
-        hide_inputs=private, hide_outputs=private,
-        hide_llm_invocation_parameters=private,
+        hide_inputs=private is True, hide_outputs=private is True,
+        hide_llm_invocation_parameters=bool(private),
     )
     requests_before = len(requests)
     model = "error-alias" if error else "requested-alias"
     params = {"model": model}
     if operation == "embeddings":
-        params["inputs"] = ["synthetic-input-content"]
+        params["inputs"] = ["synthetic-input-content"] * (140 if large_request else 1)
     else:
-        params["messages"] = [{"role": "user", "content": "synthetic-input-content"}]
+        params["messages"] = [
+            {"role": "user", "content": "synthetic-input-content"}
+            for _ in range(70 if large_request else 1)
+        ]
 
     # Supply and close transports explicitly, including SDK 1.1's clients.
     httpx = importlib.import_module("httpx2" if NATIVE else "httpx")
@@ -134,6 +152,9 @@ def test_request_and_response_attribution(server, operation, async_mode, private
             call()
         assert len(requests) == requests_before + (2 if error else 1)
         assert requests[-1]["model"] == model
+        field = "inputs" if operation == "embeddings" else "messages"
+        # SDK 3.x serializes embeddings' inputs as input on the wire.
+        assert requests[-1].get(field, requests[-1].get("input")) == params[field]
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
@@ -145,8 +166,18 @@ def test_request_and_response_attribution(server, operation, async_mode, private
             "gen_ai.response.model": None if error else "resolved-model",
         }
         assert {key: attrs.get(key) for key in expected} == expected
+        assert len(creation.attributes) == 1
+        # The SDK-native path sets its own attributes after start_span; only
+        # the legacy wrappers control the attributes passed at creation.
+        if not NATIVE:
+            for key in ("gen_ai.provider.name", "gen_ai.request.model"):
+                assert creation.attributes[0].get(key) == expected[key]
+        if not NATIVE and large_request and private is not True:
+            assert span.dropped_attributes > 0
+            assert len(attrs) == 128
         if private:
             assert "gen_ai.request.parameters" not in attrs
+        if private is True:
             captured = str(attrs) + str(span.events) + str(span.status.description)
             for marker in ["synthetic-input-content", "synthetic-output-content", "synthetic-error-content"]:
                 assert marker not in captured

@@ -17,8 +17,9 @@ export function inputAttributes(value: unknown, operation: string, config: Trace
     [S.FI_SPAN_KIND]: operation === "embeddings" ? FISpanKind.EMBEDDING : FISpanKind.LLM,
     [S.LLM_PROVIDER]: LLMProvider.MISTRALAI,
     [S.GEN_AI_OPERATION_NAME]: operation === "conversation" ? "chat" : operation,
-    [operation === "embeddings" ? S.EMBEDDING_MODEL_NAME : S.LLM_MODEL_NAME]: text(body.model),
+    [S.LLM_MODEL_NAME]: text(body.model),
   };
+  if (operation === "embeddings") attrs[S.EMBEDDING_MODEL_NAME] = text(body.model);
   // Never duplicate hidden messages, tool arguments or images into unmasked blobs.
   if (!config.hideInputs && !config.hideInputMessages && !config.hideInputText && !config.hideInputImages) {
     attrs[S.INPUT_VALUE] = json(value);

@@ -13,6 +13,7 @@ class _WithSpan:
         "_span",
         "_context_attributes",
         "_extra_attributes",
+        "_priority_attributes",
         "_is_finished",
     )
 
@@ -21,10 +22,12 @@ class _WithSpan:
         span: trace_api.Span,
         context_attributes: Attributes = None,
         extra_attributes: Attributes = None,
+        priority_attributes: Attributes = None,
     ) -> None:
         self._span = span
         self._context_attributes = context_attributes
         self._extra_attributes = extra_attributes
+        self._priority_attributes = priority_attributes
         try:
             self._is_finished = not self._span.is_recording()
         except Exception:
@@ -64,6 +67,7 @@ class _WithSpan:
             self._context_attributes,
             self._extra_attributes,
             extra_attributes,
+            self._priority_attributes,
         ):
             if not mapping:
                 continue

@@ -1,8 +1,12 @@
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
-const { SpanStatusCode } = require('@opentelemetry/api');
+const { context, trace, SpanStatusCode } = require('@opentelemetry/api');
+const { AsyncLocalStorageContextManager } = require('@opentelemetry/context-async-hooks');
+const manager = new AsyncLocalStorageContextManager().enable();
+context.setGlobalContextManager(manager);
+after(() => { context.disable(); manager.disable(); });
 const { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
 const { MistralInstrumentation } = require('../dist/src');
 
@@ -24,13 +28,17 @@ async function fixture(t, { sdk = 'mistral-current', config, registration = 'cli
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     calls.push({ body, headers: req.headers, path: req.url });
-    if (req.headers['x-test-error']) {
+    if (req.headers['x-test-error'] || body.model === 'error-alias') {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ message: 'synthetic-error-content' }));
       return;
     }
     let response = { id: 'synthetic-id', model: 'resolved-model' };
-    if (/moderations|classifications/.test(req.url)) {
+    if (req.url.endsWith('/embeddings')) {
+      response = { ...response, object: 'list',
+        data: [{ object: 'embedding', index: 0, embedding: [912345.6, 0.2] }],
+        usage: { prompt_tokens: 2, total_tokens: 2 } };
+    } else if (/moderations|classifications/.test(req.url)) {
       response.results = req.url.includes('classifications')
         ? [{ label: { scores: { 'synthetic-result-content': 0.01 } } }]
         : [{ categories: { 'synthetic-result-content': false }, category_scores: { 'synthetic-result-content': 0.01 } }];
@@ -60,7 +68,7 @@ async function fixture(t, { sdk = 'mistral-current', config, registration = 'cli
   const client = legacy ? new mod.default('synthetic-key', url) : new mod.Mistral({ apiKey: 'synthetic-key', serverURL: url });
   if (registration === 'module') instrumentation.manuallyInstrument(mod);
   else instrumentation.instrumentClient(client);
-  return { client, calls, instrumentation, spans: () => exporter.getFinishedSpans(),
+  return { client, calls, instrumentation, provider, legacy, spans: () => exporter.getFinishedSpans(),
     complete: body => legacy ? client.chat(body) : client.chat.complete(body),
     stream: body => legacy ? client.chatStream(body) : client.chat.stream(body) };
 }
@@ -81,6 +89,55 @@ for (const sdk of ['mistral-current', 'mistral-floor']) {
         assert.equal(attrs['gen_ai.request.model'], 'requested-alias');
         assert.equal(attrs['gen_ai.response.model'], 'resolved-model');
         if (privateContent) assert.doesNotMatch(JSON.stringify(attrs), /synthetic-(input|output)-content/);
+      });
+    }
+  }
+}
+
+for (const sdk of ['mistral-current', 'mistral-floor']) {
+  for (const privateContent of [false, true]) {
+    for (const error of [false, true]) {
+      test(`${sdk}: embeddings preserve request alias (private=${privateContent}, error=${error})`, async t => {
+        const f = await fixture(t, { sdk, config: {
+          hideInputs: privateContent, hideOutputs: privateContent,
+          hideEmbeddingVectors: privateContent,
+        } });
+        const model = error ? 'error-alias' : 'embedding-alias';
+        const input = ['synthetic-input-content'];
+        const parent = f.provider.getTracer('test').startSpan('parent');
+        const call = () => context.with(trace.setSpan(context.active(), parent), () =>
+          f.legacy ? f.client.embeddings({ model, input }) : f.client.embeddings.create({ model, inputs: input }));
+        try {
+          if (error) await assert.rejects(call, /synthetic-error-content/);
+          else {
+            const response = await call();
+            assert.equal(response.model, 'resolved-model');
+            assert.deepEqual(response.data[0].embedding, [912345.6, 0.2]);
+          }
+          assert.equal(f.calls.length, 1);
+          assert.equal(f.calls[0].body.model, model);
+          assert.deepEqual(f.calls[0].body.input ?? f.calls[0].body.inputs, input);
+          assert.equal(f.spans().length, 1);
+          const span = f.spans()[0];
+          assert.equal(span.parentSpanContext.spanId, parent.spanContext().spanId);
+          assert.equal(span.status.code, error ? SpanStatusCode.ERROR : SpanStatusCode.OK);
+          const attrs = span.attributes;
+          assert.equal(attrs['fi.span.kind'], 'EMBEDDING');
+          assert.equal(attrs['gen_ai.provider.name'], 'mistralai');
+          assert.equal(attrs['embedding.model_name'], model);
+          assert.equal(attrs['gen_ai.response.model'], error ? undefined : 'resolved-model');
+          if (!error) {
+            assert.equal(attrs['gen_ai.usage.input_tokens'], 2);
+            assert.equal(attrs['gen_ai.usage.total_tokens'], 2);
+          }
+          if (privateContent) {
+            assert.doesNotMatch(JSON.stringify({ attrs, status: span.status, events: span.events }), /synthetic-(input|error)-content|912345\.6/);
+          }
+          assert.doesNotMatch(JSON.stringify(attrs), /synthetic-key/);
+          assert.equal(attrs['gen_ai.request.model'], model);
+        } finally {
+          parent.end();
+        }
       });
     }
   }
