@@ -19,8 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * AWS SDK execution hook for synchronous non-streaming
  * {@code converse} and {@code invokeModel} operations. Retries share one span.
- * Streaming operations are deliberately not traced: afterExecution is not a
- * complete stream lifecycle and must not be reported as one.
+ * Streaming operations are deliberately not traced by this hook: afterExecution
+ * is not a complete stream lifecycle. Use
+ * {@link TracedBedrockRuntimeAsyncClient#converseStream} for Converse streams.
  *
  * <pre>{@code
  * BedrockRuntimeClient client = BedrockRuntimeClient.builder()

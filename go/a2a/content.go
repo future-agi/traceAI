@@ -114,10 +114,13 @@ var protocolErrors = []error{
 // returned, the agent's message. Context errors are "canceled" or "timeout",
 // A2A protocol errors use a2a-go's reason (TASK_NOT_FOUND, ...), anything else
 // (connection, HTTP status, decoding) is "transport" and carries no message.
+// The private unwind sentinel is "panic" and never carries the panic value.
 func classifyError(err error) (errType, agentMsg string) {
 	switch {
 	case err == nil:
 		return "", ""
+	case err == errCallPanic:
+		return "panic", ""
 	case errors.Is(err, context.Canceled):
 		return "canceled", ""
 	case errors.Is(err, context.DeadlineExceeded):

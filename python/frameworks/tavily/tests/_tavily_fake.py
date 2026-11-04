@@ -11,8 +11,8 @@ Scripted queries (search) and URLs (extract):
 * ``fail-500`` gets HTTP 500 (``requests.HTTPError`` / ``httpx.HTTPStatusError``).
 * ``keyless-limit`` gets HTTP 429 with the keyless error envelope
   (``TavilyKeylessLimitError`` on a keyless client).
-* a query starting ``echo-400`` gets HTTP 400 whose detail repeats the query,
-  so an error message can carry whatever the query carried.
+* a query starting ``echo-400`` gets HTTP 400 whose detail repeats the query;
+  an extract URL containing it gets HTTP 400 whose detail repeats all URLs.
 * ``slow`` (a query, or a URL containing it) is held until the fake closes,
   so a caller can cancel mid-call.
 * ``odd-results`` gets HTTP 200 whose ``results`` is not a list.
@@ -132,6 +132,9 @@ class FakeTavily:
                 urls = body.get("urls", [])
                 if isinstance(urls, str):
                     urls = [urls]
+                if any(ECHO_400 in str(url) for url in urls):
+                    self._send(400, {"detail": {"error": "Bad URLs: " + ", ".join(urls)}})
+                    return
                 if any(SLOW in str(url) for url in urls):
                     owner._release.wait(30)
                 results = []

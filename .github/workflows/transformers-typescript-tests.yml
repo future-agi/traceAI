@@ -39,12 +39,14 @@ jobs:
           PNPM="$RUNNER_TEMP/tools/node_modules/.bin/pnpm"
           "$PNPM" --filter @traceai/huggingface-transformers... install --frozen-lockfile --ignore-scripts
           "$PNPM" --filter @traceai/huggingface-transformers... run build
-          "$PNPM" --filter @traceai/huggingface-transformers pack --pack-destination "$RUNNER_TEMP/packed"
+          # Exercise the PR's shared masking code, not the last published core.
+          for package in fi-semantic-conventions fi-core huggingface-transformers; do
+            "$PNPM" --filter "@traceai/$package" pack --pack-destination "$RUNNER_TEMP/packed"
+          done
       - name: Clean-install tarball and stage pinned fixtures
         run: |
-          TARBALL="$(find "$RUNNER_TEMP/packed" -name '*.tgz' -type f)"
           npm install --prefix "$RUNNER_TEMP/customer" --ignore-scripts --no-audit --no-fund \
-            "$TARBALL" \
+            "$RUNNER_TEMP"/packed/*.tgz \
             "@huggingface/transformers@${{ matrix.transformers }}" \
             @opentelemetry/sdk-trace-node@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             typescript@5.9.3 @types/node@22
