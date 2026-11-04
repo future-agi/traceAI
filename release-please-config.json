@@ -1104,6 +1104,12 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "ruby/roast": {
+      "release-type": "ruby",
+      "component": "traceai-roast",
+      "package-name": "traceai-roast",
+      "version-file": "lib/traceai/roast/version.rb"
     }
   }
 }
