@@ -88,11 +88,42 @@ function setIoValue(
   }
 }
 
+/** Preserve native cost provenance without inventing a token-price estimate. */
+function enrichCost(attrs: Record<string, unknown>, span: AnyExportedSpan): void {
+  if (span.type !== "model_generation" && String(span.type) !== "model_inference") return;
+  // Unlike token usage, Mastra's provider-reported costContext is a query total
+  // on model_generation. Only that span owns the billable total, even on new
+  // runtimes where it is a CHAIN. Inference copies remain diagnostic so summing
+  // gen_ai.cost.* across the trace never counts both the query and its steps.
+  if (String(span.type) === "model_inference") {
+    for (const key of Object.keys(attrs)) {
+      if (/^(?:gen_ai|llm)\.cost\./.test(key)) delete attrs[key];
+    }
+  }
+  // Structural access also supports the peer floor, which predates costContext.
+  const cost = (span.attributes as { costContext?: {
+    estimatedCost?: unknown;
+    costUnit?: unknown;
+    costMetadata?: { source?: unknown };
+  } } | undefined)?.costContext;
+  const amount = cost?.estimatedCost;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) return;
+  attrs["mastra.cost.amount"] = amount;
+  if (typeof cost?.costUnit === "string") attrs["mastra.cost.unit"] = cost.costUnit;
+  const source = cost?.costMetadata?.source;
+  if (typeof source === "string") attrs["mastra.cost.source"] = source;
+  // Non-USD charges and non-provider estimates are retained above, but must not
+  // enter the collector's USD cost total or overwrite an authoritative charge.
+  if (span.type === "model_generation" && cost?.costUnit === "USD" && source === "provider_reported") {
+    attrs["gen_ai.cost.total"] = amount;
+  }
+}
+
 /**
  * Enrich a converted OTLP span in place with the attributes Future AGI keys on:
  * `gen_ai.span.kind` (from the Mastra span type) and `input.value`/`output.value`
- * (from the span's input/output). Existing values are not overwritten. Exported
- * for unit testing.
+ * (from the span's input/output). Existing I/O values are not overwritten;
+ * usage/cost ownership follows the native runtime. Exported for unit testing.
  */
 export function enrichSpan(
   otelSpan: ReadableSpan,
@@ -115,6 +146,7 @@ export function enrichSpan(
   if (kind && attrs["gen_ai.span.kind"] == null) {
     attrs["gen_ai.span.kind"] = kind;
   }
+  enrichCost(attrs, span);
 
   // input.value / output.value so prompt / response / tool I/O renders.
   // (SpanConverter puts these under gen_ai.*/mastra.* keys the backend doesn't

@@ -18,7 +18,9 @@ const wire = transformer('@opentelemetry/otlp-transformer/build/src/generated/ro
   .opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 const currentRuntime = observabilityFeatures?.has('model-inference-span') === true;
 const attrs = list => Object.fromEntries((list || []).map(a => [a.key, Object.values(a.value)[0]]));
-let createFIObservability, obs, agent, mode, requests, spans, ended;
+const privacyFlags = ['INPUTS', 'INPUT_MESSAGES', 'INPUT_TEXT', 'INPUT_IMAGES',
+  'OUTPUTS', 'OUTPUT_MESSAGES', 'OUTPUT_TEXT', 'ERROR_DETAILS'].map(flag => `FI_HIDE_${flag}`);
+let createFIObservability, obs, agent, mode, requests, spans, ended, originalEnv;
 const collector = http.createServer((request, response) => {
   const chunks = [];
   request.on('data', chunk => chunks.push(chunk));
@@ -75,6 +77,11 @@ after(async () => {
 });
 beforeEach(() => {
   mode = 'normal'; requests = []; spans = []; ended = [];
+  originalEnv = Object.fromEntries(privacyFlags.map(flag => [flag, process.env[flag]]));
+  for (const flag of privacyFlags) delete process.env[flag];
+});
+function setup(flag) {
+  if (flag) process.env[flag] = 'true';
   obs = createFIObservability({ apiKey: 'synthetic-fi-key', secretKey: 'synthetic-fi-secret',
     serviceName: 'http-contract', endpoint: `http://127.0.0.1:${collector.address().port}/tracer/v1/traces` });
   const exporter = obs.getDefaultInstance().getExporters()[0];
@@ -87,8 +94,14 @@ beforeEach(() => {
   const instance = new Agent({ id: 'http-agent', name: 'HTTP agent', instructions: 'Synthetic instruction', model: openai.chat('gpt-4o-mini') });
   const mastra = new Mastra({ agents: { agent: instance }, observability: obs });
   agent = mastra.getAgent('agent');
+}
+afterEach(async () => {
+  await obs?.shutdown();
+  obs = undefined;
+  for (const [flag, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[flag]; else process.env[flag] = value;
+  }
 });
-afterEach(async () => { await obs.shutdown(); });
 async function flush() { await obs.getDefaultInstance().flush(); }
 function checkCall() {
   assert.equal(requests.length, 1);
@@ -106,6 +119,7 @@ function checkCall() {
   }
 }
 test('real HTTP generation retains a single model call, usage, I/O and parent tree', async () => {
+  setup();
   assert.equal((await agent.generate('SYNTHETIC_PROMPT')).text, 'SYNTHETIC_RESPONSE');
   await flush();
   checkCall();
@@ -113,6 +127,7 @@ test('real HTTP generation retains a single model call, usage, I/O and parent tr
   assert.match(JSON.stringify(spans), /SYNTHETIC_RESPONSE/);
 });
 test('real completed SSE stream retains a single model call and usage', async () => {
+  setup();
   const result = await agent.stream('SYNTHETIC_PROMPT');
   let text = '';
   for await (const part of result.textStream) text += part;
@@ -123,6 +138,7 @@ test('real completed SSE stream retains a single model call and usage', async ()
 test('real SSE cancellation preserves every native outcome on the wire', {
   skip: !currentRuntime && 'Mastra observability 1.0 does not emit cancellation outcomes', timeout: 10000,
 }, async () => {
+  setup();
   mode = 'abort';
   const controller = new AbortController();
   const watchdog = setTimeout(() => controller.abort(), 5000);
@@ -148,8 +164,37 @@ test('real SSE cancellation preserves every native outcome on the wire', {
 test('real provider failure is not exported as success', {
   skip: !currentRuntime && 'Mastra observability 1.0 omits the real Agent provider-error outcome',
 }, async () => {
+  setup();
   mode = 'error';
   await assert.rejects(agent.generate('SYNTHETIC_PROMPT'));
   await flush();
   assert.ok(spans.some(span => span.status?.code === 2));
 });
+
+// Exercise the real provider SDK: older runtimes attach response.body to
+// model_step metadata, outside the converter's named output aliases.
+for (const flag of ['FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT',
+  'FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT', 'FI_HIDE_INPUT_IMAGES']) {
+  for (const streaming of [false, true]) {
+    test(`${flag} protects actual HTTP ${streaming ? 'stream' : 'generate'} aliases`, async () => {
+      setup(flag);
+      if (streaming) {
+        let text = '';
+        const result = await agent.stream('SYNTHETIC_PROMPT');
+        for await (const part of result.textStream) text += part;
+        assert.equal(text, 'SYNTHETIC_STREAM');
+      } else {
+        assert.equal((await agent.generate('SYNTHETIC_PROMPT')).text, 'SYNTHETIC_RESPONSE');
+      }
+      await flush();
+      checkCall();
+      const output = streaming ? 'SYNTHETIC_STREAM' : 'SYNTHETIC_RESPONSE';
+      const hideOutput = flag.includes('OUTPUT');
+      assert.doesNotMatch(JSON.stringify(spans), new RegExp(hideOutput ? output : 'SYNTHETIC_PROMPT'));
+      assert.match(JSON.stringify(spans), new RegExp(hideOutput ? 'SYNTHETIC_PROMPT' : output));
+      // Sanitizing our export must not alter the spans other exporters receive.
+      assert.match(JSON.stringify(ended), /SYNTHETIC_PROMPT/);
+      assert.match(JSON.stringify(ended), new RegExp(output));
+    });
+  }
+}

@@ -124,13 +124,18 @@ function sanitizeValue(value: AttributeValue, config: TraceConfig): AttributeVal
   return config.piiRedaction ? redactPiiInValue(scrubbed) : scrubbed;
 }
 
-function maskAttributes(attributes: Attributes, config: TraceConfig, embedding: boolean): Attributes {
+function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: AttributeValue | undefined): Attributes {
+  const embedding = spanType === "rag_embedding";
   const masked: Attributes = {};
   for (const [key, value] of Object.entries(attributes)) {
     if (value == null) continue;
     if (config.hideErrorDetails && (ERROR_DETAIL_ATTRIBUTE_KEYS.has(key) || ERROR_DETAIL.test(key))) continue;
     const input = INPUT_KEYS.has(key) || /^mastra\..*\.(?:input|instructions)$/.test(key);
-    const output = OUTPUT_KEYS.has(key) || /^mastra\..*\.output$/.test(key);
+    // Observability 1.0 spreads the SDK response onto model_step metadata:
+    // body contains the full provider output, alongside id/model/headers. Do not
+    // treat all metadata (or a user-defined body on another span) as output.
+    const responseBody = spanType === "model_step" && key === "mastra.metadata.body";
+    const output = OUTPUT_KEYS.has(key) || /^mastra\..*\.output$/.test(key) || responseBody;
     // Native and FI I/O blobs do not share a reliable typed message schema.
     // Hide the entire alias for granular content flags rather than leave a
     // second unmasked copy (including tool arguments and system instructions).
@@ -150,7 +155,7 @@ function maskAttributes(attributes: Attributes, config: TraceConfig, embedding: 
 
 /** Return a sanitized view; never mutate the native span seen by other exporters. */
 export function sanitizeSpan(span: ReadableSpan, config: TraceConfig): ReadableSpan {
-  const embedding = span.attributes["mastra.span.type"] === "rag_embedding";
+  const spanType = span.attributes["mastra.span.type"];
   const message = span.status.message;
   const status = message == null || config.hideErrorDetails
     ? { code: span.status.code }
@@ -158,10 +163,10 @@ export function sanitizeSpan(span: ReadableSpan, config: TraceConfig): ReadableS
   return {
     ...span,
     status,
-    attributes: maskAttributes(span.attributes, config, embedding),
+    attributes: maskAttributes(span.attributes, config, spanType),
     events: span.events.map(event => ({
       ...event,
-      attributes: maskAttributes(event.attributes ?? {}, config, embedding),
+      attributes: maskAttributes(event.attributes ?? {}, config, spanType),
     })),
   };
 }

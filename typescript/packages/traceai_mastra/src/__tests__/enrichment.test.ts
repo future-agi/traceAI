@@ -183,3 +183,60 @@ describe("context reconciliation across converter versions", () => {
     expect(result.links).toEqual([]);
   });
 });
+
+
+describe("native provider cost ownership", () => {
+  function withCost(type: string, amount: unknown, source: unknown = "provider_reported", unit: unknown = "USD"): AnyExportedSpan {
+    return { ...fakeMastraSpan(type as SpanType), attributes: {
+      costContext: { estimatedCost: amount, costUnit: unit, costMetadata: { source } },
+    } } as unknown as AnyExportedSpan;
+  }
+
+  it.each([false, true])("preserves precise provider costs and zero with inference runtime=%s", inferenceEnabled => {
+    for (const amount of [0, 0.1234567]) {
+      const native = withCost("model_generation", amount);
+      const original = JSON.stringify(native);
+      const converted = fakeOtelSpan({ "gen_ai.cost.total": 999 });
+      enrichSpan(converted, native, inferenceEnabled);
+      expect(converted.attributes).toMatchObject({ "mastra.cost.amount": amount,
+        "mastra.cost.unit": "USD", "mastra.cost.source": "provider_reported", "gen_ai.cost.total": amount });
+      expect(JSON.stringify(native)).toBe(original);
+    }
+  });
+
+  it.each([NaN, Infinity, -Infinity, -1, "0.1", null, undefined])("does not export invalid amount %s", amount => {
+    const converted = fakeOtelSpan();
+    enrichSpan(converted, withCost("model_generation", amount), true);
+    expect(Object.keys(converted.attributes).filter(key => key.includes("cost."))).toEqual([]);
+  });
+
+  it.each([["token_price_estimate", "USD"], [undefined, "USD"], ["provider_reported", "EUR"]])(
+    "retains %s / %s only as diagnostic cost, not a provider USD charge", (source, unit) => {
+      // Null avoids the helper's default when the provider source is absent.
+      const native = withCost("model_generation", 0.25, source ?? null, unit);
+      const converted = fakeOtelSpan();
+      enrichSpan(converted, native, true);
+      expect(converted.attributes["mastra.cost.amount"]).toBe(0.25);
+      expect(converted.attributes["mastra.cost.unit"]).toBe(unit);
+      expect(converted.attributes["mastra.cost.source"]).toBe(source);
+      expect(converted.attributes["gen_ai.cost.total"]).toBeUndefined();
+    });
+
+  it("does not replace a converter's generation charge with a non-provider estimate", () => {
+    const converted = fakeOtelSpan({ "gen_ai.cost.total": 0.5 });
+    enrichSpan(converted, withCost("model_generation", 0.25, "token_price_estimate"), true);
+    expect(converted.attributes["gen_ai.cost.total"]).toBe(0.5);
+    expect(converted.attributes["mastra.cost.amount"]).toBe(0.25);
+  });
+
+  it("lets only the generation own the total when inference repeats its costContext", () => {
+    const generation = fakeOtelSpan();
+    const inference = fakeOtelSpan({ "gen_ai.cost.total": 0.1234567, "llm.cost.total": 0.1234567 });
+    enrichSpan(generation, withCost("model_generation", 0.1234567), true);
+    enrichSpan(inference, withCost("model_inference", 0.1234567), true);
+    expect(generation.attributes["gen_ai.cost.total"]).toBe(0.1234567);
+    expect(inference.attributes["mastra.cost.amount"]).toBe(0.1234567);
+    expect(inference.attributes["gen_ai.cost.total"]).toBeUndefined();
+    expect(inference.attributes["llm.cost.total"]).toBeUndefined();
+  });
+});

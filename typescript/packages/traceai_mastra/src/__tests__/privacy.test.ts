@@ -173,3 +173,29 @@ describe("Mastra serialized credential boundaries", () => {
     expect(JSON.stringify(sanitizeSpan(converted({ "input.value": JSON.stringify(nested) }), generateTraceConfig()))).not.toContain("PRIVATE_DEEP");
   });
 });
+
+
+describe("native HTTP response metadata", () => {
+  it.each(["hideOutputs", "hideOutputMessages", "hideOutputText"] as const)("%s hides response bodies on spans and events only", flag => {
+    const attributes = { "mastra.span.type": "model_step", "mastra.metadata.body": "PRIVATE_RESPONSE",
+      "mastra.metadata.id": "response-id", "mastra.metadata.modelId": "test-model",
+      "mastra.metadata.customer": "keep", "mastra.metadata.headers": '{"x-request-id":"safe-id"}' };
+    const span = converted(attributes);
+    span.events[0].attributes = { ...attributes };
+    const original = JSON.stringify(span);
+    const sanitized = sanitizeSpan(span, generateTraceConfig({ [flag]: true }));
+    expect(sanitized.attributes["mastra.metadata.body"]).toBe(REDACTED_VALUE);
+    expect(sanitized.events[0].attributes?.["mastra.metadata.body"]).toBe(REDACTED_VALUE);
+    for (const key of Object.keys(attributes).filter(key => !key.endsWith(".body"))) {
+      expect(sanitized.attributes[key]).toEqual(span.attributes[key]);
+    }
+    expect(JSON.stringify(span)).toBe(original);
+  });
+
+  it("keeps provider bodies with output collection enabled, and unrelated user metadata", () => {
+    const attributes = { "mastra.metadata.body": "safe-body", "mastra.span.type": "model_step" };
+    expect(sanitizeSpan(converted(attributes), generateTraceConfig()).attributes["mastra.metadata.body"]).toBe("safe-body");
+    expect(sanitizeSpan(converted({ ...attributes, "mastra.span.type": "agent_run" }),
+      generateTraceConfig({ hideOutputs: true })).attributes["mastra.metadata.body"]).toBe("safe-body");
+  });
+});

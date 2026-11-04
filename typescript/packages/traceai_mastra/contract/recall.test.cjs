@@ -493,3 +493,59 @@ test('an explicit native link survives even the oldest converter', { skip: !supp
   assert.equal(spans[0].links[0].traceId, Buffer.from('33333333333333333333333333333333', 'hex').toString('base64'));
   assert.equal(spans[0].links[0].spanId, Buffer.from('4444444444444444', 'hex').toString('base64'));
 });
+
+
+// Native costContext is a query total on model_generation, unlike usage which
+// belongs to model_inference on current runtimes. Check decoded numeric OTLP,
+// including copies on child inference spans, so aggregate cost is not doubled.
+for (const amount of [0, 0.1234567]) {
+  test(`native provider cost ${amount} survives with one billable owner`, async () => {
+    const instance = setup();
+    const costContext = { estimatedCost: amount, costUnit: 'USD', costMetadata: { source: 'provider_reported' } };
+    const generation = instance.startSpan({ type: 'model_generation', name: 'cost-generation',
+      attributes: { model: 'synthetic', provider: 'openrouter', costContext } });
+    if (supportsOutcomes) {
+      const inference = instance.startSpan({ type: 'model_inference', name: 'cost-inference', parent: generation,
+        attributes: { model: 'synthetic', provider: 'openrouter', costContext, usage: { inputTokens: 17, outputTokens: 9 } } });
+      inference.end();
+    }
+    generation.end();
+    await flush();
+    assert.equal(spans.length, supportsOutcomes ? 2 : 1);
+    const owners = spans.filter(span => span.attrs['gen_ai.cost.total'] !== undefined);
+    assert.equal(owners.length, 1);
+    assert.equal(Number(owners[0].attrs['gen_ai.cost.total']), amount);
+    assert.equal(owners[0].attrs['mastra.span.type'], 'model_generation');
+    for (const span of spans) {
+      assert.equal(Number(span.attrs['mastra.cost.amount']), amount);
+      assert.equal(span.attrs['mastra.cost.unit'], 'USD');
+      assert.equal(span.attrs['mastra.cost.source'], 'provider_reported');
+    }
+  });
+}
+for (const amount of [NaN, Infinity, -Infinity, -1, '0.1', null, undefined]) {
+  test(`invalid native cost ${String(amount)} is not exported`, async () => {
+    const span = setup().startSpan({ type: 'model_generation', name: 'invalid-cost', attributes: {
+      model: 'synthetic', costContext: { estimatedCost: amount, costUnit: 'USD', costMetadata: { source: 'provider_reported' } },
+    } });
+    span.end();
+    await flush();
+    assert.equal(spans.length, 1);
+    assert.equal(spans[0].attrs['gen_ai.cost.total'], undefined);
+    assert.equal(spans[0].attrs['mastra.cost.amount'], undefined);
+  });
+}
+for (const [source, unit] of [['token_price_estimate', 'USD'], [undefined, 'USD'], ['provider_reported', 'EUR']]) {
+  test(`native ${source} / ${unit} cost is retained without inventing provider USD spend`, async () => {
+    const span = setup().startSpan({ type: 'model_generation', name: 'diagnostic-cost', attributes: {
+      model: 'synthetic', costContext: { estimatedCost: 0.25, costUnit: unit, costMetadata: { source } },
+    } });
+    span.end();
+    await flush();
+    assert.equal(spans.length, 1);
+    assert.equal(Number(spans[0].attrs['mastra.cost.amount']), 0.25);
+    assert.equal(spans[0].attrs['mastra.cost.unit'], unit);
+    assert.equal(spans[0].attrs['mastra.cost.source'], source);
+    assert.equal(spans[0].attrs['gen_ai.cost.total'], undefined);
+  });
+}
