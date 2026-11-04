@@ -1104,6 +1104,13 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "go/langchaingo": {
+      "release-type": "go",
+      "component": "go/langchaingo",
+      "package-name": "github.com/future-agi/traceAI/go/langchaingo",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
     }
   }
 }
