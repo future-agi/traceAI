@@ -61,6 +61,8 @@ interface Completion {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
   };
   time_info?: Record<string, number>;
 }
@@ -174,9 +176,18 @@ export class CerebrasInstrumentation extends InstrumentationBase {
           isTracingSuppressed(context.active())
         )
           return original.apply(this, args);
-        const body = args[0] as Request | undefined;
-        // Leave invalid requests to the SDK rather than changing its error contract.
-        if (!body || typeof body !== "object")
+        // The SDK spreads RequestOptions over its body. An own enumerable body
+        // replaces the positional payload, even when explicitly null/undefined.
+        // Read only body: headers and other transport options are not trace data.
+        const options = args[1];
+        const body = (
+          options != null &&
+          Object.prototype.propertyIsEnumerable.call(options, "body")
+            ? (options as { body: unknown }).body
+            : args[0]
+        ) as Request | undefined;
+        // Leave non-request bodies to the SDK; never fall back to unsent input.
+        if (!body || typeof body !== "object" || Array.isArray(body))
           return original.apply(this, args);
         const { messages, prompt: _prompt, ...parameters } = body;
         const config = generateTraceConfig(instrumentation._traceConfig);
@@ -378,8 +389,16 @@ function metadataAttributes(response: Completion): Attributes {
       [S.LLM_TOKEN_COUNT_PROMPT, response.usage.prompt_tokens],
       [S.LLM_TOKEN_COUNT_COMPLETION, response.usage.completion_tokens],
       [S.LLM_TOKEN_COUNT_TOTAL, response.usage.total_tokens],
+      [
+        S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+        response.usage.prompt_tokens_details?.cached_tokens,
+      ],
+      [
+        S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+        response.usage.completion_tokens_details?.reasoning_tokens,
+      ],
     ] as const)
-      if (value != null) attrs[key] = value;
+      if (typeof value === "number" && Number.isFinite(value)) attrs[key] = value;
   }
   for (const key of [
     "queue_time",
