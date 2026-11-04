@@ -89,7 +89,7 @@ public class TracedChatModel implements ChatModel {
 
             ChatResponse response = delegate.call(prompt);
 
-            captureResponse(span, prompt, response);
+            captureResponse(span, response);
             span.setStatus(StatusCode.OK);
             completed = true;
             return response;
@@ -159,7 +159,13 @@ public class TracedChatModel implements ChatModel {
             tracer.setInputMessages(span, inputMessages);
             tracer.setInputValue(span, inputValue.toString());
         }
-        ChatOptions options = prompt.getOptions();
+        // Resolve metadata only. Preserve the exact Prompt and provider-specific options sent to
+        // the delegate, whose own request builder remains responsible for effective options.
+        captureOptions(span, delegate.getDefaultOptions());
+        captureOptions(span, prompt.getOptions());
+    }
+
+    private static void captureOptions(Span span, ChatOptions options) {
         if (options != null) {
             if (options.getModel() != null) {
                 span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, options.getModel());
@@ -176,7 +182,7 @@ public class TracedChatModel implements ChatModel {
         }
     }
 
-    private void captureResponse(Span span, Prompt prompt, ChatResponse response) {
+    private void captureResponse(Span span, ChatResponse response) {
         if (response == null) {
             return;
         }
@@ -185,10 +191,6 @@ public class TracedChatModel implements ChatModel {
             String responseModel = metadata.getModel();
             if (responseModel != null && !responseModel.isEmpty()) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
-                boolean requestModelKnown = prompt != null && prompt.getOptions() != null && prompt.getOptions().getModel() != null;
-                if (!requestModelKnown) {
-                    span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, responseModel);
-                }
             }
         }
 
