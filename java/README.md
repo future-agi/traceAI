@@ -264,6 +264,8 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Framework | Spring Boot auto-configuration | `traceai-spring-boot-starter` |
 | Framework | Microsoft Semantic Kernel | `traceai-java-semantic-kernel` |
 
+For Anthropic Java 3.2.0–3.4.0, prefer the [native OpenTelemetry example](examples/anthropic-native-example) rather than the blocking-call wrapper. Use only one request-span owner. Native tracing omits server-tool billing counts; read the [server-tool billing limitation](examples/anthropic-native-example#server-tool-billing) before relying on span-based cost views.
+
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
