@@ -192,6 +192,10 @@ export class CerebrasInstrumentation extends InstrumentationBase {
         // Leave non-request bodies to the SDK; never fall back to unsent input.
         if (!body || typeof body !== "object" || Array.isArray(body))
           return original.apply(this, args);
+        // Custom serializers may be stateful or omit private fields. Check for
+        // own/inherited toJSON without invoking getters, and let only the SDK
+        // evaluate these opaque bodies rather than tracing their raw properties.
+        if ("toJSON" in body) return original.apply(this, args);
         const { messages, prompt: _prompt, ...parameters } = body;
         const config = generateTraceConfig(instrumentation._traceConfig);
         // Raw payloads duplicate canonical messages. Omit every representation

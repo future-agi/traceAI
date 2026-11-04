@@ -211,6 +211,111 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
     );
 
     describe.each([
+      "own method",
+      "inherited method",
+      "own accessor",
+      "inherited accessor",
+    ])("toJSON=%s", (placement) => {
+      it.each(["generated", "one-shot", "private fields"])(
+        "preserves a %s serializer without tracing raw or discarded input",
+        async (kind) => {
+          streaming = stream;
+          if (stream) reply = [{ choices: [], usage: totals }];
+          const c = client();
+          const operations = [
+            { resource: c.chat.completions, input: positional, body: effective },
+            ...(c.completions
+              ? [{
+                  resource: c.completions,
+                  input: { model: "UNSENT_MODEL", prompt: "UNSENT_INPUT" },
+                  body: { model: "effective-model", prompt: "EFFECTIVE_INPUT" },
+                }]
+              : []),
+          ];
+          for (const { resource, input, body } of operations) {
+            async function invoke() {
+              let calls = 0;
+              const serializer = jest.fn(function () {
+                if (++calls > 1 && kind === "one-shot")
+                  throw new Error("request serialized twice");
+                return {
+                  ...body,
+                  model: kind === "private fields" ? body.model : `model-${calls}`,
+                  stream,
+                };
+              });
+              const getter = jest.fn(() => serializer);
+              class SerializedBody {
+                model = "INTERNAL_MODEL";
+                messages = [{ role: "user", content: "INTERNAL_ONLY_SECRET" }];
+                prompt = "INTERNAL_ONLY_SECRET";
+              }
+              const replacement = new SerializedBody();
+              Object.defineProperty(
+                placement.startsWith("inherited") ? SerializedBody.prototype : replacement,
+                "toJSON",
+                {
+                  enumerable: !placement.startsWith("inherited"),
+                  ...(placement.endsWith("accessor")
+                    ? { get: getter }
+                    : { value: serializer }),
+                },
+              );
+              const options = Object.freeze({
+                body: Object.freeze(replacement),
+                headers: { "x-offline-option": "OPTION_SENTINEL" },
+              });
+              const start = wire.length;
+              let value: unknown;
+              let error: unknown;
+              try {
+                value = await consume(
+                  await resource.create(Object.freeze({ ...input, stream }), options),
+                  stream,
+                );
+              } catch (failure) {
+                error = failure;
+              }
+              return {
+                calls,
+                getterReads: getter.mock.calls.length,
+                receiversPreserved: [...serializer.mock.contexts, ...getter.mock.contexts]
+                  .every((receiver) => receiver === replacement),
+                value, error,
+                bodies: wire.slice(start),
+                headers: optionHeaders.slice(start),
+              };
+            }
+            instrumentation!.disable();
+            const expected = await invoke();
+            expect(expected).toMatchObject({
+              calls: 1,
+              getterReads: placement.endsWith("accessor") ? 1 : 0,
+              receiversPreserved: true,
+              value: reply,
+              error: undefined,
+              headers: ["OPTION_SENTINEL"],
+            });
+            expect(expected.bodies.map((sent) => JSON.parse(sent))).toEqual([{
+              ...body,
+              model: kind === "private fields" ? body.model : "model-1",
+              stream,
+            }]);
+            instrumentation!.enable();
+            const actual = await invoke();
+            if (kind === "private fields") {
+              expect(JSON.stringify(exporter.getFinishedSpans().map((span) => span.attributes)))
+                .not.toMatch(/INTERNAL_|UNSENT_|OPTION_SENTINEL|synthetic-offline-key/);
+            }
+            expect(actual).toEqual(expected);
+            // A serializer is opaque, just like an options.body accessor.
+            expect(exporter.getFinishedSpans()).toHaveLength(0);
+          }
+        },
+      );
+    });
+
+    describe.each([
       undefined,
       "hideOutputs",
       "hideOutputMessages",
@@ -277,6 +382,29 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
       expect(exporter.getFinishedSpans()).toHaveLength(0);
     },
   );
+
+  it.each([
+    "own method", "inherited method", "own accessor", "inherited accessor",
+  ])("toJSON=%s preserves the original serialization error without tracing input", async (placement) => {
+    const c = client();
+    const error = new Error("serializer failure");
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      const fail = jest.fn(() => { throw error; });
+      const holder = Object.defineProperty({}, "toJSON", {
+        enumerable: false,
+        ...(placement.endsWith("accessor") ? { get: fail } : { value: fail }),
+      });
+      const body = placement.startsWith("inherited") ? Object.create(holder) : holder;
+      await expect((async () => c.chat.completions.create(positional, { body }))())
+        .rejects.toBe(error);
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(fail.mock.contexts[0]).toBe(body);
+      expect(wire).toHaveLength(0);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
 
   it("preserves a body accessor's original error without issuing HTTP or tracing input", async () => {
     const c = client();
