@@ -48,7 +48,20 @@ jobs:
           python -m pip install "${artifact}[dev]" "strands-agents[otel,openai]==$STRANDS_VERSION"
       - name: Test real Strands with only loopback networking
         run: |
-          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
-          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
-          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          # Isolate only the tests; runner-wide firewall rules also disconnect
+          # the Actions runner from GitHub while pytest is running.
+          sudo unshare --net -- bash -euo pipefail -c '
+            ip link set dev lo up
+            exec sudo -H -u "$1" -- env PATH="$2" LD_LIBRARY_PATH="$3" bash -euo pipefail -s
+          ' bash "$(id -un)" "$PATH" "${LD_LIBRARY_PATH:-}" <<'TESTS'
+          # Literal IPs and no proxy avoid mistaking DNS/proxy errors for isolation.
+          command -v curl >/dev/null
+          for url in http://1.1.1.1 'http://[2606:4700:4700::1111]'; do
+            if curl --noproxy '*' --connect-timeout 2 --max-time 3 --silent --output /dev/null "$url"; then
+              echo "::error::Non-loopback networking is reachable: $url"
+              exit 1
+            fi
+            echo "Confirmed non-loopback connection blocked: $url"
+          done
           python -I -m pytest python/frameworks/strands/tests python/frameworks/strands/tests_native -q
+          TESTS
