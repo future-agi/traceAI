@@ -1,12 +1,12 @@
 'use strict';
 // Real ADK 2.4, Gemini and GenAI HTTP/SSE clients. Only the provider endpoint
 // is replaced by localhost. Also decode the adapter's real OTLP/HTTP export.
-// Usage: node native-http.cjs <package-path> <isolated-adk-runtime> <mode>
+// Usage: node native-http.cjs <package-path> <isolated-adk-runtime> <mode> [privacy-flag]
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
 const { createRequire } = require('node:module');
-const [packagePath, runtimePath, mode = 'default'] = process.argv.slice(2);
+const [packagePath, runtimePath, mode = 'default', privacyFlag] = process.argv.slice(2);
 const pr = createRequire(packagePath + '/package.json');
 const ar = createRequire(runtimePath + '/package.json');
 const { NodeTracerProvider } = pr('@opentelemetry/sdk-trace-node');
@@ -17,10 +17,16 @@ const { GoogleADKSpanExporter, recordGoogleADKModelError } = pr(packagePath);
 const toolError = mode.startsWith('tool-error');
 const providerError = mode.startsWith('provider-error');
 const streaming = mode.includes('stream');
-const audio = mode.startsWith('audio');
+const outputModality = mode.startsWith('audio-output') ? 'AUDIO' : mode.startsWith('image-output') ? 'IMAGE' : undefined;
+const audio = mode.startsWith('audio') && !outputModality;
 const captureContent = toolError || mode.endsWith('-capture');
 const audioData = Buffer.from('SYNTHETIC_AUDIO').toString('base64');
-const usage = audio
+const outputData = Buffer.from('SYNTHETIC_OUTPUT_MEDIA').toString('base64');
+const modelName = outputModality === 'AUDIO' ? 'gemini-2.5-flash-preview-tts' : outputModality === 'IMAGE' ? 'gemini-2.5-flash-image' : 'gemini-2.5-flash';
+const usage = outputModality
+  ? { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 14, thoughtsTokenCount: 4, totalTokenCount: 118,
+      candidatesTokensDetails: [{ modality: outputModality, tokenCount: 6 }, { modality: outputModality, tokenCount: 8 }] }
+  : audio
   ? { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 10, thoughtsTokenCount: 4, totalTokenCount: 114,
       promptTokensDetails: [{ modality: 'TEXT', tokenCount: 20 }, { modality: 'AUDIO', tokenCount: 30 }, { modality: 'AUDIO', tokenCount: 50 }] }
   : { promptTokenCount: 100, cachedContentTokenCount: 60, candidatesTokenCount: 10, thoughtsTokenCount: 5, totalTokenCount: 115 };
@@ -47,6 +53,7 @@ const server = http.createServer((req, res) => {
     const response = (text, done = true) => ({
       candidates: [{ index: 0, content: { role: 'model', parts: toolError && calls === 1
         ? [{ functionCall: { id: 'call-1', name: 'echo', args: { value: 'PRIVATE_TOOL' } } }]
+        : outputModality ? [{ inlineData: { mimeType: outputModality === 'AUDIO' ? 'audio/pcm' : 'image/png', data: outputData } }]
         : [{ text }] }, ...(done ? { finishReason: 'STOP' } : {}) }],
       usageMetadata: usage, modelVersion: 'gemini-2.5-flash-001',
     });
@@ -68,6 +75,10 @@ async function main() {
   // Check both the explicit flag and the stricter native-route default.
   if (mode === 'tool-error-hide') process.env.FI_HIDE_ERROR_DETAILS = 'true';
   else delete process.env.FI_HIDE_ERROR_DETAILS;
+  if (privacyFlag) {
+    assert(['FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT', 'FI_PII_REDACTION'].includes(privacyFlag));
+    process.env[privacyFlag] = 'true';
+  }
   const raw = new InMemorySpanExporter();
   const provider = new NodeTracerProvider({ spanProcessors: [
     new SimpleSpanProcessor(raw),
@@ -85,7 +96,8 @@ async function main() {
     }
     const originalRun = adk.BaseAgent.prototype.runAsync;
     const tool = new adk.FunctionTool({ name: 'echo', description: 'Synthetic tool', execute: async () => { throw new Error('PRIVATE_TOOL_ERROR'); } });
-    const agent = new adk.LlmAgent({ name: 'http_agent', model: 'gemini-2.5-flash', tools: toolError ? [tool] : [] });
+    const agent = new adk.LlmAgent({ name: 'http_agent', model: modelName, tools: toolError ? [tool] : [],
+      ...(outputModality ? { generateContentConfig: { responseModalities: outputModality === 'AUDIO' ? ['AUDIO'] : ['TEXT', 'IMAGE'] } } : {}) });
     // Redirect only the transport, not model.generateContentAsync or Runner.
     const model = agent.canonicalModel;
     agent.model = model;
@@ -101,7 +113,7 @@ async function main() {
     const spans = batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans)));
     const llms = spans.filter(s => attrs(s)['fi.span.kind'] === 'LLM');
     assert(calls > 0, 'real GenAI HTTP client reached localhost');
-    assert(requests.every(r => r.path.includes('gemini-2.5-flash')));
+    assert(requests.every(r => r.path.includes(modelName)));
     assert.equal(spans.length, raw.getFinishedSpans().length, 'no duplicate spans');
     assert.equal(new Set(spans.map(s => s.spanId)).size, spans.length);
     assert.equal(new Set(spans.map(s => s.traceId)).size, 1);
@@ -119,6 +131,7 @@ async function main() {
     if (!captureContent) {
       assert(!exported.includes('PRIVATE_'), 'default privacy');
       assert(!exported.includes(audioData), 'audio payload stays private');
+      assert(!exported.includes(outputData), 'output media stays private');
       assert(llms.every(s => attrs(s)['input.value'] === undefined && attrs(s)['output.value'] === undefined));
     }
     if (audio) {
@@ -127,6 +140,24 @@ async function main() {
       assert.deepEqual(JSON.parse(native.attributes['gcp.vertex.agent.llm_response']).usageMetadata.promptTokensDetails,
         usage.promptTokensDetails, 'ADK retained the reported modality breakdown');
       if (captureContent) assert(exported.includes('PRIVATE_INPUT'), 'content opt-in is active');
+    }
+    if (outputModality) {
+      assert(requests.some(r => r.body.generationConfig?.responseModalities?.includes(outputModality)), 'real GenAI client requested output modality');
+      assert(events.some(e => e.content?.parts?.some(p => p.inlineData?.data === outputData)), 'real ADK emitted generated media');
+      const native = raw.getFinishedSpans().find(s => s.name === 'call_llm');
+      assert.deepEqual(JSON.parse(native.attributes['gcp.vertex.agent.llm_response']).usageMetadata.candidatesTokensDetails,
+        usage.candidatesTokensDetails, 'ADK retained the reported output breakdown');
+      if (captureContent) {
+        assert(exported.includes('PRIVATE_INPUT'), 'content opt-in is active');
+        if (privacyFlag === 'FI_HIDE_OUTPUTS' || privacyFlag === 'FI_HIDE_OUTPUT_MESSAGES') {
+          assert(llms.every(s => attrs(s)['output.value'] === '__REDACTED__'));
+        } else if (privacyFlag === 'FI_HIDE_OUTPUT_TEXT') {
+          assert(!exported.includes(outputData));
+          assert(llms.every(s => JSON.parse(attrs(s)['output.value']).usageMetadata.candidatesTokensDetails[0].modality === '__REDACTED__'));
+        } else {
+          assert(llms.every(s => JSON.parse(attrs(s)['output.value']).usageMetadata.candidatesTokensDetails[0].modality === outputModality));
+        }
+      }
     }
     if (providerError) {
       assert.equal(llms.length, 1);
@@ -147,9 +178,17 @@ async function main() {
         assert.equal(attrs(span)['gen_ai.usage.output_tokens'], usage.candidatesTokenCount + usage.thoughtsTokenCount);
         assert.equal(attrs(span)['gen_ai.usage.total_tokens'], usage.totalTokenCount);
         assert.equal(attrs(span)['gen_ai.usage.input_tokens.audio'], audio ? 80 : undefined, 'reported audio usage survives content policy');
+        for (const modality of ['AUDIO', 'IMAGE']) {
+          const key = `gen_ai.usage.output_tokens.${modality.toLowerCase()}`;
+          assert.equal(attrs(span)[key], modality === outputModality ? 14 : undefined, 'reported output modality usage survives content policy');
+          if (modality === outputModality) {
+            const wire = span.attributes.find(a => a.key === key).value;
+            assert(wire.intValue !== undefined || wire.doubleValue !== undefined, 'usage is a numeric OTLP attribute');
+          }
+        }
         assert.notEqual(span.status.code, 2, 'successful calls are not marked as failures');
       }
-      if (streaming) assert(events.some(e => e.content?.parts?.some(p => p.text?.includes('PRIVATE_PART_B'))));
+      if (streaming && !outputModality) assert(events.some(e => e.content?.parts?.some(p => p.text?.includes('PRIVATE_PART_B'))));
       if (toolError) {
         assert.equal(calls, 2);
         assert(raw.getFinishedSpans().some(s => s.attributes['gcp.vertex.agent.llm_request']?.includes('PRIVATE_TOOL_ERROR')), 'ADK copied the real tool failure into later history');
@@ -158,7 +197,7 @@ async function main() {
         assert(exported.includes('PRIVATE_INPUT'), 'content opt-in is active, not blanket hidden');
       }
     }
-    console.log(JSON.stringify({ mode, result: 'PASS', calls, spanCount: spans.length, realHttpAndOtlp: true,
+    console.log(JSON.stringify({ mode, privacyFlag, result: 'PASS', calls, spanCount: spans.length, realHttpAndOtlp: true,
       usage: llms.map(s => Object.fromEntries(Object.entries(attrs(s)).filter(([key]) => key.startsWith('gen_ai.usage.')))) }));
   } finally {
     await provider.shutdown();

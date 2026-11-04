@@ -50,12 +50,12 @@ function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function audioInputTokens(details: unknown): number | undefined {
+function modalityTokens(details: unknown, modality: "AUDIO" | "IMAGE"): number | undefined {
   if (!Array.isArray(details)) return undefined;
   let total: number | undefined;
   for (const detail of details) {
     if (detail === null || typeof detail !== "object" || Array.isArray(detail)) continue;
-    if (detail.modality !== "AUDIO") continue;
+    if (detail.modality !== modality) continue;
     const tokens = count(detail.tokenCount);
     if (tokens === undefined || !Number.isSafeInteger(tokens)) continue;
     const sum = (total ?? 0) + tokens;
@@ -89,10 +89,14 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     const prompt = count(usage?.promptTokenCount);
     const total = count(usage?.totalTokenCount);
     const cached = count(usage?.cachedContentTokenCount);
-    // Audio has distinct pricing. Extract only reported modality counts before
-    // content redaction; they are a subset of input, not additional tokens.
-    const audio = audioInputTokens(usage?.promptTokensDetails);
-    if (audio !== undefined) attributes["gen_ai.usage.input_tokens.audio"] = audio;
+    // Media has distinct pricing. Extract only reported modality counts before
+    // content redaction; they are subsets of input/output, not additional tokens.
+    const inputAudio = modalityTokens(usage?.promptTokensDetails, "AUDIO");
+    const outputAudio = modalityTokens(usage?.candidatesTokensDetails, "AUDIO");
+    const outputImage = modalityTokens(usage?.candidatesTokensDetails, "IMAGE");
+    if (inputAudio !== undefined) attributes["gen_ai.usage.input_tokens.audio"] = inputAudio;
+    if (outputAudio !== undefined) attributes["gen_ai.usage.output_tokens.audio"] = outputAudio;
+    if (outputImage !== undefined) attributes["gen_ai.usage.output_tokens.image"] = outputImage;
     // Cached input is a subset of promptTokenCount, not additional input.
     if (cached !== undefined) attributes["gen_ai.usage.cache_read_tokens"] = cached;
     if (prompt !== undefined) attributes["gen_ai.usage.input_tokens"] = prompt;

@@ -60,6 +60,11 @@ jobs:
               for mode in default stream audio audio-capture audio-stream audio-stream-capture tool-error tool-error-hide provider-error provider-error-stream; do
                 "$4" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
               done
+              for mode in audio-output audio-output-capture audio-output-stream audio-output-stream-capture image-output image-output-capture image-output-stream image-output-stream-capture; do
+                for flag in "" FI_HIDE_OUTPUTS FI_HIDE_OUTPUT_MESSAGES FI_HIDE_OUTPUT_TEXT FI_PII_REDACTION; do
+                  "$4" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode" "$flag"
+                done
+              done
               for mode in default credentials credential-variants hide-inputs hide-outputs hide-input-text hide-output-text hide-input-messages hide-output-messages pii numeric-pii; do
                 "$4" "$1/typescript/packages/traceai_google_adk/test/native-privacy-wire.cjs" "$1/typescript/packages/traceai_google_adk" "$2" "$mode"
               done
@@ -85,5 +90,10 @@ jobs:
             ip link set lo up
             for mode in default stream audio audio-capture audio-stream audio-stream-capture tool-error tool-error-hide provider-error provider-error-stream; do
               "$3" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$2/node_modules/@traceai/fi-instrumentation-google-adk" "$2" "$mode"
+            done
+            for mode in audio-output audio-output-capture audio-output-stream audio-output-stream-capture image-output image-output-capture image-output-stream image-output-stream-capture; do
+              for flag in "" FI_HIDE_OUTPUTS FI_HIDE_OUTPUT_MESSAGES FI_HIDE_OUTPUT_TEXT FI_PII_REDACTION; do
+                "$3" "$1/typescript/packages/traceai_google_adk/test/native-http.cjs" "$2/node_modules/@traceai/fi-instrumentation-google-adk" "$2" "$mode" "$flag"
+              done
             done
           ' -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP/consumer" "$(command -v node)"
