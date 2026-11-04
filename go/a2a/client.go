@@ -75,6 +75,9 @@ func attachClientCompletion(ctx context.Context, req *a2aclient.Request, st *cal
 		return false
 	}
 	if completion.state == nil && completion.method == st.method {
+		// Only a bound SDK invocation can defer recording past all policies.
+		// Legacy stream wrappers keep their interceptor-only response handling.
+		st.deferredResponse = completion.owner != nil
 		completion.state = st
 		return true
 	}

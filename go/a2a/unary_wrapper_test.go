@@ -27,12 +27,12 @@ func TestUnaryCompletionOwnsOnlyItsCall(t *testing.T) {
 	result, err := observeUnary(nil, "SendMessage", boundary, func(ctx context.Context) (*a2a.Message, error) {
 		ctx = before(ctx)
 		outer := ctx.Value(stateKey{}).(*callState)
-		if !outer.unaryCompletion {
+		if !outer.deferredResponse {
 			t.Fatal("outer call did not claim completion")
 		}
 		// An unwrapped nested call must not steal its parent's completion slot.
 		inner, _, _ := tracing.Before(ctx, &a2aclient.Request{Method: "SendMessage"})
-		if inner.Value(stateKey{}).(*callState).unaryCompletion {
+		if inner.Value(stateKey{}).(*callState).deferredResponse {
 			t.Fatal("nested call stole completion")
 		}
 		_ = tracing.After(inner, &a2aclient.Response{Method: "SendMessage", Payload: message})

@@ -24,7 +24,17 @@ import (
 
 func qualificationClient(t *testing.T, transport string, exec *agent, tp *sdktrace.TracerProvider, tc traceaia2a.TraceConfig, tracingFirst bool, policies ...a2aclient.CallInterceptor) *traceaia2a.Client {
 	t.Helper()
+	return qualificationClientWithStreaming(t, transport, exec, tp, tc, tracingFirst, true, policies...)
+}
+
+func qualificationClientWithStreaming(t *testing.T, transport string, exec *agent, tp *sdktrace.TracerProvider, tc traceaia2a.TraceConfig, tracingFirst, streaming bool, policies ...a2aclient.CallInterceptor) *traceaia2a.Client {
+	t.Helper()
 	handler := traceaia2a.WrapHandler(a2asrv.NewHandler(exec, a2asrv.WithCallInterceptors(traceaia2a.NewServerInterceptor(traceaia2a.WithTracerProvider(tp), traceaia2a.WithTraceConfig(tc)))))
+	return qualificationClientWithHandler(t, transport, handler, tp, tc, tracingFirst, streaming, policies...)
+}
+
+func qualificationClientWithHandler(t *testing.T, transport string, handler a2asrv.RequestHandler, tp *sdktrace.TracerProvider, tc traceaia2a.TraceConfig, tracingFirst, streaming bool, policies ...a2aclient.CallInterceptor) *traceaia2a.Client {
+	t.Helper()
 	var cardValue *a2a.AgentCard
 	var opts []a2aclient.FactoryOption
 	tracing := traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp), traceaia2a.WithTraceConfig(tc))
@@ -44,7 +54,7 @@ func qualificationClient(t *testing.T, transport string, exec *agent, tp *sdktra
 		a2agrpc.NewHandler(handler).RegisterWith(gs)
 		go func() { _ = gs.Serve(ln) }()
 		t.Cleanup(gs.Stop)
-		cardValue = &a2a.AgentCard{SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(ln.Addr().String(), a2a.TransportProtocolGRPC)}, Capabilities: a2a.AgentCapabilities{Streaming: true}}
+		cardValue = &a2a.AgentCard{SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(ln.Addr().String(), a2a.TransportProtocolGRPC)}, Capabilities: a2a.AgentCapabilities{Streaming: streaming}}
 		opts = append(opts, a2agrpc.WithGRPCTransport(grpc.WithTransportCredentials(insecure.NewCredentials())))
 	} else {
 		var h http.Handler = a2asrv.NewJSONRPCHandler(handler)
@@ -53,7 +63,7 @@ func qualificationClient(t *testing.T, transport string, exec *agent, tp *sdktra
 		}
 		server := httptest.NewServer(h)
 		t.Cleanup(server.Close)
-		cardValue = card(server.URL, transport == "rest", true)
+		cardValue = card(server.URL, transport == "rest", streaming)
 	}
 	client, err := traceaia2a.NewClientFromCard(context.Background(), cardValue, opts...)
 	if err != nil {

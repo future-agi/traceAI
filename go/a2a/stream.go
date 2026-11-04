@@ -2,6 +2,7 @@ package traceaia2a
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"sync"
 
@@ -13,10 +14,10 @@ import (
 // Client preserves the SDK client's API and observes call completion. Create
 // the SDK client with [NewClientFromCard] or [NewClientFromEndpoints] and install
 // [NewInterceptor]. The wrapper does not create spans: it completes the
-// interceptor's existing span when unary calls
-// return, at clean stream EOF, or on early iterator abandonment. Unary completion
-// observes the final result after all response policies, including rejections
-// that cause the SDK to skip the tracing After callback.
+// interceptor's existing span when unary calls return or unwind, at clean stream
+// EOF, or on early iterator abandonment. Results and stream events are recorded
+// after all response policies, including rejections that cause the SDK to skip
+// the tracing After callback, and before events are yielded to the caller.
 type Client struct {
 	*a2aclient.Client
 	boundary *clientBoundary
@@ -52,6 +53,10 @@ func (c *Client) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a
 	})
 }
 
+// Never inspect or wrap the application's panic value: even an a2a.Error used
+// as a panic may contain private data, unrelated to an accepted agent response.
+var errCallPanic = errors.New("a2a client call panicked")
+
 func observeUnary[T any](ctx context.Context, method string, owner *clientBoundary, call func(context.Context) (T, error)) (T, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -60,15 +65,17 @@ func observeUnary[T any](ctx context.Context, method string, owner *clientBounda
 		return call(ctx)
 	}
 	completion := &streamCompletion{method: method, owner: owner}
+	returned := false
+	defer func() {
+		if !returned {
+			// Leave the original panic unwinding unchanged, including panic(nil).
+			completion.end(errCallPanic)
+		}
+	}()
 	result, err := call(context.WithValue(ctx, clientCompletionKey, completion))
-	completion.mu.Lock()
-	st := completion.state
-	completion.mu.Unlock()
-	if st != nil {
-		// After deliberately defers recording to here: policies registered on
-		// either side of tracing can still replace or reject the response.
-		st.recordResponse(result, err)
-	}
+	returned = true
+	// Policies on either side of tracing may replace or reject the response.
+	completion.recordResponse(result, err)
 	return result, err
 }
 
@@ -142,6 +149,15 @@ func attachCompletion(ctx context.Context, key completionKey, st *callState) boo
 	return false
 }
 
+func (c *streamCompletion) recordResponse(payload any, err error) {
+	c.mu.Lock()
+	st := c.state
+	c.mu.Unlock()
+	if st != nil {
+		st.recordResponse(payload, err)
+	}
+}
+
 func (c *streamCompletion) end(err error) {
 	c.mu.Lock()
 	st := c.state
@@ -188,6 +204,12 @@ func observeStream(ctx context.Context, key completionKey, method string, owner 
 		for event, err := range stream(callCtx) {
 			if err != nil {
 				streamErr = err
+			}
+			if owner != nil {
+				// Bound clients defer After recording until every SDK policy has
+				// accepted this event. Record before yield so caller mutations cannot
+				// change telemetry. Legacy clients and servers still record in After.
+				completion.recordResponse(event, err)
 			}
 			if !yield(event, err) {
 				return

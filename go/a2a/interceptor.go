@@ -67,8 +67,8 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
-// Use [NewClientFromCard] or [NewClientFromEndpoints] to complete unary calls after all
-// response policies, even when a policy error skips this interceptor's After.
+// Use [NewClientFromCard] or [NewClientFromEndpoints] to record results and stream
+// events after all response policies, even when a policy error skips this After.
 // It also handles clean EOF, early abandonment and recording after auth-required.
 // Without it, auth-required ends the client span as in earlier releases; the SDK's
 // interceptor hooks alone do not observe iterator close or every policy rejection.
@@ -191,9 +191,6 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 	// an inherited wrapper slot may belong to a different (outer) call.
 	attached := attachClientCompletion(ctx, req, st)
 	st.authRequiredEndsStream = !attached
-	// Use the requested method, not st.streaming: the SDK's unary fallback for
-	// SendStreamingMessage still uses the iterator-completion wrapper.
-	st.unaryCompletion = attached && !info.streaming
 	if st.streaming {
 		// A stream ends without a callback when the caller stops reading
 		// early; the span then ends when the caller's context is done.
@@ -208,13 +205,15 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 }
 
 // After records the result, a streamed event or the error, and ends the span
-// when the call is over. It never changes the response and never fails it.
+// when the call is over. Bound clients defer this to the outer Client so later
+// response policies cannot reject data we have already recorded or end an OK
+// span before the SDK returns an error. It never changes or fails a response.
 func (i *Interceptor) After(ctx context.Context, resp *a2aclient.Response) error {
 	if ctx == nil || resp == nil {
 		return nil
 	}
 	st, _ := ctx.Value(stateKey{}).(*callState)
-	if st == nil || resp.Method != st.method || st.unaryCompletion {
+	if st == nil || resp.Method != st.method || st.deferredResponse {
 		return nil
 	}
 	st.recordResponse(resp.Payload, resp.Err)
@@ -253,9 +252,9 @@ type callState struct {
 	ended     bool
 	stopWatch func() bool
 
-	// Wrapped unary clients record only the outcome returned by the SDK, after
-	// all response policies have run. Immutable once Before publishes the state.
-	unaryCompletion bool
+	// Bound clients record results/events returned by the SDK, after all response
+	// policies have run. Immutable once Before publishes the state.
+	deferredResponse bool
 
 	// Legacy client-only fallback; servers and wrapped clients leave this false.
 	authRequiredEndsStream bool
