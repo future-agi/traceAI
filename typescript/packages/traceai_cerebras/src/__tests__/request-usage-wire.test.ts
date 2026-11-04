@@ -146,6 +146,70 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
       },
     );
 
+    it.each(["generated", "one-shot"])(
+      "preserves an enumerable %s body accessor without tracing discarded input",
+      async (kind) => {
+        streaming = stream;
+        if (stream) reply = [{ choices: [], usage: totals }];
+        const c = client();
+        const operations = [
+          { resource: c.chat.completions, input: positional, body: effective },
+          ...(c.completions
+            ? [{
+                resource: c.completions,
+                input: { model: "UNSENT_MODEL", prompt: "UNSENT_INPUT" },
+                body: { model: "effective-model", prompt: "EFFECTIVE_INPUT" },
+              }]
+            : []),
+        ];
+        for (const { resource, input, body } of operations) {
+          async function invoke() {
+            let reads = 0;
+            const getter = jest.fn(function () {
+              if (++reads > 1 && kind === "one-shot")
+                throw new Error("body accessor was consumed twice");
+              return { ...body, model: `model-${reads}`, stream };
+            });
+            const options = Object.freeze(Object.defineProperty({
+              headers: { "x-offline-option": "OPTION_SENTINEL" },
+            }, "body", { enumerable: true, get: getter }));
+            const start = wire.length;
+            let value: unknown;
+            let error: unknown;
+            try {
+              value = await consume(
+                await resource.create({ ...input, stream }, options),
+                stream,
+              );
+            } catch (failure) {
+              error = failure;
+            }
+            expect(getter.mock.contexts.every((receiver) => receiver === options)).toBe(true);
+            return {
+              reads, value, error,
+              bodies: wire.slice(start),
+              headers: optionHeaders.slice(start),
+            };
+          }
+          instrumentation!.disable();
+          const expected = await invoke();
+          expect(expected).toMatchObject({
+            reads: 1,
+            value: reply,
+            error: undefined,
+            headers: ["OPTION_SENTINEL"],
+          });
+          expect(expected.bodies.map((sent) => JSON.parse(sent))).toEqual([
+            { ...body, model: "model-1", stream },
+          ]);
+          instrumentation!.enable();
+          expect(await invoke()).toEqual(expected);
+          // An accessor is opaque: do not export its value or the unsent input.
+          expect(exporter.getFinishedSpans()).toHaveLength(0);
+        }
+      },
+    );
+
     describe.each([
       undefined,
       "hideOutputs",
@@ -211,6 +275,61 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
       expect(wire).toHaveLength(2);
       expect(wire[1]).toBe(wire[0]);
       expect(exporter.getFinishedSpans()).toHaveLength(0);
+    },
+  );
+
+  it("preserves a body accessor's original error without issuing HTTP or tracing input", async () => {
+    const c = client();
+    const error = new Error("body accessor failure");
+    const getter = jest.fn(() => { throw error; });
+    const options = Object.defineProperty({}, "body", {
+      enumerable: true,
+      get: getter,
+    });
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      await expect((async () => c.chat.completions.create(positional, options))())
+        .rejects.toBe(error);
+      expect(getter).toHaveBeenCalledTimes(enabled ? 2 : 1);
+      expect(wire).toHaveLength(0);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
+
+  it("forwards a setter-only body override without tracing unsent input", async () => {
+    const c = client();
+    const setter = jest.fn();
+    const options = Object.defineProperty({}, "body", {
+      enumerable: true,
+      set: setter,
+    });
+    instrumentation!.disable();
+    const expected = await c.chat.completions.create(positional, options);
+    instrumentation!.enable();
+    expect(await c.chat.completions.create(positional, options)).toEqual(expected);
+    expect(wire).toHaveLength(2);
+    expect(wire[1]).toBe(wire[0]);
+    expect(setter).not.toHaveBeenCalled();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it.each(["inherited accessor", "non-enumerable accessor"])(
+    "does not read an ignored %s body property",
+    async (kind) => {
+      const getter = jest.fn(() => { throw new Error("ignored body getter"); });
+      const holder = Object.defineProperty({}, "body", {
+        enumerable: kind === "inherited accessor",
+        get: getter,
+      });
+      const options = kind === "inherited accessor" ? Object.create(holder) : holder;
+      const c = client();
+      await c.chat.completions.create(positional, options);
+      expect(getter).not.toHaveBeenCalled();
+      expect(JSON.parse(wire[0])).toEqual(positional);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(JSON.parse(exporter.getFinishedSpans()[0].attributes[S.INPUT_VALUE] as string))
+        .toEqual(positional);
     },
   );
 

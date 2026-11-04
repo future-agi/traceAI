@@ -178,13 +178,16 @@ export class CerebrasInstrumentation extends InstrumentationBase {
           return original.apply(this, args);
         // The SDK spreads RequestOptions over its body. An own enumerable body
         // replaces the positional payload, even when explicitly null/undefined.
-        // Read only body: headers and other transport options are not trace data.
+        // Inspect without reading accessors: the SDK must evaluate them exactly
+        // once. Headers and other transport options are not trace data.
         const options = args[1];
+        const bodyDescriptor = options == null
+          ? undefined
+          : Object.getOwnPropertyDescriptor(options, "body");
+        if (bodyDescriptor?.enumerable && !("value" in bodyDescriptor))
+          return original.apply(this, args);
         const body = (
-          options != null &&
-          Object.prototype.propertyIsEnumerable.call(options, "body")
-            ? (options as { body: unknown }).body
-            : args[0]
+          bodyDescriptor?.enumerable ? bodyDescriptor.value : args[0]
         ) as Request | undefined;
         // Leave non-request bodies to the SDK; never fall back to unsent input.
         if (!body || typeof body !== "object" || Array.isArray(body))
