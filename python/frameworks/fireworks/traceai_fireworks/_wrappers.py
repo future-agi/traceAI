@@ -4,15 +4,17 @@ import logging
 import sys
 from abc import ABC
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 from urllib.parse import urlsplit
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
+from traceai_fireworks._privacy import _messages_for_telemetry
+from traceai_fireworks._raw_response import _RawStreamResponse
 from traceai_fireworks._stream import (
     _AsyncStream,
     _Stream,
@@ -39,9 +41,13 @@ _REQUEST_BODY_FIELDS = frozenset({
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, *args: Any,
+        config: Optional[TraceConfig] = None, **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._config = config if config is not None else TraceConfig()
 
     @contextmanager
     def _start_span(
@@ -92,6 +98,8 @@ def _shared_instrumentor_enabled() -> bool:
 def _get_input_attributes(
     model: str,
     messages: list,
+    *,
+    config: Optional[TraceConfig] = None,
     **kwargs: Any,
 ) -> Dict[str, AttributeValue]:
     """Extract input attributes from request parameters."""
@@ -119,20 +127,18 @@ def _get_input_attributes(
     if invocation_params:
         attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
 
-    # Add input messages
+    # Mask images before BOTH flattened content and raw-input serialization.
+    # Never replace or mutate the messages passed to the provider.
+    messages = _messages_for_telemetry(messages, config if config is not None else TraceConfig())
+
+    # Add input messages from the same privacy-filtered copy as raw input.
     for i, message in enumerate(messages):
         prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-        if isinstance(message, dict):
-            if "role" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-            if "content" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message["content"]) if message["content"] else ""
-        else:
-            # Handle message objects
-            if hasattr(message, "role"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
-            if hasattr(message, "content"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
+        if "role" in message:
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
+        if "content" in message:
+            content = message["content"]
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
 
     # Only allow known model request fields into telemetry.
     raw_input = {"model": model, "messages": messages}
@@ -208,7 +214,7 @@ class _CompletionsWrapper(_WithTracer):
 
         # Get input attributes - exclude model, messages, stream from kwargs
         extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
             try:
@@ -232,6 +238,8 @@ class _CompletionsWrapper(_WithTracer):
 
     def _wrap_stream(self, stream: Any, span: Span) -> Any:
         """Transfer span ownership to a proxy, including before first iteration."""
+        if callable(getattr(type(stream), "parse", None)):
+            return _RawStreamResponse(stream, span, asynchronous=False)
         return _Stream(stream, span)
 
 
@@ -256,7 +264,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
 
         # Get input attributes - exclude model, messages, stream from kwargs
         extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
             try:
@@ -280,4 +288,6 @@ class _AsyncCompletionsWrapper(_WithTracer):
 
     def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
         """Transfer ownership only after the SDK returns a response."""
+        if callable(getattr(type(stream), "parse", None)):
+            return _RawStreamResponse(stream, span, asynchronous=True)
         return _AsyncStream(stream, span)

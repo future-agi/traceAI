@@ -1,6 +1,7 @@
 """SDK-compatible streams that own a request span until exhaustion or close."""
 
 import logging
+import weakref
 from typing import Any, Dict, Optional
 
 from fi_instrumentation import safe_json_dumps
@@ -51,40 +52,70 @@ def _get_stream_output_attributes(
     return attributes
 
 
-class _StreamBase(ObjectProxy):
-    def __init__(self, stream: Any, span: Span) -> None:
-        super().__init__(stream)
-        self._self_span = span
-        self._self_chunks = []
-        self._self_content = ""
-        self._self_finished = False
-        self._self_closed = False
+def _end_span(span: Span) -> None:
+    try:
+        span.end()
+    except Exception:
+        # Also safe during GC/interpreter shutdown; never perform async I/O here.
+        logger.debug("Failed to end Fireworks stream span")
 
-    def _record_chunk(self, chunk: Any) -> None:
-        self._self_chunks.append(chunk)
+
+class _StreamState:
+    """One owner shared by a raw response and its parsed stream.
+
+    The finalizer captures only the span, not this state or either proxy. Dropping
+    the raw response cannot finish a parsed stream still held by the caller.
+    Abandonment leaves status UNSET rather than claiming complete success.
+    """
+
+    def __init__(self, span: Span) -> None:
+        self.span = span
+        self.chunks = []
+        self.content = ""
+        self.finished = False
+        self._finalizer = weakref.finalize(self, _end_span, span)
+
+    def record_chunk(self, chunk: Any) -> None:
+        self.chunks.append(chunk)
         if getattr(chunk, "choices", None):
             content = getattr(getattr(chunk.choices[0], "delta", None), "content", None)
             if isinstance(content, str):
-                self._self_content += content
+                self.content += content
 
-    def _finish(self, error: Optional[BaseException] = None) -> None:
-        if self._self_finished:
+    def finish(self, error: Optional[BaseException] = None) -> None:
+        if self.finished:
             return
-        self._self_finished = True
+        self.finished = True
+        self._finalizer.detach()
         try:
-            self._self_span.set_attributes(
-                _get_stream_output_attributes(self._self_chunks, self._self_content)
+            self.span.set_attributes(
+                _get_stream_output_attributes(self.chunks, self.content)
             )
             if error is None:
-                self._self_span.set_status(Status(StatusCode.OK))
+                self.span.set_status(Status(StatusCode.OK))
             else:
-                self._self_span.record_exception(error)
-                self._self_span.set_status(Status(StatusCode.ERROR, str(error)))
+                self.span.record_exception(error)
+                self.span.set_status(Status(StatusCode.ERROR, str(error)))
         except Exception:
             # Telemetry must not mask a provider or cancellation exception.
             logger.debug("Failed to annotate Fireworks stream span")
         finally:
-            self._self_span.end()
+            _end_span(self.span)
+
+
+class _StreamBase(ObjectProxy):
+    def __init__(
+        self, stream: Any, span: Span, state: Optional[_StreamState] = None,
+    ) -> None:
+        super().__init__(stream)
+        self._self_state = state if state is not None else _StreamState(span)
+        self._self_closed = False
+
+    def _record_chunk(self, chunk: Any) -> None:
+        self._self_state.record_chunk(chunk)
+
+    def _finish(self, error: Optional[BaseException] = None) -> None:
+        self._self_state.finish(error)
 
 
 class _Stream(_StreamBase):
