@@ -50,7 +50,7 @@ env:
   # local port so they never reach the real collector.
   FI_BASE_URL: http://127.0.0.1:9
   FI_GRPC_URL: http://127.0.0.1:9
-  # Every package's python range allows 3.11.
+  # Default interpreter; Harbor requires Python 3.12 and is selected below.
   PYTHON_VERSION: "3.11"
   POETRY_VERSION: "2.1.2"
   # Install exactly what poetry.lock resolved: Poetry 2.1-2.2 re-resolving on an older Python picks the wrong markers.
@@ -172,7 +172,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.package.name == 'harbor' && '3.12' || env.PYTHON_VERSION }}
 
       - name: Install the package and its dev dependencies (poetry)
         id: install_poetry
@@ -229,6 +229,13 @@ jobs:
           OWN_TESTS: ${{ matrix.package.own_tests }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
         run: |
+          # Harbor uses only loopback OTLP and deterministic local execution.
+          if [ "$PKG_NAME" = harbor ]; then
+            export HARBOR_TELEMETRY=false LITELLM_LOCAL_MODEL_COST_MAP=True
+            sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
+            sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
+            trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          fi
           # Run every set, then fail if any failed (no -x).
           venv_python="$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/python"
           status=0

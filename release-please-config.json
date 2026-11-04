@@ -1097,6 +1097,12 @@
         }
       ]
     },
+    "python/frameworks/harbor": {
+      "release-type": "python",
+      "component": "traceai-harbor",
+      "package-name": "traceai-harbor",
+      "extra-files": ["traceai_harbor/version.py"]
+    },
     "typescript/packages/traceai_huggingface_transformers": {
       "release-type": "node",
       "component": "npm-traceai-huggingface-transformers",

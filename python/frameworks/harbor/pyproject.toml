@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traceai-harbor"
+version = "0.1.0"
+description = "Future AGI transport and privacy adapter for Harbor's native ATIF OpenTelemetry converter"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "harbor==0.25.0",
+  "harbor-atif2otel==0.1.1",
+  "httpx>=0.28.1,<0.29",
+  "opentelemetry-proto>=1.42.1,<2",
+]
+
+[project.entry-points."harbor.plugins"]
+futureagi = "traceai_harbor:FutureAGIPlugin"
+
+[project.scripts]
+traceai-harbor = "traceai_harbor.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "build>=1.2,<2", "hatchling>=1.27,<2"]
+
+[project.urls]
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/harbor"
+
+[tool.hatch.build.targets.wheel]
+packages = ["traceai_harbor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
