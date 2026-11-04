@@ -282,7 +282,7 @@ async def test_cancellation_before_response_finishes_span(traced, stream):
         task = asyncio.create_task(client.chat.completions.create(**PARAMS, stream=stream))
         await asyncio.wait_for(started.wait(), timeout=5)
         task.cancel("synthetic cancellation")
-        with pytest.raises(asyncio.CancelledError, match="synthetic cancellation"):
+        with pytest.raises(asyncio.CancelledError):
             await task
     spans = traced.get_finished_spans()
     assert len(spans) == 1
@@ -306,7 +306,7 @@ async def test_cancellation_during_stream_closes_and_finishes(traced):
         task = asyncio.create_task(consume())
         await asyncio.wait_for(started.wait(), timeout=5)
         task.cancel("synthetic cancellation")
-        with pytest.raises(asyncio.CancelledError, match="synthetic cancellation"):
+        with pytest.raises(asyncio.CancelledError):
             await task
         assert_finished(traced, body, error=True)
         await stream.close()

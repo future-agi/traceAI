@@ -79,6 +79,24 @@ def test_read_error_is_not_replaced_by_close_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_request_cancellation_preserves_exception_identity(mock_fireworks_client, stream):
+    # Task cancellation messages are not propagated to awaiters on Python 3.10.
+    # Exercise the wrapper boundary directly to assert the stronger invariant.
+    error = asyncio.CancelledError("synthetic request cancellation")
+    wrapped, tracer = AsyncMock(side_effect=error), MagicMock()
+    span = tracer.start_span.return_value
+    wrapper = _AsyncCompletionsWrapper(tracer)
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await wrapper(wrapped, mock_fireworks_client, (), {
+            "model": "synthetic-model", "messages": [], "stream": stream,
+        })
+    assert caught.value is error
+    span.record_exception.assert_called_once_with(error)
+    span.end.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_stream_cancellation_is_not_replaced_by_close_error():
     error = asyncio.CancelledError("synthetic cancellation")
     native, span = MagicMock(), MagicMock()
