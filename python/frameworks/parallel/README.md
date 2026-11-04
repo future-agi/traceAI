@@ -234,7 +234,7 @@ def research(client: Parallel, tracer: FITracer, question: str) -> TaskRunResult
             span.set_attribute("parallel.run_id", run.run_id)
             span.set_attribute("parallel.processor", "base")
             result = client.task_run.result(run.run_id, api_timeout=600, timeout=610)
-        except Exception:
+        except BaseException:
             span.set_status(Status(StatusCode.ERROR, "Task request failed"))
             raise
         span.set_attribute("parallel.task.status", result.run.status)

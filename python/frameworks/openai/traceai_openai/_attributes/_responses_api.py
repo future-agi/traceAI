@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Tu
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import assert_never
 
-from fi_instrumentation import safe_json_dumps  
+from fi_instrumentation import safe_json_dumps
+from traceai_openai._privacy import safe_tool
 from fi_instrumentation.fi_types import (
     ImageAttributes,
     MessageAttributes,
@@ -237,7 +238,7 @@ class _ResponsesApiAttributes:
         obj: responses.tool.Tool,
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield (f"{prefix}{ToolAttributes.TOOL_JSON_SCHEMA}", obj.model_dump_json())
+        yield (f"{prefix}{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(safe_tool(obj.model_dump(mode="json"))))
 
     @classmethod
     @stop_on_exception

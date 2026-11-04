@@ -17,16 +17,19 @@ from typing import (
     Type,
 )
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from opentelemetry.trace import Status, StatusCode
+from traceai_openai._privacy import response_output
 from traceai_openai._utils import _as_output_attributes, _to_dict, _ValueAndType, _io_value_and_type
 
 if TYPE_CHECKING:
     from openai.types import Completion
     from openai.types.chat import ChatCompletion
     from openai.types.responses.response import Response
+    from openai.types.responses import ResponseStreamEvent
 
 __all__ = (
     "_CompletionAccumulator",
@@ -43,8 +46,21 @@ class _CanGetAttributesFromResponse(Protocol):
     ) -> Iterator[Tuple[str, AttributeValue]]: ...
 
 
+def _response_status(response: Any) -> Status:
+    status = (
+        response.get("status")
+        if isinstance(response, Mapping)
+        else getattr(response, "status", None)
+    )
+    if isinstance(status, str) and status in {"failed", "cancelled", "incomplete"}:
+        # The vendor's error message can contain credentials or request content.
+        return Status(StatusCode.ERROR, "Response did not complete")
+    return Status(StatusCode.OK)
+
+
 class _ResponsesAccumulator:
     __slots__ = (
+        "_config",
         "_is_null",
         "_values",
         "_cached_result",
@@ -58,35 +74,36 @@ class _ResponsesAccumulator:
         request_parameters: Mapping[str, Any],
         chat_completion_type: Type["Response"],
         response_attributes_extractor: Optional[_CanGetAttributesFromResponse] = None,
+        config: Optional[TraceConfig] = None,
     ) -> None:
+        self._config = config
         self._chat_completion_type = chat_completion_type
         self._request_parameters = request_parameters
         self._response_attributes_extractor = response_attributes_extractor
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
-        self._values: Optional["Response"] = None
+        self._values: Optional["ResponseStreamEvent"] = None
 
     def process_chunk(self, chunk: Any) -> None:
-        if getattr(chunk, "type", None) in (
-            "response.completed",
-            "response.incomplete",
-            "response.failed",
-        ):
+        if getattr(chunk, "type", None) in {
+            "response.completed", "response.failed", "response.incomplete", "error"
+        }:
             self._is_null = False
             self._cached_result = None
-            self._values = chunk.response
+            self._values = chunk
 
     def _result(self) -> Any:
         if self._is_null:
             return None
-        return self._values
+        if self._values:
+            return getattr(self._values, "response", None)
 
-    def get_status(self) -> Optional[trace_api.Status]:
-        if self._values is not None and self._values.status == "failed":
-            # Vendor error messages can contain private input. Status alone is
-            # sufficient here; do not copy error details into output or events.
-            return trace_api.Status(status_code=trace_api.StatusCode.ERROR)
-        return None
+    def get_status(self) -> Status:
+        if self._values is None:
+            return Status(StatusCode.ERROR, "Response stream ended before a terminal event")
+        if self._values.type != "response.completed":
+            return Status(StatusCode.ERROR, "Response stream did not complete")
+        return _response_status(self._result())
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -110,12 +127,10 @@ class _ResponsesAccumulator:
         if output_content:
             yield SpanAttributes.OUTPUT_VALUE, output_content
         else:
-            # Preserve non-text output, but never treat vendor error details as
-            # assistant output (output.value has a separate privacy policy).
-            output = {
-                key: value for key, value in _to_dict(result).items() if key != "error"
-            }
-            yield from _as_output_attributes(_io_value_and_type(output))
+            # Keep response-owned data, never echoed request fields.
+            yield from _as_output_attributes(
+                _io_value_and_type(response_output(result, self._config)),
+            )
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):

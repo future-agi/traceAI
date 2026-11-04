@@ -555,7 +555,8 @@ def test_responses_terminal_events(
         if streaming:
             assert a["output.value"] == ANSWER
         assert a["gen_ai.output.messages.0.message.content"] == ANSWER
-    assert spans[0].status.code == (2 if event_type == "response.failed" else 1)
+    # A terminal incomplete response is not a successful generation either.
+    assert spans[0].status.code == (1 if event_type == "response.completed" else 2)
     assert b"PRIVATE_VENDOR_ERROR" not in spans[0].SerializeToString()
 
 
