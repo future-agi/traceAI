@@ -97,6 +97,7 @@ jobs:
           echo "core: $core"
           python -m pip install $core -e python/frameworks/llama_index \
             ${{ matrix.packages }} \
+            llama-index-llms-azure-openai llama-index-llms-openai-like \
             'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
           python -m pip show fi-instrumentation-otel
       - name: Check the embedded Workflow class is under test
