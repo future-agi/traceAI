@@ -192,6 +192,46 @@ def _get_attributes_from_image(
         yield f"{ImageAttributes.IMAGE_URL}", url
 
 
+def _telemetry_tool(tool):
+    """Project tool definitions, never connection configuration, into telemetry.
+
+    MCP authorization/headers and server URLs (which can embed credentials) must
+    reach the provider unchanged but must not reach an exporter. Unknown built-in
+    tools are type-only until their configuration has a safe projection. Function
+    parameter schemas are application data, not connection headers.
+    """
+    tool = as_dict(tool)
+    kind = tool.get("type")
+    fields = {"type"}
+    if kind == "function":
+        fields.update(("name", "description", "parameters", "strict"))
+    elif kind == "mcp":
+        fields.update(
+            ("server_label", "server_description", "allowed_tools", "require_approval")
+        )
+    result = {key: value for key, value in tool.items() if key in fields}
+    if kind == "function" and "function" in tool:
+        result["function"] = {
+            key: value for key, value in as_dict(tool["function"]).items()
+            if key in ("name", "description", "parameters", "strict")
+        }
+    return result
+
+
+def _telemetry_parameters(parameters):
+    parameters = dict(parameters)
+    if parameters.get("tools") is not None:
+        tools = parameters["tools"]
+        # Do not consume a caller-owned iterator while preparing telemetry.
+        parameters["tools"] = (
+            [_telemetry_tool(tool) for tool in tools]
+            if isinstance(tools, (list, tuple)) else []
+        )
+    if isinstance(parameters.get("tool_choice"), Mapping):
+        parameters["tool_choice"] = _telemetry_tool(parameters["tool_choice"])
+    return parameters
+
+
 def _instrument_func_type_completion(
     span: trace_api.Span,
     kwargs: Dict[str, Any],
@@ -242,9 +282,9 @@ def _instrument_func_type_completion(
                     span, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
                 )
 
-    invocation_params = {
+    invocation_params = _telemetry_parameters({
         k: v for k, v in kwargs.items() if k not in ["model", "messages"]
-    }
+    })
     _set_span_attribute(
         span,
         SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
@@ -262,6 +302,26 @@ def _message_attributes(message, config=None, *, output=True):
         )):
             continue
         yield key, value
+
+
+def _instrument_func_type_text_completion(span, kwargs, config=None):
+    # Prompt is content, not a generation parameter: never leave an unmasked
+    # duplicate in request.parameters. Normalize strings/batches to messages.
+    request = {key: value for key, value in kwargs.items() if key != "prompt"}
+    prompt = kwargs.get("prompt")
+    prompts = (
+        prompt
+        if isinstance(prompt, list) and all(isinstance(p, str) for p in prompt)
+        else [prompt]
+    )
+    request["messages"] = [
+        {
+            "role": "user",
+            "content": value if isinstance(value, str) else safe_json_dumps(value),
+        }
+        for value in prompts if value is not None
+    ]
+    _instrument_func_type_completion(span, request, config)
 
 
 def _instrument_func_type_responses(span, kwargs, config=None):
@@ -400,6 +460,36 @@ def _instrument_func_type_image_generation(
         _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(prompt))
 
 
+def _finish_reasons(choices):
+    reasons = {}
+    for position, choice in enumerate(choices or []):
+        choice = as_dict(choice)
+        index = choice.get("index")
+        if index is None:
+            index = position
+        reason = choice.get("finish_reason")
+        if isinstance(index, int) and isinstance(reason, str) and reason:
+            reasons[index] = reason
+    return reasons
+
+
+def _set_finish_reasons(span, reasons):
+    if not reasons:
+        return
+    _set_span_attribute(
+        span, SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS,
+        [reasons[index] for index in sorted(reasons)],
+    )
+    # The standard array is in choice-index order. Indexed attributes also retain
+    # identity for sparse/interleaved choices, without inventing missing reasons.
+    for index, reason in reasons.items():
+        _set_span_attribute(
+            span,
+            f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.message.finish_reason",
+            reason,
+        )
+
+
 def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConfig] = None) -> None:
     # Embedding vectors and private message content must not reappear in the
     # independent raw response aggregate after core filters semantic attributes.
@@ -465,8 +555,21 @@ def _finalize_span(span: trace_api.Span, result: Any, config: Optional[TraceConf
                     )
                     if not hide_message_output:
                         _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
+    elif as_dict(result).get("object") == "text_completion":
+        choices = as_dict(result).get("choices") or []
+        for position, choice in enumerate(choices):
+            choice = as_dict(choice)
+            index = choice.get("index")
+            if index is None:
+                index = position
+            message = {"role": "assistant", "content": choice.get("text")}
+            if len(choices) == 1 and not hide_message_output:
+                _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, choice.get("text"))
+            for key, value in _message_attributes(message, config):
+                _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value)
     elif as_dict(result).get("object") == "response":
         _set_response_messages(span, response_messages(as_dict(result).get("output")), config)
+    _set_finish_reasons(span, _finish_reasons(as_dict(result).get("choices")))
     _set_result_metadata(span, result)
 
 
@@ -501,6 +604,8 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         functions_to_instrument = {
             "completion": self._completion_wrapper,
             "acompletion": self._acompletion_wrapper,
+            "text_completion": self._text_completion_wrapper,
+            "atext_completion": self._atext_completion_wrapper,
             "completion_with_retries": self._completion_with_retries_wrapper,
             # Bug report filed on GitHub for acompletion_with_retries: https://github.com/BerriAI/litellm/issues/4908
             # "acompletion_with_retries": self._acompletion_with_retries_wrapper,
@@ -562,6 +667,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             # Async endpoints and retry helpers may expose only *args/**kwargs.
             endpoint = {
                 "acompletion": "completion",
+                "atext_completion": "text_completion",
                 "completion_with_retries": "completion",
                 "acompletion_with_retries": "completion",
                 "aembedding": "embedding",
@@ -581,7 +687,9 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             request = dict(kwargs)
         # Capture generation inputs/settings, not arbitrary SDK control objects,
         # credentials, HTTP headers, callbacks, or provider-specific secrets.
-        return {key: value for key, value in request.items() if key in _REQUEST_FIELDS}
+        return _telemetry_parameters({
+            key: value for key, value in request.items() if key in _REQUEST_FIELDS
+        })
 
     def _call(self, name, annotate, args, kwargs):
         original = self.original_litellm_funcs[name]
@@ -677,6 +785,16 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "aimage_generation", _instrument_func_type_image_generation, args, kwargs
         )
 
+    def _text_completion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call(
+            "text_completion", _instrument_func_type_text_completion, args, kwargs
+        )
+
+    async def _atext_completion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._acall(
+            "atext_completion", _instrument_func_type_text_completion, args, kwargs
+        )
+
     def _responses_wrapper(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("responses", _instrument_func_type_responses, args, kwargs)
 
@@ -760,6 +878,7 @@ class _StreamState:
         self.config = config
         self.processed_chunks = []
         self.content_by_choice = {}
+        self.finish_reasons_by_choice = {}
         self.has_tool_context = False
         self.tools_by_choice = {}
         self.functions_by_choice = {}
@@ -775,9 +894,12 @@ class _StreamState:
             _set_result_metadata(self.span, response)
             return
         choices = chunk.get("choices") or []
+        self.finish_reasons_by_choice.update(_finish_reasons(choices))
         for position, choice in enumerate(choices):
             index = choice.get("index", position)
             delta = choice.get("delta") or {}
+            if isinstance(choice.get("text"), str):
+                delta = {"role": "assistant", "content": choice["text"]}
             self.has_tool_context |= _has_tool_context(delta)
             tools = self.tools_by_choice.setdefault(index, {})
             for tool_position, tool in enumerate(delta.get("tool_calls") or []):
@@ -832,6 +954,7 @@ class _StreamState:
                 for key, value in _message_attributes({"function_call": function}, self.config):
                     _set_span_attribute(self.span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value)
             _set_response_messages(self.span, self.responses.messages(), self.config)
+            _set_finish_reasons(self.span, self.finish_reasons_by_choice)
             if error is not None:
                 _record_error(self.span, error)
             elif self.responses.failed:

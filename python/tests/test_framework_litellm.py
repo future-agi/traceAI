@@ -133,7 +133,10 @@ class TestLiteLLMInstrumentor:
         instrumentor = LiteLLMInstrumentor()
         instrumentor.original_litellm_funcs.clear()
         expected = set(mock_litellm) - {"acompletion_with_retries"}
-        expected.update(name for name in ("responses", "aresponses") if hasattr(litellm, name))
+        expected.update(
+            name for name in ("responses", "aresponses", "text_completion", "atext_completion")
+            if hasattr(litellm, name)
+        )
         originals = {name: getattr(litellm, name) for name in expected}
         try:
             instrumentor._instrument(tracer_provider=tracer_provider, config=config)

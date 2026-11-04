@@ -11,6 +11,14 @@ This integration provides support for using OpenTelemetry with the Litellm frame
 pip install traceAI-litellm
 ```
 
+For `responses` / `aresponses` on Python 3.10+, install the Responses runtime extra:
+
+```bash
+pip install 'traceAI-litellm[responses]'
+```
+
+Current LiteLLM versions import `mcp` on the Responses path, even without MCP tools. The extra supplies that upstream runtime dependency; the base installation remains compatible with older LiteLLM versions without Responses support.
+
 
 ### Set environment variables
 
@@ -38,7 +46,9 @@ trace_provider = register(
 ```
 
 ### Configure Litellm Instrumentation
-Instrument the LiteLLM client to trace `completion` / `acompletion`, `completion_with_retries`, `embedding` / `aembedding`, and `image_generation` / `aimage_generation`. On LiteLLM versions that expose them, `responses` / `aresponses` are also traced. Completion and Responses streams are traced as you consume them; other SDK endpoints are not covered.
+Instrument the LiteLLM client to trace `completion` / `acompletion`, `text_completion` / `atext_completion`, `completion_with_retries`, `embedding` / `aembedding`, and `image_generation` / `aimage_generation`. On LiteLLM versions that expose them, `responses` / `aresponses` are also traced (install the Responses extra above). Chat, text completion and Responses streams are traced as you consume them; other SDK endpoints are not covered.
+
+Reported chat/text completion finish reasons are exported in `gen_ai.response.finish_reasons`, ordered by choice index, and on each indexed output message. No finish reason is invented for an unread or partially consumed stream. Tool telemetry excludes MCP authorization, headers and server URLs; provider requests are unchanged. Function schemas are preserved; other built-in tools currently export only their type.
 
 Exhaust streams or explicitly call `close()` / `await aclose()` to finish telemetry and release provider resources promptly. Discarding a stream finalizes its span on garbage collection, but does not guarantee immediate transport cleanup.
 

@@ -54,7 +54,9 @@ jobs:
               'fi-instrumentation-otel==1.2.2' 'openai==1.40.0' 'httpx==0.27.2' \
               pytest pytest-asyncio
           else
-            .venv/bin/pip install -e python/frameworks/litellm \
+            # Use the same Responses runtime documented for users, not an
+            # undeclared runner-only MCP dependency.
+            .venv/bin/pip install -e 'python/frameworks/litellm[responses]' \
               --upgrade litellm pytest pytest-asyncio
           fi
           .venv/bin/pip check

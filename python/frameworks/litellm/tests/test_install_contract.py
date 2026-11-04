@@ -31,6 +31,20 @@ def test_retry_helper_works_with_runtime_dependencies():
     assert response.choices[0].message.content == "hello"
 
 
+def test_responses_extra_declares_the_upstream_runtime_dependency():
+    dependencies = [Requirement(value) for value in requires("traceAI-litellm")]
+    mcp = next(dep for dep in dependencies if dep.name == "mcp")
+    assert mcp.marker.evaluate({"extra": "responses"})
+    assert not mcp.marker.evaluate({"extra": ""})
+    assert Version("2.3.0") in mcp.specifier
+    if hasattr(litellm, "responses"):
+        # Latest CI installs the documented extra in a clean environment. This
+        # assertion and the real HTTP Responses tests prevent runner-only fixes.
+        assert Version(version("mcp")) in mcp.specifier
+    readme = (Path(__file__).parents[1] / "README.md").read_text()
+    assert "pip install 'traceAI-litellm[responses]'" in readme
+
+
 def test_readme_separates_provider_and_telemetry_credentials():
     readme = (Path(__file__).parents[1] / "README.md").read_text()
     setup = readme.split("## Quickstart")[0]
