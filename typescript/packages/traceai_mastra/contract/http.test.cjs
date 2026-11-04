@@ -161,6 +161,39 @@ test('real SSE cancellation preserves every native outcome on the wire', {
     assert.equal(wireSpan.attrs['mastra.span.stop_reason'], 'caller_cancelled');
   }
 });
+test('real SSE execution timeout retains native failure and stop reason', {
+  skip: !currentRuntime && 'Mastra observability 1.0 does not emit timeout outcomes', timeout: 10000,
+}, async () => {
+  setup();
+  mode = 'abort'; // Send the first delta, then leave the provider stream open.
+  const watchdogController = new AbortController();
+  const watchdog = setTimeout(() => watchdogController.abort(), 5000);
+  let sawText = false;
+  try {
+    const result = await agent.stream('SYNTHETIC_PROMPT', {
+      modelSettings: { timeout: { totalMs: 500 }, maxRetries: 0 },
+      abortSignal: watchdogController.signal,
+    });
+    for await (const part of result.fullStream) if (part.type === 'text-delta') sawText = true;
+  } catch (error) {
+    // SDK versions may throw or finish with an error chunk. The native outcome
+    // below must prove it was the real execution budget, not the watchdog.
+    assert.match(String(error), /timeout|timed out/i);
+  } finally { clearTimeout(watchdog); }
+  assert.equal(watchdogController.signal.aborted, false, 'execution budget must expire before caller cancellation');
+  assert.equal(sawText, true, 'timeout must interrupt a started provider stream');
+  assert.equal(requests.length, 1);
+  await flush();
+  const timedOut = ended.filter(span => span.stopReason === 'timeout');
+  assert.ok(timedOut.length > 0, 'runtime must report the actual execution timeout');
+  for (const span of ended.filter(span => span.outcome && span.outcome !== 'success')) {
+    const wireSpan = spans.find(item => item.spanId === Buffer.from(span.id, 'hex').toString('base64'));
+    assert.ok(wireSpan, `missing timed-out span ${span.name}`);
+    assert.notEqual(wireSpan.status?.code, 1);
+    assert.equal(wireSpan.attrs['mastra.span.outcome'], span.outcome);
+    assert.equal(wireSpan.attrs['mastra.span.stop_reason'], span.stopReason);
+  }
+});
 test('real provider failure is not exported as success', {
   skip: !currentRuntime && 'Mastra observability 1.0 omits the real Agent provider-error outcome',
 }, async () => {
