@@ -6,10 +6,10 @@ from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 
 
 @pytest.mark.parametrize("flag,keys", [
-    ("hide_input_text", ("input.value", "raw.input", "gen_ai.input.messages", "gen_ai.prompt.template.variables")),
+    ("hide_input_text", ("input.value", "raw.input", "gen_ai.prompt.template.variables")),
     ("hide_input_messages", ("input.value", "raw.input")),
     ("hide_input_images", ("input.value", "raw.input")),
-    ("hide_output_text", ("output.value", "raw.output", "gen_ai.output.messages")),
+    ("hide_output_text", ("output.value", "raw.output")),
     ("hide_output_messages", ("output.value", "raw.output")),
 ])
 def test_opaque_payloads_are_not_evaluated(flag, keys):

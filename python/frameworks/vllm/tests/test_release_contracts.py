@@ -151,15 +151,27 @@ def test_cancel_preserves_exception_and_finishes_once(tracing, hide, phase):
 
         async with openai.AsyncOpenAI(**OPTIONS, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))) as client:
             stream = None
+            cancellation_args = []
+
+            async def observe_cancellation(operation):
+                try:
+                    return await operation
+                except asyncio.CancelledError as error:
+                    cancellation_args.append(error.args)
+                    raise
+
             if phase == "stream":
                 stream = await client.chat.completions.create(**PARAMS, stream=True)
-                task = asyncio.create_task(stream.__anext__())
+                task = asyncio.create_task(observe_cancellation(stream.__anext__()))
             else:
-                task = asyncio.create_task(client.chat.completions.create(**PARAMS))
+                task = asyncio.create_task(observe_cancellation(client.chat.completions.create(**PARAMS)))
             await asyncio.wait_for(entered.wait(), 3)
             task.cancel(SECRET)
-            with pytest.raises(asyncio.CancelledError, match=SECRET):
+            # Python 3.10 can recreate CancelledError without its message when
+            # awaiting a Task. Assert the original args inside the task instead.
+            with pytest.raises(asyncio.CancelledError):
                 await task
+            assert cancellation_args == [(SECRET,)]
             if stream is not None:
                 await stream.close()
 
