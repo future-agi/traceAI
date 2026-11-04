@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import inspect
+import sys
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import Context as ExecutionContext
@@ -729,10 +730,22 @@ async def _trace_async_generator(
     manager: AbstractContextManager[_DecoratorContext],
 ) -> AsyncGenerator[Any, Any]:
     with _generator_context(manager) as (_, execution_context):
-        operation: Callable[[], Awaitable[Any]] = generator.__anext__
+        # This wrapper is already registered with the event loop. It must be the
+        # sole finalization owner: registering the underlying generator too lets
+        # shutdown_asyncgens() close it concurrently, outside execution_context.
+        # Native generators capture their hooks when the first __anext__ object
+        # is created, before any application code runs. Disable the thread-local
+        # hooks ONLY for that synchronous call; restore them before any await so
+        # nested/unrelated generators retain the loop's normal finalization.
+        hooks = sys.get_asyncgen_hooks()
+        try:
+            sys.set_asyncgen_hooks(firstiter=None, finalizer=None)
+            pending = generator.__anext__()
+        finally:
+            sys.set_asyncgen_hooks(*hooks)
         while True:
             try:
-                output = await _ContextualAwaitable(operation(), execution_context)
+                output = await _ContextualAwaitable(pending, execution_context)
             except StopAsyncIteration:
                 return
             try:
@@ -741,9 +754,9 @@ async def _trace_async_generator(
                 await _ContextualAwaitable(generator.aclose(), execution_context)
                 raise
             except BaseException as exc:
-                operation = partial(generator.athrow, exc)
+                pending = generator.athrow(exc)
             else:
-                operation = partial(generator.asend, sent)
+                pending = generator.asend(sent)
 
 
 def _infer_span_name(*, instance: Any, callable: Callable[..., Any]) -> str:

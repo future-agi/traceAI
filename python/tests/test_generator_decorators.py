@@ -377,9 +377,8 @@ def test_async_loop_shutdown_finalizes_partial_stream(tracing):
         try:
             yield 1
         finally:
-            # The loop may close the underlying generator before the wrapper.
-            # Deterministic cleanup under the span requires explicit aclose().
-            cleanup.append(True)
+            await asyncio.sleep(0.001)
+            cleanup.append(get_current_span().is_recording())
 
     async def consume():
         iterator = stream()
