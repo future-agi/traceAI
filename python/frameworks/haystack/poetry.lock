@@ -1565,6 +1565,7 @@ files = [
     {file = "typing_extensions-4.14.1-py3-none-any.whl", hash = "sha256:d1e1e3b58374dc93031d6eda2420a48ea44a36c2b4766a4fdeb3710755731d76"},
     {file = "typing_extensions-4.14.1.tar.gz", hash = "sha256:38b39f4aeeab64884ce9f74c94263ef78f3c22467c8724005483154c26648d36"},
 ]
+markers = {dev = "python_version < \"3.13\""}
 
 [[package]]
 name = "typing-inspection"
@@ -1710,5 +1711,5 @@ type = ["pytest-mypy"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.10, <3.13"
-content-hash = "abb3779fcb44f154906464e67e9bbfce20c3414b0513d0faa99fc773f8041618"
+python-versions = ">=3.10, <3.14"
+content-hash = "8754c8cc7198113b601329739b4a36466f1ee88a0482aa0b3beec3602804980a"
