@@ -10,6 +10,8 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -18,7 +20,8 @@ import java.util.function.Supplier;
 /**
  * Instrumentation wrapper for Azure AI Search (formerly Azure Cognitive Search) operations.
  * Wraps the synchronous Azure SearchClient from azure-search-documents 11.6.2 through 11.8.1.
- * For SDK 12.0.3 use the separate traceai-java-azure-search-v12 artifact.
+ * For SDK 12.x use the separate traceai-java-azure-search-v12 artifact
+ * (compiled against 12.0.3, compatibility tested with 12.0.3 and 12.1.1).
  * SearchAsyncClient is not supported by this wrapper.
  *
  * <p>Searches stay lazy. Each requested page produces a RETRIEVER span, parented to the
@@ -149,11 +152,11 @@ public class TracedSearchClient {
             span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "upload");
 
-            int documentCount = countDocuments(documents);
-            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
+            Collection<T> batch = documentBatch(documents);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) batch.size());
 
             // Execute upload
-            IndexDocumentsResult result = searchClient.uploadDocuments(documents);
+            IndexDocumentsResult result = searchClient.uploadDocuments(batch);
 
             captureIndexResult(span, result);
 
@@ -183,11 +186,11 @@ public class TracedSearchClient {
             span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "merge_or_upload");
 
-            int documentCount = countDocuments(documents);
-            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
+            Collection<T> batch = documentBatch(documents);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) batch.size());
 
             // Execute merge or upload
-            IndexDocumentsResult result = searchClient.mergeOrUploadDocuments(documents);
+            IndexDocumentsResult result = searchClient.mergeOrUploadDocuments(batch);
 
             captureIndexResult(span, result);
 
@@ -217,11 +220,11 @@ public class TracedSearchClient {
             span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "delete");
 
-            int documentCount = countDocuments(documents);
-            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
+            Collection<T> batch = documentBatch(documents);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) batch.size());
 
             // Execute delete
-            IndexDocumentsResult result = searchClient.deleteDocuments(documents);
+            IndexDocumentsResult result = searchClient.deleteDocuments(batch);
 
             captureIndexResult(span, result);
 
@@ -251,7 +254,9 @@ public class TracedSearchClient {
             span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
             span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "get_document");
-            span.setAttribute("azure_search.document_key", key);
+            if (!tracer.getConfig().isHideInputs()) {
+                span.setAttribute("azure_search.document_key", key);
+            }
 
             // Execute get document
             T document = searchClient.getDocument(key, modelClass);
@@ -419,13 +424,17 @@ public class TracedSearchClient {
     }
 
     /**
-     * Counts documents in an iterable.
+     * Materializes single-pass sources once so counting cannot consume the SDK's input.
+     * Collections already expose a count without iteration and need no additional copy.
      */
-    private <T> int countDocuments(Iterable<T> documents) {
-        int count = 0;
-        for (T ignored : documents) {
-            count++;
+    private <T> Collection<T> documentBatch(Iterable<T> documents) {
+        if (documents instanceof Collection<T> collection) {
+            return collection;
         }
-        return count;
+        List<T> batch = new ArrayList<>();
+        for (T document : documents) {
+            batch.add(document);
+        }
+        return batch;
     }
 }

@@ -12,7 +12,8 @@ import java.util.Map;
 
 /**
  * Instrumentation wrapper for Azure AI Search (formerly Azure Cognitive Search) operations.
- * Wraps synchronous retrieval with azure-search-documents 12.0.3.
+ * Wraps synchronous retrieval with azure-search-documents 12.x.
+ * Compiled against 12.0.3; compatibility tested with 12.0.3 and 12.1.1.
  * Use traceai-java-azure-search for SDK 11.x. SearchAsyncClient is not supported.
  * Document operations are available on the unwrapped client, without retrieval enrichment.
  *
