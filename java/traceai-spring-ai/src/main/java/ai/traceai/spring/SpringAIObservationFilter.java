@@ -12,7 +12,10 @@ import org.springframework.ai.tool.observation.ToolCallingObservationContext;
  * Enriches Spring AI's native Micrometer observations for Future AGI. It never starts a
  * span, installs a tracing handler, or creates an OpenTelemetry provider/exporter.
  * Register this filter with the same ObservationRegistry used by Spring AI and the
- * application's Micrometer OpenTelemetry bridge. Do not also wrap those models in
+ * application's Micrometer OpenTelemetry bridge. Pair it with
+ * {@link SpringAITracingObservationHandler} in place of the generic tracing handler to preserve
+ * error privacy and completion-aware status; a filter runs too late to protect exception details.
+ * Do not also wrap those models in
  * {@link TracedChatModel} or {@link TracedEmbeddingModel}.
  *
  * <p>Content is off by default. The two opt-in flags control only content added by this

@@ -19,6 +19,7 @@
     <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><scope>test</scope></dependency>
     <dependency><groupId>com.futureagi</groupId><artifactId>traceai-spring-ai</artifactId><version>${traceai.version}</version></dependency>
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-openai</artifactId></dependency>
+    <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-client-chat</artifactId><scope>test</scope></dependency>
     <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-tracing-bridge-otel</artifactId></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><scope>test</scope></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-otlp</artifactId></dependency>
@@ -30,7 +31,7 @@
   <build><plugins>
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.12.1</version></plugin>
     <plugin><groupId>org.codehaus.mojo</groupId><artifactId>build-helper-maven-plugin</artifactId><version>3.6.0</version><executions><execution><id>real-framework-factory</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals><configuration><sources><source>${factory.source}</source></sources></configuration></execution></executions></plugin>
-    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.3</version><configuration><argLine>-Djava.net.preferIPv4Stack=true</argLine></configuration></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.3</version><configuration><argLine>-Djava.net.preferIPv4Stack=true</argLine><environmentVariables><FI_HIDE_ERROR_DETAILS>true</FI_HIDE_ERROR_DETAILS></environmentVariables></configuration></plugin>
   </plugins></build>
   <profiles><profile><id>spring2</id><properties><spring-ai.version>2.0.2</spring-ai.version><spring-boot.version>4.1.2</spring-boot.version><factory.source>src/spring2/java</factory.source></properties><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId><scope>test</scope></dependency></dependencies></profile></profiles>
 </project>
