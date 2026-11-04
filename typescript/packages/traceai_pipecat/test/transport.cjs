@@ -6,8 +6,9 @@ function createClient(sdk, callbacks = {}, options = {}) {
     initialize(options, onMessage) {
       this.callbacks = options.callbacks;
       this.onMessage = onMessage;
-      this._state = 'disconnected';
       this.sent = [];
+      // Daily/WebSocket transports notify through their state setter on reset.
+      this.state = 'disconnected';
     }
     get state() { return this._state; }
     set state(value) {

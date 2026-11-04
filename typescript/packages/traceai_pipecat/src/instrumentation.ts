@@ -52,6 +52,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
   private manualModules?: Set<unknown>;
   // Iterable so unpatch/disable can finish spans and restore owned callbacks.
   private pendingConnections = new Map<object, PendingConnections>();
+  private initializingTransports = new WeakSet<object>();
 
   constructor(config: PipecatInstrumentationConfig = {}) {
     super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
@@ -123,6 +124,20 @@ export class PipecatInstrumentation extends InstrumentationBase {
           return instrumentation.followDelegation(original, this, args, method);
         });
         methods.push(method);
+      }
+      // Legacy disconnect() reinitializes the transport after its close callbacks.
+      // initialize()'s default state is not another close boundary: cancellation
+      // still belongs to that disconnect's captured attempts, not a callback retry.
+      if (typeof prototype._initialize === "function") {
+        const instrumentation = this;
+        this._wrap(prototype, "_initialize", (original: ClientMethod) => function (this: object, ...args: unknown[]) {
+          const initializing = instrumentation.initializingTransports;
+          const nested = initializing.has(this);
+          initializing.add(this);
+          try { return original.apply(this, args); }
+          finally { if (!nested) initializing.delete(this); }
+        });
+        methods.push("_initialize");
       }
       if (methods.length) {
         (this.patches ??= new Map()).set(prototype, methods);
@@ -205,31 +220,48 @@ export class PipecatInstrumentation extends InstrumentationBase {
         const original = callbacks[name];
         if (typeof original !== "function") continue;
         const wrapped: ClientMethod = function (this: unknown, ...args: unknown[]) {
-          if (name === "onBotReady") {
-            // Both SDKs resolve this exact function before dispatching bot-ready.
-            // A broadcast must not mark older, replaced handshakes successful.
-            // Finish now so a callback can disconnect and dispose its provider
-            // without racing promise continuations or a cleanup timer.
-            const resolver = PipecatInstrumentation.connectionResolver(client);
-            for (const [finish, scope] of pending.attempts) {
-              if (scope.resolver && scope.resolver === resolver) finish(SpanStatusCode.OK);
+          // Exclude only the SDK's synchronous initialize dispatch. User callbacks
+          // can cause genuine nested drops, and must not inherit this exclusion.
+          const initializing = instrumentation.initializingTransports.delete(client);
+          let disconnected: Map<FinishSpan, ConnectionScope> | undefined;
+          try {
+            if (name === "onBotReady") {
+              // Both SDKs resolve this exact function before dispatching bot-ready.
+              // A broadcast must not mark older, replaced handshakes successful.
+              // Finish now so a callback can disconnect and dispose its provider
+              // without racing promise continuations or a cleanup timer.
+              const resolver = PipecatInstrumentation.connectionResolver(client);
+              for (const [finish, scope] of pending.attempts) {
+                if (scope.resolver && scope.resolver === resolver) finish(SpanStatusCode.OK);
+              }
+            } else if (name === "onTransportStateChanged" && args[0] === "disconnected" && !initializing) {
+              // The state event precedes onDisconnected. Capture even an EMPTY
+              // set before application callbacks can install a replacement resolver.
+              disconnected = new Map(pending.attempts);
+              pending.connected = false;
+              pending.disconnections.push(disconnected);
+              PipecatInstrumentation.cancelConnections(disconnected);
+            } else if (name === "onDisconnected") {
+              // Nested synchronous closes notify in stack order. Transports that
+              // notify without a state event still cancel the current attempts.
+              const closed = pending.disconnections.pop();
+              if (!closed) pending.connected = false;
+              PipecatInstrumentation.cancelConnections(closed ?? new Map(pending.attempts));
+              instrumentation.releaseConnections(client, pending);
             }
-          } else if (name === "onTransportStateChanged" && args[0] === "disconnected") {
-            // The state event precedes onDisconnected. Capture even an EMPTY
-            // set before application callbacks can install a replacement resolver.
-            const disconnected = new Map(pending.attempts);
-            pending.connected = false;
-            pending.disconnections.push(disconnected);
-            PipecatInstrumentation.cancelConnections(disconnected);
-          } else if (name === "onDisconnected") {
-            // Nested synchronous closes notify in stack order. Transports that
-            // notify without a state event still cancel the current attempts.
-            const disconnected = pending.disconnections.pop();
-            if (!disconnected) pending.connected = false;
-            PipecatInstrumentation.cancelConnections(disconnected ?? new Map(pending.attempts));
-            instrumentation.releaseConnections(client, pending);
+            return original.apply(this, args);
+          } catch (error) {
+            if (disconnected) {
+              // A throwing callback/listener aborts transport dispatch before
+              // onDisconnected. Retire only this boundary, preserving live retries.
+              const index = pending.disconnections.indexOf(disconnected);
+              if (index !== -1) pending.disconnections.splice(index, 1);
+              instrumentation.releaseConnections(client, pending);
+            }
+            throw error;
+          } finally {
+            if (initializing) instrumentation.initializingTransports.add(client);
           }
-          return original.apply(this, args);
         };
         callbacks[name] = wrapped;
         restore.push(() => { if (callbacks[name] === wrapped) callbacks[name] = original; });

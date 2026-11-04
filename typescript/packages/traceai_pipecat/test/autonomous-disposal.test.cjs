@@ -36,7 +36,7 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
         const { client, transport } = createClient(sdk, {
           onDisconnected() { if (location === 'onDisconnected') disposed = provider[disposal](); },
           onTransportStateChanged(state) {
-            if (location === 'onTransportStateChanged' && state === 'disconnected') disposed = provider[disposal]();
+            if (location === 'onTransportStateChanged' && state === 'disconnected' && dropped) disposed = provider[disposal]();
           },
           onBotReady() {
             if (location === 'onBotReady' && !dropped) {
