@@ -29,7 +29,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">3.10, <3.14"
 fi-instrumentation-otel = ">=0.1.11"
-mcp = ">=1.8.1"
+mcp = ">=1.30.0"
 
 
 [tool.poetry.urls]
