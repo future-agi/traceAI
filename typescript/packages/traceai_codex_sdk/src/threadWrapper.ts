@@ -16,6 +16,7 @@ import { ContentPolicy, TurnTracer, clockMs } from "./spans";
 import { InputLike, ThreadEventLike, ThreadLike, TurnOptionsLike } from "./types";
 
 const PATCHED = Symbol.for("@traceai/codex-sdk/patched");
+const PATCH_RECORD = Symbol.for("@traceai/codex-sdk/patch-record");
 const LOG = "@traceai/codex-sdk";
 
 export interface TurnTracingContext {
@@ -33,8 +34,7 @@ interface PatchRecord {
 }
 
 export function isPatched(target: unknown): boolean {
-  // Also recognize the boolean marker used by older copies of this package.
-  return !!target && !!(target as Record<symbol, unknown>)[PATCHED];
+  return !!target && (target as Record<symbol, unknown>)[PATCHED] === true;
 }
 
 /** The undo closure retains neither the target nor its possibly bound original method. */
@@ -42,7 +42,7 @@ function weakUndo(ref: WeakRef<ThreadLike>, owner: symbol): () => void {
   return () => {
     const target = ref.deref();
     if (!target) return;
-    const record = Object.getOwnPropertyDescriptor(target, PATCHED)?.value as PatchRecord | undefined;
+    const record = Object.getOwnPropertyDescriptor(target, PATCH_RECORD)?.value as PatchRecord | undefined;
     if (record?.owner !== owner) return;
     try {
       // Do not clobber a method that the application replaced after our patch.
@@ -51,6 +51,7 @@ function weakUndo(ref: WeakRef<ThreadLike>, owner: symbol): () => void {
         else delete (target as Record<string, unknown>)[record.method];
       }
       delete (target as Record<symbol, unknown>)[PATCHED];
+      delete (target as Record<symbol, unknown>)[PATCH_RECORD];
     } catch (error) {
       diag.debug(`${LOG}: unpatch failed: ${error}`);
     }
@@ -100,7 +101,12 @@ export function patchThread(target: ThreadLike, getContext: GetContext): (() => 
     return undefined;
   }
 
-  Object.defineProperty(target, PATCHED, { value: record, configurable: true });
+  // Keep the public marker boolean so older installed copies also recognize an
+  // active patch. Store ownership separately, only on the weakly tracked target.
+  Object.defineProperties(target, {
+    [PATCHED]: { value: true, configurable: true },
+    [PATCH_RECORD]: { value: record, configurable: true },
+  });
   return weakUndo(new WeakRef(target), owner);
 }
 

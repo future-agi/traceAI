@@ -87,6 +87,21 @@ it("retains active-owner duplicate protection and does not let a non-owner unpat
   }
 });
 
+it("keeps the boolean marker recognized by older installed instrumentation copies", () => {
+  const mod = fakeModule();
+  const thread = new mod.Codex([]).startThread();
+  const instrumentation = new CodexSDKInstrumentation();
+  instrumentation.wrapThread(thread);
+  try {
+    // This is the exact legacy duplicate-patch predicate, not our helper.
+    const marker = (thread as unknown as Record<symbol, unknown>)[Symbol.for("@traceai/codex-sdk/patched")];
+    expect(marker === true).toBe(true);
+  } finally {
+    instrumentation.unpatch();
+  }
+  expect(Object.getOwnPropertySymbols(thread)).toEqual([]);
+});
+
 it("restores the original own property descriptor rather than just its value", () => {
   const mod = fakeModule();
   const thread = new mod.Codex([]).startThread();
