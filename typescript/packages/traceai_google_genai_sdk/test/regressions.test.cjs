@@ -306,9 +306,15 @@ test("automatic-tool usage includes every hop, not only the last response", asyn
                   promptTokenCount: 60,
                   candidatesTokenCount: 40,
                   totalTokenCount: 100,
+                  promptTokensDetails: [{ modality: "AUDIO", tokenCount: 6 }],
+                  candidatesTokensDetails: [{ modality: "AUDIO", tokenCount: 4 }, { modality: "IMAGE", tokenCount: 1 }],
                 },
               }
-            : answer("sunny");
+            : answer("sunny", {
+                promptTokenCount: 4, candidatesTokenCount: 2, totalTokenCount: 6,
+                promptTokensDetails: [{ modality: "AUDIO", tokenCount: 2 }],
+                candidatesTokensDetails: [{ modality: "AUDIO", tokenCount: 1 }, { modality: "IMAGE", tokenCount: 1 }],
+              });
         if (streaming)
           sse(res, [
             { usageMetadata: { ...body.usageMetadata, totalTokenCount: 1 } },
@@ -352,6 +358,9 @@ test("automatic-tool usage includes every hop, not only the last response", asyn
     assert.equal(attrs()["gen_ai.usage.total_tokens"], 106);
     assert.equal(attrs()["gen_ai.usage.input_tokens"], 64);
     assert.equal(attrs()["gen_ai.usage.output_tokens"], 42);
+    assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 8);
+    assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 5);
+    assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 2);
     assert.equal(Number((await exported())["gen_ai.usage.total_tokens"]), 106);
   }
 });
@@ -805,3 +814,69 @@ test("untraced nested calls never contribute usage to an active automatic-tool c
     assert.equal(ai.models.generateContentInternal, original);
   }
 });
+
+// Exercise the real SDK response classes, including cumulative SSE snapshots,
+// at both supported checkpoints. Content hiding must not erase cost metadata.
+const modalityUsage = {
+  promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 23,
+  thoughtsTokenCount: 5, cachedContentTokenCount: 2,
+  promptTokensDetails: [{ modality: "TEXT", tokenCount: 5 }, { modality: "AUDIO", tokenCount: 6 }],
+  candidatesTokensDetails: [{ modality: "TEXT", tokenCount: 2 }, { modality: "AUDIO", tokenCount: 4 }, { modality: "IMAGE", tokenCount: 1 }],
+  cacheTokensDetails: [{ modality: "AUDIO", tokenCount: 2 }],
+};
+for (const streaming of [false, true]) {
+  test(`generation modality cost inputs survive ${streaming ? "cumulative SSE" : "generation"} and hiding`, async () => {
+    for (const hidden of [false, true]) {
+      reset();
+      const ai = client();
+      const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden } });
+      const body = answer("PRIVATE_OUTPUT", modalityUsage);
+      handler = (_, res) => streaming ? sse(res, [
+        { usageMetadata: { promptTokenCount: 1, promptTokensDetails: [{ modality: "AUDIO", tokenCount: 1 }] } },
+        body, { usageMetadata: modalityUsage },
+      ]) : json(res, body);
+      try {
+        let response = await ai.models[streaming ? "generateContentStream" : "generateContent"]({ model: "gemini-test", contents: "PRIVATE_INPUT" });
+        if (streaming) for await (const chunk of response) response = chunk;
+        assert.deepEqual(response.usageMetadata.promptTokensDetails, modalityUsage.promptTokensDetails);
+        assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 6);
+        assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 4);
+        assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 1);
+        assert.equal(attrs()["gen_ai.usage.cache_read_tokens.audio"], 2);
+        assert.equal(attrs()["gen_ai.usage.input_tokens"], 11);
+        assert.equal(attrs()["gen_ai.usage.total_tokens"], 23);
+        const data = await exported();
+        assert.equal(Number(data["gen_ai.usage.input_tokens.audio"]), 6);
+        assert.equal(Number(data["gen_ai.usage.output_tokens.image"]), 1);
+        if (hidden) assert.doesNotMatch(JSON.stringify(data), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    }
+  });
+  test(`Interactions modality cost inputs survive ${streaming ? "cumulative SSE" : "generation"}`, async () => {
+    reset();
+    const ai = client();
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true } });
+    const usage = {
+      total_input_tokens: 11, total_output_tokens: 7, total_tokens: 23,
+      input_tokens_by_modality: [{ modality: "audio", tokens: 2 }, { modality: "AUDIO", tokens: 4 }, { modality: "text", tokens: 5 }],
+      output_tokens_by_modality: [{ modality: "audio", tokens: 4 }, { modality: "image", tokens: 1 }],
+    };
+    const body = { id: "i-modality", status: "completed", usage };
+    const { eventType } = require("./interaction-fixtures.cjs");
+    const events = [
+      { event_type: eventType("interaction.start"), interaction: { id: "i-modality", status: "in_progress", usage } },
+      { event_type: eventType("interaction.complete"), interaction: body },
+    ];
+    handler = (_, res) => streaming ? sse(res, events) : json(res, body);
+    try {
+      const response = await ai.interactions.create({ model: "gemini-test", input: "PRIVATE_INPUT", stream: streaming, automatic_continuation: false });
+      if (streaming) { const received = []; for await (const event of response) received.push(event); assert.deepEqual(received, events); }
+      else assert.deepEqual(response.usage, usage);
+      assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 6);
+      assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 4);
+      assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 1);
+      assert.equal(attrs()["gen_ai.usage.total_tokens"], 23);
+      assert.equal(Number((await exported())["gen_ai.usage.output_tokens.audio"]), 4);
+    } finally { h.dispose(); await provider.forceFlush(); }
+  });
+}

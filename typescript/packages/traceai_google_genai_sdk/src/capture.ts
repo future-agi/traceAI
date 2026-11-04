@@ -237,6 +237,26 @@ export class Capture {
         .find((v) => typeof v === "number" && Number.isFinite(v));
       if (typeof count === "number") result.set(key, count);
     }
+    // These are numeric cost inputs, not media content. Keep them even when all
+    // content is hidden. Fixed modality names avoid provider-controlled keys.
+    for (const [prefix, details] of [
+      [S.LLM_TOKEN_COUNT_PROMPT, usage.promptTokensDetails ?? usage.input_tokens_by_modality],
+      [S.LLM_TOKEN_COUNT_COMPLETION, usage.candidatesTokensDetails ?? usage.output_tokens_by_modality],
+      [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, usage.cacheTokensDetails ?? usage.cached_tokens_by_modality],
+    ] as const) {
+      for (const value of list(details)) {
+        const detail = record(value);
+        const modality = typeof detail.modality === "string" ? detail.modality.toLowerCase() : "";
+        const count = detail.tokenCount ?? detail.tokens;
+        if (
+          ["text", "audio", "image", "video", "document"].includes(modality) &&
+          typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) {
+          const key = `${prefix}.${modality}`;
+          result.set(key, (result.get(key) ?? 0) + count);
+        }
+      }
+    }
     return result;
   }
   response(value: unknown): void {
