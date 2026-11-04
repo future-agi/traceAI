@@ -3,8 +3,6 @@ package ai.traceai.anthropic;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
-import com.anthropic.models.Message;
-import com.anthropic.models.MessageCreateParams;
 import com.sun.net.httpserver.HttpServer;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
@@ -45,14 +43,16 @@ class LegacySdkHttpTest {
             exchange.close();
         });
         server.start();
-        var client = AnthropicOkHttpClient.builder().apiKey("synthetic-key")
-            .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).maxRetries(0).build();
+        var builder = AnthropicOkHttpClient.builder().apiKey("synthetic-key")
+            .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).maxRetries(0);
+        SdkTestSupport.disableNativeTracing(builder);
+        var client = builder.build();
         try {
-            var params = MessageCreateParams.builder().model("test-model").maxTokens(64).addUserMessage("Capital of France?");
-            if (temperature != null) params.temperature(temperature);
+            var params = SdkTestSupport.paramsBuilder("Capital of France?");
+            if (temperature != null) SdkTestSupport.setTemperature(params, temperature);
             var traced = new TracedAnthropicClient(client, new FITracer(otel.getOpenTelemetry().getTracer("legacy")));
-            Message result = traced.createMessage(params.build());
-            assertThat(result.id()).isEqualTo("msg_synthetic");
+            Object result = traced.createMessage(SdkTestSupport.call(params, "build"));
+            assertThat(SdkTestSupport.call(result, "id")).isEqualTo("msg_synthetic");
             assertThat(traced.unwrap()).isSameAs(client);
             assertThat(calls.get()).isEqualTo(1);
             assertThat(otel.getSpans()).hasSize(1);

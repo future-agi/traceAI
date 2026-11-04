@@ -16,9 +16,11 @@ import re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
+from httpx import HTTPError as HTTPXError
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode
+from requests.exceptions import RequestException
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +155,7 @@ class _Operation:
         self._method = method
         # TraceConfig.hide_inputs: also keep the query out of error text.
         self._hide_inputs = hide_inputs
-        # TraceConfig.pii_redaction: FITracer covers attributes; error text is done here.
+        # Redact before capping text; FITracer cannot recognize truncated PII.
         self._pii = pii
         # search is a retrieval; extract fetches the pages it is given.
         self._kind = _RETRIEVER if method == "search" else _TOOL
@@ -201,7 +203,7 @@ class _Operation:
             if identifier is not None:
                 attributes["tavily.request_id"] = identifier
         elif query is not None:
-            value = _safe_text(query, keys)
+            value = _safe_text(query, keys, pii=self._pii)
             if value is not None:
                 attributes[_INPUT_VALUE] = value
                 # FITracer masks input.value when inputs are hidden, but not this key.
@@ -326,8 +328,11 @@ class _Operation:
         query: Optional[str],
     ) -> None:
         name = type(error).__name__
-        if self._method in ("extract", "map", "crawl", "research", "get_research"):
-            # SDK/HTTP errors can echo URLs, schema, prompts and streamed output.
+        if self._method in (
+            "extract", "map", "crawl", "research", "get_research"
+        ) or isinstance(error, (RequestException, HTTPXError)):
+            # Transport errors can expose custom endpoint credentials; other
+            # SDK errors can echo URLs, schema, prompts and streamed output.
             # Type-only events keep those out of telemetry even on core 1.1,
             # where hide_inputs does not strip exception messages or status text.
             span.set_status(Status(StatusCode.ERROR, name))

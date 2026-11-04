@@ -68,16 +68,18 @@ once. Usage, credits and search options are not recorded.
   `tavily.failed_result_count` records failed extractions. Unknown counts are omitted.
 - Set `FI_HIDE_INPUTS=true` to mask inputs, omit retrieval queries and remove
   search/extract query text from error details.
-- Set `FI_PII_REDACTION=true` to redact supported personal-data patterns.
+- Set `FI_PII_REDACTION=true` to redact supported personal-data patterns before
+  query text is capped, so truncation cannot leave a recognizable PII fragment.
   You can also pass `config=TraceConfig(hide_inputs=True, pii_redaction=True)`
   to `instrument()`, importing `TraceConfig` from `fi_instrumentation`.
 
-Errors are re-raised unchanged. Search spans retain scrubbed error summaries,
-without traceback frames. Extraction spans record only the exception type,
-never error messages or tracebacks: HTTP errors can echo sensitive URL arguments.
-This applies even with default privacy settings and on the minimum supported
-core version. Cancelling an async call sets ERROR and `tavily.cancelled=true`,
-without an exception event. Instrumentation failures do not replace your SDK
+Errors are re-raised unchanged. Search HTTP/transport failures record only the
+exception type, never messages or tracebacks: these errors can include custom
+endpoint credentials. Other search errors retain scrubbed, frames-free summaries.
+Extraction failures also record only the type, because errors can echo sensitive
+URL arguments. Type-only recording applies even with default privacy settings
+and on the minimum supported core version. Cancelling an async call sets ERROR
+and `tavily.cancelled=true`, without an exception event. Instrumentation failures do not replace your SDK
 result or exception.
 
 ## LangChain and LangGraph
