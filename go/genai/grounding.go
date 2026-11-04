@@ -11,6 +11,7 @@ const (
 	maxGroundingSources    = 16
 	maxGroundingQueries    = 8
 	maxGroundingCitations  = 16
+	maxURLRetrievals       = 16
 )
 
 // These are deliberately partial provider types. Search HTML/blobs, retrieved
@@ -46,17 +47,31 @@ type groundingSource struct {
 	Title string `json:"title,omitempty"`
 }
 
+type urlContextMetadata struct {
+	URLs []*struct {
+		URL    string `json:"retrievedUrl"`
+		Status string `json:"urlRetrievalStatus"`
+	} `json:"urlMetadata"`
+}
+
+type urlRetrievalEvidence struct {
+	URL    string `json:"retrieved_url"`
+	Status string `json:"url_retrieval_status,omitempty"`
+}
+
 type groundingCandidate struct {
-	Index     int                `json:"candidate_index"`
-	Sources   []groundingSource  `json:"sources,omitempty"`
-	Queries   []string           `json:"web_search_queries,omitempty"`
-	Citations []citationEvidence `json:"citations,omitempty"`
-	Truncated bool               `json:"truncated,omitempty"`
+	Index         int                    `json:"candidate_index"`
+	Sources       []groundingSource      `json:"sources,omitempty"`
+	Queries       []string               `json:"web_search_queries,omitempty"`
+	Citations     []citationEvidence     `json:"citations,omitempty"`
+	URLRetrievals []urlRetrievalEvidence `json:"url_retrievals,omitempty"`
+	Truncated     bool                   `json:"truncated,omitempty"`
 }
 
 // Retained evidence is bounded across the entire stream, not per chunk. At most
-// four candidates, 16 sources, eight queries and 16 citations per candidate,
-// with each string capped at 512 bytes. The JSON uses one OTel attribute slot.
+// four candidates, 16 sources, eight queries, 16 citations and 16 URL retrieval
+// outcomes per candidate, with each string capped at 512 bytes. The JSON uses
+// one OTel attribute slot, including the existing grounding privacy controls.
 // Repeated cumulative metadata is deduplicated; a later empty chunk cannot
 // erase earlier evidence. We do not export grounding-support indices because
 // they reference chunk-local source arrays that may change between events.
@@ -65,8 +80,8 @@ type groundingCapture struct {
 	Truncated  bool                  `json:"truncated,omitempty"`
 }
 
-func (g *groundingCapture) add(index int, metadata *groundingMetadata, citations *citationMetadata) {
-	if metadata == nil && citations == nil {
+func (g *groundingCapture) add(index int, metadata *groundingMetadata, citations *citationMetadata, urlContext *urlContextMetadata) {
+	if metadata == nil && citations == nil && urlContext == nil {
 		return
 	}
 	var c *groundingCandidate
@@ -117,7 +132,23 @@ func (g *groundingCapture) add(index int, metadata *groundingMetadata, citations
 			c.Citations = append(c.Citations, value)
 		}
 	}
-	if fresh && (len(c.Sources) > 0 || len(c.Queries) > 0 || len(c.Citations) > 0) {
+	if urlContext != nil {
+		for _, result := range urlContext.URLs {
+			if result == nil || result.URL == "" {
+				continue
+			}
+			value := urlRetrievalEvidence{URL: boundedMetadataString(result.URL, &c.Truncated)}
+			switch result.Status {
+			case "URL_RETRIEVAL_STATUS_UNSPECIFIED", "URL_RETRIEVAL_STATUS_SUCCESS", "URL_RETRIEVAL_STATUS_ERROR",
+				"URL_RETRIEVAL_STATUS_PAYWALL", "URL_RETRIEVAL_STATUS_UNSAFE":
+				value.Status = result.Status
+			}
+			// Deduplicate URL/status pairs, not URLs: a later outcome must not
+			// erase an earlier one. A fetch failure is not a generation error.
+			c.URLRetrievals = appendBoundedUnique(c.URLRetrievals, value, maxURLRetrievals, &c.Truncated)
+		}
+	}
+	if fresh && (len(c.Sources) > 0 || len(c.Queries) > 0 || len(c.Citations) > 0 || len(c.URLRetrievals) > 0) {
 		if len(g.Candidates) == maxGroundingCandidates {
 			g.Truncated = true
 			return

@@ -22,7 +22,7 @@ func TestMetadataFitsDefaultOTelBudget(t *testing.T) {
 			cfg := &genai.GenerateContentConfig{
 				Temperature: genai.Ptr(float32(0.5)), TopP: genai.Ptr(float32(0.9)), TopK: genai.Ptr(float32(40)),
 				MaxOutputTokens: 100, PresencePenalty: genai.Ptr(float32(0.2)), FrequencyPenalty: genai.Ptr(float32(0.3)), Seed: genai.Ptr(int32(42)), StopSequences: []string{"STOP"},
-				Tools:      []*genai.Tool{{GoogleSearch: &genai.GoogleSearch{}}},
+				Tools:      []*genai.Tool{{GoogleSearch: &genai.GoogleSearch{}, URLContext: &genai.URLContext{}}},
 				ToolConfig: &genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny}},
 			}
 			for i := 0; i < 150; i++ {
@@ -30,20 +30,22 @@ func TestMetadataFitsDefaultOTelBudget(t *testing.T) {
 				cfg.Tools[0].FunctionDeclarations = append(cfg.Tools[0].FunctionDeclarations, &genai.FunctionDeclaration{Name: name})
 				cfg.ToolConfig.FunctionCallingConfig.AllowedFunctionNames = append(cfg.ToolConfig.FunctionCallingConfig.AllowedFunctionNames, name)
 			}
-			var chunks, citations []any
+			var chunks, citations, urls []any
 			var queries []string
 			for i := 0; i < 150; i++ {
 				uri := fmt.Sprintf("https://fixture.invalid/source-%d", i)
 				chunks = append(chunks, map[string]any{"web": map[string]any{"uri": uri, "title": fmt.Sprintf("Source %d", i)}})
 				citations = append(citations, map[string]any{"uri": uri, "startIndex": 0, "endIndex": 5})
 				queries = append(queries, fmt.Sprintf("query-%d", i))
+				urls = append(urls, map[string]any{"retrievedUrl": uri, "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"})
 			}
 			var candidates []any
 			for i := 0; i < 20; i++ {
 				candidates = append(candidates, map[string]any{
 					"index": i, "finishReason": "STOP", "content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": fmt.Sprintf("answer-%d", i)}}},
-					"groundingMetadata": map[string]any{"groundingChunks": chunks, "webSearchQueries": queries},
-					"citationMetadata":  map[string]any{"citationSources": citations},
+					"groundingMetadata":  map[string]any{"groundingChunks": chunks, "webSearchQueries": queries},
+					"citationMetadata":   map[string]any{"citationSources": citations},
+					"urlContextMetadata": map[string]any{"urlMetadata": urls},
 				})
 			}
 			body, _ := json.Marshal(map[string]any{
@@ -80,7 +82,11 @@ func TestMetadataFitsDefaultOTelBudget(t *testing.T) {
 					Sources   []any    `json:"sources"`
 					Queries   []string `json:"web_search_queries"`
 					Citations []any    `json:"citations"`
-					Truncated bool     `json:"truncated"`
+					URLs      []struct {
+						URL    string `json:"retrieved_url"`
+						Status string `json:"url_retrieval_status"`
+					} `json:"url_retrievals"`
+					Truncated bool `json:"truncated"`
 				} `json:"candidates"`
 				Truncated bool `json:"truncated"`
 			}
@@ -91,8 +97,13 @@ func TestMetadataFitsDefaultOTelBudget(t *testing.T) {
 				t.Errorf("candidate evidence not bounded: %d", len(evidence.Candidates))
 			}
 			for _, candidate := range evidence.Candidates {
-				if len(candidate.Sources) != 16 || len(candidate.Queries) != 8 || len(candidate.Citations) != 16 || !candidate.Truncated {
+				if len(candidate.Sources) != 16 || len(candidate.Queries) != 8 || len(candidate.Citations) != 16 || len(candidate.URLs) != 16 || !candidate.Truncated {
 					t.Error("large source list not bounded")
+				}
+				for i, result := range candidate.URLs {
+					if result.URL != fmt.Sprintf("https://fixture.invalid/source-%d", i) || result.Status != "URL_RETRIEVAL_STATUS_SUCCESS" {
+						t.Errorf("URL retrieval result lost under default budget: %+v", result)
+					}
 				}
 			}
 		})

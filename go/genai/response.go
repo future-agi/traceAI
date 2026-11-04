@@ -30,11 +30,12 @@ type modalityTokens struct {
 
 type generateResponse struct {
 	Candidates []struct {
-		Index             *int               `json:"index"`
-		Content           content            `json:"content"`
-		FinishReason      string             `json:"finishReason"`
-		GroundingMetadata *groundingMetadata `json:"groundingMetadata"`
-		CitationMetadata  *citationMetadata  `json:"citationMetadata"`
+		Index              *int                `json:"index"`
+		Content            content             `json:"content"`
+		FinishReason       string              `json:"finishReason"`
+		GroundingMetadata  *groundingMetadata  `json:"groundingMetadata"`
+		CitationMetadata   *citationMetadata   `json:"citationMetadata"`
+		URLContextMetadata *urlContextMetadata `json:"urlContextMetadata"`
 	} `json:"candidates"`
 	UsageMetadata *usageMetadata  `json:"usageMetadata"`
 	ModelVersion  string          `json:"modelVersion"`
@@ -132,7 +133,7 @@ func (a *accumulator) addResponse(b []byte) {
 		if c.Index != nil {
 			idx = *c.Index
 		}
-		a.grounding.add(idx, c.GroundingMetadata, c.CitationMetadata)
+		a.grounding.add(idx, c.GroundingMetadata, c.CitationMetadata, c.URLContextMetadata)
 		acc, ok := a.candidates[idx]
 		if !ok {
 			acc = &candidateAcc{}
