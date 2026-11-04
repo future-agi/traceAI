@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        guardrails: ['0.5.0', '0.11.0']
+        guardrails: ['0.5.0', '0.6.0', '0.7.0', '0.10.0', '0.11.0']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +33,10 @@ jobs:
           "$RUNNER_TEMP/guardrails-venv/bin/pip" install -e python/frameworks/guardrails \
             "guardrails-ai==${{ matrix.guardrails }}" \
             pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+          # Guardrails 0.6 imports pkg_resources without declaring setuptools.
+          if [ "${{ matrix.guardrails }}" = "0.6.0" ]; then
+            "$RUNNER_TEMP/guardrails-venv/bin/pip" install setuptools==80.9.0
+          fi
       - name: Test with external networking disabled
         run: |
           mkdir -p "$RUNNER_TEMP/guardrails-home"

@@ -54,9 +54,10 @@ class GuardrailsInstrumentor(BaseInstrumentor):
             for name in ("guard_tracing", "runner_tracing", "validator_tracing"):
                 module = import_module(f"guardrails.telemetry.{name}")
                 self._bind(module, "trace", api)
-                # Streaming guard spans use the separately imported function.
+                # These imports are not all OTel factories: intermediate SDKs
+                # use an optional explicit/context-tracer resolver as well.
                 if hasattr(module, "get_tracer"):
-                    self._bind(module, "get_tracer", api.get_tracer)
+                    self._bind(module, "get_tracer", api.bind_get_tracer(module.get_tracer))
                 if name == "runner_tracing":
                     # Native serializers traverse mixed history and can drain an
                     # async LLMResponse iterator. Replace attribute extraction,

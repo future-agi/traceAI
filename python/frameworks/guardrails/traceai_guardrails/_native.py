@@ -5,6 +5,7 @@ Guard/Runner execution method, contextvars module or validator is patched.
 """
 
 from contextlib import contextmanager
+from functools import wraps
 from inspect import signature
 from typing import Any, Mapping
 
@@ -197,6 +198,22 @@ class NativeTraceAPI(ObjectProxy):
         super().__init__(trace)
         self._self_provider = provider
         self._self_config = config
+
+    def bind_get_tracer(self, original):
+        if original is trace.get_tracer:
+            return self.get_tracer
+
+        # 0.7 imports telemetry.common.get_tracer(tracer=None) in runner and
+        # validator telemetry. It resolves an explicit/context-local tracer,
+        # rather than creating one from an instrumentation scope name.
+        @wraps(original)
+        def resolve_tracer(tracer=None):
+            resolved = original(tracer)
+            if resolved is None:
+                return None  # Preserve the SDK's fallback to module.trace.
+            return NativeTracer(resolved, self._self_config)
+
+        return resolve_tracer
 
     def get_tracer(
         self,
