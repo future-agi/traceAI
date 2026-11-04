@@ -8,6 +8,7 @@ import io.weaviate.client.v1.graphql.query.argument.NearVectorArgument;
 import io.weaviate.client.v1.graphql.query.fields.Field;
 import io.weaviate.client.v1.data.model.WeaviateObject;
 import io.weaviate.client.v1.batch.model.ObjectGetResponse;
+import io.weaviate.client.v1.batch.model.ObjectGetResponseStatus;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -99,7 +100,7 @@ public class TracedWeaviateClient {
             // Capture results
             if (result.hasErrors()) {
                 span.setAttribute("weaviate.has_errors", true);
-                if (result.getError() != null) {
+                if (!tracer.getConfig().isHideErrorDetails() && result.getError() != null) {
                     span.setAttribute("weaviate.error", result.getError().toString());
                 }
             } else if (result.getResult() != null && result.getResult().getData() != null) {
@@ -196,14 +197,26 @@ public class TracedWeaviateClient {
                 .withObjects(objects)
                 .run();
 
-            // Capture result
-            if (result.hasErrors()) {
+            // HTTP success can still contain rejected objects. Record counts/status
+            // only: per-object error bodies can contain customer documents.
+            boolean hasErrors = result.hasErrors();
+            if (!hasErrors && result.getResult() != null) {
+                long imported = 0;
+                for (ObjectGetResponse item : result.getResult()) {
+                    if (isSuccessful(item)) {
+                        imported++;
+                    }
+                }
+                long failed = result.getResult().length - imported;
+                span.setAttribute("weaviate.imported_count", imported);
+                span.setAttribute("weaviate.failed_count", failed);
+                hasErrors = failed > 0;
+            }
+            if (hasErrors) {
                 span.setAttribute("weaviate.has_errors", true);
-            } else if (result.getResult() != null) {
-                span.setAttribute("weaviate.imported_count", (long) result.getResult().length);
             }
 
-            span.setStatus(result.hasErrors() ? StatusCode.ERROR : StatusCode.OK);
+            span.setStatus(hasErrors ? StatusCode.ERROR : StatusCode.OK);
             return result;
 
         } catch (Exception e) {
@@ -212,6 +225,17 @@ public class TracedWeaviateClient {
         } finally {
             span.end();
         }
+    }
+
+    private static boolean isSuccessful(ObjectGetResponse item) {
+        // Do not report incomplete or unconfirmed responses as successful imports.
+        if (item == null || item.getResult() == null) {
+            return false;
+        }
+        var result = item.getResult();
+        var errors = result.getErrors();
+        return ObjectGetResponseStatus.SUCCESS.equals(result.getStatus())
+                && (errors == null || errors.getError() == null || errors.getError().isEmpty());
     }
 
     /**

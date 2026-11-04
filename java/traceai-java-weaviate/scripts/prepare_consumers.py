@@ -32,6 +32,7 @@ def main():
             shutil.copy(module / "src/consumer-test/WeaviateReadmeConsumerTest.java", test)
         else:
             shutil.copy(module / "src/consumer-test/WeaviateLegacyConsumerTest.java", test)
+            shutil.copy(module / "src/test/java/ai/traceai/weaviate/TracedWeaviateLegacyTest.java", test)
         dependencies = [
             ("org.junit.jupiter", "junit-jupiter", "5.10.1", "test"),
             ("org.assertj", "assertj-core", "3.24.2", "test"),
