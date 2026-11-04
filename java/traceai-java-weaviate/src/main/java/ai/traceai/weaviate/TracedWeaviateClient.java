@@ -200,17 +200,23 @@ public class TracedWeaviateClient {
             // HTTP success can still contain rejected objects. Record counts/status
             // only: per-object error bodies can contain customer documents.
             boolean hasErrors = result.hasErrors();
-            if (!hasErrors && result.getResult() != null) {
+            if (!hasErrors) {
+                ObjectGetResponse[] responses = result.getResult();
+                int responseCount = responses == null ? 0 : responses.length;
                 long imported = 0;
-                for (ObjectGetResponse item : result.getResult()) {
-                    if (isSuccessful(item)) {
-                        imported++;
+                if (responses != null) {
+                    for (ObjectGetResponse item : responses) {
+                        if (isSuccessful(item)) {
+                            imported++;
+                        }
                     }
                 }
-                long failed = result.getResult().length - imported;
+                // Count rejected items and requested objects with no confirmed outcome.
+                // Extra responses must also flag an inconsistent batch, never negative counts.
+                long failed = Math.max(objects.length, responseCount) - imported;
                 span.setAttribute("weaviate.imported_count", imported);
                 span.setAttribute("weaviate.failed_count", failed);
-                hasErrors = failed > 0;
+                hasErrors = failed > 0 || responseCount != objects.length;
             }
             if (hasErrors) {
                 span.setAttribute("weaviate.has_errors", true);
@@ -234,7 +240,8 @@ public class TracedWeaviateClient {
         }
         var result = item.getResult();
         var errors = result.getErrors();
-        return ObjectGetResponseStatus.SUCCESS.equals(result.getStatus())
+        // The batch response schema defaults an omitted status to SUCCESS.
+        return (result.getStatus() == null || ObjectGetResponseStatus.SUCCESS.equals(result.getStatus()))
                 && (errors == null || errors.getError() == null || errors.getError().isEmpty());
     }
 

@@ -106,12 +106,16 @@ class TracedWeaviateLegacyTest {
 
     static Stream<Arguments> batchResponses() {
         return Stream.of(
+                Arguments.of("empty batch", "[]", 0, 0L, 0L),
                 Arguments.of("all success", "[" + SUCCESS + "," + SUCCESS + "]", 2, 2L, 0L),
                 Arguments.of("mixed", "[" + SUCCESS + "," + FAILED + "]", 2, 1L, 1L),
                 Arguments.of("all failed", "[" + FAILED + "]", 1, 0L, 1L),
                 Arguments.of("failed status only", "[{\"result\":{\"status\":\"FAILED\"}}]", 1, 0L, 1L),
                 Arguments.of("errors despite success status", "[" + FAILED.replace("FAILED", "SUCCESS") + "]", 1, 0L, 1L),
                 Arguments.of("empty errors", "[{\"result\":{\"status\":\"SUCCESS\",\"errors\":{\"error\":[]}}}]", 1, 1L, 0L),
+                Arguments.of("default success status", "[{\"result\":{}}]", 1, 1L, 0L),
+                Arguments.of("default success with empty errors", "[{\"result\":{\"errors\":{\"error\":[]}}}]", 1, 1L, 0L),
+                Arguments.of("missing status with errors", "[{\"result\":{\"errors\":" + ERROR_BODY + "}}]", 1, 0L, 1L),
                 Arguments.of("missing result", "[{}]", 1, 0L, 1L),
                 Arguments.of("null item", "[null]", 1, 0L, 1L));
     }
@@ -138,6 +142,39 @@ class TracedWeaviateLegacyTest {
                 if (failed > 0) {
                     soft.assertThat(span.getAttributes().get(AttributeKey.booleanKey("weaviate.has_errors"))).isTrue();
                 }
+            });
+            assertPrivate(span);
+        }
+    }
+
+    static Stream<Arguments> mismatchedBatchResponses() {
+        return Stream.of(
+                Arguments.of("one success for two requests", "[" + SUCCESS + "]", 1, 1L, 1L),
+                Arguments.of("one failure for two requests", "[" + FAILED + "]", 1, 0L, 2L),
+                Arguments.of("extra response", "[" + SUCCESS + "," + SUCCESS + "," + SUCCESS + "]", 3, 3L, 0L),
+                Arguments.of("empty response", "[]", 0, 0L, 2L),
+                Arguments.of("null response", "null", null, 0L, 2L));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("mismatchedBatchResponses")
+    void batchMismatchedOutcomesAreNotReportedAsSuccess(
+            String name, String body, Integer responseSize, long imported, long failed) throws Exception {
+        try (Fixture fixture = new Fixture(200, body, TraceConfig.builder().hideErrorDetails(false).build())) {
+            var result = fixture.traced.batchImport(object(), object());
+            assertThat(result.hasErrors()).as("outer SDK result is still HTTP success").isFalse();
+            if (responseSize == null) {
+                assertThat(result.getResult()).isNull();
+            } else {
+                assertThat(result.getResult()).as("caller receives the unmodified response").hasSize(responseSize);
+            }
+            SpanData span = fixture.onlySpan();
+            assertSoftly(soft -> {
+                soft.assertThat(span.getAttributes().get(AttributeKey.longKey("weaviate.batch_size"))).isEqualTo(2L);
+                soft.assertThat(span.getAttributes().get(AttributeKey.longKey("weaviate.imported_count"))).isEqualTo(imported);
+                soft.assertThat(span.getAttributes().get(AttributeKey.longKey("weaviate.failed_count"))).isEqualTo(failed);
+                soft.assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+                soft.assertThat(span.getAttributes().get(AttributeKey.booleanKey("weaviate.has_errors"))).isTrue();
             });
             assertPrivate(span);
         }
