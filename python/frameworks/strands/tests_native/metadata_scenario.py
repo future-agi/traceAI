@@ -200,7 +200,7 @@ elif check == "system":
     key = "gen_ai.system_instructions"
     event = ("gen_ai.client.inference.operation.details", {key: SYSTEM})
     spans = [synthetic(events=[event]), synthetic({key: SYSTEM})]
-    if version("strands-agents") == "1.20.0":
+    if version("strands-agents") == "1.24.0":
         # The SDK floor predates system-prompt capture; do not fabricate a prompt.
         assert SYSTEM not in snapshot
         assert SYSTEM not in project(original).to_json()

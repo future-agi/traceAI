@@ -5,10 +5,15 @@ Send Strands' native agent, model, event-loop and tool spans to Future AGI with 
 ## Install
 
 ```bash
-pip install -U traceai-strands 'strands-agents[otel,openai]>=1.20.0' 'fi-instrumentation-otel>=1.2.2'
+pip install -U traceai-strands 'strands-agents[otel,openai]>=1.24.0' 'fi-instrumentation-otel>=1.2.2'
 ```
 
-Strands Agents 1.20.0 or newer and Python 3.10 or newer are required. Upgrade older Strands installations: the former 1.0.0 minimum did not propagate the example's explicit provider metadata to the model span that carries token usage. The example uses your own OpenAI API key; you can instead use any model supported by Strands.
+| Dependency | Minimum supported version |
+| --- | --- |
+| Python | 3.10 |
+| Strands Agents | 1.24.0 |
+
+Upgrade older Strands installations to preserve explicit provider metadata on the model span and complete event-loop spans when a model call raises an ordinary error. This does not resolve the [early-stream-close limitation](#known-limitation-stopping-a-python-stream-early). The example uses your own OpenAI API key; you can instead use any model supported by Strands.
 
 ## Configure and run
 

@@ -41,10 +41,10 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "strands-agents[otel,openai]>=1.20.0",
+    "strands-agents[otel,openai]>=1.24.0",
 ]
 strands = [
-    "strands-agents>=1.20.0",
+    "strands-agents>=1.24.0",
 ]
 
 [project.urls]
