@@ -35,6 +35,21 @@ test('callable identity, this, synchronous values, properties, disabled and supp
   assert.equal(t.memory.getFinishedSpans().length, count + 1);
 });
 
+for (const task of ['text-generation', 'text2text-generation', 'summarization', 'feature-extraction', 'question-answering']) {
+  test(`${task} retains local INTERNAL kind and identifies huggingface in memory and OTLP`, async () => {
+    const result = task === 'feature-extraction' ? { dims: [1, 3] } : { answer: 'safe' };
+    const wrapped = new TransformersInstrumentation().wrapPipeline(pipeline(async () => result, task));
+    assert.equal(await wrapped('safe input', 'safe context'), result);
+    const span = last();
+    assert.equal(span.attributes['gen_ai.provider.name'], 'huggingface');
+    assert.equal(span.kind, SpanKind.INTERNAL);
+    await t.flush();
+    const wire = t.wire().find(s => s.spanId === span.spanContext().spanId);
+    assert.equal(telemetry.attributes(wire)['gen_ai.provider.name'], 'huggingface');
+    assert.equal(wire.kind, 1, 'OTLP INTERNAL is 1');
+  });
+}
+
 test('immutable module facade, factory this, no factory/disposal spans, unsupported passthrough', async () => {
   const i = new TransformersInstrumentation();
   const p = pipeline(async () => [{ generated_text: 'ok' }]);
