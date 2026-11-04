@@ -39,10 +39,15 @@ type invokeTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 type invokeUsage struct {
-	Input      *int64 `json:"input_tokens"`
-	Output     *int64 `json:"output_tokens"`
-	CacheRead  *int64 `json:"cache_read_input_tokens"`
-	CacheWrite *int64 `json:"cache_creation_input_tokens"`
+	Input         *int64              `json:"input_tokens"`
+	Output        *int64              `json:"output_tokens"`
+	CacheRead     *int64              `json:"cache_read_input_tokens"`
+	CacheWrite    *int64              `json:"cache_creation_input_tokens"`
+	CacheCreation invokeCacheCreation `json:"cache_creation"`
+}
+type invokeCacheCreation struct {
+	FiveMinutes *int64 `json:"ephemeral_5m_input_tokens"`
+	OneHour     *int64 `json:"ephemeral_1h_input_tokens"`
 }
 
 func parseInvocation(model *string, body []byte) *invocation {
@@ -173,6 +178,14 @@ func (r *record) invokeUsage(u *invokeUsage) {
 	}
 	if u.CacheWrite != nil {
 		r.usage.CacheWrite = u.CacheWrite
+	}
+	// Stream usage updates are cumulative and can omit either TTL. Replace only
+	// reported valid counts, retaining message_start values across output deltas.
+	if n := u.CacheCreation.FiveMinutes; n != nil && *n >= 0 {
+		r.usage.CacheWrite5m = n
+	}
+	if n := u.CacheCreation.OneHour; n != nil && *n >= 0 {
+		r.usage.CacheWrite1h = n
 	}
 	// Anthropic input_tokens excludes cache reads/writes. Keep the authoritative
 	// counters separately; do not invent a total when fields are absent.

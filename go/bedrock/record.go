@@ -89,7 +89,10 @@ type record struct {
 	truncated         bool
 	usage             tokenUsage
 }
-type tokenUsage struct{ Input, Output, Total, CacheRead, CacheWrite *int64 }
+type tokenUsage struct {
+	Input, Output, Total, CacheRead, CacheWrite *int64
+	CacheWrite5m, CacheWrite1h                  *int64
+}
 
 func int64ptr(v *int32) *int64 {
 	if v == nil {
@@ -176,10 +179,20 @@ func (r *record) finish(err error, closed bool) {
 	r.blocks = nil
 }
 func (r *record) tokens() {
+	// TTL counters partition cache_write_tokens for pricing; they are not extra
+	// writes and must never be added to the service's aggregate or total tokens.
 	for _, x := range []struct {
 		k string
 		v *int64
-	}{{"input_tokens", r.usage.Input}, {"output_tokens", r.usage.Output}, {"total_tokens", r.usage.Total}, {"cache_read_tokens", r.usage.CacheRead}, {"cache_write_tokens", r.usage.CacheWrite}} {
+	}{
+		{"input_tokens", r.usage.Input},
+		{"output_tokens", r.usage.Output},
+		{"total_tokens", r.usage.Total},
+		{"cache_read_tokens", r.usage.CacheRead},
+		{"cache_write_tokens", r.usage.CacheWrite},
+		{"cache_write_5m_tokens", r.usage.CacheWrite5m},
+		{"cache_write_1h_tokens", r.usage.CacheWrite1h},
+	} {
 		if x.v != nil && *x.v >= 0 {
 			r.span.SetAttributes(attribute.Int64("gen_ai.usage."+x.k, *x.v))
 		}
@@ -190,6 +203,27 @@ func (r *record) setUsage(u *types.TokenUsage) {
 		return
 	}
 	r.usage = tokenUsage{Input: int64ptr(u.InputTokens), Output: int64ptr(u.OutputTokens), Total: int64ptr(u.TotalTokens), CacheRead: int64ptr(u.CacheReadInputTokens), CacheWrite: int64ptr(u.CacheWriteInputTokens)}
+	// Combine entries only within this snapshot. Resetting usage above prevents
+	// repeated metadata events from double counting writes. Unknown TTLs stay
+	// solely in the service's aggregate; do not guess their price category.
+	for _, detail := range u.CacheDetails {
+		n := int64ptr(detail.InputTokens)
+		if n == nil || *n < 0 {
+			continue
+		}
+		switch detail.Ttl {
+		case types.CacheTTLFiveMinutes:
+			if r.usage.CacheWrite5m != nil {
+				*n += *r.usage.CacheWrite5m
+			}
+			r.usage.CacheWrite5m = n
+		case types.CacheTTLOneHour:
+			if r.usage.CacheWrite1h != nil {
+				*n += *r.usage.CacheWrite1h
+			}
+			r.usage.CacheWrite1h = n
+		}
+	}
 }
 func (r *record) stop(s string) {
 	// Stop reasons are machine values, never a second channel for response text.
