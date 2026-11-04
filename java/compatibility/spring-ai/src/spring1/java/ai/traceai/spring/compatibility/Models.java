@@ -13,6 +13,10 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.retry.support.RetryTemplate;
 
 final class Models {
+    static org.springframework.ai.chat.prompt.ChatOptions chatOptions(ChatModel model) {
+        return model.getDefaultOptions();
+    }
+
     static ChatModel chat(String baseUrl, ObservationRegistry registry) {
         return OpenAiChatModel.builder()
             .openAiApi(api(baseUrl))

@@ -1,6 +1,9 @@
 package ai.traceai.spring.compatibility;
 
 import ai.traceai.spring.SpringAIObservationFilter;
+import ai.traceai.spring.SpringAITracingObservationHandler;
+import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
+import io.micrometer.tracing.otel.bridge.OtelTracer;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.observation.ObservationFilter;
 import io.micrometer.observation.ObservationRegistry;
@@ -52,10 +55,13 @@ class DocumentedBootSetupTest {
                     "management.opentelemetry.resource-attributes.project_name=spring-ai-test")
                 .run(context -> {
                     assertThat(context).hasNotFailed().hasSingleBean(OpenTelemetry.class)
-                        .hasSingleBean(SdkTracerProvider.class).hasBean("springAIObservationFilter");
+                        .hasSingleBean(SdkTracerProvider.class).hasSingleBean(DefaultTracingObservationHandler.class)
+                        .hasBean("springAIObservationFilter");
                     var model = Models.chat(modelServer.url(), context.getBean(ObservationRegistry.class));
                     assertThat(model.call(new Prompt(NativeSpringAITest.INPUT)).getResult().getOutput().getText())
                         .isEqualTo(NativeSpringAITest.OUTPUT);
+                    modelServer.replies.add(new NativeSpringAITest.Reply("{\"error\":{\"message\":\"synthetic-boot-secret\",\"type\":\"invalid_request_error\"}}", "application/json", 400));
+                    org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> model.call(new Prompt("private-error-prompt")));
                     assertThat(context.getBean(SdkTracerProvider.class).forceFlush().join(5, TimeUnit.SECONDS).isSuccess()).isTrue();
                 });
             assertThat(headers).isNotEmpty().containsOnly(List.of("synthetic-api-key", "synthetic-secret-key", "spring-ai-test"));
@@ -67,14 +73,27 @@ class DocumentedBootSetupTest {
             var models = resources.stream().flatMap(r -> r.getScopeSpansList().stream())
                 .flatMap(s -> s.getSpansList().stream()).filter(s -> s.getAttributesList().stream()
                     .anyMatch(a -> a.getKey().equals("fi.span.kind") && a.getValue().getStringValue().equals("LLM"))).toList();
-            assertThat(models).hasSize(1);
-            assertThat(received.toString()).doesNotContain(NativeSpringAITest.INPUT, NativeSpringAITest.OUTPUT);
+            assertThat(models).hasSize(2);
+            var errors = models.stream().filter(s -> s.getStatus().getCode()
+                == io.opentelemetry.proto.trace.v1.Status.StatusCode.STATUS_CODE_ERROR).toList();
+            assertThat(errors).hasSize(1);
+            assertThat(errors.get(0).getStatus().getMessage()).isEmpty();
+            assertThat(errors.get(0).getEventsList()).hasSize(1);
+            assertThat(errors.get(0).getEvents(0).getAttributesList()).hasSize(1);
+            assertThat(errors.get(0).getEvents(0).getAttributes(0).getKey()).isEqualTo("exception.type");
+            assertThat(received.toString()).doesNotContain(NativeSpringAITest.INPUT, NativeSpringAITest.OUTPUT,
+                "synthetic-boot-secret", "private-error-prompt", "exception.message", "exception.stacktrace");
         } finally { receiver.stop(0); }
     }
 
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class Application {
+        @Bean
+        DefaultTracingObservationHandler defaultTracingObservationHandler(OtelTracer tracer) {
+            return new SpringAITracingObservationHandler(tracer);
+        }
+
         @Bean
         ObservationFilter springAIObservationFilter() {
             return new SpringAIObservationFilter();

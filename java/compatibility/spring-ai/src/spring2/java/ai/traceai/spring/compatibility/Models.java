@@ -10,6 +10,10 @@ import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 
 final class Models {
+    static org.springframework.ai.chat.prompt.ChatOptions chatOptions(ChatModel model) {
+        return model.getOptions();
+    }
+
     static ChatModel chat(String baseUrl, ObservationRegistry registry) {
         return OpenAiChatModel.builder()
             .options(OpenAiChatOptions.builder().baseUrl(baseUrl + "/v1").apiKey("synthetic-key")
