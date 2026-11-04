@@ -19,18 +19,18 @@ class _StreamState:
         self.finished = False
 
     def process(self, chunk: Any) -> None:
-        if self.finished:
+        if self.finished or self.span.is_finished:
             return
         try:
             self.extractor.process_chunk(_to_dict(chunk))
         except Exception:
             logger.exception("Failed to accumulate DeepSeek response")
 
-    def finish(self, error: Any = None) -> None:
-        if self.finished:
+    def finish(self, error: Any = None, *, completed: bool = False) -> None:
+        if self.finished or self.span.is_finished:
             return
         self.finished = True
-        status = trace.Status(trace.StatusCode.OK)
+        status = trace.Status(trace.StatusCode.OK if completed else trace.StatusCode.UNSET)
         if error is not None:
             self.span.record_exception(error)
             status = trace.Status(
@@ -61,7 +61,7 @@ class _Stream(ObjectProxy):
         try:
             chunk = next(self._self_iterator)
         except StopIteration:
-            self._self_state.finish()
+            self._self_state.finish(completed=True)
             raise
         except BaseException as error:
             self._self_state.finish(error)
@@ -110,7 +110,7 @@ class _AsyncStream(ObjectProxy):
         try:
             chunk = await self._self_iterator.__anext__()
         except StopAsyncIteration:
-            self._self_state.finish()
+            self._self_state.finish(completed=True)
             raise
         except BaseException as error:
             self._self_state.finish(error)

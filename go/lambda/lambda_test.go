@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -315,10 +314,6 @@ func TestNilProviderDisablesInstrumentation(t *testing.T) {
 }
 
 func TestResultContentTypeRules(t *testing.T) {
-	type jsonReader struct {
-		io.Reader `json:"-"`
-		Value     string `json:"value"`
-	}
 	for _, tc := range []struct {
 		name   string
 		seen   bool
@@ -331,13 +326,19 @@ func TestResultContentTypeRules(t *testing.T) {
 		{"custom-bytes", false, nil, `{"custom":true}`, contentTypeBytes},
 		{"json-value", true, map[string]string{"ok": "yes"}, `{"ok":"yes"}`, contentTypeJSON},
 		{"nil-value", true, nil, "null", contentTypeJSON},
+		{"nil-reader", true, (*strings.Reader)(nil), "null", contentTypeJSON},
+		{"nil-typed-reader", true, (*closingResponse)(nil), "null", contentTypeJSON},
+		{"nil-marshaling-reader", true, (*singleMarshalResponse)(nil), "null", contentTypeJSON},
 		{"plain-reader", true, strings.NewReader("raw"), "raw", contentTypeBytes},
 		{"empty-json-reader", true, bytes.NewBufferString("raw"), "raw", contentTypeBytes},
-		{"json-serializable-reader", true, jsonReader{strings.NewReader("raw"), "x"}, `{"value":"x"}`, contentTypeJSON},
+		{"json-shaped-raw-reader", true, strings.NewReader(`{"value":"x"}`), `{"value":"x"}`, contentTypeBytes},
 		{"typed-reader", true, &typedResponse{Reader: bytes.NewReader(nil), contentType: "text/csv"}, "", "text/csv"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			capture := &resultCapture{seen: tc.seen, value: tc.value}
+			capture := &resultCapture{}
+			if tc.seen {
+				capture.record(context.Background(), tc.value)
+			}
 			if got := capture.contentType([]byte(tc.body)); got != tc.expect {
 				t.Fatalf("content type %q, want %q", got, tc.expect)
 			}

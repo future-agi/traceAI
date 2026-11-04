@@ -1,7 +1,8 @@
 """Configure the maintained OpenInference Agno instrumentor and OTLP export.
 
 Agno's own tracing setup uses this same instrumentor. This module does not
-install a second set of framework/model wrappers or transform emitted spans.
+install a second set of framework/model wrappers. Maintained private wrappers
+repair the delegated implementation while preserving its installation ownership.
 """
 
 from __future__ import annotations
@@ -144,7 +145,10 @@ class AgnoInstrumentorWrapper:
                         "Supply a configured tracer_provider or otlp_endpoint before tracing Agno."
                     )
             try:
-                delegate.instrument(
+                from ._wrappers._install import activate
+
+                activate(
+                    delegate,
                     tracer_provider=provider,
                     config=config,
                     raise_exception_on_conflict=True,
@@ -206,7 +210,8 @@ def configure_agno_tracing(
     For Future AGI direct export, use https://api.futureagi.com/tracer/v1/traces,
     headers X-Api-Key and X-Secret-Key, and a project_name. Project attributes
     belong to the resource, not authentication headers. Content controls are
-    supplied through OpenInference's TraceConfig or OPENINFERENCE_* variables.
+    supplied through OpenInference's TraceConfig, OPENINFERENCE_* variables,
+    and the shared FI_HIDE_* policy (either family's hide flags take precedence).
     """
     return AgnoInstrumentorWrapper().instrument(
         tracer_provider=tracer_provider,

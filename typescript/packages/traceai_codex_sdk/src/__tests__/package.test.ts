@@ -30,7 +30,7 @@ describe("package", () => {
   it("keeps the SDK a peer dependency, never a runtime dependency", () => {
     const ours = manifest(PKG_DIR) as { dependencies: Record<string, string>; peerDependencies: Record<string, string> };
     expect(ours.dependencies["@openai/codex-sdk"]).toBeUndefined();
-    expect(ours.peerDependencies["@openai/codex-sdk"]).toBe(">=0.44.0 <1");
+    expect(ours.peerDependencies["@openai/codex-sdk"]).toBe(">=0.162.1 <1");
   });
 
   it("defaults to hidden content", () => {

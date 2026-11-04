@@ -127,6 +127,18 @@ def scrub_local(text: str) -> str:
                 pass
         if _TRACEBACK_HEAD in text:
             text = _TRACEBACK.sub(STACK_TRACE_REMOVED, text)
+    # POSIX homes can live under arbitrary mounts, not just the roots below.
+    # Read at call time and escape the exact prefix (including spaces). Match
+    # whole paths only, never siblings or paths embedded in URLs/API routes.
+    # An unset or root HOME must not turn this into a catch-all for /api/...
+    home = os.path.expanduser("~").rstrip("/")
+    if home.startswith("/"):
+        text = re.sub(
+            r"(?<![\w:/.])" + re.escape(home)
+            + r"(?=$|[/\s\"'<>|:*?,;)\]\\])(?:/[^\s\"'<>|:*?,;)\]\\]*)?",
+            PATH_REMOVED,
+            text,
+        )
     text = _LOCAL_PATH.sub(PATH_REMOVED, text)
     for pattern, token in _IDENTITY:
         text = pattern.sub(token, text)
