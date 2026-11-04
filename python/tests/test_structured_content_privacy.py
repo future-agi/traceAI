@@ -20,7 +20,14 @@ from fi_instrumentation.instrumentation.config import REDACTED_VALUE, TraceConfi
 
 @pytest.mark.parametrize(
     "direction,key",
-    [("inputs", "gen_ai.tool.call.arguments"), ("outputs", "gen_ai.tool.call.result")],
+    [
+        ("inputs", "gen_ai.tool.call.arguments"),
+        ("outputs", "gen_ai.tool.call.result"),
+        ("input_text", "input.value"),
+        ("input_text", "raw.input"),
+        ("output_text", "output.value"),
+        ("output_text", "raw.output"),
+    ],
 )
 def test_structured_credentials_hidden_on_native_span_surfaces(direction, key):
     sentinel = "synthetic-credential-never-export"

@@ -361,6 +361,11 @@ class TraceConfig:
         key: str,
         value: Union[AttributeValue, Callable[[], AttributeValue]],
     ) -> Optional[AttributeValue]:
+        # Opaque payloads can duplicate structured messages. Treat their whole
+        # value as private before evaluating a lazy serializer; no safe modality
+        # boundary exists inside arbitrary JSON or strings.
+        private_input = self.hide_inputs or self.hide_input_messages or self.hide_input_text
+        private_output = self.hide_outputs or self.hide_output_messages or self.hide_output_text
         if self.hide_error_details and is_error_detail_key(key):
             return None
         elif (
@@ -368,30 +373,33 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
-        elif self.hide_inputs and _has_content_prefix(key, (SpanAttributes.INPUT_VALUE,)):
+        elif (private_input or self.hide_input_images) and _has_content_prefix(
+            key, (SpanAttributes.INPUT_VALUE, *tuple(_HIDDEN_WITH_INPUTS))
+        ):
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
             return None
-        elif self.hide_inputs and _has_content_prefix(key, tuple(_HIDDEN_WITH_INPUTS)):
-            # The raw request body (messages included) and the values filled
-            # into a prompt template are inputs too.
-            value = REDACTED_VALUE
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.OUTPUT_VALUE,)):
+        elif private_output and _has_content_prefix(
+            key, (SpanAttributes.OUTPUT_VALUE, SpanAttributes.RAW_OUTPUT)
+        ):
             value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_MIME_TYPE:
             return None
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.RAW_OUTPUT,)):
-            value = REDACTED_VALUE
         # The aggregate tool call can contain both arguments and results; hide
         # it if either direction is private. Specific child fields remain
         # directional, and identifiers like gen_ai.tool.name stay visible.
-        elif key == SpanAttributes.GEN_AI_TOOL_CALL and (self.hide_inputs or self.hide_outputs):
+        elif key == SpanAttributes.GEN_AI_TOOL_CALL and (private_input or private_output):
             value = REDACTED_VALUE
-        elif (self.hide_inputs or self.hide_outputs) and _has_content_prefix(key, _MIXED_CONTENT_PREFIXES):
+        elif (private_input or private_output) and _has_content_prefix(key, _MIXED_CONTENT_PREFIXES):
             value = REDACTED_VALUE
-        elif self.hide_inputs and _has_content_prefix(key, _INPUT_CONTENT_PREFIXES):
+        elif (
+            private_input
+            and _has_content_prefix(key, _INPUT_CONTENT_PREFIXES)
+            # Unlike opaque raw payloads, this field is explicitly image-only.
+            and (self.hide_inputs or not _has_content_prefix(key, (SpanAttributes.INPUT_IMAGES,)))
+        ):
             value = REDACTED_VALUE
-        elif self.hide_outputs and _has_content_prefix(key, _OUTPUT_CONTENT_PREFIXES):
+        elif private_output and _has_content_prefix(key, _OUTPUT_CONTENT_PREFIXES):
             value = REDACTED_VALUE
         elif (
             self.hide_inputs or self.hide_input_messages
@@ -401,6 +409,10 @@ class TraceConfig:
             self.hide_outputs or self.hide_output_messages
         ) and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key:
             return None
+        elif self.hide_input_text and key == SpanAttributes.GEN_AI_INPUT_MESSAGES:
+            value = REDACTED_VALUE
+        elif self.hide_output_text and key == SpanAttributes.GEN_AI_OUTPUT_MESSAGES:
+            value = REDACTED_VALUE
         elif (
             self.hide_input_text
             and SpanAttributes.GEN_AI_INPUT_MESSAGES in key

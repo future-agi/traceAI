@@ -644,14 +644,15 @@ def test_responses_plaintext_reasoning(
     a = attrs(spans)
     assert a["gen_ai.usage.output_tokens"] == 7
     assert spans[0].status.code == 1
-    if policy != "hide_outputs":
+    if policy is None:
         if streaming:
             assert a["output.value"] == ANSWER
         else:
             assert json.loads(a["output.value"])["output_text"] == ANSWER
     if policy:
-        if policy != "hide_outputs":
-            a.pop("output.value", None)  # Raw output has an independent policy.
+        # Granular privacy also covers the raw duplicate; do not remove it
+        # from the assertion and accidentally permit a leak.
+        assert a["output.value"] == "__REDACTED__"
         encoded = json.dumps(a)
         assert REASONING not in encoded
         assert summary not in encoded
