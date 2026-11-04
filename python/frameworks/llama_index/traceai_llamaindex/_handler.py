@@ -179,7 +179,7 @@ from typing_extensions import assert_never
 from wrapt import FunctionWrapper
 
 from ._provider import provider_name
-from ._stream import _stream_capture
+from ._stream import _AsyncResponseStream, _ResponseStream, _response_span, _stream_capture
 from ._usage import token_counts
 
 logger = logging.getLogger(__name__)
@@ -233,6 +233,7 @@ class _Span(BaseSpan):
     _parent: Optional["_Span"] = PrivateAttr()
     _first_token_timestamp: Optional[int] = PrivateAttr()
     _waiting_for_streaming: bool = PrivateAttr()
+    _response_streaming: bool = PrivateAttr()
     _last_updated_at: float = PrivateAttr()
     _stream_chunks: List[str] = PrivateAttr()
     _stream_content: str = PrivateAttr()
@@ -258,6 +259,7 @@ class _Span(BaseSpan):
         self._first_token_timestamp = None
         self._attributes = {}
         self._waiting_for_streaming = False
+        self._response_streaming = False
         self._last_updated_at = time()
         self._list_attr_len: DefaultDict[str, int] = defaultdict(int)
         self._stream_chunks = []
@@ -338,6 +340,11 @@ class _Span(BaseSpan):
             pass
 
     def process_output(self, instance: Any, result: Any) -> None:
+        if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+            # Their __str__ consumes the generator, including provider I/O.
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(result))
+            self[OUTPUT_MIME_TYPE] = JSON
+            return
         if OUTPUT_VALUE in self._attributes:
             # If the output value was set up by event handling, we don't
             # need to continue
@@ -432,6 +439,16 @@ class _Span(BaseSpan):
             self.finish(event.exception)
             self.notify_parent(_StreamingStatus.FINISHED, event.exception)
 
+    def process_response_chunk(self, chunk: Any) -> None:
+        if not self.active:
+            return
+        if isinstance(chunk, str):
+            self._stream_content += chunk
+            self[OUTPUT_VALUE] = self._stream_content
+            self._attributes.pop(OUTPUT_MIME_TYPE, None)
+        self._last_updated_at = time()
+        self.notify_parent(_StreamingStatus.IN_PROGRESS)
+
     def notify_parent(
         self, status: _StreamingStatus, exception: Optional[BaseException] = None
     ) -> None:
@@ -440,6 +457,10 @@ class _Span(BaseSpan):
         if status is _StreamingStatus.IN_PROGRESS:
             parent._last_updated_at = time()
         else:
+            if parent._response_streaming:
+                # A container can synthesize more tokens after the model ends.
+                # Its observer owns the final outcome, including errors/close.
+                return
             if self._cancelled:
                 parent.cancel(self._cancel_reason)
             parent.finish(exception)
@@ -952,6 +973,13 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             parent = self.open_spans.get(parent_span_id) if parent_span_id else None
+        if parent is None and parent_span_id:
+            # A lazy stream can create model spans after its call has returned.
+            parent = self._export_queue.find(parent_span_id)
+        if parent is None:
+            parent = _response_span.get()
+            if parent is not None:
+                parent_span_id = parent.id_
         otel_span = self._otel_tracer.start_span(
             name=id_.partition("-")[0],
             start_time=time_ns(),
@@ -990,6 +1018,24 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if span and span._workflow_run:
             return self._exit_workflow_run(span, instance, result)
         if span:
+            if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+                span.process_output(instance, result)
+                if result.response_gen is not None and result.response_txt is None:
+                    span._waiting_for_streaming = span._response_streaming = True
+                    stream = result.response_gen
+                    if isinstance(stream, _ResponseStream):
+                        stream._self_spans.append(span)
+                    else:
+                        proxy = (
+                            _AsyncResponseStream
+                            if isinstance(result, AsyncStreamingResponse)
+                            else _ResponseStream
+                        )
+                        result.response_gen = proxy(
+                            stream, [span], self._finish_response_children
+                        )
+                    self._export_queue.put(span)
+                    return span
             if isinstance(instance, (BaseLLM, MultiModalLLM)) and (
                 isinstance(result, Generator)
                 and result.gi_frame is not None
@@ -1006,6 +1052,22 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
+
+    def _finish_response_children(self, span: _Span, error: Optional[BaseException]) -> None:
+        # Closing a synthesis generator need not close the LLM generators held
+        # inside its frame. Finish only this response's still-pending descendants,
+        # including models created lazily after the response was returned.
+        with self._export_queue.lock:
+            pending = list(self._export_queue.spans.values())
+        for child in pending:
+            if not child.active:
+                continue
+            parent = child._parent
+            while parent is not None:
+                if parent is span:
+                    child.finish(error)
+                    break
+                parent = parent._parent
 
     def prepare_to_drop_span(
         self,
@@ -1361,6 +1423,14 @@ def _to_dict(obj: Any) -> Any:
     """
     Convert any class instance to a dictionary.
     """
+    if isinstance(obj, (StreamingResponse, AsyncStreamingResponse)):
+        # dataclasses.asdict deep-copies the live generator; str drains it.
+        # Keep only already available data until the consumer reads tokens.
+        return {
+            "response_txt": obj.response_txt,
+            "metadata": _to_dict(obj.metadata),
+            "source_nodes": [_show_repr_str(node) for node in obj.source_nodes],
+        }
     if dataclasses.is_dataclass(obj):
         return dataclasses.asdict(obj)
     elif isinstance(obj, BaseModel):

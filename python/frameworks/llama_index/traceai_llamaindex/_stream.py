@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 _stream_capture: ContextVar[Optional[List[Any]]] = ContextVar(
     "traceai_llamaindex_stream", default=None
 )
+# Async synthesizers can create their model stream only on first consumption,
+# after the dispatcher's call context has gone away.
+_response_span: ContextVar[Optional[Any]] = ContextVar(
+    "traceai_llamaindex_response_span", default=None
+)
 
 
 def _finish_spans(spans: List[Any], error: Optional[BaseException] = None) -> None:
@@ -105,6 +110,56 @@ class _AsyncStream(_Stream):
             raise
         finally:
             self._finish(error)
+
+
+class _ResponseStream(_Stream):
+    """Observe a response container's tokens without reading ahead.
+
+    A query and its synthesizer can return the same container. They share this
+    observer, so every span ends at the consumer's terminal operation, not at a
+    nested LLM's end event (which can precede the final synthesized token).
+    """
+
+    def __init__(
+        self, stream: Any, spans: List[Any], finish_children: Callable[..., None]
+    ) -> None:
+        super().__init__(stream, spans)
+        self._self_finish_children = finish_children
+
+    def _record_chunk(self, chunk: Any) -> None:
+        for span in self._self_spans:
+            try:
+                span.process_response_chunk(chunk)
+            except Exception:
+                logger.exception("Failed to record response token")
+
+    def _advance(self, method: Callable[..., Any], *args: Any) -> Any:
+        token = _response_span.set(self._self_spans[0] if self._self_spans else None)
+        try:
+            chunk = super()._advance(method, *args)
+            self._record_chunk(chunk)
+            return chunk
+        finally:
+            _response_span.reset(token)
+
+    def _finish(self, error: Optional[BaseException] = None) -> None:
+        for span in self._self_spans:
+            try:
+                self._self_finish_children(span, error)
+            except Exception:
+                logger.exception("Failed to finish response child spans")
+        super()._finish(error)
+
+
+class _AsyncResponseStream(_ResponseStream, _AsyncStream):
+    async def _advance_async(self, method: Callable[..., Any], *args: Any) -> Any:
+        token = _response_span.set(self._self_spans[0] if self._self_spans else None)
+        try:
+            chunk = await super()._advance_async(method, *args)
+            self._record_chunk(chunk)
+            return chunk
+        finally:
+            _response_span.reset(token)
 
 
 def _wrap_result(result: Any, spans: List[Any]) -> Any:

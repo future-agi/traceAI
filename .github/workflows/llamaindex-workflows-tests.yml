@@ -69,6 +69,8 @@ jobs:
               'llama-index-core==0.14.25'
               'llama-index-workflows==2.26.1'
               'llama-index-llms-openai==0.8.3'
+              'llama-index-llms-anthropic==0.12.3'
+              'anthropic==0.75.0'
           # The lowest fi-instrumentation-otel the package declares, from PyPI
           # instead of this repo's core, with the latest LlamaIndex.
           - name: core-floor

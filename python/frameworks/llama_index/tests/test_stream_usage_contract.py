@@ -56,7 +56,7 @@ def traces():
 
 @pytest.fixture
 def clients():
-    state = {"mode": "ok", "last_byte_at": 0, "blocked": None}
+    state = {"mode": "ok", "last_byte_at": 0, "blocked": None, "requests": 0}
 
     def chunks():
         for text in ("synthetic ", "answer"):
@@ -93,6 +93,7 @@ def clients():
                 yield chunk
 
     def respond(request, asynchronous=False):
+        state["requests"] += 1
         body = json.loads(request.content)
         if body.get("stream"):
             return httpx.Response(200, headers={"content-type": "text/event-stream"},
@@ -268,7 +269,7 @@ def test_usage_preserves_zero_counts_and_provider_cache_fields(as_object):
         usage["output_tokens_details"] = SimpleNamespace(**usage["output_tokens_details"])
         usage = SimpleNamespace(**usage)
     assert dict(_get_token_counts(usage)) == {
-        "gen_ai.usage.input_tokens": 0, "gen_ai.usage.output_tokens": 0,
+        "gen_ai.usage.input_tokens": 4, "gen_ai.usage.output_tokens": 0,
         "gen_ai.usage.total_tokens": 0, "gen_ai.usage.cache_read_tokens": 0,
         "gen_ai.usage.cache_write_tokens": 4, "gen_ai.usage.output_tokens.reasoning": 0,
     }
@@ -382,3 +383,157 @@ async def test_async_generator_protocol_preserves_thrown_error(traces, clients):
         await stream.athrow(error)
     assert caught.value is error
     assert span(exporter, ".astream_chat").status.status_code == StatusCode.ERROR
+
+
+def query_engine(clients):
+    from llama_index.core import Document, VectorStoreIndex
+    from llama_index.core.embeddings import MockEmbedding
+
+    embed = MockEmbedding(embed_dim=3)
+    index = VectorStoreIndex.from_documents([Document(text="synthetic source")], embed_model=embed)
+    return index.as_query_engine(llm=model(clients), embed_model=embed, streaming=True)
+
+
+def rag_spans(exporter, asynchronous=False):
+    suffixes = (".aquery", "._aquery", ".asynthesize") if asynchronous else (
+        ".query", "._query", ".synthesize"
+    )
+    return [s for s in exporter.get_finished_spans() if s.name.endswith(suffixes)]
+
+
+def assert_rag_finished(exporter, instrumentor, status, asynchronous=False):
+    results = rag_spans(exporter, asynchronous)
+    assert len(results) == 3, [s.name for s in exporter.get_finished_spans()]
+    assert all(s.status.status_code == status for s in results)
+    assert not instrumentor._span_handler.open_spans
+    pending = [s for s in instrumentor._span_handler._export_queue.spans.values() if s.active]
+    assert not pending, [(s.id_, s.parent_id, s._parent.id_ if s._parent else None) for s in pending]
+    model_spans = [s for s in exporter.get_finished_spans()
+                   if s.name.endswith((".stream_chat", ".astream_chat", ".stream", ".astream"))]
+    assert all(s.context.trace_id == results[0].context.trace_id for s in model_spans)
+    return results
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+@pytest.mark.parametrize("instrumented", [False, True])
+def test_rag_stream_is_lazy_and_preserves_chunks(traces, clients, instrumented, hidden):
+    exporter, instrumentor = traces(hidden)
+    if not instrumented:
+        instrumentor.uninstrument()
+    response = query_engine(clients).query(PROMPT)
+    assert clients[2]["requests"] == 0
+    assert not rag_spans(exporter)
+    chunks = list(response.response_gen)
+    assert chunks == ["synthetic ", "answer", ""]
+    assert clients[2]["requests"] == 1
+    if instrumented:
+        for result in assert_rag_finished(exporter, instrumentor, StatusCode.OK):
+            assert result.end_time >= clients[2]["last_byte_at"]
+            assert (ANSWER in result.attributes["output.value"]) is not hidden
+        for result in exporter.get_finished_spans():
+            if hidden:
+                assert PROMPT not in str(dict(result.attributes))
+                assert ANSWER not in str(dict(result.attributes))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instrumented", [False, True])
+async def test_async_rag_stream_is_lazy_and_preserves_chunks(traces, clients, instrumented):
+    exporter, instrumentor = traces()
+    if not instrumented:
+        instrumentor.uninstrument()
+    response = await query_engine(clients).aquery(PROMPT)
+    assert clients[2]["requests"] == 0
+    assert clients[2]["last_byte_at"] == 0
+    assert not rag_spans(exporter, True)
+    chunks = [chunk async for chunk in response.response_gen]
+    assert chunks == ["synthetic ", "answer", ""]
+    if instrumented:
+        for result in assert_rag_finished(exporter, instrumentor, StatusCode.OK, True):
+            assert result.end_time >= clients[2]["last_byte_at"]
+            assert ANSWER in result.attributes["output.value"]
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_rag_stream_close_finishes_query_and_children(traces, clients, started):
+    exporter, instrumentor = traces()
+    response = query_engine(clients).query(PROMPT)
+    if started:
+        assert next(response.response_gen) == "synthetic "
+    assert not rag_spans(exporter)
+    response.response_gen.close()
+    for result in assert_rag_finished(exporter, instrumentor, StatusCode.ERROR):
+        assert result.attributes["llama_index.cancelled"] is True
+        assert all(e.name != "exception" for e in result.events)
+    response.response_gen.close()
+    assert len(rag_spans(exporter)) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+async def test_async_rag_stream_close_finishes_query_and_children(traces, clients, started):
+    exporter, instrumentor = traces()
+    response = await query_engine(clients).aquery(PROMPT)
+    if started:
+        assert await response.response_gen.__anext__() == "synthetic "
+    assert not rag_spans(exporter, True)
+    await response.response_gen.aclose()
+    for result in assert_rag_finished(exporter, instrumentor, StatusCode.ERROR, True):
+        assert result.attributes["llama_index.cancelled"] is True
+        assert all(e.name != "exception" for e in result.events)
+
+
+def test_rag_stream_failure_reaches_query(traces, clients):
+    exporter, instrumentor = traces()
+    clients[2]["mode"] = "error"
+    response = query_engine(clients).query(PROMPT)
+    assert next(response.response_gen) == "synthetic "
+    with pytest.raises(httpx.ReadError, match="synthetic stream failure"):
+        next(response.response_gen)
+    for result in assert_rag_finished(exporter, instrumentor, StatusCode.ERROR):
+        assert len([e for e in result.events if e.name == "exception"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_rag_stream_failure_reaches_query(traces, clients):
+    exporter, instrumentor = traces()
+    clients[2]["mode"] = "error"
+    response = await query_engine(clients).aquery(PROMPT)
+    assert await response.response_gen.__anext__() == "synthetic "
+    with pytest.raises(httpx.ReadError, match="synthetic stream failure"):
+        await response.response_gen.__anext__()
+    assert_rag_finished(exporter, instrumentor, StatusCode.ERROR, True)
+
+
+@pytest.mark.asyncio
+async def test_async_rag_task_cancellation_reaches_query(traces, clients):
+    exporter, instrumentor = traces()
+    clients[2].update(mode="block", blocked=asyncio.Event())
+    response = await query_engine(clients).aquery(PROMPT)
+    assert await response.response_gen.__anext__() == "synthetic "
+    task = asyncio.create_task(response.response_gen.__anext__())
+    await asyncio.wait_for(clients[2]["blocked"].wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for result in assert_rag_finished(exporter, instrumentor, StatusCode.ERROR, True):
+        assert result.attributes["llama_index.cancelled"] is True
+
+
+def test_closing_one_rag_response_does_not_end_another(traces, clients):
+    exporter, instrumentor = traces()
+    engine = query_engine(clients)
+    first = engine.query("first question")
+    second = engine.query("second question")
+    assert clients[2]["requests"] == 0
+    first.response_gen.close()
+    results = rag_spans(exporter)
+    assert len(results) == 3
+    assert all(s.status.status_code == StatusCode.ERROR for s in results)
+    assert any(s.active for s in instrumentor._span_handler._export_queue.spans.values())
+    assert "".join(second.response_gen) == ANSWER
+    results = rag_spans(exporter)
+    assert len(results) == 6
+    assert sum(s.status.status_code == StatusCode.OK for s in results) == 3
+    assert len({s.context.trace_id for s in results}) == 2
+    assert not any(s.active for s in instrumentor._span_handler._export_queue.spans.values())
