@@ -1,4 +1,4 @@
-"""Real provider normalization and MCPAgent, with only loopback HTTP/SSE IO."""
+"""Real provider normalization and MCPAgent, with offline HTTP/SSE and stdio IO."""
 
 from __future__ import annotations
 
@@ -110,7 +110,10 @@ def provider_spans(method, hidden=False, model=MODEL):
             )
 
             async def run():
-                client = mcp_client()
+                # HTTP MCP creates an OAuth store under HOME even without auth.
+                # Stdio keeps arbitrary synthetic homes independent of filesystem
+                # permissions, while the real provider still uses HTTP/SSE.
+                client = mcp_client("stdio")
                 try:
                     agent = MCPAgent(llm=llm, client=client, callbacks=[handler])
                     await drive(agent, method, query="show usage")
