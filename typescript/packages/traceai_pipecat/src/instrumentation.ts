@@ -34,6 +34,7 @@ type ConnectionScope = {
 type FinishSpan = (code: SpanStatusCode) => void;
 type PendingConnections = {
   attempts: Map<FinishSpan, ConnectionScope>;
+  claimedResolvers: WeakSet<object>;
   detach: () => void;
 };
 const CONNECTION_SCOPE = createContextKey("traceai.pipecat.connection-scope");
@@ -230,12 +231,18 @@ export class PipecatInstrumentation extends InstrumentationBase {
   }
 
   private invokeConnection(original: ClientMethod, instance: unknown, args: unknown[], scope?: ConnectionScope): unknown {
+    const pending = scope && this.pendingConnections.get(scope.instance);
     const before = scope && PipecatInstrumentation.connectionResolver(scope.instance);
     const result = original.apply(instance, args);
-    if (scope?.handshaking) {
+    if (scope?.handshaking && pending) {
       const resolver = PipecatInstrumentation.connectionResolver(scope.instance);
-      // A rejected overlapping call never installs a resolver of its own.
-      if (typeof resolver === "function" && resolver !== before) scope.resolver = resolver;
+      // A rejected overlapping call never installs a resolver of its own. An
+      // initialization callback can also reenter connect before this call returns:
+      // the nested attempt claims its resolver first, so the outer cannot borrow it.
+      if (typeof resolver === "function" && resolver !== before && !pending.claimedResolvers.has(resolver)) {
+        pending.claimedResolvers.add(resolver);
+        scope.resolver = resolver;
+      }
     }
     return result;
   }
@@ -296,7 +303,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
     if (scope) {
       let pending = this.pendingConnections.get(scope.instance);
       if (!pending) {
-        pending = { attempts: new Map(), detach: () => {} };
+        pending = { attempts: new Map(), claimedResolvers: new WeakSet(), detach: () => {} };
         this.pendingConnections.set(scope.instance, pending);
         pending.detach = this.observeConnections(scope.instance, pending);
       }
