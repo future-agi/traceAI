@@ -325,6 +325,37 @@ class BedrockReleaseRegressionTest {
         }
     }
 
+    @org.junit.jupiter.api.RepeatedTest(5)
+    void subscriptionCancellationPreservesTheSdkRaceOutcome() throws Exception {
+        realStreamCancellationEndsOnceBeforeFutureCallbacks("subscription");
+    }
+
+    @SuppressWarnings("unchecked")
+    private BedrockRuntimeAsyncClient observeFuture(BedrockRuntimeAsyncClient client,
+                                                     AtomicReference<CompletableFuture<Void>> observed) {
+        return (BedrockRuntimeAsyncClient) java.lang.reflect.Proxy.newProxyInstance(
+            BedrockRuntimeAsyncClient.class.getClassLoader(), new Class<?>[]{BedrockRuntimeAsyncClient.class},
+            (proxy, method, args) -> {
+                try {
+                    Object result = method.invoke(client, args);
+                    if (method.getName().equals("converseStream")) observed.set((CompletableFuture<Void>) result);
+                    return result;
+                } catch (java.lang.reflect.InvocationTargetException error) {
+                    throw error.getCause();
+                }
+            });
+    }
+
+    private void sameSdkOutcome(CompletableFuture<Void> sdk, Throwable observedError) {
+        // AWS can finish normally or report transport cancellation; preserve the exact outcome,
+        // not an assumed success determined by which cancellation listener happened to run first.
+        assertThat(sdk).isDone();
+        sdk.handle((value, error) -> {
+            assertThat(observedError).isSameAs(error);
+            return null;
+        }).join();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"subscription", "future", "timeout"})
     void realStreamCancellationEndsOnceBeforeFutureCallbacks(String mode) throws Exception {
@@ -340,13 +371,14 @@ class BedrockReleaseRegressionTest {
             public void onComplete() { }
         }).build();
         try (var client = async()) {
-            var result = new TracedBedrockRuntimeAsyncClient(client, tracer).converseStream(streamRequest(), handler);
+            AtomicReference<CompletableFuture<Void>> sdkFuture = new AtomicReference<>();
+            var result = new TracedBedrockRuntimeAsyncClient(observeFuture(client, sdkFuture), tracer)
+                .converseStream(streamRequest(), handler);
             assertThat(received.await(10, TimeUnit.SECONDS)).isTrue();
             assertThat(exporter.getFinishedSpanItems()).isEmpty();
             var observed = result.handle((value, error) -> {
-                // AWS completes its future normally on subscription cancellation (not future cancellation).
-                if (mode.equals("subscription")) assertThat(error).isNull();
-                else assertThat(error).isNotNull();
+                sameSdkOutcome(sdkFuture.get(), error);
+                if (!mode.equals("subscription")) assertThat(error).isNotNull();
                 assertThat(only().getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
                 return null;
             });
@@ -354,7 +386,7 @@ class BedrockReleaseRegressionTest {
             else if (mode.equals("future")) assertThat(result.cancel(true)).isTrue();
             else result.orTimeout(10, TimeUnit.MILLISECONDS);
             observed.get(10, TimeUnit.SECONDS);
-            assertThat(result.isCancelled()).isEqualTo(mode.equals("future"));
+            assertThat(result.isCancelled()).isEqualTo(sdkFuture.get().isCancelled());
             release.countDown();
         }
         assertThat(exporter.getFinishedSpanItems()).hasSize(1);
@@ -370,14 +402,14 @@ class BedrockReleaseRegressionTest {
             if (subscriberFailure) throw new IllegalStateException("private-subscriber-error");
         }).build();
         try (var client = async()) {
-            if (subscriberFailure) {
-                // AWS's Consumer subscriber catches user exceptions and cancels; native future succeeds.
-                client.converseStream(streamRequest(), handler).get(10, TimeUnit.SECONDS);
-                assertThat(exporter.getFinishedSpanItems()).isEmpty();
-            }
-            var result = new TracedBedrockRuntimeAsyncClient(client, tracer).converseStream(streamRequest(), handler);
-            if (subscriberFailure) result.get(10, TimeUnit.SECONDS);
-            else assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(ValidationException.class);
+            AtomicReference<CompletableFuture<Void>> sdkFuture = new AtomicReference<>();
+            var result = new TracedBedrockRuntimeAsyncClient(observeFuture(client, sdkFuture), tracer)
+                .converseStream(streamRequest(), handler);
+            result.handle((value, error) -> {
+                sameSdkOutcome(sdkFuture.get(), error);
+                return null;
+            }).get(10, TimeUnit.SECONDS);
+            if (!subscriberFailure) assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(ValidationException.class);
         }
         assertThat(only().getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
         assertThat(only().toString()).doesNotContain("private-provider-error", "private-subscriber-error");
