@@ -12,6 +12,7 @@ import {
   } from "@opentelemetry/api";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes } from "./maskingRules";
+  import { redactPiiInString } from "./piiRedaction";
   import {
     ERROR_TYPE,
     ERROR_TYPE_OTHER,
@@ -152,8 +153,12 @@ import {
       if (this.isEnded) return this;
       // The SDK keeps the last status set, so the last one decides whether error.type is added
       this.hasErrorStatus = status.code === SpanStatusCode.ERROR;
+      const sanitized = sanitizeStatus(status, this.config.hideErrorDetails, this.lastException);
+      // Hiding takes precedence; redact only retained text, without mutating caller-owned status.
       this.span.setStatus(
-        sanitizeStatus(status, this.config.hideErrorDetails, this.lastException),
+        this.config.piiRedaction && typeof sanitized.message === "string"
+          ? { ...sanitized, message: redactPiiInString(sanitized.message) }
+          : sanitized,
       );
       return this;
     }
@@ -170,7 +175,8 @@ import {
         return;
       }
       if (this.hasErrorStatus && !this.hasExplicitErrorType) {
-        this.span.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
+        // Derived classifications need the same masking as explicit error.type attributes.
+        this.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
       }
       this.span.end(endTime);
       this.isEnded = true;
