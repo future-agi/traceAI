@@ -21,10 +21,12 @@ _INPUT_CONTENT = ('langfuse.observation.input', 'memory.query.text',
 _OUTPUT_CONTENT = ('langfuse.observation.output',)
 _KIND_KEYS = ('fi.span.kind', 'gen_ai.span.kind', 'llm.request.type', 'openinference.span.kind')
 _MODEL_KEYS = frozenset({'gen_ai.request.model', 'gen_ai.response.model'})
-# Provider namespaces and a final model tag are identifiers, not arbitrary URLs.
-# In particular, reject schemes, userinfo, query strings and empty path segments.
+# Model IDs may be local paths, including a provider-prefixed absolute path
+# (openai//models/llama-3.2). Only that boundary allows a double slash; reject
+# URL schemes, userinfo, query/fragment material and other empty path segments.
 _MODEL_ID = re.compile(
-    r'[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
+    r'(?:/|[A-Za-z0-9][A-Za-z0-9._-]*//)?'
+    r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*'
     r'(?::[A-Za-z0-9][A-Za-z0-9._-]*)?'
 )
 

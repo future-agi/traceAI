@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def run_native(provider, pii, hidden, capture):
+def run_native(provider, pii, hidden, capture, model=None):
     tests = Path(__file__).resolve().parent
     harness_parent = tests.parents[2] / 'tests'
     with tempfile.TemporaryDirectory() as directory:
@@ -32,7 +32,8 @@ def run_native(provider, pii, hidden, capture):
         }
         result = subprocess.run(
             [sys.executable, '-I', str(tests / '_native_content_policy.py'),
-             str(harness_parent), provider, str(capture).lower()],
+             str(harness_parent), provider, str(capture).lower(),
+             *([model] if model is not None else [])],
             env=env, cwd=directory, capture_output=True, text=True, timeout=120,
         )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -48,3 +49,14 @@ def test_native_pii_policy(provider, pii, hidden):
 @pytest.mark.parametrize('pii', [False, True])
 def test_native_tagged_model_without_content(pii):
     run_native('ollama', pii, hidden=None, capture=False)
+
+
+@pytest.mark.parametrize('capture', [False, True])
+@pytest.mark.parametrize('model', [
+    'openai//models/llama-3.2',
+    'openai//opt/.cache/llama-3.2.gguf',
+    'openai/./models/llama-3.2',
+])
+def test_native_local_path_model(capture, model):
+    # Real OpenAIAdapter requests (including SSE) must keep their attribution.
+    run_native('openai', pii=False, hidden=None, capture=capture, model=model)

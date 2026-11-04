@@ -80,6 +80,10 @@ def test_all_native_content_uses_shared_pii_policy(monkeypatch, pii, capture, hi
 @pytest.mark.parametrize('model', [
     'llama3.2:3b', 'library/llama3.2:3b', 'provider/model-name:0',
     'openai/gpt-4o-mini', 'organization/model/variant:v1.2', 'a' * 256,
+    '/models/llama-3.2', 'openai//models/llama-3.2',
+    'openai//opt/models/llama-3.2.gguf', '/models/.cache/llama-3.2',
+    './models/llama-3.2', '../models/llama-3.2', 'openai/./models/llama-3.2',
+    '/' + 'a' * 255, 'openai//' + 'a' * 248,
 ])
 def test_valid_model_identifiers_survive(source_span, key, capture, model):
     native = source_span({key: model})
@@ -90,14 +94,20 @@ def test_valid_model_identifiers_survive(source_span, key, capture, model):
 
 
 @pytest.mark.parametrize('key', ['gen_ai.request.model', 'gen_ai.response.model'])
+@pytest.mark.parametrize('capture', [False, True])
 @pytest.mark.parametrize('model', [
     'https://host.invalid/secret', 'http://user:synthetic-secret@host.invalid/model',
     '//host.invalid/model', 'model?api_key=synthetic-secret', 'model#synthetic-secret',
     'user:synthetic-secret@host.invalid', 'model:tag/secret', 'model::tag',
     'model:tag\n', 'model synthetic-secret', 'a' * 257, '',
+    'file:/models/llama-3.2', 'file:///models/llama-3.2',
+    'openai/https://host.invalid/model', 'openai//user:synthetic-secret@host.invalid/model',
+    'openai//models/llama?api_key=synthetic-secret', 'openai//models/llama#synthetic-secret',
+    'openai///models/llama-3.2', '/models//llama-3.2', '/models/llama-3.2/',
+    'openai//models/llama\n', '/' + 'a' * 256, 'openai//' + 'a' * 249,
 ])
-def test_model_validation_rejects_urls_and_unbounded_content(source_span, key, model):
-    projected = project(source_span({key: model}), 'models', False)
+def test_model_validation_rejects_urls_and_unbounded_content(source_span, key, capture, model):
+    projected = project(source_span({key: model}), 'models', capture)
     assert key not in projected.attributes
     assert b'synthetic-secret' not in encode_spans([projected]).SerializeToString()
 

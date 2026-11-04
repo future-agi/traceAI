@@ -20,7 +20,9 @@ from harness import Receiver, _flatten_attributes  # noqa: E402
 
 PROVIDER = sys.argv[2]
 CAPTURE = sys.argv[3] == 'true'
-MODEL = 'llama3.2:3b' if PROVIDER == 'ollama' else 'openai/gpt-4o-mini'
+MODEL = sys.argv[4] if len(sys.argv) > 4 else (
+    'llama3.2:3b' if PROVIDER == 'ollama' else 'openai/gpt-4o-mini'
+)
 INPUT_EMAIL = 'synthetic.input@example.com'
 OUTPUT_EMAIL = 'synthetic.output@example.com'
 PROMPT = json.dumps({'question': 'Contact ' + INPUT_EMAIL, 'api_key': 'synthetic-input-secret'})
@@ -116,6 +118,9 @@ def main():
                 expected_count = 1 if PROVIDER == 'ollama' else 2
                 assert len(exported) == len(native) == len(requests) == expected_count
                 assert sum(bool(r.get('stream')) for r in requests) == (PROVIDER == 'openai')
+                # Cognee strips the provider prefix, not the absolute-path slash.
+                request_model = MODEL.removeprefix('openai/') if PROVIDER == 'openai' else MODEL
+                assert all(r['model'] == request_model for r in requests)
                 assert all(INPUT_EMAIL in json.dumps(r) for r in requests)
                 config = TraceConfig()
                 assert config.pii_redaction == (os.environ['FI_PII_REDACTION'] == 'true')
@@ -149,7 +154,7 @@ def main():
                             assert attrs[direction + '.mime_type'] == 'application/json'
                             assert ('<EMAIL_ADDRESS>' in expected) == config.pii_redaction
                     assert source.attributes['gen_ai.request.model'] == MODEL
-                    assert attrs.get('gen_ai.request.model') == MODEL, 'valid tagged model must survive'
+                    assert attrs.get('gen_ai.request.model') == MODEL, 'valid model identifier must survive'
                 assert all(r['path'] == '/tracer/v1/traces' for r in receiver.requests())
             finally:
                 handle.shutdown()
