@@ -248,9 +248,15 @@ class TracedChatModelTest {
                 public ChatOptions getDefaultOptions() {
                     return defaults;
                 }
+
+                // Also implements the 2.x interface when these precompiled tests run on that runtime.
+                public ChatOptions getOptions() {
+                    return defaults;
+                }
             };
             TracedChatModel model = new TracedChatModel(delegate, support.tracer, "synthetic");
             assertThat(model.getDefaultOptions()).isSameAs(defaults);
+            assertThat(model.getOptions()).isSameAs(defaults);
             assertThat(model.unwrap()).isSameAs(delegate);
             assertThat(support.spansStarted.get()).isZero();
         }

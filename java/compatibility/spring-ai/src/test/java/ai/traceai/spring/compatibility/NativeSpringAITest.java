@@ -172,13 +172,14 @@ class NativeSpringAITest {
     static final class Fixture implements AutoCloseable {
         final HttpServer server;
         final ConcurrentLinkedQueue<Reply> replies = new ConcurrentLinkedQueue<>();
+        final ConcurrentLinkedQueue<String> requests = new ConcurrentLinkedQueue<>();
         final InMemorySpanExporter exporter = InMemorySpanExporter.create();
         final SdkTracerProvider sdk;
         final ObservationRegistry registry = ObservationRegistry.create();
         Fixture(SpringAIObservationFilter filter) throws Exception {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", exchange -> {
-                exchange.getRequestBody().readAllBytes();
+                requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 Reply reply = replies.poll();
                 if (reply == null) reply = new Reply("{}", "application/json", 500);
                 byte[] bytes = reply.body().getBytes(StandardCharsets.UTF_8);

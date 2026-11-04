@@ -92,6 +92,24 @@ class TracedEmbeddingModelTest {
     }
 
     @Test
+    void responseModelDoesNotInventUnknownRequestModel() {
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            RecordingModel delegate = new RecordingModel();
+            TracedEmbeddingModel model = traced(support, delegate);
+            assertThat(model.call(new EmbeddingRequest(List.of("a"), null))).isSameAs(delegate.response);
+            assertThat(model.call(new EmbeddingRequest(List.of("a"), EmbeddingOptions.builder().build())))
+                .isSameAs(delegate.response);
+            assertThat(model.embedForResponse(List.of("a"))).isSameAs(delegate.response);
+
+            assertThat(support.finished()).hasSize(3).allSatisfy(span -> {
+                assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_REQUEST_MODEL))).isNull();
+                assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_MODEL)))
+                    .isEqualTo("embed-model");
+            });
+        }
+    }
+
+    @Test
     void floorApiOverloadsDelegateDirectlyWithOriginalArguments() {
         try (SpanTestSupport support = new SpanTestSupport()) {
             RecordingModel delegate = new RecordingModel();
