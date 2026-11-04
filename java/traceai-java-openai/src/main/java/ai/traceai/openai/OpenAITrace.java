@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Bounded, best-effort wire metadata. Never changes an SDK payload or throws parsing errors. */
 final class OpenAITrace {
     static final ContextKey<Boolean> LEGACY = ContextKey.named("traceai-openai-legacy");
+    static final ContextKey<Map<String, String>> FI_ATTRIBUTES = ContextKey.named("traceai-openai-fi-attributes");
     static final int LIMIT = 64 * 1024;
     final FITracer tracer;
     final Span span;
@@ -32,8 +33,11 @@ final class OpenAITrace {
 
     OpenAITrace(FITracer tracer, String operation) {
         this.tracer = tracer;
+        Context parent = Context.current();
+        Map<String, String> attributes = parent.get(FI_ATTRIBUTES);
         span = tracer.startSpan("OpenAI " + operation,
-            "embeddings".equals(operation) ? FISpanKind.EMBEDDING : FISpanKind.LLM);
+            "embeddings".equals(operation) ? FISpanKind.EMBEDDING : FISpanKind.LLM, parent,
+            attributes != null ? attributes : ai.traceai.ContextAttributes.getAttributesFromContext());
         span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
         span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, operation);
         context = Context.current().with(span);
@@ -118,6 +122,11 @@ final class OpenAITrace {
             count(usage, "completion_tokens", SemanticConventions.LLM_TOKEN_COUNT_COMPLETION);
             count(usage, "output_tokens", SemanticConventions.LLM_TOKEN_COUNT_COMPLETION);
             count(usage, "total_tokens", SemanticConventions.LLM_TOKEN_COUNT_TOTAL);
+            // These are subsets of aggregate usage, not extra tokens to add to totals.
+            detail(usage, "prompt_tokens_details", "cached_tokens", SemanticConventions.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ);
+            detail(usage, "input_tokens_details", "cached_tokens", SemanticConventions.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ);
+            detail(usage, "completion_tokens_details", "reasoning_tokens", SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING);
+            detail(usage, "output_tokens_details", "reasoning_tokens", SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING);
         }
         if (json.has("choices") && json.get("choices").isJsonArray()) {
             List<Map<String, String>> output = new ArrayList<>();
@@ -188,6 +197,15 @@ final class OpenAITrace {
 
     private void count(JsonObject json, String field, String key) {
         if (json.has(field) && json.get(field).isJsonPrimitive()) span.setAttribute(key, json.get(field).getAsLong());
+    }
+
+    private void detail(JsonObject usage, String group, String field, String key) {
+        JsonElement details = usage.get(group);
+        if (details == null || !details.isJsonObject()) return;
+        JsonElement value = details.getAsJsonObject().get(field);
+        if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
+            count(details.getAsJsonObject(), field, key);
+        }
     }
 
     private static String string(JsonObject json, String key) {

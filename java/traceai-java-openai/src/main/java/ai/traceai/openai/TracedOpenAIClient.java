@@ -73,7 +73,7 @@ public class TracedOpenAIClient {
             tracer.setInputMessages(span, inputMessages);
 
             // Capture raw input
-            tracer.setRawInput(span, params);
+            LegacyOpenAITrace.input(tracer, span, params, false);
 
             // Execute request
             ChatCompletion result = client.chat().completions().create(params);
@@ -107,21 +107,16 @@ public class TracedOpenAIClient {
 
                 // Set primary output value
                 ChatCompletion.Choice firstChoice = result.choices().get(0);
-                if (firstChoice.message() != null && firstChoice.message().content().isPresent()) {
+                if (!tracer.getConfig().isHideOutputMessages()
+                        && firstChoice.message() != null && firstChoice.message().content().isPresent()) {
                     tracer.setOutputValue(span, firstChoice.message().content().get());
                 }
             }
 
             // Token usage — usage() returns Optional<CompletionUsage>
-            result.usage().ifPresent(usage -> {
-                tracer.setTokenCounts(span,
-                    usage.promptTokens(),
-                    usage.completionTokens(),
-                    usage.totalTokens()
-                );
-            });
+            result.usage().ifPresent(usage -> LegacyOpenAITrace.usage(tracer, span, usage));
 
-            tracer.setRawOutput(span, result);
+            if (!tracer.getConfig().isHideOutputMessages()) tracer.setRawOutput(span, result);
             span.setStatus(StatusCode.OK);
             return result;
 
@@ -144,7 +139,7 @@ public class TracedOpenAIClient {
             span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, params.model().toString());
             span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "embeddings");
 
-            tracer.setRawInput(span, params);
+            LegacyOpenAITrace.input(tracer, span, params);
 
             CreateEmbeddingResponse result = client.embeddings().create(params);
 
@@ -165,7 +160,7 @@ public class TracedOpenAIClient {
                     result.usage().totalTokens());
             }
 
-            tracer.setRawOutput(span, result);
+            if (!tracer.getConfig().isHideOutputMessages()) tracer.setRawOutput(span, result);
             span.setStatus(StatusCode.OK);
             return result;
 
@@ -206,7 +201,7 @@ public class TracedOpenAIClient {
                 inputMessages.add(FITracer.message("user", extractMessageContent(message)));
             }
             tracer.setInputMessages(span, inputMessages);
-            if (!tracer.getConfig().isHideInputMessages()) tracer.setRawInput(span, params);
+            LegacyOpenAITrace.input(tracer, span, params, true);
             return new LegacyChatStream(client.chat().completions().createStreaming(params), span, tracer);
         } catch (Throwable error) {
             tracer.setError(span, error);

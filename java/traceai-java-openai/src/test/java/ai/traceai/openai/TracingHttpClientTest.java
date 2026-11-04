@@ -32,6 +32,25 @@ class TracingHttpClientTest {
     final FITracer tracer = new FITracer(provider.get("test"), TraceConfig.builder().build());
     @AfterEach void closeProvider() { provider.close(); }
 
+    @Test void malformedOptionalUsageDoesNotDropOutputOrOtherMetrics() throws Exception {
+        for (String details : List.of("null", "[]", "{}", "{\"cached_tokens\":null}", "{\"cached_tokens\":\"unknown\"}")) {
+            String json = "{\"output\":\"answer\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15,"
+                + "\"input_tokens_details\":" + details + ",\"output_tokens_details\":{\"reasoning_tokens\":2}}}";
+            try (var response = TracingHttpClient.wrap(new FakeTransport(new FakeResponse("application/json", json)), tracer)
+                    .execute(request("responses", "{}"))) {
+                assertThat(new String(response.body().readAllBytes(), StandardCharsets.UTF_8)).isEqualTo(json);
+            }
+        }
+        assertThat(spans()).hasSize(5);
+        for (var span : spans()) {
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+            assertThat(attr(span, "output.value")).contains("answer");
+            assertThat(span.getAttributes().get(AttributeKey.longKey("gen_ai.usage.total_tokens"))).isEqualTo(15);
+            assertThat(span.getAttributes().get(AttributeKey.longKey("gen_ai.usage.input_tokens.cache_read"))).isNull();
+            assertThat(span.getAttributes().get(AttributeKey.longKey("gen_ai.usage.output_tokens.reasoning"))).isEqualTo(2);
+        }
+    }
+
     @Test void wrappingDoesNotReadAndCloseIsOwnedByCaller() throws Exception {
         var raw = new FakeResponse("application/json", "{\"id\":\"r1\",\"model\":\"m1\"}");
         var transport = new FakeTransport(raw);

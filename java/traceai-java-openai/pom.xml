@@ -19,7 +19,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <!-- Compiled separately against the current SDK and the packaged adapter. -->
-                    <testExcludes><testExclude>**/ModernOpenAIClientTest.java</testExclude></testExcludes>
+                    <testExcludes><testExclude>**/Modern*Test.java</testExclude></testExcludes>
                 </configuration>
             </plugin>
         </plugins>

@@ -98,8 +98,7 @@ final class LegacyChatStream implements StreamResponse<ChatCompletionChunk>, Ite
                     });
                 }
             }
-            chunk.usage().ifPresent(usage -> tracer.setTokenCounts(span,
-                usage.promptTokens(), usage.completionTokens(), usage.totalTokens()));
+            chunk.usage().ifPresent(usage -> LegacyOpenAITrace.usage(tracer, span, usage));
         } catch (RuntimeException ignored) { /* Preserve the SDK's chunk unchanged. */ }
     }
 

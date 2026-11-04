@@ -67,7 +67,11 @@ public final class TracingHttpClient implements HttpClient {
      */
     public static HttpClient inCurrentContext(HttpClient transport) {
         HttpClient delegate = transport instanceof ContextClient ? ((ContextClient) transport).delegate : transport;
-        return new ContextClient(Objects.requireNonNull(delegate, "transport"), Context.current());
+        // FI identity uses ThreadLocals, not OTel Context. Bind even an empty snapshot so a
+        // dispatch thread's identity cannot be mistaken for the caller's.
+        Context context = Context.current().with(OpenAITrace.FI_ATTRIBUTES,
+            java.util.Map.copyOf(ai.traceai.ContextAttributes.getAttributesFromContext()));
+        return new ContextClient(Objects.requireNonNull(delegate, "transport"), context);
     }
 
     private static final class ContextClient implements HttpClient {
