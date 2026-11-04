@@ -39,12 +39,13 @@ jobs:
           PNPM="$RUNNER_TEMP/tools/node_modules/.bin/pnpm"
           "$PNPM" --filter @traceai/huggingface-transformers... install --frozen-lockfile --ignore-scripts
           "$PNPM" --filter @traceai/huggingface-transformers... run build
+          "$PNPM" --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
           "$PNPM" --filter @traceai/huggingface-transformers pack --pack-destination "$RUNNER_TEMP/packed"
       - name: Clean-install tarball and stage pinned fixtures
         run: |
           TARBALL="$(find "$RUNNER_TEMP/packed" -name '*.tgz' -type f)"
           npm install --prefix "$RUNNER_TEMP/customer" --ignore-scripts --no-audit --no-fund \
-            "$TARBALL" \
+            "$TARBALL" "$RUNNER_TEMP/fi-core.tgz" \
             "@huggingface/transformers@${{ matrix.transformers }}" \
             @opentelemetry/sdk-trace-node@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             typescript@5.9.3 @types/node@22
