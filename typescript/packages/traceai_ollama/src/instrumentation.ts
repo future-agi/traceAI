@@ -92,7 +92,7 @@ interface OllamaTool {
 
 interface OllamaChatRequest {
   model: string;
-  messages: OllamaMessage[];
+  messages?: OllamaMessage[];
   format?: string | Record<string, unknown>;
   options?: Record<string, unknown>;
   stream?: boolean;
@@ -277,7 +277,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaChatRequest,
       ) {
-        const { messages: _messages, ...invocationParameters } = request;
+        const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Chat`,
@@ -293,7 +293,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(request),
-              ...getChatToolsJSONSchema(request),
+              // Tool definitions stay in INPUT_VALUE/RAW_INPUT, where FITracer
+              // applies code and environment input-hiding controls.
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
             },
           },
@@ -353,7 +354,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaGenerateRequest,
       ) {
-        const invocationParameters = getGenerateInvocationParameters(request);
+        const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Generate`,
@@ -781,7 +782,7 @@ function wrapGenerateStream(
  * Gets input message attributes for chat requests
  */
 function getChatInputMessagesAttributes(request: OllamaChatRequest): Attributes {
-  const serialized = request.messages.map((message) => {
+  const serialized = (request.messages ?? []).map((message) => {
     const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
       obj.content = message.content;
@@ -789,16 +790,6 @@ function getChatInputMessagesAttributes(request: OllamaChatRequest): Attributes 
     return obj;
   });
   return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
-}
-
-/**
- * Gets tool schema attributes for chat requests
- */
-function getChatToolsJSONSchema(request: OllamaChatRequest): Attributes {
-  if (!request.tools) {
-    return {};
-  }
-  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
 }
 
 /**
@@ -842,22 +833,22 @@ function getChatUsageAttributes(response: OllamaChatResponse): Attributes {
 
 // Content-bearing fields (including stop sequences, JSON schemas and context
 // tokens) belong only in the privacy-governed input attributes, never parameters.
-const GENERATE_NUMERIC_OPTIONS = [
+const INVOCATION_NUMERIC_OPTIONS = [
   "num_keep", "seed", "num_predict", "top_k", "top_p", "tfs_z", "typical_p",
   "repeat_last_n", "temperature", "repeat_penalty", "presence_penalty",
   "frequency_penalty", "mirostat", "mirostat_tau", "mirostat_eta", "num_ctx",
   "num_batch", "num_gpu", "main_gpu", "rope_frequency_base", "rope_frequency_scale",
   "num_thread",
 ] as const;
-const GENERATE_BOOLEAN_OPTIONS = [
+const INVOCATION_BOOLEAN_OPTIONS = [
   "penalize_newline", "numa", "low_vram", "f16_kv", "vocab_only", "use_mmap",
   "use_mlock", "embedding_only",
 ] as const;
 
-function getGenerateInvocationParameters(request: OllamaGenerateRequest): Record<string, unknown> {
+function getInvocationParameters(request: OllamaChatRequest | OllamaGenerateRequest): Record<string, unknown> {
   const parameters: Record<string, unknown> = { model: request.model };
   if (typeof request.stream === "boolean") parameters.stream = request.stream;
-  if (typeof request.raw === "boolean") parameters.raw = request.raw;
+  if ("raw" in request && typeof request.raw === "boolean") parameters.raw = request.raw;
   if (request.format === "json") parameters.format = request.format;
   const keepAlive = request.keep_alive;
   if ((typeof keepAlive === "number" && Number.isFinite(keepAlive)) ||
@@ -866,11 +857,11 @@ function getGenerateInvocationParameters(request: OllamaGenerateRequest): Record
   }
   if (request.options) {
     const options: Record<string, number | boolean> = {};
-    for (const key of GENERATE_NUMERIC_OPTIONS) {
+    for (const key of INVOCATION_NUMERIC_OPTIONS) {
       const value = request.options[key];
       if (typeof value === "number" && Number.isFinite(value)) options[key] = value;
     }
-    for (const key of GENERATE_BOOLEAN_OPTIONS) {
+    for (const key of INVOCATION_BOOLEAN_OPTIONS) {
       const value = request.options[key];
       if (typeof value === "boolean") options[key] = value;
     }
