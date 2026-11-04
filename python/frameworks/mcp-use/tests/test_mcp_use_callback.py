@@ -445,11 +445,15 @@ def test_either_hide_flag_drops_the_error_text(config):
     assert "SERVER-SIDE-TEXT" not in wire(spans) and "tool failed because" not in wire(spans)
 
 
-def test_stack_traces_paths_user_and_host_are_never_recorded():
+@pytest.mark.parametrize(
+    "home", ["/home/synthetic", "/work/synthetic", "/data/synthetic", "/custom.mount/synthetic user"]
+)
+def test_stack_traces_paths_user_and_host_are_never_recorded(monkeypatch, home):
     # mcp-use sends a failed MCP call back to the model as format_error()'s
     # dict, whose "stack" is a full traceback; exception text quotes paths.
+    # HOME is not necessarily under one of the conventional filesystem roots.
+    monkeypatch.setenv("HOME", home)
     user, host = getpass.getuser(), socket.gethostname()
-    home = os.path.expanduser("~")
     exporter, handler = _handler()
     run = Run(handler)
     run.llm(AIMessage(content="", tool_calls=[{"name": "fail", "args": {"topic": "t"}, "id": "c", "type": "tool_call"}]))
@@ -490,6 +494,31 @@ def test_stack_traces_paths_user_and_host_are_never_recorded():
         "code": "UNKNOWN",
         "tool": "fail",
     }
+
+
+@pytest.mark.parametrize("home", ["/work/synthetic", "/data/synthetic", "/custom.mount/synthetic user"])
+def test_scrub_local_uses_home_with_path_boundaries(monkeypatch, home):
+    monkeypatch.setenv("HOME", home)
+    assert scrub_local("cannot open {0}/notes/archive.db".format(home)) == "cannot open [path]"
+    assert scrub_local('home="{0}"; retry {0}/'.format(home)) == 'home="[path]"; retry [path]'
+    for text in (
+        "https://example.com" + home + "/notes",
+        "/api/v1" + home + "/items",
+        home + "-other/notes",
+        home + "2/notes",
+        home + ".bak/notes",
+        "relative" + home + "/notes",
+        "see /api/v1/items and /data/v1/query",
+    ):
+        assert scrub_local(text) == text
+    # A changed home is read at call time, not cached from the first import.
+    monkeypatch.setenv("HOME", home + "2/")
+    assert scrub_local(home + "2/notes") == "[path]"
+
+
+def test_scrub_local_root_home_does_not_hide_every_api_path(monkeypatch):
+    monkeypatch.setenv("HOME", "/")
+    assert scrub_local("GET /api/v1/items") == "GET /api/v1/items"
 
 
 def test_scrub_local_keeps_ordinary_text():
