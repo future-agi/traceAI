@@ -179,9 +179,7 @@ public class TracedSearchClient {
             try (Scope scope = parent.with(span).makeCurrent()) {
                 setCommonAttributes(span, topK, dimensions, mode);
                 span.setAttribute("azure_search.result_scope", "page");
-                if (!"vector".equals(mode)) {
-                    tracer.setInputValue(span, searchText);
-                }
+                tracer.setInputValue(span, searchText);
                 if (options.getFilter() != null) {
                     span.setAttribute("azure_search.has_filter", true);
                     if (!tracer.getConfig().isHideInputs()) {
