@@ -33,6 +33,7 @@ langchain-core = ">=1.6.12,<2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+langchain-anthropic = ">=1.7.7,<2"
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"

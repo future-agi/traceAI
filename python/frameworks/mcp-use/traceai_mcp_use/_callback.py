@@ -40,7 +40,6 @@ from traceai_mcp_use._text import (
     MAX_VALUE_BYTES,
     KnownTexts,
     Secrets,
-    cap,
     clean,
 )
 from traceai_mcp_use.version import __version__
@@ -67,6 +66,9 @@ OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
 TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 CACHE_READ_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_READ_TOKENS
 CACHE_WRITE_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_WRITE_TOKENS
+# Provider-specific billing tiers are not part of the shared semantic attributes.
+CACHE_WRITE_5M_TOKENS = "mcp_use.llm.cache_creation.ephemeral_5m_input_tokens"
+CACHE_WRITE_1H_TOKENS = "mcp_use.llm.cache_creation.ephemeral_1h_input_tokens"
 TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_CALL_ID = SpanAttributes.GEN_AI_TOOL_CALL_ID
 TOOL_ARGUMENTS = SpanAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
@@ -393,10 +395,10 @@ class FutureAGICallback(BaseCallbackHandler):
         return clean(text, self._secrets, limit, self._pii, self._scrubs(root))
 
     def _name(self, text: Any) -> Optional[str]:
-        """An identifier (model, tool name, id): secrets removed, 256-byte cap."""
+        """An identifier: secrets and local identity removed before the byte cap."""
         if not isinstance(text, str) or not text:
             return None
-        return cap(self._secrets.redact(text), MAX_NAME_BYTES)
+        return self._clean(text, None, MAX_NAME_BYTES)
 
     def _remember(self, root: Optional[_Root], texts: Iterable[Optional[str]], output: bool) -> None:
         if root is None:
@@ -956,7 +958,19 @@ class FutureAGICallback(BaseCallbackHandler):
             details = usage.get("input_token_details")
             if isinstance(details, Mapping):
                 self._set(span, CACHE_READ_TOKENS, _int(details.get("cache_read")))
-                self._set(span, CACHE_WRITE_TOKENS, _int(details.get("cache_creation")))
+                short = _int(details.get("ephemeral_5m_input_tokens"))
+                long = _int(details.get("ephemeral_1h_input_tokens"))
+                self._set(span, CACHE_WRITE_5M_TOKENS, short)
+                self._set(span, CACHE_WRITE_1H_TOKENS, long)
+                # ChatAnthropic reports cache_creation=0 when it supplies the
+                # TTL breakdown. Prefer the tiers (including explicit zeros),
+                # but do not add them to LangChain's inclusive input/total.
+                writes = (
+                    (short or 0) + (long or 0)
+                    if short is not None or long is not None
+                    else _int(details.get("cache_creation"))
+                )
+                self._set(span, CACHE_WRITE_TOKENS, writes)
         elif isinstance(llm_output, Mapping) and isinstance(llm_output.get("token_usage"), Mapping):
             token_usage = llm_output["token_usage"]
             self._set(span, INPUT_TOKENS, _int(token_usage.get("prompt_tokens")))

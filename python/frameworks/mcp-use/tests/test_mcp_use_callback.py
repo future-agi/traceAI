@@ -992,6 +992,34 @@ def test_malformed_callback_payloads_never_raise(capture):
     assert handler._runs == {}
 
 
+@pytest.mark.parametrize("identifier,expected", [
+    ("org/model-v1", "org/model-v1"),
+    ("/work/synthetic-review-user/model.gguf", "[path]"),
+    ("/work/synthetic-review-user", "[path]"),
+    ("/work/synthetic-review-user-extra/model.gguf", "/work/synthetic-review-user-extra/model.gguf"),
+    ("https://models.example/work/synthetic-review-user/model", "https://models.example/work/synthetic-review-user/model"),
+])
+def test_identifier_scrub_preserves_model_and_url_boundaries(monkeypatch, identifier, expected):
+    monkeypatch.setenv("HOME", "/work/synthetic-review-user")
+    exporter, provider = new_provider()
+    try:
+        handler = FutureAGICallback(tracer_provider=provider)
+        assert handler._name(identifier) == expected
+    finally:
+        provider.shutdown()
+
+
+def test_identifier_home_is_scrubbed_before_truncation(monkeypatch):
+    home = "/data/" + "synthetic-user-" * 30
+    monkeypatch.setenv("HOME", home)
+    exporter, provider = new_provider()
+    try:
+        handler = FutureAGICallback(tracer_provider=provider)
+        assert handler._name(home + "/model.gguf") == "[path]"
+    finally:
+        provider.shutdown()
+
+
 def test_constructor_validates_its_arguments():
     with pytest.raises(TypeError, match="TraceConfig"):
         FutureAGICallback(config={"hide_inputs": True})  # type: ignore[arg-type]
