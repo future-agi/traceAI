@@ -19,6 +19,8 @@ type invocation struct {
 	Temperature *float64        `json:"temperature"`
 	TopP        *float64        `json:"top_p"`
 	Tools       []invokeTool    `json:"tools"`
+
+	contentOmitted bool
 }
 type invokeMessage struct {
 	Role    string          `json:"role"`
@@ -50,8 +52,19 @@ type invokeCacheCreation struct {
 	OneHour     *int64 `json:"ephemeral_1h_input_tokens"`
 }
 
+// Recognize the Messages array without retaining its contents. encoding/json
+// validates the whole document before invoking this method; schema recognition
+// needs only the array shape, while the provider remains responsible for validity.
+// Do not use RawMessage here: it would copy an arbitrarily large prompt or media.
+type invokeMessageArray bool
+
+func (a *invokeMessageArray) UnmarshalJSON(data []byte) error {
+	*a = len(data) > 0 && data[0] == '['
+	return nil
+}
+
 func parseInvocation(model *string, body []byte) *invocation {
-	if model == nil || len(body) > 2*maxCapture {
+	if model == nil {
 		return nil
 	}
 	// Match only the final resource component, including regional inference
@@ -65,6 +78,25 @@ func parseInvocation(model *string, body []byte) *invocation {
 	}
 	if !strings.HasPrefix(id, "anthropic.") {
 		return nil
+	}
+	if len(body) > 2*maxCapture {
+		// A capture limit must not suppress usage, completion or error telemetry.
+		// Decode only bounded metadata; skip system, tools and unknown fields,
+		// and inspect messages without allocating its contents or element slice.
+		var metadata struct {
+			Version     boundedMetadataString `json:"anthropic_version"`
+			Messages    invokeMessageArray    `json:"messages"`
+			MaxTokens   *int64                `json:"max_tokens"`
+			Temperature *float64              `json:"temperature"`
+			TopP        *float64              `json:"top_p"`
+		}
+		if json.Unmarshal(body, &metadata) != nil || metadata.Version != "bedrock-2023-05-31" || !metadata.Messages {
+			return nil
+		}
+		return &invocation{
+			Version: string(metadata.Version), MaxTokens: metadata.MaxTokens,
+			Temperature: metadata.Temperature, TopP: metadata.TopP, contentOmitted: true,
+		}
 	}
 	var in invocation
 	if json.Unmarshal(body, &in) != nil || in.Version != "bedrock-2023-05-31" || in.Messages == nil {
@@ -132,6 +164,10 @@ func (r *record) invokeInput(in *invocation) {
 		r.span.SetAttributes(attribute.String("input.value", "__REDACTED__"))
 	}
 	if !r.privacy.input() {
+		return
+	}
+	if in.contentOmitted {
+		r.truncated = true
 		return
 	}
 	ms := make([]message, 0)
