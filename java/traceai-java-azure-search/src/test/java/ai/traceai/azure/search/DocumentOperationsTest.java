@@ -14,7 +14,12 @@ import com.azure.core.util.ClientOptions;
 import com.azure.core.util.TracingOptions;
 import com.azure.search.documents.SearchClient;
 import com.azure.search.documents.SearchClientBuilder;
+import com.azure.search.documents.models.IndexAction;
+import com.azure.search.documents.models.IndexActionType;
+import com.azure.search.documents.models.IndexBatchBase;
+import com.azure.search.documents.models.IndexBatchException;
 import com.azure.search.documents.models.IndexDocumentsResult;
+import com.azure.search.documents.models.IndexingResult;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import io.opentelemetry.api.common.AttributeKey;
@@ -27,6 +32,7 @@ import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -49,6 +55,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.tuple;
 
 class DocumentOperationsTest {
     private static final String KEY = "private-document-key-canary";
@@ -66,6 +74,8 @@ class DocumentOperationsTest {
     private SdkTracerProvider provider;
     private SearchClient client;
     private volatile boolean fail;
+    private volatile boolean rejectDocument;
+    private RuntimeException transportFailure;
 
     @BeforeEach
     void start() throws Exception {
@@ -79,15 +89,22 @@ class DocumentOperationsTest {
         server.createContext("/", exchange -> {
             bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             paths.add(exchange.getRequestURI().getPath());
-            String response = fail
-                ? "{\"error\":{\"code\":\"BadRequest\",\"message\":\"" + ERROR + "\"}}"
-                : exchange.getRequestMethod().equals("GET")
-                    ? "{\"id\":\"" + KEY + "\"}"
-                    : "{\"value\":[{\"key\":\"one\",\"status\":true,\"statusCode\":200},"
-                        + "{\"key\":\"two\",\"status\":true,\"statusCode\":200}]}";
+            String response;
+            if (fail) {
+                response = "{\"error\":{\"code\":\"BadRequest\",\"message\":\"" + ERROR + "\"}}";
+            } else if (exchange.getRequestURI().getPath().endsWith("/$count")) {
+                response = "2";
+            } else if (exchange.getRequestMethod().equals("GET")) {
+                response = "{\"id\":\"" + KEY + "\"}";
+            } else {
+                response = "{\"value\":[{\"key\":\"one\",\"status\":true,\"statusCode\":200},"
+                    + (rejectDocument
+                        ? "{\"key\":\"two\",\"status\":false,\"statusCode\":503,\"errorMessage\":\"" + ERROR + "\"}]}"
+                        : "{\"key\":\"two\",\"status\":true,\"statusCode\":200}]}");
+            }
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(fail ? 400 : 200, bytes.length);
+            exchange.sendResponseHeaders(fail ? 400 : rejectDocument ? 207 : 200, bytes.length);
             exchange.getResponseBody().write(bytes);
             exchange.close();
         });
@@ -119,9 +136,10 @@ class DocumentOperationsTest {
     void documentLookupRespectsInputCaptureOnSuccessAndFailure(boolean hideInputs, boolean failure) throws Exception {
         fail = failure;
         TracedSearchClient traced = traced(hideInputs);
+        Throwable error = null;
         if (failure) {
-            assertThatThrownBy(() -> traced.getDocument(KEY, Map.class))
-                .isInstanceOf(RuntimeException.class).hasCauseInstanceOf(HttpResponseException.class);
+            error = catchThrowable(() -> traced.getDocument(KEY, Map.class));
+            assertThat(error).isNotNull();
         } else {
             assertThat(traced.getDocument(KEY, Map.class)).containsEntry("id", KEY);
         }
@@ -157,6 +175,9 @@ class DocumentOperationsTest {
         });
         assertThat(exported).isEmpty();
         assertThat(Span.current().getSpanContext().isValid()).isFalse();
+        if (failure) {
+            assertThat(error).isInstanceOf(HttpResponseException.class);
+        }
     }
 
     @ParameterizedTest
@@ -200,7 +221,7 @@ class DocumentOperationsTest {
                 throw failure;
             }
         };
-        assertThatThrownBy(() -> write(traced(true), operation, documents)).hasCause(failure);
+        assertThatThrownBy(() -> write(traced(true), operation, documents)).isSameAs(failure);
         assertThat(bodies).isEmpty();
         assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
             assertThat(span.hasEnded()).isTrue();
@@ -208,6 +229,106 @@ class DocumentOperationsTest {
             assertThat(span.toString()).doesNotContain(failure.getMessage());
         });
         assertThat(Span.current().getSpanContext().isValid()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"upload", "merge", "delete", "get", "count"})
+    void documentFailuresPreserveNativeExceptionAndEndSpan(String operation) {
+        fail = operation.equals("get") || operation.equals("count");
+        rejectDocument = !fail;
+        Throwable raw = catchThrowable(() -> execute(client, operation));
+        assertThat(raw).isInstanceOf(fail ? HttpResponseException.class : IndexBatchException.class);
+        assertThat(exporter.getFinishedSpanItems()).isEmpty();
+        assertThat(bodies).hasSize(1);
+        List<String> nativeBodies = List.copyOf(bodies);
+        List<String> nativePaths = List.copyOf(paths);
+        bodies.clear();
+        paths.clear();
+
+        Throwable error = catchThrowable(() -> execute(traced(true), operation));
+        assertThat(bodies).containsExactlyElementsOf(nativeBodies);
+        assertThat(paths).containsExactlyElementsOf(nativePaths);
+        assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
+            assertThat(span.hasEnded()).isTrue();
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(span.toString()).doesNotContain(KEY, ERROR, CREDENTIAL);
+        });
+        assertThat(Span.current().getSpanContext().isValid()).isFalse();
+        assertThat(error).isExactlyInstanceOf(raw.getClass());
+        if (error instanceof IndexBatchException indexing) {
+            assertThat(indexing.getIndexingResults())
+                .extracting(IndexingResult::getKey, IndexingResult::isSucceeded, IndexingResult::getStatusCode)
+                .containsExactly(tuple("one", true, 200), tuple("two", false, 503));
+            assertThat(indexing.getIndexingResults().get(1).getErrorMessage()).isEqualTo(ERROR);
+            IndexActionType action = switch (operation) {
+                case "merge" -> IndexActionType.MERGE_OR_UPLOAD;
+                case "delete" -> IndexActionType.DELETE;
+                default -> IndexActionType.UPLOAD;
+            };
+            var batch = new IndexBatchBase<>(DOCUMENTS.stream().map(document ->
+                new IndexAction<Map<String, Object>>().setActionType(action).setDocument(document)).toList());
+            assertThat(indexing.findFailedActionsToRetry(batch, document -> document.get("id").toString()).getActions())
+                .singleElement().satisfies(retry -> {
+                    assertThat(retry.getDocument()).isEqualTo(DOCUMENTS.get(1));
+                    assertThat(retry.getActionType()).isEqualTo(action);
+                });
+        } else {
+            assertThat(((HttpResponseException) error).getResponse().getStatusCode()).isEqualTo(400);
+            assertThat(error.getMessage()).contains(ERROR);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"upload", "merge", "delete", "get", "count"})
+    void nativePipelineFailuresKeepTheirIdentity(String operation) {
+        fail = operation.equals("get") || operation.equals("count");
+        rejectDocument = !fail;
+        Throwable nativeError = catchThrowable(() -> execute(client, operation));
+        assertThat(nativeError).isInstanceOf(fail ? HttpResponseException.class : IndexBatchException.class);
+
+        // Replay an actual SDK failure at the transport boundary to check identity.
+        // The unwrapped client control verifies that Azure itself preserves this instance.
+        transportFailure = (RuntimeException) nativeError;
+        assertThat(catchThrowable(() -> execute(client, operation))).isSameAs(nativeError);
+        Throwable error = catchThrowable(() -> execute(traced(true), operation));
+        assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
+            assertThat(span.hasEnded()).isTrue();
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+            assertThat(span.toString()).doesNotContain(KEY, ERROR, CREDENTIAL);
+        });
+        assertThat(Span.current().getSpanContext().isValid()).isFalse();
+        assertThat(error).isSameAs(nativeError);
+    }
+
+    @Test
+    void documentCountPreservesNativeResult() {
+        long expected = client.getDocumentCount();
+        assertThat(expected).isEqualTo(2L);
+        assertThat(traced(true).getDocumentCount()).isEqualTo(expected);
+        assertThat(paths).hasSize(2);
+        assertThat(paths.get(1)).isEqualTo(paths.get(0));
+        assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
+            assertThat(span.hasEnded()).isTrue();
+            assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+            assertThat(span.getAttributes().get(AttributeKey.longKey("azure_search.total_documents"))).isEqualTo(2L);
+        });
+        assertThat(Span.current().getSpanContext().isValid()).isFalse();
+    }
+
+    private Object execute(SearchClient client, String operation) {
+        return switch (operation) {
+            case "get" -> client.getDocument(KEY, Map.class);
+            case "count" -> client.getDocumentCount();
+            default -> write(client, operation, DOCUMENTS);
+        };
+    }
+
+    private Object execute(TracedSearchClient client, String operation) {
+        return switch (operation) {
+            case "get" -> client.getDocument(KEY, Map.class);
+            case "count" -> client.getDocumentCount();
+            default -> write(client, operation, DOCUMENTS);
+        };
     }
 
     private TracedSearchClient traced(boolean hideInputs) {
@@ -248,6 +369,9 @@ class DocumentOperationsTest {
     }
 
     private Mono<HttpResponse> sendToLoopback(HttpRequest request) {
+        if (transportFailure != null) {
+            return Mono.error(transportFailure);
+        }
         HttpURLConnection connection = null;
         try {
             // Preserve the SDK's actual serialization and response parsing; redirect only transport.

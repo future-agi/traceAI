@@ -163,9 +163,9 @@ public class TracedSearchClient {
             span.setStatus(StatusCode.OK);
             return result;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Azure Search upload documents failed", e);
+            throw e;
         } finally {
             span.end();
         }
@@ -197,9 +197,9 @@ public class TracedSearchClient {
             span.setStatus(StatusCode.OK);
             return result;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Azure Search merge or upload documents failed", e);
+            throw e;
         } finally {
             span.end();
         }
@@ -231,9 +231,9 @@ public class TracedSearchClient {
             span.setStatus(StatusCode.OK);
             return result;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Azure Search delete documents failed", e);
+            throw e;
         } finally {
             span.end();
         }
@@ -270,9 +270,9 @@ public class TracedSearchClient {
             span.setStatus(StatusCode.OK);
             return document;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Azure Search get document failed", e);
+            throw e;
         } finally {
             span.end();
         }
@@ -299,9 +299,9 @@ public class TracedSearchClient {
             span.setStatus(StatusCode.OK);
             return count;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             tracer.setError(span, e);
-            throw new RuntimeException("Azure Search get document count failed", e);
+            throw e;
         } finally {
             span.end();
         }
