@@ -57,6 +57,15 @@ type tool struct {
 	} `json:"functionDeclarations"`
 }
 
+// Bound flattened previews by attribute count, not turn count: one multimodal
+// or tool-heavy turn can itself exceed OTel's default 128-attribute limit.
+// Together these use at most 80 slots, reserving 48 for aggregate content,
+// parameters, context, usage, model and status. Aggregates retain every turn.
+const (
+	maxMessagePreviewAttributes = 32 // each of input and output
+	maxToolDefinitions          = 16
+)
+
 type parsedRequest struct {
 	attrs []attribute.KeyValue
 }
@@ -90,8 +99,12 @@ func parseGenerateRequest(body []byte, tc TraceConfig) parsedRequest {
 	}
 
 	n := 0
+tools:
 	for _, t := range r.Tools {
 		for _, fd := range t.FunctionDeclarations {
+			if n == maxToolDefinitions {
+				break tools
+			}
 			def := map[string]any{"name": fd.Name}
 			if fd.Description != "" {
 				def["description"] = fd.Description
@@ -117,15 +130,30 @@ func parseGenerateRequest(body []byte, tc TraceConfig) parsedRequest {
 		msgs = append(msgs, sys)
 	}
 	msgs = append(msgs, r.Contents...)
-	for i, m := range msgs {
-		p.attrs = append(p.attrs, messageAttributes(GenAIInputMessages+"."+strconv.Itoa(i)+".", m, "user", false)...)
-	}
 	if v := conversationJSON(msgs, "user", tc, false); v != "" {
 		p.attrs = append(p.attrs,
 			attribute.String(InputValue, v),
 			attribute.String(InputMimeType, MimeTypeJSON))
 	}
+	p.attrs = append(p.attrs, messagePreview(msgs, GenAIInputMessages, "user", false)...)
 	return p
+}
+
+// messagePreview caps even a single turn with many parts or function calls.
+func messagePreview(msgs []content, prefix, defaultRole string, output bool) []attribute.KeyValue {
+	var kvs []attribute.KeyValue
+	for i, m := range msgs {
+		remaining := maxMessagePreviewAttributes - len(kvs)
+		if remaining == 0 {
+			break
+		}
+		attrs := messageAttributes(prefix+"."+strconv.Itoa(i)+".", m, defaultRole, output)
+		if len(attrs) > remaining {
+			attrs = attrs[:remaining]
+		}
+		kvs = append(kvs, attrs...)
+	}
+	return kvs
 }
 
 func generationConfigAttributes(raw map[string]json.RawMessage) []attribute.KeyValue {
@@ -351,13 +379,15 @@ func simpleMessage(m content, defaultRole string, tc TraceConfig, output bool) m
 	o := map[string]any{"role": role}
 	v := viewParts(m.Parts)
 	if text, ok := v.onlyText(); ok && len(v.items) > 0 {
-		o["content"] = text
+		o["content"] = tc.contentText(text, output)
 	} else if len(v.items) > 0 {
 		items := make([]map[string]any, 0, len(v.items))
 		for _, it := range v.items {
 			switch {
 			case it.kind == "text":
-				items = append(items, map[string]any{"type": "text", "text": it.text})
+				items = append(items, map[string]any{"type": "text", "text": tc.contentText(it.text, output)})
+			case it.kind == "image" && !output && tc.HideInputImages:
+				continue
 			case it.image != "":
 				img := it.image
 				if strings.HasPrefix(img, "data:") && (output || len(img) > tc.imageMax()) {
@@ -385,6 +415,13 @@ func simpleMessage(m content, defaultRole string, tc TraceConfig, output bool) m
 		o["tool_results"] = res
 	}
 	return o
+}
+
+func (tc TraceConfig) contentText(text string, output bool) string {
+	if (!output && tc.HideInputText) || (output && tc.HideOutputText) {
+		return RedactedValue
+	}
+	return text
 }
 
 func compactJSON(b json.RawMessage) string {

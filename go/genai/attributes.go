@@ -46,6 +46,11 @@ const (
 	EmbeddingModelName = "embedding.model_name"
 	EmbeddingCount     = "embedding.count"
 
+	// GenAIUsageDetails contains allow-listed per-modality usage counts as JSON.
+	GenAIUsageDetails = "gen_ai.usage.details"
+	// GenAIUsageToolUsePromptTokens is the tool-use subset of input tokens.
+	GenAIUsageToolUsePromptTokens = "gen_ai.usage.input_tokens.tool_use"
+
 	// traceAI names (shared with Python/TypeScript/Java traceAI).
 	GenAIUsageTotalTokens         = "gen_ai.usage.total_tokens"
 	GenAIUsageCacheReadTokens     = "gen_ai.usage.cache_read_tokens"

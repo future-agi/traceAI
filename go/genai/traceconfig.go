@@ -48,11 +48,11 @@ type TraceConfig struct {
 	HideInputMessages bool
 	// HideOutputMessages drops gen_ai.output.messages.* only.
 	HideOutputMessages bool
-	// HideInputImages drops images from input messages.
+	// HideInputImages drops images from input messages and input.value.
 	HideInputImages bool
-	// HideInputText redacts the text of input messages.
+	// HideInputText redacts text in input messages and input.value.
 	HideInputText bool
-	// HideOutputText redacts the text of output messages.
+	// HideOutputText redacts text in output messages and output.value.
 	HideOutputText bool
 	// HideErrorDetails drops API error messages from attributes and status
 	// descriptions. Nil derives the setting from HideInputs, HideOutputs,

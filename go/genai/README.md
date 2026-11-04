@@ -113,8 +113,8 @@ switches, with the same names and defaults as Python, turn it off:
 | `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) are dropped |
 | `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) are dropped |
 | `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | drop `gen_ai.input.messages.*` / `gen_ai.output.messages.*` only |
-| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | redact the message text, keep roles and function calls |
-| `FI_HIDE_INPUT_IMAGES` | drop image parts |
+| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | redact text in messages and aggregate `input.value` / `output.value`; keep roles and tool data |
+| `FI_HIDE_INPUT_IMAGES` | drop images from input messages and aggregate `input.value` |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | drop `gen_ai.request.parameters` |
 | `FI_HIDE_ERROR_DETAILS` | drop API error messages from attributes and status descriptions; keep ERROR status and error classification |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | redact `data:` images longer than this (default 32000) |
@@ -146,10 +146,19 @@ generated (inline) images are never copied; the transport adds no resource attri
   stop sequences, and an allow-listed `gen_ai.request.parameters`), function declarations
   (`gen_ai.tool.definitions.*`), the system instruction and turns, response id and model
   (`modelVersion`), finish reasons, function calls (id, name, arguments), and token usage when the
-  API returns it: input = `promptTokenCount`, output = `candidatesTokenCount` +
-  `thoughtsTokenCount` (as in Python), `total_tokens`, `output_tokens.reasoning`,
-  `cache_read_tokens`. Usage is never written as zero; a stream takes the last chunk's running
-  total.
+  API returns it: input = `promptTokenCount` + `toolUsePromptTokenCount`, output =
+  `candidatesTokenCount` + `thoughtsTokenCount`, `total_tokens`, `output_tokens.reasoning`,
+  `cache_read_tokens`. Cache reads are already included in prompt tokens and are not added
+  again. The tool-use subset is also recorded as `gen_ai.usage.input_tokens.tool_use`;
+  `gen_ai.usage.details` keeps allow-listed per-modality counts as JSON for pricing.
+  Absent counts are not invented; explicitly reported input/output/total zeros are retained.
+  A stream uses the last reported usage object, not a sum of chunks. The provider total is
+  preserved rather than recomputed.
+  Flattened input/output previews each use at most 32 attributes, and tool definitions are
+  limited to the first 16 declarations. This reserves room for context, usage, aggregate
+  content and status under the default OpenTelemetry 128-attribute limit, even with many
+  turns, parts, calls or candidates. Aggregate `input.value` / `output.value` retain the full
+  conversation subject to privacy settings.
 - `POST .../models/{model}:embedContent` and `:batchEmbedContents`: one `EMBEDDING` span
   with operation `embeddings`, request model, `embedding.model_name`, text inputs using the
   same input attributes as generation, and allow-listed task type/output dimensionality in
@@ -166,7 +175,7 @@ generated (inline) images are never copied; the transport adds no resource attri
 - HTTP 4xx/5xx: status ERROR, `http.response.status_code`, `error.type` (the Google status such as
   `NOT_FOUND`), and the API error message when error details are allowed. An error block inside a stream
   ends the span with ERROR.
-- Invalid embedding JSON or vector values: status ERROR and `error.type=decode`, without
+- Invalid generation JSON/chunks or embedding JSON/vector values: status ERROR and `error.type=decode`, without
   recording the response body or decoder error text. The SDK still receives the original response.
 - Cancellation: a context cancelled before the response completes ends the span with ERROR and
   `error.type=canceled`.
