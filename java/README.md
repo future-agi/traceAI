@@ -6,9 +6,9 @@ OpenTelemetry instrumentation for Java AI applications. Trace LLM calls, embeddi
 
 Release coordinates use **`com.futureagi`**. Artifact names are unchanged, and **Java package names remain `ai.traceai.*`**; existing imports do not change.
 
-> These coordinates are prepared for the first Central release; this PR does not publish them. Until that release is available, use the [commit-pinned JitPack alternative](#jitpack-for-unreleased-commits) or [build locally](#build-and-test). Do not assume the old `ai.traceai` Maven coordinates are on Central.
+The install examples track Java SDK `1.0.1`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
 
-The version below is `1.0.0`, the version in [`pom.xml`](pom.xml). All SDK modules inherit that version. The BOM aligns all SDK modules.
+> **Unreleased API:** the [provider ownership and shutdown](#provider-ownership-and-shutdown) behavior below, including `TraceAI.init(TraceConfig, OpenTelemetry)`, is not in the immutable Central releases `1.0.0` or `1.0.1`. Until a new release containing it is published and passes the [external-consumer check](#validate-readme-coordinates), that section requires a verified source build of this checkout. Installing an older Central release or the historical JitPack commit below is not sufficient. The basic OpenAI quickstart remains available from Central.
 
 ### Maven
 
@@ -20,7 +20,7 @@ Import the BOM once, then add the instrumentation you need:
         <dependency>
             <groupId>com.futureagi</groupId>
             <artifactId>traceai-bom</artifactId>
-            <version>1.0.0</version>
+            <version>1.0.1</version> <!-- x-release-please-version -->
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -42,7 +42,9 @@ Import the BOM once, then add the instrumentation you need:
 </dependencies>
 ```
 
-Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
+Without the BOM, specify `<version>1.0.1</version>` on each traceAI dependency. <!-- x-release-please-version -->
+
+For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
 
 ```xml
 <dependency>
@@ -61,7 +63,7 @@ repositories {
 }
 
 dependencies {
-    implementation platform('com.futureagi:traceai-bom:1.0.0')
+    implementation platform('com.futureagi:traceai-bom:1.0.1') // x-release-please-version
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
     // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
@@ -171,6 +173,26 @@ TraceAI.init(TraceConfig.builder()
 Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
 
 ### Provider ownership and shutdown
+
+**Unreleased; source build required.** Central `1.0.0` and `1.0.1` do not provide this overload or the lifecycle behavior described in this section. First build and verify core and the BOM from this checkout (JDK 21 and Maven):
+
+```bash
+# From java/ in this checkout; runs core tests before installing source artifacts.
+mvn -B -ntp -pl traceai-bom,traceai-java-core -am install
+python3 -I scripts/test_consumers.py --core-only
+```
+
+The second command compiles the exact example below as independent applications, both with and without the BOM. Continue only if both pass. The locally installed source artifact takes precedence over the older Central artifact with the same version. Do not deploy it or overwrite any published version. Until a containing release is verified, keep using this source build for this API.
+
+Add `com.futureagi:traceai-java-core` to your application using the BOM above, or use an explicit version after the source install:
+
+```xml
+<dependency>
+    <groupId>com.futureagi</groupId>
+    <artifactId>traceai-java-core</artifactId>
+    <version>1.0.1</version> <!-- x-release-please-version -->
+</dependency>
+```
 
 `TraceAI.init(config)` and `TraceAI.initFromEnvironment()` create a provider used by `TraceAI.getTracer()` and the TraceAI wrappers. They do **not** register, replace or read global OpenTelemetry. Global tracers do not send spans through this local provider. This lets a Java agent or application SDK coexist without registration errors, including when the application registers its SDK after TraceAI starts.
 
@@ -292,6 +314,19 @@ mvn -B -ntp install
 ```
 
 `verify` runs the SDK reactor's tests. Examples are separate applications, not published modules. A local `install` makes the `com.futureagi` coordinates available for the example commands above. After installing, run `python3 -I scripts/test_consumers.py` to compile independent applications using the README OpenAI snippet, the additive Spring Boot dependencies, and BOM-managed libraries on the main classpath. CI repeats these checks for both the normal and JitPack POMs.
+
+### Validate README coordinates
+
+The consumer check reads the advertised Maven, BOM and Gradle versions from this README, requires them to match the reactor, and compiles the OpenAI quickstart and borrowed-SDK example outside the reactor. CI checks source-installed artifacts; that alone is not evidence that an immutable Central artifact contains an API.
+
+After a new release containing the ownership API is published, verify its release-managed README coordinates against Central in a fresh Maven repository:
+
+```bash
+# From java/; resolves public artifacts only, without a local source install.
+python3 -I scripts/test_consumers.py --central --core-only
+```
+
+This check is expected to fail for Central `1.0.0` and `1.0.1`. Remove the unreleased/source-build notices only after it passes for a new published version; do not replace those immutable releases. The check never publishes or calls a provider.
 
 ### Validate release artifacts without publishing
 

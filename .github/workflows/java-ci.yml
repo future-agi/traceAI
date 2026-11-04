@@ -5,6 +5,7 @@ on:
     paths:
       - 'java/**'
       - 'jitpack.yml'
+      - 'release-please-config.json'
       - '.github/workflows/java-ci.yml'
       - '.github/workflows/release-java.yml'
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'java/**'
       - 'jitpack.yml'
+      - 'release-please-config.json'
       - '.github/workflows/java-ci.yml'
       - '.github/workflows/release-java.yml'
   workflow_dispatch:
@@ -147,6 +149,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Check release-managed README coordinates
+        run: python3 -I scripts/test_readme_contract.py
       - name: Test the complete reactor
         run: mvn -B -ntp verify
       - name: Build sources and Javadocs without signing or publishing
