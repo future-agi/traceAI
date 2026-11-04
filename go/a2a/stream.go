@@ -11,44 +11,55 @@ import (
 )
 
 // Client preserves the SDK client's API and observes call completion. Create
-// the SDK client with [NewInterceptor], then call [WrapClient]. The wrapper does
-// not create spans: it completes the interceptor's existing span when unary calls
+// the SDK client with [NewClientFromCard] or [NewClientFromEndpoints] and install
+// [NewInterceptor]. The wrapper does not create spans: it completes the
+// interceptor's existing span when unary calls
 // return, at clean stream EOF, or on early iterator abandonment. Unary completion
 // observes the final result after all response policies, including rejections
 // that cause the SDK to skip the tracing After callback.
-type Client struct{ *a2aclient.Client }
+type Client struct {
+	*a2aclient.Client
+	boundary *clientBoundary
+}
 
-// WrapClient adds call-completion handling to an instrumented SDK client.
-// Use the returned client for all traced calls; calling its embedded Client
-// directly bypasses completion handling. Install [NewInterceptor] only once.
+// WrapClient retains legacy stream-completion handling for an existing SDK client.
+// Unary calls retain interceptor-only behavior: the SDK cannot expose their final
+// outcome when a response policy skips After.
+//
+// Deprecated: use [NewClientFromCard] or [NewClientFromEndpoints] to bind completion
+// to the actual SDK client and invocation before any policy can make a nested call.
+// Calling the embedded Client directly bypasses completion handling.
 func WrapClient(client *a2aclient.Client) *Client { return &Client{Client: client} }
 
 // SendMessage observes the final accepted result or returned policy error.
 func (c *Client) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
-	return observeUnary(ctx, "SendMessage", func(ctx context.Context) (a2a.SendMessageResult, error) {
+	return observeUnary(ctx, "SendMessage", c.boundary, func(ctx context.Context) (a2a.SendMessageResult, error) {
 		return c.Client.SendMessage(ctx, req)
 	})
 }
 
 // GetTask observes completion even when a response policy rejects the snapshot.
 func (c *Client) GetTask(ctx context.Context, req *a2a.GetTaskRequest) (*a2a.Task, error) {
-	return observeUnary(ctx, "GetTask", func(ctx context.Context) (*a2a.Task, error) {
+	return observeUnary(ctx, "GetTask", c.boundary, func(ctx context.Context) (*a2a.Task, error) {
 		return c.Client.GetTask(ctx, req)
 	})
 }
 
 // CancelTask observes completion without changing the SDK's result or error.
 func (c *Client) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
-	return observeUnary(ctx, "CancelTask", func(ctx context.Context) (*a2a.Task, error) {
+	return observeUnary(ctx, "CancelTask", c.boundary, func(ctx context.Context) (*a2a.Task, error) {
 		return c.Client.CancelTask(ctx, req)
 	})
 }
 
-func observeUnary[T any](ctx context.Context, method string, call func(context.Context) (T, error)) (T, error) {
+func observeUnary[T any](ctx context.Context, method string, owner *clientBoundary, call func(context.Context) (T, error)) (T, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	completion := &streamCompletion{method: method}
+	if owner == nil {
+		return call(ctx)
+	}
+	completion := &streamCompletion{method: method, owner: owner}
 	result, err := call(context.WithValue(ctx, clientCompletionKey, completion))
 	completion.mu.Lock()
 	st := completion.state
@@ -63,14 +74,14 @@ func observeUnary[T any](ctx context.Context, method string, call func(context.C
 
 // SendStreamingMessage observes completion without changing events or errors.
 func (c *Client) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
-	return observeStream(ctx, clientCompletionKey, "SendStreamingMessage", func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	return observeStream(ctx, clientCompletionKey, "SendStreamingMessage", c.boundary, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return c.Client.SendStreamingMessage(ctx, req)
 	})
 }
 
 // SubscribeToTask observes completion, including a persisted nonterminal snapshot.
 func (c *Client) SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
-	return observeStream(ctx, clientCompletionKey, "SubscribeToTask", func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	return observeStream(ctx, clientCompletionKey, "SubscribeToTask", c.boundary, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return c.Client.SubscribeToTask(ctx, req)
 	})
 }
@@ -88,13 +99,13 @@ func WrapHandler(handler a2asrv.RequestHandler) a2asrv.RequestHandler {
 type completionHandler struct{ a2asrv.RequestHandler }
 
 func (h *completionHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
-	return observeStream(ctx, serverCompletionKey, "SendStreamingMessage", func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	return observeStream(ctx, serverCompletionKey, "SendStreamingMessage", nil, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return h.RequestHandler.SendStreamingMessage(ctx, req)
 	})
 }
 
 func (h *completionHandler) SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
-	return observeStream(ctx, serverCompletionKey, "SubscribeToTask", func(ctx context.Context) iter.Seq2[a2a.Event, error] {
+	return observeStream(ctx, serverCompletionKey, "SubscribeToTask", nil, func(ctx context.Context) iter.Seq2[a2a.Event, error] {
 		return h.RequestHandler.SubscribeToTask(ctx, req)
 	})
 }
@@ -106,13 +117,15 @@ const (
 	serverCompletionKey
 )
 
-// Each call or iteration owns a slot. Only its first matching Before can claim it, so
-// nested calls inheriting this context cannot overwrite the outer call's state.
-// Separate keys isolate inbound and outbound calls on the same context.
+// Each call or iteration owns a slot. Bound clients also capture the SDK request
+// at entry, before user policies can nest calls. Server and legacy stream wrappers
+// keep their first-matching-Before behavior. Separate keys isolate inbound/outbound.
 type streamCompletion struct {
-	mu     sync.Mutex
-	method string
-	state  *callState
+	mu      sync.Mutex
+	method  string
+	state   *callState
+	owner   *clientBoundary
+	request *a2aclient.Request
 }
 
 // attachCompletion reports whether this call claimed its wrapper's completion
@@ -148,7 +161,7 @@ func (c *streamCompletion) end(err error) {
 	}
 }
 
-func observeStream(ctx context.Context, key completionKey, method string, stream func(context.Context) iter.Seq2[a2a.Event, error]) iter.Seq2[a2a.Event, error] {
+func observeStream(ctx context.Context, key completionKey, method string, owner *clientBoundary, stream func(context.Context) iter.Seq2[a2a.Event, error]) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		parent := ctx
 		if parent == nil {
@@ -159,7 +172,7 @@ func observeStream(ctx context.Context, key completionKey, method string, stream
 		// watcher would incorrectly turn a successful snapshot into an error.
 		callCtx, cancel := context.WithCancel(parent)
 		defer cancel()
-		completion := &streamCompletion{method: method}
+		completion := &streamCompletion{method: method, owner: owner}
 		callCtx = context.WithValue(callCtx, key, completion)
 		var streamErr error
 		completed := false

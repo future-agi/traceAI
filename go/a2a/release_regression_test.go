@@ -55,12 +55,12 @@ func qualificationClient(t *testing.T, transport string, exec *agent, tp *sdktra
 		t.Cleanup(server.Close)
 		cardValue = card(server.URL, transport == "rest", true)
 	}
-	client, err := a2aclient.NewFromCard(context.Background(), cardValue, opts...)
+	client, err := traceaia2a.NewClientFromCard(context.Background(), cardValue, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Destroy() })
-	return traceaia2a.WrapClient(client)
+	return client
 }
 
 type qualificationReject struct {

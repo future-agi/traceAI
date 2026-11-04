@@ -16,9 +16,16 @@ func TestUnaryCompletionOwnsOnlyItsCall(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	tracing := NewInterceptor(WithTracerProvider(tp), WithTraceConfig(TraceConfig{}))
+	boundary := &clientBoundary{}
+	before := func(ctx context.Context) context.Context {
+		req := &a2aclient.Request{Method: "SendMessage"}
+		ctx, _, _ = boundary.Before(ctx, req)
+		ctx, _, _ = tracing.Before(ctx, req)
+		return ctx
+	}
 	message := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("accepted"))
-	result, err := observeUnary(nil, "SendMessage", func(ctx context.Context) (*a2a.Message, error) {
-		ctx, _, _ = tracing.Before(ctx, &a2aclient.Request{Method: "SendMessage"})
+	result, err := observeUnary(nil, "SendMessage", boundary, func(ctx context.Context) (*a2a.Message, error) {
+		ctx = before(ctx)
 		outer := ctx.Value(stateKey{}).(*callState)
 		if !outer.unaryCompletion {
 			t.Fatal("outer call did not claim completion")
@@ -30,8 +37,8 @@ func TestUnaryCompletionOwnsOnlyItsCall(t *testing.T) {
 		}
 		_ = tracing.After(inner, &a2aclient.Response{Method: "SendMessage", Payload: message})
 		// A wrapped nested call owns a fresh slot and completes independently.
-		_, err := observeUnary(ctx, "SendMessage", func(ctx context.Context) (*a2a.Message, error) {
-			ctx, _, _ = tracing.Before(ctx, &a2aclient.Request{Method: "SendMessage"})
+		_, err := observeUnary(ctx, "SendMessage", boundary, func(ctx context.Context) (*a2a.Message, error) {
+			ctx = before(ctx)
 			if ctx.Value(stateKey{}).(*callState) == outer {
 				t.Fatal("nested call reused outer state")
 			}
@@ -54,7 +61,7 @@ func TestUnaryCompletionOwnsOnlyItsCall(t *testing.T) {
 
 func TestUnaryCompletionWithoutInterceptor(t *testing.T) {
 	rejection := errors.New("synthetic policy rejection")
-	result, err := observeUnary(context.Background(), "GetTask", func(context.Context) (*a2a.Task, error) { return nil, rejection })
+	result, err := observeUnary(context.Background(), "GetTask", &clientBoundary{}, func(context.Context) (*a2a.Task, error) { return nil, rejection })
 	if result != nil || err != rejection {
 		t.Fatal("untraced API outcome changed")
 	}

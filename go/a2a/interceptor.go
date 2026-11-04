@@ -59,7 +59,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // Interceptor is an a2aclient.CallInterceptor that traces A2A client calls.
 // Attach it with a2aclient.WithCallInterceptors when you create the client:
 //
-//	client, err := a2aclient.NewFromCard(ctx, card,
+//	client, err := traceaia2a.NewClientFromCard(ctx, card,
 //		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 //
 // SendMessage, SendStreamingMessage, GetTask, CancelTask and SubscribeToTask
@@ -67,7 +67,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
-// Use [WrapClient] around the created client to complete unary calls after all
+// Use [NewClientFromCard] or [NewClientFromEndpoints] to complete unary calls after all
 // response policies, even when a policy error skips this interceptor's After.
 // It also handles clean EOF, early abandonment and recording after auth-required.
 // Without it, auth-required ends the client span as in earlier releases; the SDK's
@@ -187,9 +187,9 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 	}
 
 	// Keep the interceptor-only client's historical auth-required completion.
-	// Only a call claimed by WrapClient can wait for actual iterator completion;
+	// Only an owned completion slot can wait for actual iterator completion;
 	// an inherited wrapper slot may belong to a different (outer) call.
-	attached := attachCompletion(ctx, clientCompletionKey, st)
+	attached := attachClientCompletion(ctx, req, st)
 	st.authRequiredEndsStream = !attached
 	// Use the requested method, not st.streaming: the SDK's unary fallback for
 	// SendStreamingMessage still uses the iterator-completion wrapper.
