@@ -40,14 +40,27 @@ func (p TraceConfig) output() bool {
 	return !p.HideOutputs && !p.HideOutputMessages && !p.HideOutputText
 }
 func bounded(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	s = s[:n]
-	for !utf8.ValidString(s) && len(s) > 0 {
-		s = s[:len(s)-1]
-	}
+	s, _ = boundedUTF8(s, n)
 	return s
+}
+
+func boundedUTF8(s string, n int) (string, bool) {
+	truncated := len(s) > n
+	// Bound the work before normalizing: malformed bytes must not poison an
+	// entire OTLP batch, even when the original string fits the capture budget.
+	if len(s) > n {
+		s = s[:n]
+	}
+	s = strings.ToValidUTF8(s, "�")
+	if len(s) > n {
+		// Replacement characters can expand the string. Keep a valid boundary.
+		truncated = true
+		for !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n]
+	}
+	return s, truncated
 }
 
 // block is an allowlist projection, not an SDK object serialization.
@@ -69,6 +82,7 @@ type record struct {
 	privacy           TraceConfig
 	started           time.Time
 	first             bool
+	streamComplete    bool
 	blocks            map[int32]*block
 	used              int
 	contentAttributes int
@@ -89,10 +103,8 @@ func (r *record) take(s string) string {
 	if n < 0 {
 		n = 0
 	}
-	if len(s) > n {
-		r.truncated = true
-	}
-	s = bounded(s, n)
+	s, truncated := boundedUTF8(s, n)
+	r.truncated = r.truncated || truncated
 	r.used += len(s)
 	return s
 }
@@ -202,8 +214,10 @@ func (r *record) contentAttrs(values ...attribute.KeyValue) {
 func (r *record) messages(direction string, ms []message) {
 	// Keep both Future AGI indexed messages and a bounded summary, derived from
 	// the same sanitized projection. The SDK remains the source of application data.
-	for i, m := range ms {
-		prefix := "gen_ai." + direction + ".messages." + strconv.Itoa(i) + ".message."
+	index := 0
+	emit := func(m message) {
+		prefix := "gen_ai." + direction + ".messages." + strconv.Itoa(index) + ".message."
+		index++
 		r.contentAttrs(attribute.String(prefix+"role", m.Role))
 		var text strings.Builder
 		tool := 0
@@ -222,6 +236,24 @@ func (r *record) messages(direction string, ms []message) {
 		}
 		if text.Len() > 0 {
 			r.contentAttrs(attribute.String(prefix+"content", text.String()))
+		}
+	}
+	for _, m := range ms {
+		// The indexed convention has one tool_call_id per message. Split each
+		// result into its own tool message, preserving surrounding text order.
+		start := 0
+		for j, b := range m.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if j > start {
+				emit(message{Role: m.Role, Content: m.Content[start:j]})
+			}
+			emit(message{Role: "tool", Content: m.Content[j : j+1]})
+			start = j + 1
+		}
+		if start < len(m.Content) || len(m.Content) == 0 {
+			emit(message{Role: m.Role, Content: m.Content[start:]})
 		}
 	}
 	data, _ := json.Marshal(ms)
@@ -297,11 +329,16 @@ func (r *record) converseInput(ms []types.Message, sys []types.SystemContentBloc
 		}
 		// Stop sequences are content, so granular input switches cover them too.
 		if r.privacy.input() {
+			var stops []string
 			for i, s := range config.StopSequences {
 				if i >= 16 {
+					r.truncated = true
 					break
 				}
-				r.span.SetAttributes(attribute.String("gen_ai.request.stop_sequences."+strconv.Itoa(i), r.take(s)))
+				stops = append(stops, r.take(s))
+			}
+			if len(stops) > 0 {
+				r.span.SetAttributes(attribute.StringSlice("gen_ai.request.stop_sequences", stops))
 			}
 		}
 	}
@@ -391,6 +428,7 @@ func (r *record) converseEvent(ev types.ConverseStreamOutput) {
 			r.delta(*v.Value.ContentBlockIndex, "tool_use", str(d.Value.Input))
 		}
 	case *types.ConverseStreamOutputMemberMessageStop:
+		r.streamComplete = true
 		r.stop(string(v.Value.StopReason))
 	case *types.ConverseStreamOutputMemberMetadata:
 		r.setUsage(v.Value.Usage)
