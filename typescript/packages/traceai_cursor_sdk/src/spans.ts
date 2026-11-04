@@ -757,10 +757,11 @@ export class RunTracer {
   /**
    * Token counts: the run's cumulative usage from the SDK (`RunResult.usage`
    * / `run.usage`) when present, else the sum of this run's `usage` events.
-   * Cursor's `inputTokens` excludes cache reads and writes (its `totalTokens`
-   * is input + output + cache read + cache write, without `reasoningTokens`,
-   * a subset of output), so the promoted input count adds them back, as the
-   * GenAI semantic conventions ask; `cursor.usage.*` keeps Cursor's numbers.
+   * Cursor's `inputTokens` excludes cache reads and writes, so the promoted
+   * input count adds them back, as the GenAI semantic conventions ask. The SDK
+   * includes caches in `totalTokens` in 1.0.37, but not in 1.2.0 / 1.3.1.
+   * Normalize complete totals to input + output under either convention;
+   * reasoning is already a subset of output. `cursor.usage.*` keeps raw counts.
    */
   private usageAttributes(runUsage: TokenUsageLike | undefined): Attributes {
     let usage: TokenUsageLike | undefined;
@@ -790,11 +791,12 @@ export class RunTracer {
       attributes[S.OUTPUT_TOKENS] = output;
       attributes[C.USAGE_OUTPUT_TOKENS] = output;
     }
-    if (total !== undefined) {
-      attributes[S.TOTAL_TOKENS] = total;
-      attributes[C.USAGE_TOTAL_TOKENS] = total;
-    } else if (promptTokens !== undefined && output !== undefined) {
+    if (total !== undefined) attributes[C.USAGE_TOTAL_TOKENS] = total;
+    if (promptTokens !== undefined && output !== undefined) {
       attributes[S.TOTAL_TOKENS] = promptTokens + output;
+    } else if (total !== undefined) {
+      // Partial usage cannot be recomputed safely; retain the reported total.
+      attributes[S.TOTAL_TOKENS] = total;
     }
     if (cacheRead !== undefined) {
       attributes[S.CACHE_READ_TOKENS] = cacheRead;

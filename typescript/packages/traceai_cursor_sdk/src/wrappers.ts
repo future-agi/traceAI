@@ -269,6 +269,13 @@ export class RunWatcher {
     ctx.registry.add(this);
     tracer.attachRun(run);
     this.subscribe();
+    // Subscribe before checking the snapshot so completion during attachment is
+    // not missed. startGrace() is idempotent if subscription notified us inline;
+    // do not finish immediately, since the app may still read buffered events.
+    if (this.handleTerminal()) {
+      this.terminalSeen = true;
+      this.startGrace();
+    }
   }
 
   get finished(): boolean {
