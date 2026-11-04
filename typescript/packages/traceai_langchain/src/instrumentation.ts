@@ -1,4 +1,7 @@
 import type * as CallbackManagerModuleV02 from "@langchain/core/callbacks/manager";
+import type * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import { randomUUID } from "crypto";
+import { wrapModelStream } from "./streamLifecycle";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -44,6 +47,8 @@ export class LangChainInstrumentation extends InstrumentationBase {
   private fiTracer: FITracer;
   private tracerProvider?: TracerProvider;
   private traceConfig?: TraceConfigOptions;
+  private manualModule?: CallbackManagerModule;
+  private modelModules?: Set<typeof ChatModelModule>;
 
   constructor({
     instrumentationConfig,
@@ -82,21 +87,74 @@ export class LangChainInstrumentation extends InstrumentationBase {
     });
   }
 
-  manuallyInstrument(module: CallbackManagerModule) {
+  /** Pass chatModels as well to close spans when a model stream is returned early. */
+  manuallyInstrument(module: CallbackManagerModule, chatModels?: typeof ChatModelModule) {
     if (module == null) {
       return;
     }
+    this.manualModule = module;
     diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
+    if (chatModels != null) this.patchChatModels(chatModels);
   }
 
-  protected init(): InstrumentationModuleDefinition {
-    return new InstrumentationNodeModuleDefinition(
-      "@langchain/core/dist/callbacks/manager.cjs",
-      ["^0.1.0", "^0.2.0", "^0.3.0", "^1.0.0"],
-      this.patch.bind(this),
-      this.unpatch.bind(this),
-    );
+  protected init(): InstrumentationModuleDefinition[] {
+    return [
+      new InstrumentationNodeModuleDefinition(
+        "@langchain/core/dist/callbacks/manager.cjs",
+        ["^0.1.0", "^0.2.0", "^0.3.0", "^1.0.0"],
+        this.patch.bind(this),
+        this.unpatch.bind(this),
+      ),
+      new InstrumentationNodeModuleDefinition(
+        "@langchain/core/dist/language_models/chat_models.cjs",
+        ["^0.2.0", "^0.3.0", "^1.0.0"],
+        this.patchChatModels.bind(this),
+        this.unpatchChatModels.bind(this),
+      ),
+    ];
+  }
+
+  enable(): void {
+    super.enable();
+    if (this.manualModule != null) this.patch(this.manualModule);
+    this.modelModules?.forEach((module) => this.patchChatModels(module));
+  }
+
+  disable(): void {
+    super.disable();
+    if (this.manualModule != null) this.unpatch(this.manualModule);
+    this.modelModules?.forEach((module) => this.unpatchChatModels(module));
+  }
+
+  private patchChatModels(module: typeof ChatModelModule) {
+    const prototype = module?.BaseChatModel?.prototype;
+    if (prototype == null || isWrapped(prototype._streamIterator)) return module;
+    (this.modelModules ??= new Set()).add(module);
+    this._wrap(prototype, "_streamIterator", (original) => {
+      return function (
+        this: typeof prototype,
+        ...args: Parameters<typeof prototype._streamIterator>
+      ) {
+        // LangChain honors a supplied run id. Clone config because some versions
+        // consume/delete it; do not mutate options owned by the application.
+        const options = args[1];
+        const runId = options?.runId ?? randomUUID();
+        return wrapModelStream((signal) => {
+          args[1] = { ...options, runId, signal };
+          return original.apply(this, args);
+        }, runId, options?.signal);
+      };
+    });
+    return module;
+  }
+
+  private unpatchChatModels(module?: typeof ChatModelModule) {
+    const prototype = module?.BaseChatModel?.prototype;
+    if (prototype != null && isWrapped(prototype._streamIterator)) {
+      this._unwrap(prototype, "_streamIterator");
+    }
+    return module;
   }
 
   get tracer(): Tracer {

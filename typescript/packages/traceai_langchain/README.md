@@ -36,6 +36,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import * as CallbackManagerModule from "@langchain/core/callbacks/manager";
+import * as ChatModelModule from "@langchain/core/language_models/chat_models";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
@@ -56,7 +57,7 @@ registerInstrumentations({
 });
 
 // 3. Manually instrument LangChain (required as it doesn't have a traditional module structure)
-lcInstrumentation.manuallyInstrument(CallbackManagerModule);
+lcInstrumentation.manuallyInstrument(CallbackManagerModule, ChatModelModule);
 
 // 4. Use LangChain as normal
 const chatModel = new ChatOpenAI({
@@ -89,6 +90,14 @@ Future AGI to inspect the `ChatOpenAI` span.
 For a long-running service, leave the provider running between requests. When the
 service stops, finish in-flight chains, await `awaitAllCallbacks()`, then shut down
 the provider. Before an explicit `forceFlush()`, drain callbacks in the same order.
+
+Pass both modules to `manuallyInstrument()` when using chat-model streams. The
+chat-model patch also handles `break`, iterator `return()`, and cancellation:
+unfinished spans end with an error and `langchain.stream.cancelled=true`, rather
+than reporting a partial response as successful. The original one-argument form
+still instruments callbacks, but cannot detect an early iterator return on
+LangChain versions that omit the terminal callback. Fully consume or explicitly
+close every stream; an iterator abandoned without `return()` cannot be observed.
 
 ## Features
 

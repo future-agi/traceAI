@@ -25,10 +25,12 @@ import {
   safelyGetFISpanKindFromRunType,
 } from "./utils";
 import { FITracer, getErrorMessage } from "@traceai/fi-core";
+import { isStreamCancelled, registerStreamRun } from "./streamLifecycle";
 
 type RunWithSpan = {
   run: Run;
   span: Span;
+  unregisterStream: () => void;
 };
 
 /**
@@ -124,9 +126,10 @@ export class LangChainTracer extends BaseTracer {
   private runs: Record<string, RunWithSpan | undefined> = {};
   /** The error objects passed to handle*Error, keyed by run id, until the run's trace ends */
   private runErrors: Record<string, unknown> = {};
-  constructor(tracer: FITracer) {
+  constructor(tracer: FITracer, awaitHandlers?: boolean) {
     super();
     this.tracer = tracer;
+    if (awaitHandlers != null) this.awaitHandlers = awaitHandlers;
   }
   name: string = "FILangChainTracer";
   protected persistRun(_run: Run): Promise<void> {
@@ -245,19 +248,29 @@ export class LangChainTracer extends BaseTracer {
       activeContext,
     );
 
-    this.runs[run.id] = { run, span };
+    const runWithSpan: RunWithSpan = { run, span, unregisterStream: () => {} };
+    this.runs[run.id] = runWithSpan;
+    runWithSpan.unregisterStream = registerStreamRun(run.id, async () => {
+      if (this.runs[run.id] == null) return;
+      span.setAttribute("langchain.stream.cancelled", true);
+      // Do not fabricate successful output or usage from a partial response.
+      // Use the existing error path to release both our spans and BaseTracer's
+      // run map. This does not synthesize callbacks for other integrations.
+      const error = new Error("Stream closed before completion");
+      error.name = "AbortError";
+      await this.handleLLMError(error, run.id);
+    });
   }
 
   protected async _endTrace(run: Run) {
     await super._endTrace(run);
-    if (isTracingSuppressed(context.active())) {
-      return;
-    }
+    // Suppression prevents new spans, not cleanup of spans already started.
     const runWithSpan = this.runs[run.id];
     if (!runWithSpan) {
       return;
     }
     const { span } = runWithSpan;
+    if (isStreamCancelled(run.id)) span.setAttribute("langchain.stream.cancelled", true);
     const bubbleUp =
       run.error != null
         ? getGraphBubbleUpName(this.runErrors[run.id], run.error)
@@ -295,6 +308,7 @@ export class LangChainTracer extends BaseTracer {
     }
 
     runWithSpan.span.end();
+    runWithSpan.unregisterStream();
     delete this.runs[run.id];
   }
 

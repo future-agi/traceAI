@@ -66,7 +66,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/langchain-consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/langchain-tarballs/"*.tgz "@langchain/core@$CORE_VERSION" \
             @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0
-          cp typescript/packages/traceai_langchain/contract/lifecycle.mjs "$RUNNER_TEMP/langchain-consumer/"
+          cp typescript/packages/traceai_langchain/contract/{lifecycle,release}.mjs "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/types.cts"
       - name: Install the README Quick Start in an empty consumer
@@ -107,6 +107,10 @@ jobs:
             for privacy in public private; do
               sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
                 "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/lifecycle.mjs" "$mode" "$privacy"
+            done
+            for privacy in public options environment; do
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/release.mjs" "$mode" "$privacy"
             done
           done
       - name: LangGraph pause and handoff spans, localhost only

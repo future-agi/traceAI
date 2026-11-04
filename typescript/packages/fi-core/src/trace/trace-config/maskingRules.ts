@@ -1,6 +1,6 @@
 import { Attributes, AttributeValue } from "@opentelemetry/api";
 import { REDACTED_VALUE } from "./constants";
-import { SemanticConventions } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, SemanticAttributePrefixes, RetrievalAttributePostfixes } from "@traceai/fi-semantic-conventions";
 import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
 import { isErrorDetailAttribute } from "./errorDetails";
@@ -39,7 +39,17 @@ const maskEmbeddingVectorsRule: MaskingRule = {
  * With JSON blob format, messages are stored as a single JSON string under gen_ai.input.messages / gen_ai.output.messages.
  * The rules now parse and modify the JSON blob content.
  */
+const retrievalDocuments = `${SemanticAttributePrefixes.retrieval}.${RetrievalAttributePostfixes.documents}`;
+
 const maskingRules: MaskingRule[] = [
+  {
+    // Retrieved documents are outputs too, including metadata that can duplicate
+    // private content. Cover both opaque payloads and flattened document fields.
+    condition: ({ config, key }) =>
+      (config.hideOutputs || config.hideOutputText) &&
+      (key === retrievalDocuments || key.startsWith(`${retrievalDocuments}.`)),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
   {
     // Error text (exception messages, stack traces, provider error bodies) can quote the content
     condition: ({ config, key }) =>
