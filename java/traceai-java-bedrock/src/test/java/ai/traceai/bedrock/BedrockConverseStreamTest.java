@@ -85,6 +85,7 @@ class BedrockConverseStreamTest {
         subscriber.get().onComplete();
         assertThat(otel.getSpans()).isEmpty();
         captured.get().complete();
+        assertThat(otel.getSpans()).isEmpty();
         sdkFuture.complete(null);
         assertThat(future).isCompletedWithValue(null);
         // Duplicate/late notifications must neither export a second span nor replace success.
@@ -94,6 +95,62 @@ class BedrockConverseStreamTest {
         assertThat(otel.getSpans().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
         assertThat(otel.getSpans().get(0).getAttributes().get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)))
             .isEqualTo("answer");
+    }
+
+    @Test
+    void attemptErrorsAndHandlerCompletionWaitForTheFinalSdkFuture() {
+        var sdkFuture = new CompletableFuture<Void>();
+        var captured = new AtomicReference<ConverseStreamResponseHandler>();
+        var client = new TracedBedrockRuntimeAsyncClient(sdk(handler -> { captured.set(handler); return sdkFuture; }), tracer(false));
+        var handler = ConverseStreamResponseHandler.builder().subscriber(event -> { }).build();
+        var future = client.converseStream(request(), handler);
+        captured.get().exceptionOccurred(new IllegalStateException("intermediate"));
+        captured.get().complete();
+        assertThat(otel.getSpans()).isEmpty();
+        var terminal = new IllegalStateException("terminal");
+        sdkFuture.completeExceptionally(terminal);
+        assertThatThrownBy(future::join).hasCause(terminal);
+        assertThat(otel.getSpans()).hasSize(1);
+        assertThat(otel.getSpans().get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    @Test
+    void nextStreamAttemptCannotRetainEarlierUsageStopReasonOrTruncation() {
+        var sdkFuture = new CompletableFuture<Void>();
+        var captured = new AtomicReference<ConverseStreamResponseHandler>();
+        var client = new TracedBedrockRuntimeAsyncClient(sdk(handler -> { captured.set(handler); return sdkFuture; }), tracer(false));
+        var handler = ConverseStreamResponseHandler.builder().subscriber(event -> { }).build();
+        var future = client.converseStream(request(), handler);
+        deliver(captured.get(),
+            MessageStartEvent.builder().role(ConversationRole.USER).build(),
+            ContentBlockDeltaEvent.builder().contentBlockIndex(0).delta(ContentBlockDelta.builder().text("x".repeat(40000)).build()).build(),
+            MessageStopEvent.builder().stopReason(StopReason.MAX_TOKENS).build(),
+            ConverseStreamMetadataEvent.builder().usage(TokenUsage.builder().inputTokens(90).outputTokens(9).totalTokens(99).build()).build());
+        captured.get().exceptionOccurred(new IllegalStateException("retry"));
+        deliver(captured.get(), ContentBlockDeltaEvent.builder().contentBlockIndex(0)
+            .delta(ContentBlockDelta.builder().text("answer").build()).build());
+        captured.get().complete();
+        sdkFuture.complete(null);
+        assertThat(future).isCompletedWithValue(null);
+        assertThat(otel.getSpans()).hasSize(1);
+        var attributes = otel.getSpans().get(0).getAttributes();
+        assertThat(attributes.get(AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE))).isEqualTo("answer");
+        assertThat(attributes.get(AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES))).contains("assistant").doesNotContain("user");
+        assertThat(attributes.get(AttributeKey.longKey(SemanticConventions.LLM_TOKEN_COUNT_TOTAL))).isNull();
+        assertThat(attributes.get(AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON))).isNull();
+        assertThat(attributes.get(AttributeKey.booleanKey("gen_ai.bedrock.output_truncated"))).isNull();
+        assertThat(attributes.get(AttributeKey.doubleKey("gen_ai.client.time_to_first_token"))).isPositive();
+    }
+
+    private void deliver(ConverseStreamResponseHandler handler, ConverseStreamOutput... events) {
+        handler.onEventStream(SdkPublisher.adapt(subscriber -> {
+            subscriber.onSubscribe(new Subscription() {
+                public void request(long n) { }
+                public void cancel() { }
+            });
+            for (var event : events) subscriber.onNext(event);
+            subscriber.onComplete();
+        }));
     }
 
     @Test

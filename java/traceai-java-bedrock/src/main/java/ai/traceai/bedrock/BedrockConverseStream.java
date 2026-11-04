@@ -81,6 +81,7 @@ final class BedrockConverseStream implements ConverseStreamResponseHandler {
 
     @Override
     public void onEventStream(SdkPublisher<ConverseStreamOutput> publisher) {
+        beginAttempt();
         callback(() -> delegate.onEventStream(SdkPublisher.adapt(subscriber -> publisher.subscribe(new Subscriber<ConverseStreamOutput>() {
             @Override
             public void onSubscribe(Subscription subscription) {
@@ -106,7 +107,7 @@ final class BedrockConverseStream implements ConverseStreamResponseHandler {
                 callback(() -> subscriber.onNext(event));
             }
             @Override public void onError(Throwable error) {
-                finish(error);
+                // AWS can notify this subscriber before retrying the logical invocation.
                 callback(() -> subscriber.onError(error));
             }
             @Override public void onComplete() {
@@ -117,14 +118,18 @@ final class BedrockConverseStream implements ConverseStreamResponseHandler {
 
     @Override
     public void exceptionOccurred(Throwable error) {
-        finish(error);
+        // This is also an attempt notification, not necessarily the final SDK outcome.
         callback(() -> delegate.exceptionOccurred(error));
     }
 
     @Override
     public void complete() {
         callback(delegate::complete);
-        finish(null);
+        // The SDK future is authoritative, including failures after handler completion.
+    }
+
+    private synchronized void beginAttempt() {
+        if (!finished) output.resetAttempt();
     }
 
     private void callback(Runnable operation) {

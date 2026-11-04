@@ -431,6 +431,7 @@ class BedrockReleaseRegressionTest {
         }
         assertThat(only().getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
         assertThat(string(only(), SemanticConventions.OUTPUT_VALUE)).isEqualTo("partial-output");
+        assertThat(only().getAttributes().get(AttributeKey.doubleKey("gen_ai.client.time_to_first_token"))).isPositive();
         assertThat(only().toString()).doesNotContain("private-stream-error");
     }
 
@@ -452,7 +453,7 @@ class BedrockReleaseRegressionTest {
         return frame(event, json, "event");
     }
 
-    private static byte[] frame(String event, String json, String type) throws Exception {
+    static byte[] frame(String event, String json, String type) throws Exception {
         ByteArrayOutputStream headers = new ByteArrayOutputStream();
         DataOutputStream stream = new DataOutputStream(headers);
         for (String[] pair : List.of(new String[]{":message-type", type}, new String[]{type.equals("exception") ? ":exception-type" : ":event-type", event},

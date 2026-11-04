@@ -22,6 +22,10 @@ final class BedrockStreamOutput {
     private final BedrockTracing tracing;
     private final Span span;
     private final Map<Integer, Block> blocks = new TreeMap<>();
+    private final long startedNanos = System.nanoTime();
+    private Double firstContentSeconds;
+    private JsonObject usage;
+    private String finishReason;
     private String role = "assistant";
     private int characters;
     private boolean truncated;
@@ -31,13 +35,25 @@ final class BedrockStreamOutput {
         this.span = span;
     }
 
+    void resetAttempt() {
+        blocks.clear();
+        usage = null;
+        finishReason = null;
+        role = "assistant";
+        characters = 0;
+        truncated = false;
+        // First content delivered to the caller is invocation-level, even if AWS later retries.
+    }
+
     void accept(ConverseStreamOutput event) {
+        if (firstContentSeconds == null && hasContent(event)) {
+            firstContentSeconds = (System.nanoTime() - startedNanos) / 1e9;
+        }
         if (event instanceof ConverseStreamMetadataEvent) {
-            var usage = ((ConverseStreamMetadataEvent) event).usage();
-            if (usage != null) tracing.captureUsage(span, BedrockTracing.sdkJson(usage, 0).getAsJsonObject());
+            var value = ((ConverseStreamMetadataEvent) event).usage();
+            if (value != null) usage = BedrockTracing.sdkJson(value, 0).getAsJsonObject();
         } else if (event instanceof MessageStopEvent) {
-            String reason = ((MessageStopEvent) event).stopReasonAsString();
-            if (reason != null) span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, reason);
+            finishReason = ((MessageStopEvent) event).stopReasonAsString();
         }
         if (tracing.hideStreamOutput()) return;
         if (event instanceof MessageStartEvent) {
@@ -60,7 +76,29 @@ final class BedrockStreamOutput {
         }
     }
 
+    private static boolean hasContent(ConverseStreamOutput event) {
+        if (event instanceof ContentBlockStartEvent) {
+            var start = ((ContentBlockStartEvent) event).start();
+            return start != null && start.toolUse() != null
+                && (nonEmpty(start.toolUse().toolUseId()) || nonEmpty(start.toolUse().name()));
+        }
+        if (event instanceof ContentBlockDeltaEvent) {
+            var delta = ((ContentBlockDeltaEvent) event).delta();
+            return delta != null && (nonEmpty(delta.text())
+                || delta.toolUse() != null && nonEmpty(delta.toolUse().input()));
+        }
+        return false;
+    }
+
+    private static boolean nonEmpty(String value) {
+        return value != null && !value.isEmpty();
+    }
+
     void capture() {
+        // Defer attempt-specific attributes so retries cannot leave stale usage/cache/stop fields.
+        if (usage != null) tracing.captureUsage(span, usage);
+        if (finishReason != null) span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, finishReason);
+        if (firstContentSeconds != null) span.setAttribute("gen_ai.client.time_to_first_token", firstContentSeconds);
         if (tracing.hideStreamOutput()) return;
         JsonArray content = new JsonArray();
         for (Block block : blocks.values()) {
