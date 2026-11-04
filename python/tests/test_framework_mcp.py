@@ -247,7 +247,7 @@ class TestInstrumentedStreamReader:
 
         async def test_context():
             async with reader as stream:
-                assert stream == mock_stream
+                assert stream is reader
 
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
@@ -350,7 +350,7 @@ class TestContextAttachingStreamReader:
 
         async def test_context():
             async with reader as stream:
-                assert stream == mock_stream
+                assert stream is reader
 
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
