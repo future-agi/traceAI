@@ -66,6 +66,7 @@ INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
 OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
 TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 CACHE_READ_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_READ_TOKENS
+CACHE_WRITE_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_WRITE_TOKENS
 TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_CALL_ID = SpanAttributes.GEN_AI_TOOL_CALL_ID
 TOOL_ARGUMENTS = SpanAttributes.GEN_AI_TOOL_CALL_ARGUMENTS
@@ -955,6 +956,7 @@ class FutureAGICallback(BaseCallbackHandler):
             details = usage.get("input_token_details")
             if isinstance(details, Mapping):
                 self._set(span, CACHE_READ_TOKENS, _int(details.get("cache_read")))
+                self._set(span, CACHE_WRITE_TOKENS, _int(details.get("cache_creation")))
         elif isinstance(llm_output, Mapping) and isinstance(llm_output.get("token_usage"), Mapping):
             token_usage = llm_output["token_usage"]
             self._set(span, INPUT_TOKENS, _int(token_usage.get("prompt_tokens")))

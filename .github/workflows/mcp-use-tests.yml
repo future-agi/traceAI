@@ -1,0 +1,91 @@
+name: MCP-use dependency floor
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/mcp-use/**'
+      - 'python/frameworks/mcp/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/mcp-use-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/mcp-use/**'
+      - 'python/frameworks/mcp/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/mcp-use-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-use-floor-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MCP_USE_ANONYMIZED_TELEMETRY: 'false'
+  MCP_USE_LANGFUSE: 'false'
+  MCP_USE_LAMINAR: 'false'
+  FI_BASE_URL: http://127.0.0.1:9
+  FI_GRPC_URL: http://127.0.0.1:9
+
+jobs:
+  floor:
+    name: Fresh floor (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Resolve the declared dependency floors from scratch
+        run: |
+          python -m venv .floor-venv
+          # Pin only our direct dependencies to their advertised minima. Leave
+          # LangGraph/checkpoint and every other transitive dependency unpinned:
+          # pip check alone cannot detect an import-broken upstream resolution.
+          python - <<'PY' > "$RUNNER_TEMP/mcp-use-floor.txt"
+          import re
+          import tomllib
+          from pathlib import Path
+
+          deps = tomllib.loads(Path("python/frameworks/mcp-use/pyproject.toml").read_text())["tool"]["poetry"]["dependencies"]
+          for name in ("mcp-use", "langchain-core", "fi-instrumentation-otel"):
+              floor = re.fullmatch(r">=([0-9]+\.[0-9]+\.[0-9]+)(?:,.*)?", deps[name])
+              assert floor, f"No explicit supported floor for {name}"
+              print(f"{name}=={floor[1]}")
+          PY
+          .floor-venv/bin/python -m pip install --no-cache-dir \
+            -c "$RUNNER_TEMP/mcp-use-floor.txt" ./python/frameworks/mcp-use \
+            'pytest==8.4.2' 'pytest-asyncio==0.24.0'
+          .floor-venv/bin/python -m pip check
+          .floor-venv/bin/python -m pip freeze
+      - name: Import the real client and verify installed floors
+        run: |
+          .floor-venv/bin/python - <<'PY'
+          import os
+          from importlib.metadata import version
+          from pathlib import Path
+          from mcp_use import MCPAgent, MCPClient
+          from traceai_mcp_use import FutureAGICallback
+
+          for requirement in (Path(os.environ["RUNNER_TEMP"]) / "mcp-use-floor.txt").read_text().splitlines():
+              name, expected = requirement.split("==")
+              assert version(name) == expected, (name, version(name), expected)
+          PY
+      - name: Run the full package and real-agent exporter tests
+        run: |
+          .floor-venv/bin/python -m pytest python/frameworks/mcp-use/tests \
+            -q -p no:cacheprovider --noconftest -o addopts=
