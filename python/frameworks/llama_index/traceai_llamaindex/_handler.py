@@ -488,7 +488,9 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        # Error payloads can echo hidden inputs even when outputs are visible.
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepStartEvent) -> None:
@@ -575,7 +577,8 @@ class _Span(BaseSpan):
     def _(self, event: StreamChatErrorEvent) -> None:
         if not self.waiting_for_streaming:
             self.record_exception(event.exception)
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatEndEvent) -> None:
