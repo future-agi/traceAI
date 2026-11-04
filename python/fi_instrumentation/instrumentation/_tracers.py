@@ -3,7 +3,8 @@ import collections
 import inspect
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar
+from contextvars import Context as ExecutionContext
+from contextvars import ContextVar, copy_context
 from datetime import datetime
 from functools import partial
 from secrets import randbits
@@ -632,25 +633,60 @@ _DecoratorContext = Union[_ChainContext, _ToolContext]
 @contextmanager
 def _generator_context(
     manager: AbstractContextManager[_DecoratorContext],
-) -> Iterator[_DecoratorContext]:
-    # Start lazily on first consumption, under the consumer's parent. Detach
-    # immediately: an OTel context token must never span a yield (or two tasks).
+) -> Iterator[Tuple[_DecoratorContext, ExecutionContext]]:
+    # Start lazily under the first consumer's parent, then isolate the complete
+    # execution context, not just its current span. Reuse this SAME Context for
+    # every advance/close so tokens created inside the generator remain valid
+    # across yields, awaits and consumers in different tasks or threads.
     with manager as context:
-        pass
+        execution_context = copy_context()
     span = context._span
     try:
-        yield context
+        yield context, execution_context
     except GeneratorExit:
         # Explicit early close is not a failed operation.
         raise
     except BaseException as exc:
         # use_span only handles Exception; cancellation is a BaseException.
         # Record once through FiSpan so error privacy applies on every path.
-        span.record_exception(exc, escaped=True)
-        span.set_status(Status(StatusCode.ERROR, str(exc)))
+        execution_context.run(span.record_exception, exc, escaped=True)
+        execution_context.run(span.set_status, Status(StatusCode.ERROR, str(exc)))
         raise
     finally:
-        span.end()
+        execution_context.run(span.end)
+
+
+class _ContextualAwaitable:
+    """Drive each await step in the generator's context, in the caller's task.
+
+    Context.run(async_function) only creates a coroutine; it does not run its
+    body in that context. A new task per advance would copy the context on
+    Python 3.10 (invalidating tokens) and change task-local cancellation scopes.
+    Instead, delegate the await protocol without introducing a task or retaining
+    a context attachment while the caller is suspended.
+    """
+
+    def __init__(self, awaitable: Awaitable[Any], context: ExecutionContext) -> None:
+        self._awaitable = awaitable
+        self._context = context
+
+    def __await__(self) -> Generator[Any, Any, Any]:
+        iterator = self._context.run(self._awaitable.__await__)
+        operation: Callable[[], Any] = iterator.__next__
+        while True:
+            try:
+                output = self._context.run(operation)
+            except StopIteration as stopped:
+                return stopped.value
+            try:
+                sent = yield output
+            except GeneratorExit:
+                self._context.run(iterator.close)
+                raise
+            except BaseException as exc:
+                operation = partial(iterator.throw, exc)
+            else:
+                operation = partial(iterator.send, sent)
 
 
 def _trace_generator(
@@ -666,28 +702,22 @@ def _trace_sync_generator(
     generator: Generator[Any, Any, Any],
     manager: AbstractContextManager[_DecoratorContext],
 ) -> Generator[Any, Any, Any]:
-    with _generator_context(manager) as context:
+    with _generator_context(manager) as (context, execution_context):
         operation: Callable[[], Any] = generator.__next__
         while True:
             try:
-                with use_span(
-                    context._span, record_exception=False, set_status_on_exception=False
-                ):
-                    output = operation()
+                output = execution_context.run(operation)
             except StopIteration as stopped:
                 # Do not accumulate chunks: streams can be unbounded. Preserve
                 # an explicit return value or output set by the application.
                 if stopped.value is not None:
-                    context.process_output(stopped.value)
+                    execution_context.run(context.process_output, stopped.value)
                 return stopped.value
             try:
                 sent = yield output
             except GeneratorExit:
-                with use_span(
-                    context._span, record_exception=False, set_status_on_exception=False
-                ):
-                    generator.close()
-                raise
+                # Python 3.13 exposes the value returned during close().
+                return execution_context.run(generator.close)
             except BaseException as exc:
                 operation = partial(generator.throw, exc)
             else:
@@ -698,23 +728,17 @@ async def _trace_async_generator(
     generator: AsyncGenerator[Any, Any],
     manager: AbstractContextManager[_DecoratorContext],
 ) -> AsyncGenerator[Any, Any]:
-    with _generator_context(manager) as context:
+    with _generator_context(manager) as (_, execution_context):
         operation: Callable[[], Awaitable[Any]] = generator.__anext__
         while True:
             try:
-                with use_span(
-                    context._span, record_exception=False, set_status_on_exception=False
-                ):
-                    output = await operation()
+                output = await _ContextualAwaitable(operation(), execution_context)
             except StopAsyncIteration:
                 return
             try:
                 sent = yield output
             except GeneratorExit:
-                with use_span(
-                    context._span, record_exception=False, set_status_on_exception=False
-                ):
-                    await generator.aclose()
+                await _ContextualAwaitable(generator.aclose(), execution_context)
                 raise
             except BaseException as exc:
                 operation = partial(generator.athrow, exc)
