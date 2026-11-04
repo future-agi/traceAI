@@ -204,17 +204,19 @@ public class TracedKernel {
     }
 
     private <T> void captureOutput(Span span, FunctionResult<T> result) {
-        if (result == null) {
+        if (result == null || tracer.getConfig().isHideOutputs()) {
             return;
         }
 
-        T value = result.getResult();
+        // As with inputs, format and serialize only a bounded, cycle-free copy. Never pass
+        // the SDK result wrapper or a user's original object graph to Gson or toString().
+        Object value = ArgumentSnapshot.capture(result.getResult());
         if (value != null) {
             tracer.setOutputValue(span, value.toString());
         }
 
         // Token usage belongs to the model-call span below this one. Copying it here would count
         // the same tokens twice.
-        tracer.setRawOutput(span, result);
+        tracer.setRawOutput(span, value);
     }
 }
