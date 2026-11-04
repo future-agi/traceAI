@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 import static ai.traceai.anthropic.SdkTestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -96,6 +97,75 @@ class WrapperContractTest {
         assertEquals(OUTPUT, attr(SemanticConventions.OUTPUT_VALUE));
         assertEquals("[{\"role\":\"assistant\",\"content\":\"" + OUTPUT + "\"}]", attr(SemanticConventions.LLM_OUTPUT_MESSAGES));
         assertEquals("end_turn", attr(SemanticConventions.LLM_RESPONSE_FINISH_REASON));
+        assertEquals(StatusCode.OK, span().getStatus().getStatusCode());
+    }
+
+    public static class City {
+        public String city;
+    }
+
+    private Object structuredParams() throws Exception {
+        Class<?> paramsClass;
+        try {
+            paramsClass = modelClass("StructuredMessageCreateParams");
+        } catch (ClassNotFoundException legacySdk) {
+            return org.junit.jupiter.api.Assumptions.abort("SDK floor has no structured-output API");
+        }
+        Object builder = paramsClass.getMethod("builder").invoke(null);
+        call(builder, "model", String.class, "test-model");
+        call(builder, "maxTokens", long.class, 64L);
+        call(builder, "addUserMessage", String.class, INPUT);
+        call(builder, "outputConfig", Class.class, City.class);
+        return call(builder, "build");
+    }
+
+    private void assertParsedCity(Object result) throws Exception {
+        assertInstanceOf(modelClass("StructuredMessage"), result);
+        assertEquals("msg_synthetic", call(result, "id"));
+        List<?> blocks = (List<?>) call(result, "content");
+        Object textBlock = ((Optional<?>) call(blocks.get(0), "text")).orElseThrow();
+        assertEquals("Oslo", assertInstanceOf(City.class, call(textBlock, "text")).city,
+            "the caller must still receive the SDK's parsed response, not the raw wire message");
+    }
+
+    @Test
+    void structuredOutputRetainsJsonAndParsedResponse() throws Exception {
+        Object params = structuredParams();
+        String json = "{\"city\":\"Oslo\"}";
+        response = MESSAGE.replace("\"" + OUTPUT + "\"", ObjectMappers.jsonMapper().writeValueAsString(json));
+
+        Object result = traced().createMessage(params);
+        assertParsedCity(result);
+        assertEquals(json, attr(SemanticConventions.OUTPUT_VALUE));
+        JsonNode messages = ObjectMappers.jsonMapper().readTree(attr(SemanticConventions.LLM_OUTPUT_MESSAGES));
+        assertEquals(1, messages.size());
+        assertEquals("assistant", messages.get(0).path("role").asText());
+        assertEquals(json, messages.get(0).path("content").asText());
+        JsonNode raw = ObjectMappers.jsonMapper().readTree(attr(SemanticConventions.RAW_OUTPUT));
+        assertEquals("msg_synthetic", raw.path("id").asText());
+        assertEquals("text", raw.path("content").get(0).path("type").asText());
+        assertEquals(json, raw.path("content").get(0).path("text").asText());
+        assertEquals(7, raw.path("usage").path("output_tokens").asInt());
+        assertEquals("test-model", attr(SemanticConventions.LLM_RESPONSE_MODEL));
+        assertEquals("msg_synthetic", attr(SemanticConventions.LLM_RESPONSE_ID));
+        assertEquals("end_turn", attr(SemanticConventions.LLM_RESPONSE_FINISH_REASON));
+        assertEquals(23L, count(SemanticConventions.LLM_TOKEN_COUNT_TOTAL));
+        assertEquals(StatusCode.OK, span().getStatus().getStatusCode());
+    }
+
+    @Test
+    void structuredOutputRespectsPrivacyWithoutChangingParsedResponse() throws Exception {
+        Object params = structuredParams();
+        response = MESSAGE.replace("\"" + OUTPUT + "\"",
+            ObjectMappers.jsonMapper().writeValueAsString("{\"city\":\"Oslo\"}"));
+
+        Object result = traced(TraceConfig.builder().hideOutputs(true).build()).createMessage(params);
+        assertParsedCity(result);
+        assertNull(attr(SemanticConventions.OUTPUT_VALUE));
+        assertNull(attr(SemanticConventions.LLM_OUTPUT_MESSAGES));
+        assertNull(attr(SemanticConventions.RAW_OUTPUT));
+        assertFalse(span().toString().contains("Oslo"));
+        assertEquals(23L, count(SemanticConventions.LLM_TOKEN_COUNT_TOTAL));
         assertEquals(StatusCode.OK, span().getStatus().getStatusCode());
     }
 

@@ -152,33 +152,38 @@ public class TracedAnthropicClient {
             Object messagesApi = invokeMethod(client, "messages");
             T result = (T) invokeMethod(messagesApi, "create", params);
 
+            // StructuredMessage holds parsed POJOs, not wire text/JSON. Observe its
+            // raw Message when available, but return the original typed result.
+            Object rawMessage = extractFieldObject(result, "rawMessage");
+            Object response = rawMessage != null ? rawMessage : result;
+
             // Extract response model
-            String responseModel = extractField(result, "model");
+            String responseModel = extractField(response, "model");
             if (responseModel != null) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
             }
 
             // Extract response ID
-            String responseId = extractField(result, "id");
+            String responseId = extractField(response, "id");
             if (responseId != null) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, responseId);
             }
 
             // Unwrap SDK content unions; never export their debug representation.
-            String output = extractText(extractFieldObject(result, "content"));
+            String output = extractText(extractFieldObject(response, "content"));
             if (output != null) {
                 tracer.setOutputValue(span, output);
                 tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", output)));
             }
 
             // Extract stop reason
-            String stopReason = extractField(result, "stopReason");
+            String stopReason = extractField(response, "stopReason");
             if (stopReason != null) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, stopReason);
             }
 
             // Extract usage
-            Object usage = extractFieldObject(result, "usage");
+            Object usage = extractFieldObject(response, "usage");
             if (usage != null) {
                 Object inputTokens = extractFieldObject(usage, "inputTokens");
                 Object outputTokens = extractFieldObject(usage, "outputTokens");
@@ -202,7 +207,7 @@ public class TracedAnthropicClient {
 
             // Capture raw output
             if (!tracer.getConfig().isHideOutputs()) {
-                tracer.setRawOutput(span, serializeContent(result));
+                tracer.setRawOutput(span, serializeContent(response));
             }
 
             span.setStatus(StatusCode.OK);
