@@ -1104,6 +1104,14 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "python/frameworks/transformers": {
+      "release-type": "python",
+      "component": "traceai-transformers",
+      "package-name": "traceAI-transformers",
+      "extra-files": [
+        "traceai_transformers/version.py"
+      ]
     }
   }
 }
