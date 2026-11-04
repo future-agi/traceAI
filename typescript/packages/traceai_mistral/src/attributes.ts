@@ -58,7 +58,8 @@ function normalizeMessage(value: unknown): Data {
 function metadata(value: Data): Attributes {
   const usage = record(value.usage);
   return {
-    [S.LLM_MODEL_NAME]: text(value.model),
+    // A resolved model is not the requested alias. If no model was requested
+    // (e.g. an agent ID), leave request.model unset rather than inventing one.
     [S.GEN_AI_RESPONSE_MODEL]: text(value.model),
     [S.GEN_AI_RESPONSE_ID]: text(value.conversationId ?? value.id),
     [S.LLM_TOKEN_COUNT_PROMPT]: number(usage.promptTokens ?? usage.prompt_tokens),

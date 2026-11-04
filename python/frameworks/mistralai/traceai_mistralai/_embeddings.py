@@ -9,6 +9,7 @@ from fi_instrumentation.fi_types import (
 from opentelemetry import trace
 
 from ._chat_wrapper import _AsyncChatWrapper, _SyncChatWrapper
+from ._request_attributes_extractor import _get_model_attributes
 
 
 class _EmbeddingResponse:
@@ -30,6 +31,7 @@ class _EmbeddingResponse:
                     )
 
     def _get_extra_attributes_from_request(self, request_parameters):
+        yield from _get_model_attributes(request_parameters)
         # Text belongs only in the embedding attributes, where all three input
         # privacy flags apply. Do not duplicate it in input.value or parameters.
         yield (
