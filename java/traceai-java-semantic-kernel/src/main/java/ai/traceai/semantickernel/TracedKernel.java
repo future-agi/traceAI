@@ -5,12 +5,14 @@ import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import ai.traceai.TraceAI;
 import com.microsoft.semantickernel.Kernel;
+import com.microsoft.semantickernel.contextvariables.ContextVariable;
 import com.microsoft.semantickernel.orchestration.FunctionResult;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunction;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunctionArguments;
 import io.opentelemetry.api.trace.Span;
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -157,28 +159,39 @@ public class TracedKernel {
     }
 
     private void captureInputArguments(Span span, KernelFunctionArguments arguments) {
-        if (arguments == null) {
+        if (arguments == null || tracer.getConfig().isHideInputs()) {
             return;
         }
 
-        StringBuilder inputBuilder = new StringBuilder();
-        for (Map.Entry<String, ?> entry : arguments.entrySet()) {
+        try {
+            Map<String, Object> values = new LinkedHashMap<>();
+            StringBuilder inputBuilder = new StringBuilder();
+            for (Map.Entry<String, ContextVariable<?>> entry : arguments.entrySet()) {
+                ContextVariable<?> variable = entry.getValue();
+                Object value = variable == null ? null : variable.getValue();
+                values.put(entry.getKey(), value);
+
+                String text;
+                try {
+                    text = value == null ? "" : value.toString();
+                } catch (RuntimeException ignored) {
+                    // A user-defined formatter must not prevent capture of the other arguments.
+                    continue;
+                }
+                if (inputBuilder.length() > 0) {
+                    inputBuilder.append("\n");
+                }
+                inputBuilder.append(entry.getKey()).append(": ").append(text);
+            }
+
             if (inputBuilder.length() > 0) {
-                inputBuilder.append("\n");
+                tracer.setInputValue(span, inputBuilder.toString());
             }
-            inputBuilder.append(entry.getKey()).append(": ");
-            Object value = entry.getValue();
-            if (value != null) {
-                inputBuilder.append(value.toString());
-            }
+            // Serialize values, not SDK wrappers and their converter/type implementation details.
+            tracer.setRawInput(span, values);
+        } catch (RuntimeException ignored) {
+            // Input capture is best-effort; getter or serialization failures must not abort the call.
         }
-
-        if (inputBuilder.length() > 0) {
-            tracer.setInputValue(span, inputBuilder.toString());
-        }
-
-        // Also capture raw input
-        tracer.setRawInput(span, arguments);
     }
 
     private void setFunctionAttributes(Span span, String functionName, String pluginName) {

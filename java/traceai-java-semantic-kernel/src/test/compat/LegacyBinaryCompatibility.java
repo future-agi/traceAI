@@ -59,10 +59,44 @@ public class LegacyBinaryCompatibility {
                 if (spans.size() != 10) throw new AssertionError("spans=" + spans);
                 if (spans.toString().contains("hello") || spans.toString().contains("answer")) throw new AssertionError("content leaked");
                 System.out.println("PASS: 6 subscriptions, 10 privacy-safe spans");
+
+                exporter.reset();
+                var plugin = com.microsoft.semantickernel.plugin.KernelPluginFactory.createFromObject(
+                    new EchoPlugin(), "local");
+                Kernel inputKernel = Kernel.builder().withPlugin(plugin).build();
+                KernelFunction<String> echo = plugin.get("echo");
+                var arguments = KernelFunctionArguments.builder()
+                    .withVariable("question", "synthetic-legacy-question").build();
+                String control = inputKernel.invokeAsync(echo).withArguments(arguments).block().getResult();
+                var inputTracer = new FITracer(sdk.get("offline-legacy-input"), TraceConfig.builder().build());
+                String actual = new TracedKernel(inputKernel, inputTracer)
+                    .invokeAsync(echo, arguments).block().getResult();
+                if (!"received: synthetic-legacy-question".equals(control) || !control.equals(actual))
+                    throw new AssertionError("traced and untraced argument handling differ");
+                var inputSpans = exporter.getFinishedSpanItems();
+                if (inputSpans.size() != 1) throw new AssertionError("input spans=" + inputSpans);
+                var attributes = inputSpans.get(0).getAttributes();
+                if (!"question: synthetic-legacy-question".equals(attributes.get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey("input.value"))))
+                    throw new AssertionError("argument value not captured");
+                if (!"{\"question\":\"synthetic-legacy-question\"}".equals(attributes.get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey("fi.raw_input"))))
+                    throw new AssertionError("raw arguments not flattened");
+                System.out.println("PASS: identical traced/untraced result and flattened exported inputs");
             } catch (Throwable failure) {
                 failure.printStackTrace();
                 System.exit(12);
             }
+        }
+    }
+
+    public static class EchoPlugin {
+        @com.microsoft.semantickernel.semanticfunctions.annotations.DefineKernelFunction(
+            name = "echo", returnType = "java.lang.String")
+        public String echo(
+                @com.microsoft.semantickernel.semanticfunctions.annotations.KernelFunctionParameter(name = "question")
+                String question) {
+            return "received: " + question;
         }
     }
 }
