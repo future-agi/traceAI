@@ -234,7 +234,12 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     };
     const observe = (chunk: any) => {
       instrumentation.response(span, chunk.response ?? { id: chunk.id, model: chunk.model, usage: chunk.usage }, operation, false, hideErrorDetails);
-      if (chunk.type === 'response.failed' || chunk.type === 'error') span.setStatus({ code: SpanStatusCode.ERROR });
+      // Native chat/completion streams yield data-only { error: ... } frames
+      // without throwing. Record status, not free-form error details, and leave
+      // the caller's chunks and iterator behavior unchanged.
+      if (chunk.error != null || chunk.type === 'response.failed' || chunk.type === 'error') {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+      }
       if (chunk.type === 'response.completed' || chunk.type === 'response.failed') {
         responseFinished = true;
         // Terminal Responses events contain the canonical output including tools.

@@ -45,6 +45,7 @@ describe.each(sdks)('exception privacy / portkey-ai %s', (_version, sdk) => {
   let wire: WireRequest[];
   let savedPii: string | undefined;
   let savedHide: string | undefined;
+  let streamChunks: unknown[] | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -58,8 +59,13 @@ describe.each(sdks)('exception privacy / portkey-ai %s', (_version, sdk) => {
           res.end('{}');
         } else {
           received.push(body);
-          res.writeHead(400, { 'content-type': 'application/json', 'x-request-id': 'synthetic-request' });
-          res.end(JSON.stringify({ error: { message } }));
+          if (streamChunks) {
+            res.writeHead(200, { 'content-type': 'text/event-stream' });
+            res.end(streamChunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n');
+          } else {
+            res.writeHead(400, { 'content-type': 'application/json', 'x-request-id': 'synthetic-request' });
+            res.end(JSON.stringify({ error: { message } }));
+          }
         }
       });
     });
@@ -72,6 +78,7 @@ describe.each(sdks)('exception privacy / portkey-ai %s', (_version, sdk) => {
   beforeEach(() => {
     received = [];
     wire = [];
+    streamChunks = undefined;
     savedPii = process.env.FI_PII_REDACTION;
     savedHide = process.env.FI_HIDE_ERROR_DETAILS;
     delete process.env.FI_PII_REDACTION;
@@ -131,5 +138,96 @@ describe.each(sdks)('exception privacy / portkey-ai %s', (_version, sdk) => {
     if (mode.redacted) expect(serialized).not.toContain(email);
     else expect(serialized).toContain(email);
     expect(serialized).not.toContain(credential);
+  });
+
+  const nativeRequest = (client: any, operation: string) => operation === 'chat'
+    ? client.chat.completions.create({ model: 'synthetic-model', messages: [{ role: 'user', content: 'hello' }], stream: true })
+    : client.completions.create({ model: 'synthetic-model', prompt: 'hello', stream: true });
+  const partialChunk = (operation: string) => ({ choices: [{ index: 0, ...(operation === 'chat'
+    ? { delta: { content: 'partial output' } } : { text: 'partial output' }) }] });
+  const consume = async (stream: AsyncIterable<unknown>) => {
+    const chunks = [];
+    const iterator = stream[Symbol.asyncIterator]();
+    for (;;) {
+      const item = await iterator.next();
+      if (item.done) return { chunks, terminal: item };
+      chunks.push(item.value);
+    }
+  };
+  const exportedSpans = () => wire.flatMap(request => request.resourceSpans.flatMap(resource =>
+    resource.scopeSpans.flatMap(scope => scope.spans)));
+
+  it.each(modes.flatMap(mode => ['chat', 'completions'].map(operation => ({ ...mode, operation }))))(
+    'native $operation data-only error: $name preserves SDK behavior and export privacy', async mode => {
+      if (mode.env !== undefined) process.env.FI_PII_REDACTION = mode.env;
+      streamChunks = [partialChunk(mode.operation), { error: { message, code: 'synthetic_error' } }];
+      const client = new sdk.Portkey({ apiKey: credential, baseURL, maxRetries: 0 });
+      // Control: native Portkey yields the error frame and then ends normally.
+      const baseline = await consume(await nativeRequest(client, mode.operation));
+      expect(baseline).toEqual({ chunks: streamChunks, terminal: { done: true, value: undefined } });
+      expect(wire).toHaveLength(0);
+
+      inst = new PortkeyInstrumentation({ traceConfig: mode.config });
+      inst.setTracerProvider(provider);
+      inst.manuallyInstrument(client);
+      const stream = await nativeRequest(client, mode.operation);
+      expect(wire).toHaveLength(0);
+      expect(await consume(stream)).toEqual(baseline);
+      expect(received).toHaveLength(2);
+      expect(received[1]).toEqual(received[0]);
+      await provider.forceFlush();
+      const spans = exportedSpans();
+      expect(spans).toHaveLength(1);
+      const [span] = spans;
+      expect(span.status.code).toBe(2);
+      expect(attribute(span.attributes, 'error.type')).toEqual(expect.any(String));
+      expect(attribute(span.attributes, S.OUTPUT_VALUE)).toBe('partial output');
+      // Status-only failures do not fabricate an exception or retain free-form
+      // provider error details, even when content/error-detail capture is enabled.
+      expect(span.status.message).toBeUndefined();
+      expect(span.events ?? []).toHaveLength(0);
+      expect(JSON.stringify(wire)).not.toContain(email);
+      expect(JSON.stringify(wire)).not.toContain(credential);
+    },
+  );
+
+  it.each(['chat', 'completions'])('ends native %s errors on iterator return without changing the result', async operation => {
+    process.env.FI_HIDE_ERROR_DETAILS = 'true';
+    streamChunks = [partialChunk(operation), { error: { message, code: 'synthetic_error' } }, { choices: [] }];
+    const client = new sdk.Portkey({ apiKey: credential, baseURL, maxRetries: 0 });
+    const stopAfterError = async () => {
+      const iterator = (await nativeRequest(client, operation))[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      const second = await iterator.next();
+      const terminal = await iterator.return();
+      return { first, second, terminal };
+    };
+    const baseline = await stopAfterError();
+    expect(baseline.second).toEqual({ done: false, value: streamChunks[1] });
+    inst = new PortkeyInstrumentation();
+    inst.setTracerProvider(provider);
+    inst.manuallyInstrument(client);
+    expect(await stopAfterError()).toEqual(baseline);
+    await provider.forceFlush();
+    const spans = exportedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(2);
+    expect(attribute(spans[0].attributes, 'error.type')).toEqual(expect.any(String));
+    expect(attribute(spans[0].attributes, S.OUTPUT_VALUE)).toBe('partial output');
+    expect(JSON.stringify(wire)).not.toContain(email);
+  });
+
+  it.each(['chat', 'completions'])('does not classify native %s output or null errors as failures', async operation => {
+    streamChunks = [partialChunk(operation), { error: null, choices: [] }];
+    const client = new sdk.Portkey({ apiKey: credential, baseURL, maxRetries: 0 });
+    inst = new PortkeyInstrumentation();
+    inst.setTracerProvider(provider);
+    inst.manuallyInstrument(client);
+    expect((await consume(await nativeRequest(client, operation))).chunks).toEqual(streamChunks);
+    await provider.forceFlush();
+    const spans = exportedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).not.toBe(2);
+    expect(attribute(spans[0].attributes, 'error.type')).toBeUndefined();
   });
 });
