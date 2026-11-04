@@ -49,16 +49,22 @@ jobs:
           # Keep the core dependency at its declared minimum. The general Python
           # workflow separately exercises the repository's locked dependencies.
           .venv/bin/pip install -e python/frameworks/crewai "$requirement" \
-            'fi-instrumentation-otel==1.2.2' \
+            'fi-instrumentation-otel==1.2.2' 'traceAI-openai==0.1.12' \
             'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-mock==3.14.0'
           .venv/bin/pip check
+          # Legacy CrewAI estimates its roll-up using tiktoken; fetch the
+          # public tokenizer before entering the network-isolated test process.
+          export TIKTOKEN_CACHE_DIR="$PWD/.tiktoken-cache"
+          if [ "$CREWAI_VERSION" = 0.41.1 ]; then
+            .venv/bin/python -I -c 'import tiktoken; tiktoken.encoding_for_model("gpt-4o-mini")'
+          fi
           .venv/bin/python -I -c 'from importlib.metadata import version; print("CrewAI", version("crewai"))'
       - name: Run the full wrapper and shared suites without outbound network
         run: |
           mkdir -p "$RUNNER_TEMP/crewai-home"
           sudo unshare --net -- bash -e -c '
             ip link set lo up
-            export HOME="$3"
+            export HOME="$3" TIKTOKEN_CACHE_DIR="$2/.tiktoken-cache"
             export CREWAI_DISABLE_TELEMETRY=true CREWAI_DISABLE_TRACKING=true
             export CREWAI_TRACING_ENABLED=false OTEL_SDK_DISABLED=false
             export OPENAI_API_KEY=synthetic-openai-key

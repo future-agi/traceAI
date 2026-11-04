@@ -54,6 +54,8 @@ def _safe_context_attributes() -> dict:
 
 def _safe_output(value: Any) -> Any:
     cls = type(value)
+    if cls.__module__.startswith("crewai.") and cls.__name__ == "LiteAgentOutput":
+        return _safe_data(value.raw)
     if cls.__module__.startswith("crewai.") and cls.__name__ in (
         "TaskOutput",
         "CrewOutput",

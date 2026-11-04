@@ -1,10 +1,12 @@
 import logging
 from importlib import import_module
+from importlib.metadata import version as package_version
 from typing import Any, Collection
 
 from fi_instrumentation import TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+from packaging.version import Version
 from traceai_crewai._wrappers import (
     _AsyncExecuteCoreWrapper,
     _AsyncKickoffWrapper,
@@ -16,10 +18,15 @@ from traceai_crewai._wrappers import (
     _StructuredToolWrapper,
     _ToolUseWrapper,
 )
+from traceai_crewai._standalone import (
+    _AgentKickoffWrapper,
+    _AsyncAgentKickoffWrapper,
+    _AsyncFlowKickoffWrapper,
+)
 from traceai_crewai._privacy import _CrewAITraceConfig
 from traceai_crewai._tracer import _CrewAITracer
 from traceai_crewai.version import __version__
-from wrapt import wrap_function_wrapper
+from wrapt import FunctionWrapper, wrap_function_wrapper
 
 _instruments = ("crewai >= 0.41.1",)
 
@@ -81,9 +88,12 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         # These entry points do not exist on the supported 0.41.1 floor.
         # kickoff_async delegates to kickoff; wrapping both would double-count.
         self._optional_originals = []
+        modern_agent = Version(package_version("crewai")) >= Version("1.15.0")
         for module_name, class_name, method_name, wrapper_type in (
             ("crewai", "Crew", "akickoff", _AsyncKickoffWrapper),
             ("crewai", "Task", "_aexecute_core", _AsyncExecuteCoreWrapper),
+            ("crewai", "Agent", "kickoff", _AgentKickoffWrapper),
+            ("crewai", "Agent", "kickoff_async", _AsyncAgentKickoffWrapper),
             (
                 "crewai.tools.structured_tool",
                 "CrewStructuredTool",
@@ -101,6 +111,10 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
             ("crewai.tools.base_tool", "Tool", "run", _NativeToolWrapper),
             ("crewai.tools.base_tool", "Tool", "arun", _AsyncNativeToolWrapper),
         ):
+            # Earlier Agent.kickoff versions use LiteAgent instead of the
+            # coroutine-factory contract covered by these public wrappers.
+            if class_name == "Agent" and not modern_agent:
+                continue
             try:
                 module = import_module(module_name)
             except ModuleNotFoundError as exc:
@@ -118,6 +132,28 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
                     wrapper_type(tracer=self._tracer),
                 )
                 self._optional_originals.append((cls, method_name, original))
+
+        # Flow.kickoff and akickoff delegate to kickoff_async. Recent CrewAI
+        # exposes Flow through a subclass: wrap the actual defining owner once,
+        # and restore it without leaving a synthetic override on the public API.
+        try:
+            flow_module = import_module("crewai.flow.flow")
+        except ModuleNotFoundError as exc:
+            if not exc.name or not (
+                exc.name == "crewai.flow.flow"
+                or "crewai.flow.flow".startswith(exc.name + ".")
+            ):
+                raise
+        else:
+            flow = getattr(flow_module, "Flow", None)
+            for cls in flow.__mro__ if flow is not None else ():
+                original = vars(cls).get("kickoff_async")
+                if original is not None:
+                    cls.kickoff_async = FunctionWrapper(
+                        original, _AsyncFlowKickoffWrapper(tracer=self._tracer)
+                    )
+                    self._optional_originals.append((cls, "kickoff_async", original))
+                    break
 
     def _uninstrument(self, **kwargs: Any) -> None:
         for cls, method_name, original in self._optional_originals:

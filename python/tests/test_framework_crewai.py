@@ -51,6 +51,7 @@ class TestCrewAIInstrumentor:
         mock_import.side_effect = lambda name: {
             "crewai": mock_task_module,
             "crewai.tools.tool_usage": mock_tool_module,
+            "crewai.flow.flow": Mock(Flow=None),
         }.get(name, Mock())
 
         instrumentor = CrewAIInstrumentor()
