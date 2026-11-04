@@ -80,7 +80,7 @@ public final class TracedCohereV2Client {
                 vectors.getUbinary().ifPresent(value -> span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, (long) value.size()));
                 vectors.getBase64().ifPresent(value -> span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, (long) value.size()));
             }
-            response.getMeta().ifPresent(attributes::meta);
+            response.getMeta().ifPresent(attributes::embeddingMeta);
             attributes.rawOutput(response);
             return response;
         });

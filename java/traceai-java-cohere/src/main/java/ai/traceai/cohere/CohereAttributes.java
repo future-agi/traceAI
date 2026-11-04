@@ -9,6 +9,7 @@ import com.cohere.api.types.NonStreamedChatResponse;
 import com.cohere.api.types.StreamedChatResponse;
 import com.cohere.api.types.Usage;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.opentelemetry.api.trace.Span;
 
 import java.util.ArrayList;
@@ -39,7 +40,7 @@ final class CohereAttributes {
 
     void chatInput(Object request) {
         if (tracer.getConfig().isHideInputs() || tracer.getConfig().isHideInputMessages()) return;
-        JsonNode json = json(request);
+        JsonNode json = inputJson(request);
         if (json == null) return;
         List<Map<String, String>> messages = new ArrayList<>();
         if (json.has("messages")) {
@@ -62,7 +63,7 @@ final class CohereAttributes {
 
     void rawInput(Object request) {
         if (tracer.getConfig().isHideInputs()) return;
-        JsonNode json = json(request);
+        JsonNode json = inputJson(request);
         if (json != null) tracer.setRawInput(span, json.toString());
     }
 
@@ -106,6 +107,16 @@ final class CohereAttributes {
             units.getInputTokens().ifPresent(value -> span.setAttribute("cohere.billed_units.input_tokens", value.longValue()));
             units.getSearchUnits().ifPresent(value -> span.setAttribute("cohere.rerank.search_units", value.longValue()));
         });
+    }
+
+    void embeddingMeta(ApiMeta meta) {
+        meta(meta);
+        // Embeddings often report only billed input tokens. Keep actual usage
+        // when present (including zero), and never fabricate output or total counts.
+        if (meta.getTokens().flatMap(tokens -> tokens.getInputTokens()).isEmpty()) {
+            meta.getBilledUnits().flatMap(units -> units.getInputTokens()).ifPresent(value ->
+                span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT, value.longValue()));
+        }
     }
 
     TracedCohereStream.EventState v1Event(StreamedChatResponse event) {
@@ -175,6 +186,17 @@ final class CohereAttributes {
         StringBuilder result = new StringBuilder();
         if (content.isArray()) for (JsonNode part : content) result.append(part.path("text").asText(""));
         return result.toString();
+    }
+
+    private static JsonNode inputJson(Object request) {
+        JsonNode json = json(request);
+        if (json == null) return null;
+        // Authentication is never trace content, even with input capture enabled.
+        // Only edit the serialized tracing copy; the SDK still needs these tokens.
+        for (JsonNode connector : json.path("connectors")) {
+            if (connector.isObject()) ((ObjectNode) connector).remove("user_access_token");
+        }
+        return json;
     }
 
     private static JsonNode json(Object value) {

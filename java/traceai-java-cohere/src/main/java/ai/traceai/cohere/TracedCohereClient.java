@@ -101,7 +101,8 @@ public class TracedCohereClient {
                     span.setAttribute("cohere.preamble", preamble));
             }
 
-            tracer.setRawInput(span, request);
+            // Use the same credential-safe tracing copy as the streaming path.
+            new CohereAttributes(tracer, span).rawInput(request);
 
             // Execute request
             NonStreamedChatResponse response = client.chat(request);
