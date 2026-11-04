@@ -45,11 +45,22 @@ type generateRequest struct {
 	Contents          []content       `json:"contents"`
 	SystemInstruction *content        `json:"systemInstruction"`
 	Tools             []tool          `json:"tools"`
+	ToolConfig        *toolConfig     `json:"toolConfig"`
 	GenerationConfig  json.RawMessage `json:"generationConfig"`
 }
 
 type tool struct {
-	FunctionDeclarations []struct {
+	// Only presence is read: built-in configuration may contain private data.
+	GoogleSearch          *struct{} `json:"googleSearch"`
+	GoogleSearchRetrieval *struct{} `json:"googleSearchRetrieval"`
+	CodeExecution         *struct{} `json:"codeExecution"`
+	URLContext            *struct{} `json:"urlContext"`
+	GoogleMaps            *struct{} `json:"googleMaps"`
+	Retrieval             *struct{} `json:"retrieval"`
+	FileSearch            *struct{} `json:"fileSearch"`
+	ComputerUse           *struct{} `json:"computerUse"`
+	EnterpriseWebSearch   *struct{} `json:"enterpriseWebSearch"`
+	FunctionDeclarations  []struct {
 		Name                 string          `json:"name"`
 		Description          string          `json:"description"`
 		Parameters           json.RawMessage `json:"parameters"`
@@ -97,6 +108,8 @@ func parseGenerateRequest(body []byte, tc TraceConfig) parsedRequest {
 			p.attrs = append(p.attrs, generationConfigAttributes(raw)...)
 		}
 	}
+
+	p.attrs = append(p.attrs, toolConfigAttributes(r)...)
 
 	n := 0
 tools:

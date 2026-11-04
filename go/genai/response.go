@@ -30,9 +30,11 @@ type modalityTokens struct {
 
 type generateResponse struct {
 	Candidates []struct {
-		Index        *int    `json:"index"`
-		Content      content `json:"content"`
-		FinishReason string  `json:"finishReason"`
+		Index             *int               `json:"index"`
+		Content           content            `json:"content"`
+		FinishReason      string             `json:"finishReason"`
+		GroundingMetadata *groundingMetadata `json:"groundingMetadata"`
+		CitationMetadata  *citationMetadata  `json:"citationMetadata"`
 	} `json:"candidates"`
 	UsageMetadata *usageMetadata  `json:"usageMetadata"`
 	ModelVersion  string          `json:"modelVersion"`
@@ -88,6 +90,7 @@ type accumulator struct {
 	model, id    string
 	candidates   map[int]*candidateAcc
 	usage        *usageMetadata
+	grounding    groundingCapture
 	streamErr    *apiError
 	decodeFailed bool
 	stream       bool
@@ -129,6 +132,7 @@ func (a *accumulator) addResponse(b []byte) {
 		if c.Index != nil {
 			idx = *c.Index
 		}
+		a.grounding.add(idx, c.GroundingMetadata, c.CitationMetadata)
 		acc, ok := a.candidates[idx]
 		if !ok {
 			acc = &candidateAcc{}
@@ -155,6 +159,9 @@ func (a *accumulator) attributes(tc TraceConfig) []attribute.KeyValue {
 		kvs = append(kvs, attribute.String(GenAIResponseModel, a.model))
 	}
 	kvs = append(kvs, usageAttributes(a.usage)...)
+	if value := a.grounding.json(); value != "" {
+		kvs = append(kvs, attribute.String(GenAIResponseGrounding, value))
+	}
 
 	idxs := make([]int, 0, len(a.candidates))
 	for i := range a.candidates {

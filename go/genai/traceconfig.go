@@ -36,7 +36,9 @@ const (
 // TraceConfig decides which content attributes leave the process. The zero
 // value captures everything, like DEFAULT_HIDE_* = False in Python traceAI.
 type TraceConfig struct {
-	// HideLLMInvocationParameters drops gen_ai.request.parameters.
+	// HideLLMInvocationParameters drops gen_ai.request.parameters, tool_choice
+	// and builtin_tools. The latter two are also omitted by any input content
+	// switch (HideInputs, HideInputMessages, HideInputText).
 	HideLLMInvocationParameters bool
 	// HideInputs redacts input.value and drops input messages, system
 	// instructions and tool-call arguments.
@@ -44,15 +46,19 @@ type TraceConfig struct {
 	// HideOutputs redacts output.value and drops output messages and tool-call
 	// results.
 	HideOutputs bool
-	// HideInputMessages drops gen_ai.input.messages.* only.
+	// HideInputMessages drops gen_ai.input.messages.*, tool selection and
+	// grounding metadata, but preserves input.value.
 	HideInputMessages bool
-	// HideOutputMessages drops gen_ai.output.messages.* only.
+	// HideOutputMessages drops gen_ai.output.messages.* and grounding metadata,
+	// but preserves output.value.
 	HideOutputMessages bool
 	// HideInputImages drops images from input messages and input.value.
 	HideInputImages bool
-	// HideInputText redacts text in input messages and input.value.
+	// HideInputText redacts text in input messages and input.value, and omits
+	// tool selection and grounding metadata.
 	HideInputText bool
-	// HideOutputText redacts text in output messages and output.value.
+	// HideOutputText redacts text in output messages and output.value, and
+	// omits grounding metadata.
 	HideOutputText bool
 	// HideErrorDetails drops API error messages from attributes and status
 	// descriptions. Nil derives the setting from HideInputs, HideOutputs,
@@ -113,8 +119,11 @@ func (c TraceConfig) imageMax() int {
 // false when the attribute must be dropped. The rules and their order follow
 // fi_instrumentation.TraceConfig.mask in Python traceAI. System instructions
 // and tool-call arguments go with the inputs, tool-call results with the
-// outputs, and the
-// API's error message follows HideErrorDetails because an API error can
+// outputs. Grounding URLs, titles, queries and citations can quote either the
+// prompt or answer, so the entire grounding attribute is omitted under any
+// input/output content, message or text hiding switch. This is intentionally
+// more conservative than message-only filtering of input.value / output.value.
+// The API's error message follows HideErrorDetails because an API error can
 // quote the request or response.
 func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	key := string(kv.Key)
@@ -122,6 +131,12 @@ func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	out := strings.Contains(key, GenAIOutputMessages)
 	redacted := attribute.String(key, RedactedValue)
 	switch {
+	case (c.HideLLMInvocationParameters || c.HideInputs || c.HideInputMessages || c.HideInputText) &&
+		(key == GenAIRequestToolChoice || key == GenAIRequestBuiltinTools):
+		return kv, false
+	case key == GenAIResponseGrounding &&
+		(c.HideInputs || c.HideInputMessages || c.HideInputText || c.HideOutputs || c.HideOutputMessages || c.HideOutputText):
+		return kv, false
 	case c.HideLLMInvocationParameters && key == GenAIRequestParameters:
 		return kv, false
 	case c.HideInputs && key == InputValue:
