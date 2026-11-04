@@ -1,0 +1,44 @@
+name: Vertex AI Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-vertexai/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/vertexai-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-vertexai/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/vertexai-java-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Vertex ${{ matrix.sdk }} / Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['1.7.0', '1.52.0']
+        java: ['17', '21']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Test real SDK lifecycle, privacy and loopback OTLP export
+        run: >-
+          mvn -B -ntp -f java/pom.xml -pl traceai-java-vertexai -am
+          -Dgoogle-cloud.version=${{ matrix.sdk }}
+          '-Dtest=FITracer*Test,TraceConfigEnvironmentTest,TraceAIVersionTest,VertexAI*Test'
+          -Dsurefire.failIfNoSpecifiedTests=false clean verify

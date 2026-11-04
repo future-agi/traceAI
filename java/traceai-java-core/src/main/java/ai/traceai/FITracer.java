@@ -24,6 +24,9 @@ import java.util.function.Supplier;
  */
 public class FITracer {
 
+    private static final int ATTRIBUTE_LIMIT = 32000;
+    private static final String TRUNCATION_MARKER = "...[truncated]";
+
     private final Tracer tracer;
     private final TraceConfig config;
     private final Gson gson;
@@ -133,8 +136,7 @@ public class FITracer {
      */
     public void setRawInput(Span span, Object value) {
         if (!config.isHideInputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_INPUT, truncateIfNeeded(json));
+            setBoundedRawJson(span, SemanticConventions.RAW_INPUT, "fi.raw_input_truncated", value);
         }
     }
 
@@ -145,8 +147,20 @@ public class FITracer {
      */
     public void setRawOutput(Span span, Object value) {
         if (!config.isHideOutputs() && value != null) {
-            String json = toJson(value);
-            span.setAttribute(SemanticConventions.RAW_OUTPUT, truncateIfNeeded(json));
+            setBoundedRawJson(span, SemanticConventions.RAW_OUTPUT, "fi.raw_output_truncated", value);
+        }
+    }
+
+    /**
+     * Omits oversized raw payloads rather than cutting through their JSON structure.
+     * The flag distinguishes a size-limited omission from absent or hidden content.
+     */
+    private void setBoundedRawJson(Span span, String key, String truncatedKey, Object value) {
+        String json = toJson(value);
+        if (json != null && json.length() > ATTRIBUTE_LIMIT) {
+            span.setAttribute(truncatedKey, true);
+        } else if (json != null) {
+            span.setAttribute(key, json);
         }
     }
 
@@ -185,7 +199,7 @@ public class FITracer {
     public void setInputMessages(Span span, List<Map<String, String>> messages) {
         if (!config.isHideInputs() && !config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_INPUT_MESSAGES,
-                truncateIfNeeded(gson.toJson(messages)));
+                boundedMessagesJson(messages));
         }
     }
 
@@ -198,7 +212,7 @@ public class FITracer {
     public void setOutputMessages(Span span, List<Map<String, String>> messages) {
         if (!config.isHideOutputs() && !config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES,
-                truncateIfNeeded(gson.toJson(messages)));
+                boundedMessagesJson(messages));
         }
     }
 
@@ -320,11 +334,58 @@ public class FITracer {
      * @return the potentially truncated value
      */
     private String truncateIfNeeded(String value) {
-        int maxLength = 32000; // OpenTelemetry attribute value limit
-        if (value != null && value.length() > maxLength) {
-            return value.substring(0, maxLength - 13) + "...[truncated]";
+        if (value != null && value.length() > ATTRIBUTE_LIMIT) {
+            return prefix(value, ATTRIBUTE_LIMIT - TRUNCATION_MARKER.length()) + TRUNCATION_MARKER;
         }
         return value;
+    }
+
+    /**
+     * Keeps a prefix of messages, shortening the last content to fit its JSON envelope.
+     * Counts serialized characters (including escaping), never cuts JSON, and never mutates callers.
+     */
+    private String boundedMessagesJson(List<Map<String, String>> messages) {
+        StringBuilder json = new StringBuilder("[");
+        for (Map<String, String> message : messages) {
+            int separator = json.length() > 1 ? 1 : 0;
+            int budget = ATTRIBUTE_LIMIT - json.length() - separator - 1; // closing bracket
+            String encoded = gson.toJson(message);
+            boolean truncated = encoded.length() > budget;
+            if (truncated) {
+                if (message == null || message.get("content") == null) break;
+                Map<String, String> bounded = new LinkedHashMap<>(message);
+                String content = message.get("content");
+                bounded.put("content", TRUNCATION_MARKER);
+                encoded = gson.toJson(bounded);
+                if (encoded.length() > budget) break; // even the envelope cannot fit
+                int low = 0;
+                int high = Math.min(content.length(), budget);
+                while (low < high) {
+                    int mid = low + (high - low + 1) / 2;
+                    bounded.put("content", prefix(content, mid) + TRUNCATION_MARKER);
+                    String candidate = gson.toJson(bounded);
+                    if (candidate.length() <= budget) {
+                        low = mid;
+                        encoded = candidate;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+            }
+            if (separator > 0) json.append(',');
+            json.append(encoded);
+            if (truncated) break;
+        }
+        return json.append(']').toString();
+    }
+
+    private static String prefix(String value, int length) {
+        if (length > 0 && length < value.length()
+                && Character.isHighSurrogate(value.charAt(length - 1))
+                && Character.isLowSurrogate(value.charAt(length))) {
+            length--;
+        }
+        return value.substring(0, length);
     }
 
     /**
