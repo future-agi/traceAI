@@ -72,10 +72,13 @@ once. Usage, credits and search options are not recorded.
   You can also pass `config=TraceConfig(hide_inputs=True, pii_redaction=True)`
   to `instrument()`, importing `TraceConfig` from `fi_instrumentation`.
 
-Errors are re-raised unchanged. Search/extract spans retain scrubbed error
-summaries, without traceback frames. Cancelling an async call sets ERROR and
-`tavily.cancelled=true`, without an exception event. Instrumentation failures
-do not replace your SDK result or exception.
+Errors are re-raised unchanged. Search spans retain scrubbed error summaries,
+without traceback frames. Extraction spans record only the exception type,
+never error messages or tracebacks: HTTP errors can echo sensitive URL arguments.
+This applies even with default privacy settings and on the minimum supported
+core version. Cancelling an async call sets ERROR and `tavily.cancelled=true`,
+without an exception event. Instrumentation failures do not replace your SDK
+result or exception.
 
 ## LangChain and LangGraph
 
