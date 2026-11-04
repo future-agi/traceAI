@@ -16,8 +16,14 @@ const { trace } = pr('@opentelemetry/api');
 const { GoogleADKSpanExporter, recordGoogleADKModelError } = pr(packagePath);
 const toolError = mode.startsWith('tool-error');
 const providerError = mode.startsWith('provider-error');
-const streaming = mode === 'stream' || mode === 'provider-error-stream';
-const usage = { promptTokenCount: 100, cachedContentTokenCount: 60, candidatesTokenCount: 10, thoughtsTokenCount: 5, totalTokenCount: 115 };
+const streaming = mode.includes('stream');
+const audio = mode.startsWith('audio');
+const captureContent = toolError || mode.endsWith('-capture');
+const audioData = Buffer.from('SYNTHETIC_AUDIO').toString('base64');
+const usage = audio
+  ? { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 10, thoughtsTokenCount: 4, totalTokenCount: 114,
+      promptTokensDetails: [{ modality: 'TEXT', tokenCount: 20 }, { modality: 'AUDIO', tokenCount: 30 }, { modality: 'AUDIO', tokenCount: 50 }] }
+  : { promptTokenCount: 100, cachedContentTokenCount: 60, candidatesTokenCount: 10, thoughtsTokenCount: 5, totalTokenCount: 115 };
 let calls = 0;
 const requests = [], batches = [];
 const server = http.createServer((req, res) => {
@@ -65,7 +71,7 @@ async function main() {
   const raw = new InMemorySpanExporter();
   const provider = new NodeTracerProvider({ spanProcessors: [
     new SimpleSpanProcessor(raw),
-    new SimpleSpanProcessor(new GoogleADKSpanExporter(new OTLPTraceExporter({ url: origin + '/v1/traces' }), { captureContent: toolError })),
+    new SimpleSpanProcessor(new GoogleADKSpanExporter(new OTLPTraceExporter({ url: origin + '/v1/traces' }), { captureContent })),
   ] });
   provider.register();
   try {
@@ -89,7 +95,7 @@ async function main() {
     await runner.sessionService.createSession({ appName: 'http-contract', userId: 'synthetic-user', sessionId: 'PRIVATE_SESSION' });
     const events = [];
     for await (const event of runner.runAsync({ userId: 'synthetic-user', sessionId: 'PRIVATE_SESSION',
-      newMessage: { role: 'user', parts: [{ text: 'PRIVATE_INPUT' }] },
+      newMessage: { role: 'user', parts: [{ text: 'PRIVATE_INPUT' }, ...(audio ? [{ inlineData: { mimeType: 'audio/wav', data: audioData } }] : [])] },
       runConfig: streaming ? { streamingMode: adk.StreamingMode.SSE } : undefined })) events.push(event);
     await provider.forceFlush();
     const spans = batches.flatMap(batch => batch.resourceSpans.flatMap(resource => resource.scopeSpans.flatMap(scope => scope.spans)));
@@ -110,7 +116,18 @@ async function main() {
     assert(!exported.includes('SYNTHETIC_GOOGLE_KEY'));
     assert(!exported.includes('PRIVATE_TOOL_ERROR'));
     assert(!exported.includes('PRIVATE_PROVIDER_ERROR'));
-    if (!toolError) assert(!exported.includes('PRIVATE_'), 'default privacy');
+    if (!captureContent) {
+      assert(!exported.includes('PRIVATE_'), 'default privacy');
+      assert(!exported.includes(audioData), 'audio payload stays private');
+      assert(llms.every(s => attrs(s)['input.value'] === undefined && attrs(s)['output.value'] === undefined));
+    }
+    if (audio) {
+      assert(requests.some(r => r.body.contents.some(c => c.parts.some(p => p.inlineData?.data === audioData))), 'real GenAI client sent audio');
+      const native = raw.getFinishedSpans().find(s => s.name === 'call_llm');
+      assert.deepEqual(JSON.parse(native.attributes['gcp.vertex.agent.llm_response']).usageMetadata.promptTokensDetails,
+        usage.promptTokensDetails, 'ADK retained the reported modality breakdown');
+      if (captureContent) assert(exported.includes('PRIVATE_INPUT'), 'content opt-in is active');
+    }
     if (providerError) {
       assert.equal(llms.length, 1);
       const llm = llms[0];
@@ -126,9 +143,10 @@ async function main() {
       assert.equal(llms.length, toolError ? 2 : 1);
       for (const span of llms) {
         assert.equal(attrs(span)['gen_ai.usage.input_tokens'], 100);
-        assert.equal(attrs(span)['gen_ai.usage.cache_read_tokens'], 60);
-        assert.equal(attrs(span)['gen_ai.usage.output_tokens'], 15);
-        assert.equal(attrs(span)['gen_ai.usage.total_tokens'], 115);
+        assert.equal(attrs(span)['gen_ai.usage.cache_read_tokens'], usage.cachedContentTokenCount);
+        assert.equal(attrs(span)['gen_ai.usage.output_tokens'], usage.candidatesTokenCount + usage.thoughtsTokenCount);
+        assert.equal(attrs(span)['gen_ai.usage.total_tokens'], usage.totalTokenCount);
+        assert.equal(attrs(span)['gen_ai.usage.input_tokens.audio'], audio ? 80 : undefined, 'reported audio usage survives content policy');
         assert.notEqual(span.status.code, 2, 'successful calls are not marked as failures');
       }
       if (streaming) assert(events.some(e => e.content?.parts?.some(p => p.text?.includes('PRIVATE_PART_B'))));
@@ -140,7 +158,8 @@ async function main() {
         assert(exported.includes('PRIVATE_INPUT'), 'content opt-in is active, not blanket hidden');
       }
     }
-    console.log(JSON.stringify({ mode, result: 'PASS', calls, spanCount: spans.length, realHttpAndOtlp: true }));
+    console.log(JSON.stringify({ mode, result: 'PASS', calls, spanCount: spans.length, realHttpAndOtlp: true,
+      usage: llms.map(s => Object.fromEntries(Object.entries(attrs(s)).filter(([key]) => key.startsWith('gen_ai.usage.')))) }));
   } finally {
     await provider.shutdown();
     server.closeAllConnections();

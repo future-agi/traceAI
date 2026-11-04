@@ -149,6 +149,64 @@ test('configuration validates inputs and refuses to replace an existing provider
 });
 
 
+for (const captureContent of [false, true]) {
+  test(`audio input counts use only valid reported details (captureContent=${captureContent})`, async () => {
+    const c = collect({captureContent});
+    const audio = tokenCount => ({modality: 'AUDIO', tokenCount});
+    const cases = [
+      ['single audio count', [audio(80)], 80],
+      ['aggregate audio only', [{modality: 'TEXT', tokenCount: 20}, audio(30), {modality: 'IMAGE', tokenCount: 10}, audio(50)], 80],
+      ['reported zero', [audio(0)], 0],
+      ['missing details', undefined, undefined],
+      ['empty details', [], undefined],
+      ['null details', null, undefined],
+      ['non-array details', audio(80), undefined],
+      ['string details', '[{"modality":"AUDIO","tokenCount":80}]', undefined],
+      ['text only', [{modality: 'TEXT', tokenCount: 100}], undefined],
+      ['unknown modality', [{modality: 'audio', tokenCount: 80}, {tokenCount: 80}], undefined],
+      ['invalid counts', [audio(-1), audio('80'), audio(null), audio(true), audio(1.5), audio(Number.MAX_VALUE), audio(undefined)], undefined],
+      ['invalid entries alongside valid audio', [null, 80, 'AUDIO', [], {}, audio(-1), audio('90'), audio(30), audio(50)], 80],
+      ['unsafe sum', [audio(Number.MAX_SAFE_INTEGER), audio(1)], undefined],
+    ];
+    try {
+      for (const [, promptTokensDetails] of cases) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': JSON.stringify({content: {parts: [{text: 'PRIVATE_OUTPUT'}]}, usageMetadata: {
+            promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 10, thoughtsTokenCount: 4,
+            totalTokenCount: 114, promptTokensDetails,
+          }}),
+        }}).end();
+      }
+      // JSON permits numeric literals that parse to Infinity; never export them.
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gcp.vertex.agent.llm_response': '{"usageMetadata":{"promptTokensDetails":[{"modality":"AUDIO","tokenCount":1e400}]}}',
+      }}).end();
+      // Audio detail alone must not fabricate aggregate or cache totals.
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {promptTokensDetails: [audio(80)]}}),
+      }}).end();
+      await c.provider.forceFlush();
+      for (let i = 0; i < cases.length; i++) {
+        const a = c.spans[i].attributes;
+        assert.equal(a['gen_ai.usage.input_tokens.audio'], cases[i][2], cases[i][0]);
+        assert.equal(a['gen_ai.usage.input_tokens'], 100);
+        assert.equal(a['gen_ai.usage.cache_read_tokens'], 40);
+        assert.equal(a['gen_ai.usage.output_tokens'], 14);
+        assert.equal(a['gen_ai.usage.total_tokens'], 114);
+        assert.equal(a['gcp.vertex.agent.llm_response'], undefined);
+        assert.equal(a['output.value'] !== undefined, captureContent);
+        if (!captureContent) assert(!JSON.stringify(a).includes('PRIVATE_OUTPUT'));
+      }
+      assert.equal(c.spans.at(-2).attributes['gen_ai.usage.input_tokens.audio'], undefined);
+      const detailOnly = c.spans.at(-1).attributes;
+      assert.equal(detailOnly['gen_ai.usage.input_tokens.audio'], 80);
+      for (const key of ['input_tokens', 'cache_read_tokens', 'output_tokens', 'total_tokens']) {
+        assert.equal(detailOnly[`gen_ai.usage.${key}`], undefined);
+      }
+    } finally { await c.provider.shutdown(); }
+  });
+}
+
 test('reported cache reads are independent of content capture and never subtracted from prompt totals', async () => {
   for (const captureContent of [false, true]) {
     const c = collect({captureContent});

@@ -50,6 +50,21 @@ function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function audioInputTokens(details: unknown): number | undefined {
+  if (!Array.isArray(details)) return undefined;
+  let total: number | undefined;
+  for (const detail of details) {
+    if (detail === null || typeof detail !== "object" || Array.isArray(detail)) continue;
+    if (detail.modality !== "AUDIO") continue;
+    const tokens = count(detail.tokenCount);
+    if (tokens === undefined || !Number.isSafeInteger(tokens)) continue;
+    const sum = (total ?? 0) + tokens;
+    if (!Number.isSafeInteger(sum)) return undefined;
+    total = sum;
+  }
+  return total;
+}
+
 /** Translate only native ADK spans; never create or reparent spans. */
 function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: TraceConfig): ReadableSpan {
   if (span.instrumentationScope.name !== SCOPE) return span;
@@ -74,6 +89,10 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     const prompt = count(usage?.promptTokenCount);
     const total = count(usage?.totalTokenCount);
     const cached = count(usage?.cachedContentTokenCount);
+    // Audio has distinct pricing. Extract only reported modality counts before
+    // content redaction; they are a subset of input, not additional tokens.
+    const audio = audioInputTokens(usage?.promptTokensDetails);
+    if (audio !== undefined) attributes["gen_ai.usage.input_tokens.audio"] = audio;
     // Cached input is a subset of promptTokenCount, not additional input.
     if (cached !== undefined) attributes["gen_ai.usage.cache_read_tokens"] = cached;
     if (prompt !== undefined) attributes["gen_ai.usage.input_tokens"] = prompt;

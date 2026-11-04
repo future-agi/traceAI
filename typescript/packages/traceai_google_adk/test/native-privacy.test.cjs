@@ -33,7 +33,7 @@ async function exported(flag, operation, input, output, flagValue = 'true') {
 }
 
 const input = {contents: [{role: 'user', parts: [{text: 'PRIVATE_INPUT'}, {functionResponse: {response: {nested: ['PRIVATE_INPUT']}}}]}], config: {systemInstruction: 'PRIVATE_INPUT'}};
-const output = {content: {role: 'model', parts: [{text: 'PRIVATE_OUTPUT'}, {functionCall: {args: {nested: ['PRIVATE_OUTPUT']}}}]}, usageMetadata: {promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18}};
+const output = {content: {role: 'model', parts: [{text: 'PRIVATE_OUTPUT'}, {functionCall: {args: {nested: ['PRIVATE_OUTPUT']}}}]}, usageMetadata: {promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18, promptTokensDetails: [{modality: 'TEXT', tokenCount: 5}, {modality: 'AUDIO', tokenCount: 6}]}};
 for (const flag of flags.slice(0, 6)) {
   test(`${flag} masks native model and tool payloads, including nested strings`, async () => {
     const side = flag.includes('OUTPUT') ? 'output' : 'input';
@@ -47,7 +47,10 @@ for (const flag of flags.slice(0, 6)) {
         assert.equal(a[`${side}.value`], '__REDACTED__');
         assert.equal(a[`${side}.mime_type`], undefined);
       }
-      if (operation !== 'execute_tool') assert.equal(a['gen_ai.usage.total_tokens'], 18);
+      if (operation !== 'execute_tool') {
+        assert.equal(a['gen_ai.usage.total_tokens'], 18);
+        assert.equal(a['gen_ai.usage.input_tokens.audio'], 6, 'usage is extracted before content redaction');
+      }
     }
   });
 }
