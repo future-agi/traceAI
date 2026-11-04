@@ -69,9 +69,13 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
 export class CodexSDKInstrumentation {
   private tracerProvider?: TracerProvider;
   private readonly traceConfig?: TraceConfigOptions;
-  /** Undo functions for the class patch and wrapCodex() factories (never one per thread). */
+  /** Undo functions for the class patch and wrapCodex() factories. */
   private readonly undo: Array<() => void> = [];
-  /** False after unpatch(): instance patches stay in place but pass events through untraced. */
+  /** Thread undo functions hold only WeakRefs; collected threads release their bookkeeping. */
+  private readonly threadUndo = new Set<() => void>();
+  private readonly threadFinalizer = new FinalizationRegistry<() => void>((undo) => {
+    this.threadUndo.delete(undo);
+  });
   private enabled = true;
 
   constructor(config: CodexSDKInstrumentationConfig = {}) {
@@ -106,13 +110,16 @@ export class CodexSDKInstrumentation {
   }
 
   /**
-   * Patch one Thread instance. Returns the same instance. No reference to the
-   * thread is kept: after `unpatch()` the patched method passes events through
-   * untraced instead of being removed.
+   * Patch one Thread instance. Returns the same instance. Only a weak reference
+   * is kept, so `unpatch()` can restore live threads without retaining dropped ones.
    */
   wrapThread<T extends object>(thread: T): T {
     this.enabled = true;
-    patchThread(thread as ThreadLike, () => this.tracingContext());
+    const undo = patchThread(thread as ThreadLike, () => this.tracingContext());
+    if (undo) {
+      this.threadUndo.add(undo);
+      this.threadFinalizer.register(thread, undo, undo);
+    }
     return thread;
   }
 
@@ -148,6 +155,11 @@ export class CodexSDKInstrumentation {
   /** Remove every patch this instrumentation applied. */
   unpatch(): void {
     this.enabled = false;
+    for (const undo of this.threadUndo) {
+      this.threadFinalizer.unregister(undo);
+      undo();
+    }
+    this.threadUndo.clear();
     while (this.undo.length) {
       const fn = this.undo.pop();
       try {

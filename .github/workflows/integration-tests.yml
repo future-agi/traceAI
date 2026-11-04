@@ -125,10 +125,10 @@ jobs:
           corepack pnpm run build:deps
           corepack pnpm --filter "@traceai/$PACKAGE_NAME" run build
           corepack pnpm --filter "@traceai/$PACKAGE_NAME" test --runInBand
-      - name: Codex real SDK contract (local subprocess, no API calls)
+      - name: Codex floor and pinned SDK contracts (real binaries, loopback provider)
         if: matrix.package.name == 'codex-sdk'
         working-directory: ${{ matrix.package.dir }}
-        run: node contract/run_real_sdk.mjs
+        run: bash contract/compatibility.sh
       - name: Build installable tarball
         working-directory: ${{ matrix.package.dir }}
         run: |

@@ -26,14 +26,35 @@ export interface TurnTracingContext {
 type GetContext = () => TurnTracingContext | undefined;
 
 interface PatchRecord {
-  target: ThreadLike;
   method: "runStreamedInternal" | "runStreamed";
-  original: unknown;
-  hadOwn: boolean;
+  originalDescriptor: PropertyDescriptor | undefined;
+  wrapper: unknown;
+  owner: symbol;
 }
 
 export function isPatched(target: unknown): boolean {
-  return !!target && (target as Record<symbol, unknown>)[PATCHED] === true;
+  // Also recognize the boolean marker used by older copies of this package.
+  return !!target && !!(target as Record<symbol, unknown>)[PATCHED];
+}
+
+/** The undo closure retains neither the target nor its possibly bound original method. */
+function weakUndo(ref: WeakRef<ThreadLike>, owner: symbol): () => void {
+  return () => {
+    const target = ref.deref();
+    if (!target) return;
+    const record = Object.getOwnPropertyDescriptor(target, PATCHED)?.value as PatchRecord | undefined;
+    if (record?.owner !== owner) return;
+    try {
+      // Do not clobber a method that the application replaced after our patch.
+      if (Object.getOwnPropertyDescriptor(target, record.method)?.value === record.wrapper) {
+        if (record.originalDescriptor) Object.defineProperty(target, record.method, record.originalDescriptor);
+        else delete (target as Record<string, unknown>)[record.method];
+      }
+      delete (target as Record<symbol, unknown>)[PATCHED];
+    } catch (error) {
+      diag.debug(`${LOG}: unpatch failed: ${error}`);
+    }
+  };
 }
 
 /**
@@ -44,10 +65,11 @@ export function isPatched(target: unknown): boolean {
 export function patchThread(target: ThreadLike, getContext: GetContext): (() => void) | undefined {
   if (!target || typeof target !== "object" || isPatched(target)) return undefined;
 
-  let record: PatchRecord | undefined;
+  const owner = Symbol();
+  let record: PatchRecord;
   if (typeof target.runStreamedInternal === "function") {
     const original = target.runStreamedInternal;
-    record = { target, method: "runStreamedInternal", original, hadOwn: Object.prototype.hasOwnProperty.call(target, "runStreamedInternal") };
+    const originalDescriptor = Object.getOwnPropertyDescriptor(target, "runStreamedInternal");
     const traced = function tracedRunStreamedInternal(this: ThreadLike, input: InputLike, turnOptions?: TurnOptionsLike) {
       const startTimeMs = clockMs();
       const parentContext = otelContext.active();
@@ -55,10 +77,11 @@ export function patchThread(target: ThreadLike, getContext: GetContext): (() => 
       const generator = original.apply(this, arguments as unknown as [InputLike, TurnOptionsLike?]);
       return traceEvents(generator, this, input, turnOptions, parentContext, startTimeMs, getContext);
     };
+    record = { method: "runStreamedInternal", originalDescriptor, wrapper: traced, owner };
     defineMethod(target, "runStreamedInternal", traced);
   } else if (typeof target.runStreamed === "function") {
     const original = target.runStreamed;
-    record = { target, method: "runStreamed", original, hadOwn: Object.prototype.hasOwnProperty.call(target, "runStreamed") };
+    const originalDescriptor = Object.getOwnPropertyDescriptor(target, "runStreamed");
     diag.warn(`${LOG}: Thread.runStreamedInternal not found; tracing runStreamed() only, run() may be untraced`);
     const traced = async function tracedRunStreamed(this: ThreadLike, input: InputLike, turnOptions?: TurnOptionsLike) {
       const startTimeMs = clockMs();
@@ -71,22 +94,14 @@ export function patchThread(target: ThreadLike, getContext: GetContext): (() => 
         events: traceEvents(result.events, this, input, turnOptions, parentContext, startTimeMs, getContext),
       };
     };
+    record = { method: "runStreamed", originalDescriptor, wrapper: traced, owner };
     defineMethod(target, "runStreamed", traced);
   } else {
     return undefined;
   }
 
-  Object.defineProperty(target, PATCHED, { value: true, configurable: true });
-  const done = record;
-  return () => {
-    try {
-      if (done.hadOwn) defineMethod(done.target, done.method, done.original);
-      else delete (done.target as Record<string, unknown>)[done.method];
-      delete (done.target as Record<symbol, unknown>)[PATCHED];
-    } catch (error) {
-      diag.debug(`${LOG}: unpatch failed: ${error}`);
-    }
-  };
+  Object.defineProperty(target, PATCHED, { value: record, configurable: true });
+  return weakUndo(new WeakRef(target), owner);
 }
 
 function defineMethod(target: object, name: string, value: unknown): void {
