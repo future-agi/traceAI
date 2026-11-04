@@ -221,6 +221,20 @@ class _RawResponse(ObjectProxy):
             self._self_with_span.finish_tracing(status=status)
 
 
+class _LegacyRawResponse(_RawResponse):
+    """Legacy envelopes expose text as a property, including on async clients."""
+
+    @property
+    def text(self) -> str:
+        try:
+            result = self.__wrapped__.text
+        except BaseException as exc:
+            _finish_on_exit(self, exc)
+            raise
+        self._record_body_consumption()
+        return result
+
+
 class _AsyncRawResponse(_RawResponse):
     """AsyncAPIResponse has awaitable parse/close; LegacyAPIResponse does not."""
 

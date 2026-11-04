@@ -35,6 +35,7 @@ from traceai_openai._span_io_handler import add_io_to_span_attributes
 from traceai_openai._stream import (
     _AsyncRawResponse,
     _AsyncStream,
+    _LegacyRawResponse,
     _RawResponse,
     _ResponseAccumulator,
     _Stream,
@@ -263,11 +264,16 @@ class _WithOpenAI(ABC):
                 with_span.set_attribute(
                     SpanAttributes.EMBEDDING_EMBEDDINGS, self._raw_embeddings_json(parsed)
                 )
-            telemetry_output = (
-                response_output(parsed, self._config)
-                if cast_to is self._openai.types.responses.response.Response
-                and isinstance(parsed, dict) else parsed
-            )
+            telemetry_output = parsed
+            if cast_to is self._openai.types.responses.response.Response:
+                if isinstance(parsed, Mapping):
+                    telemetry_output = response_output(parsed, self._config)
+                elif not isinstance(parsed, self._openai.types.responses.response.Response):
+                    # Explicit parse types (including str/bytes) may contain the
+                    # entire envelope, with echoed instructions and tools. Omit
+                    # opaque output rather than bypass the response allowlist;
+                    # never parse again or change the application's return value.
+                    telemetry_output = None
             add_io_to_span_attributes(with_span, None, telemetry_output, config=self._config)
             _finish_tracing(
                 status=_response_status(parsed),
@@ -283,9 +289,12 @@ class _WithOpenAI(ABC):
         if hasattr(response, "parse") and callable(response.parse):
             # Modern envelopes are deliberately lazy, even for non-SSE responses.
             # Do not call async parse from sync I/O/attribute extraction paths.
-            raw_wrapper = (
-                _AsyncRawResponse if iscoroutinefunction(response.parse) else _RawResponse
-            )
+            if isinstance(response, LegacyAPIResponse):
+                raw_wrapper = _LegacyRawResponse
+            else:
+                raw_wrapper = (
+                    _AsyncRawResponse if iscoroutinefunction(response.parse) else _RawResponse
+                )
             raw = raw_wrapper(response, with_span, response_accumulator, on_parse)
             if isinstance(response, LegacyAPIResponse):
                 # Preserve eager legacy non-stream telemetry. Stream parse caches
