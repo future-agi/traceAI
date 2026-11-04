@@ -2,6 +2,7 @@ package traceaibedrock
 
 import (
 	"context"
+	"io"
 	"sync"
 )
 
@@ -41,6 +42,14 @@ func observeStream[T any](ctx context.Context, inner reader[T], r *record, obser
 			s.errMu.Lock()
 			s.terminalErr = err
 			s.errMu.Unlock()
+			// Semantic completion is telemetry-only. A clean SDK EOF remains a
+			// nil Err(), but is not success without the provider's terminal event.
+			if !r.streamComplete {
+				early = true
+				if err == nil {
+					err = io.ErrUnexpectedEOF
+				}
+			}
 			r.finish(err, early)
 			close(s.events)
 			close(s.stopped)

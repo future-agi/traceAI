@@ -263,6 +263,101 @@ def test_visible_errors_recorded_once_and_filters_preserved(sdk, telemetry):
     assert span.status.status_code == StatusCode.ERROR
 
 
+@pytest.mark.parametrize("source", ["config", "environment"])
+@pytest.mark.parametrize("call", ["sync", "async", "next", "close", "cancel"])
+@pytest.mark.parametrize("traceback_in_message", [False, True])
+def test_pii_error_fields_are_redacted_without_mutating_exception(
+    sdk, telemetry, monkeypatch, source, call, traceback_in_message
+):
+    monkeypatch.setenv("FI_PII_REDACTION", "true" if source == "environment" else "false")
+    config = TraceConfig(pii_redaction=True) if source == "config" else None
+    exporter, _ = enable(telemetry, config)
+    client = sdk[int(call in {"async", "cancel"})]()
+    message = "query rejected for alice@example.com"
+    if traceback_in_message:
+        message += "\nTraceback (most recent call last):\nserver-side traceback"
+    error_type = asyncio.CancelledError if call == "cancel" else ValueError
+    error = error_type(message)
+    cause = RuntimeError("upstream failure for bob@example.com")
+    error.__cause__ = cause
+    if hasattr(error, "add_note"):
+        error.add_note("request owner carol@example.com")
+    if call in {"next", "close"}:
+        iterator = client.query_iterator("documents")
+        client.pages.error = error
+        exporter.clear()
+
+        def invoke():
+            return getattr(iterator, call)()
+    else:
+        client.error = error
+
+        def invoke():
+            return client.search("documents", filter='owner == "alice@example.com"')
+    original_args = error.args
+    if call in {"async", "cancel"}:
+        # Python 3.10's asyncio.run replaces CancelledError at the task boundary.
+        # Check the exception delivered by the wrapper inside the coroutine.
+        async def observe_error():
+            with pytest.raises(error_type) as raised:
+                await invoke()
+            return raised.value
+
+        observed = asyncio.run(observe_error())
+    else:
+        with pytest.raises(error_type) as raised:
+            invoke()
+        observed = raised.value
+    assert observed is error
+    assert error.args == original_args
+    assert error.__cause__ is cause
+    if hasattr(error, "__notes__"):
+        assert error.__notes__ == ["request owner carol@example.com"]
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "query rejected for <EMAIL_ADDRESS>"
+    assert span.end_time is not None
+    assert len(span.events) == 1
+    event = span.events[0]
+    assert event.name == "exception"
+    expected_type = "asyncio.exceptions.CancelledError" if call == "cancel" else "ValueError"
+    assert event.attributes["exception.type"] == expected_type
+    assert event.attributes["exception.escaped"] == "False"
+    assert "query rejected for <EMAIL_ADDRESS>" in event.attributes["exception.message"]
+    assert "upstream failure for <EMAIL_ADDRESS>" in event.attributes["exception.stacktrace"]
+    assert "Traceback (most recent call last)" in event.attributes["exception.stacktrace"]
+    wire = encode_spans([span]).SerializeToString()
+    for email in (b"alice@example.com", b"bob@example.com", b"carol@example.com"):
+        assert email not in wire
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+def test_pii_explicit_opt_out_preserves_visible_errors(sdk, telemetry, monkeypatch):
+    monkeypatch.setenv("FI_PII_REDACTION", "true")
+    exporter, _ = enable(telemetry, TraceConfig(pii_redaction=False))
+    client = sdk[0]()
+    client.error = ValueError("alice@example.com")
+    with pytest.raises(ValueError):
+        client.search("documents")
+    (span,) = exporter.get_finished_spans()
+    assert span.status.description == "alice@example.com"
+    assert span.events[0].attributes["exception.message"] == "alice@example.com"
+
+
+def test_pii_with_hidden_details_still_omits_error_text(sdk, telemetry):
+    exporter, _ = enable(telemetry, TraceConfig(pii_redaction=True, hide_error_details=True))
+    client = sdk[0]()
+    client.error = ValueError("alice@example.com")
+    with pytest.raises(ValueError):
+        client.search("documents")
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert not span.status.description
+    assert len(span.events) == 1
+    assert set(span.events[0].attributes) == {"exception.type", "exception.escaped"}
+    assert b"alice@example.com" not in encode_spans([span]).SerializeToString()
+
+
 def test_positional_controls_and_empty_results(sdk, telemetry):
     exporter, _ = enable(telemetry)
     client = sdk[0]()

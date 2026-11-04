@@ -57,9 +57,10 @@ def _suppressed(instance, operation: str) -> bool:
     active = context.get_value(_ACTIVE_COLLECTION_CALL)
     if active is None or active[0] != id(instance):
         return False
-    # A duplicate wrapper of the same operation, or Chroma's peek -> get alias.
-    # Other operations (including an embedding cache lookup) remain visible.
-    return active[1] == operation or (active[1] == "peek" and operation == "get")
+    # Suppress only Chroma's known peek -> get delegation. An embedding
+    # callback can issue an independent query on this same collection; equal
+    # instance and operation do not imply duplicate wrapping.
+    return active[1] == "peek" and operation == "get"
 
 
 class BaseWrapper:

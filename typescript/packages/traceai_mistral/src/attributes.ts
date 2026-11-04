@@ -2,6 +2,11 @@ import { Attributes } from "@opentelemetry/api";
 import { safelyJSONStringify, TraceConfig } from "@traceai/fi-core";
 import { SemanticConventions as S, FISpanKind, MimeType, LLMProvider } from "@traceai/fi-semantic-conventions";
 
+// Keep optional input leaves within half the default 128-attribute budget.
+// The JS SDK drops new keys when full, so response model/usage need room before
+// the provider returns. The complete input remains in the privacy-aware JSON.
+const MAX_EMBEDDING_INPUT_ATTRIBUTES = 64;
+
 type Data = Record<string, unknown>;
 export function record(value: unknown): Data {
   return value !== null && (typeof value === "object" || typeof value === "function") ? value as Data : {};
@@ -17,8 +22,9 @@ export function inputAttributes(value: unknown, operation: string, config: Trace
     [S.FI_SPAN_KIND]: operation === "embeddings" ? FISpanKind.EMBEDDING : FISpanKind.LLM,
     [S.LLM_PROVIDER]: LLMProvider.MISTRALAI,
     [S.GEN_AI_OPERATION_NAME]: operation === "conversation" ? "chat" : operation,
-    [operation === "embeddings" ? S.EMBEDDING_MODEL_NAME : S.LLM_MODEL_NAME]: text(body.model),
+    [S.LLM_MODEL_NAME]: text(body.model),
   };
+  if (operation === "embeddings") attrs[S.EMBEDDING_MODEL_NAME] = text(body.model);
   // Never duplicate hidden messages, tool arguments or images into unmasked blobs.
   if (!config.hideInputs && !config.hideInputMessages && !config.hideInputText && !config.hideInputImages) {
     attrs[S.INPUT_VALUE] = json(value);
@@ -36,7 +42,7 @@ export function inputAttributes(value: unknown, operation: string, config: Trace
   attrs[S.LLM_INVOCATION_PARAMETERS] = json(parameters);
   if (operation === "embeddings" && !config.hideInputs && !config.hideInputText) {
     const input = body.inputs ?? body.input;
-    (typeof input === "string" ? [input] : array(input)).forEach((item, index) => {
+    (typeof input === "string" ? [input] : array(input)).slice(0, MAX_EMBEDDING_INPUT_ATTRIBUTES).forEach((item, index) => {
       if (typeof item === "string") attrs[`${S.EMBEDDING_EMBEDDINGS}.${index}.${S.EMBEDDING_TEXT}`] = item;
     });
   }
@@ -58,7 +64,8 @@ function normalizeMessage(value: unknown): Data {
 function metadata(value: Data): Attributes {
   const usage = record(value.usage);
   return {
-    [S.LLM_MODEL_NAME]: text(value.model),
+    // A resolved model is not the requested alias. If no model was requested
+    // (e.g. an agent ID), leave request.model unset rather than inventing one.
     [S.GEN_AI_RESPONSE_MODEL]: text(value.model),
     [S.GEN_AI_RESPONSE_ID]: text(value.conversationId ?? value.id),
     [S.LLM_TOKEN_COUNT_PROMPT]: number(usage.promptTokens ?? usage.prompt_tokens),

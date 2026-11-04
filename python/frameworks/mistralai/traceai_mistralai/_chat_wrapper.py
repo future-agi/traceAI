@@ -114,13 +114,23 @@ class _WithTracer(ABC):
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
     ) -> Iterator[_WithSpan]:
-        # Because OTEL has a default limit of 128 attributes, we split our
-        # attributes into two tiers, where "extra_attributes" are added first to
-        # ensure that the most important "attributes" are added last and are not
-        # dropped.
+        # Flattened messages can exceed OTel's default 128-attribute limit.
+        # Append attribution after them at creation (including for processors),
+        # and retain it separately for reapplication after response attributes.
+        priority_attributes = {}
         try:
+            creation_attributes = dict(extra_attributes)
+            priority_attributes = {
+                key: creation_attributes.pop(key)
+                for key in (
+                    SpanAttributes.GEN_AI_PROVIDER_NAME,
+                    SpanAttributes.GEN_AI_REQUEST_MODEL,
+                )
+                if key in creation_attributes
+            }
+            creation_attributes.update(priority_attributes)
             span = self._tracer.start_span(
-                name=span_name, attributes=dict(extra_attributes)
+                name=span_name, attributes=creation_attributes
             )
         except Exception:
             logger.exception("Failed to start span")
@@ -135,6 +145,7 @@ class _WithTracer(ABC):
                 span=span,
                 context_attributes=dict(context_attributes),
                 extra_attributes=dict(attributes),
+                priority_attributes=priority_attributes,
             )
 
 

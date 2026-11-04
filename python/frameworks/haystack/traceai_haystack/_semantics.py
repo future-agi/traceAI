@@ -1,5 +1,7 @@
 from enum import Enum, auto
 from inspect import BoundArguments, Parameter, signature
+from math import isfinite
+from urllib.parse import urlsplit
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -474,6 +476,85 @@ def _get_embedding_model_attributes(
         )
     ) and isinstance(model, str):
         yield EMBEDDING_MODEL_NAME, model
+
+
+def _get_embedding_token_count_attributes(
+    response: Mapping[str, Any],
+) -> Iterator[Tuple[str, Any]]:
+    """Keep reported usage independently of embedding text/vector capture."""
+    meta = response.get("meta")
+    if not isinstance(meta, Mapping):
+        return
+    sources = [
+        value
+        for key in ("usage", "billed_units")
+        if isinstance(value := meta.get(key), Mapping)
+    ]
+    for attribute, aliases in (
+        (GEN_AI_USAGE_INPUT_TOKENS, ("prompt_tokens", "input_tokens")),
+        (GEN_AI_USAGE_OUTPUT_TOKENS, ("completion_tokens", "output_tokens")),
+        (GEN_AI_USAGE_TOTAL_TOKENS, ("total_tokens",)),
+    ):
+        # Prefer usage over billed_units, but do not infer absent totals or
+        # zeros. Malformed metadata must not become content-bearing attributes.
+        for value in (source.get(key) for source in sources for key in aliases):
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value >= 0
+                and (not isinstance(value, float) or isfinite(value))
+            ):
+                yield attribute, value
+                break
+
+
+def _get_provider_attributes(
+    component: Any, is_async: bool = False
+) -> Iterator[Tuple[str, Any]]:
+    """Attribute built-in OpenAI-family components by their effective SDK URL.
+
+    Component ancestry establishes the protocol, not the vendor: custom OpenAI
+    endpoints must not be labelled OpenAI. Never export endpoint URLs, which can
+    contain credentials. Do not require removed/optional component imports.
+    """
+    if not any(
+        cls.__module__.startswith("haystack.components.")
+        and cls.__name__
+        in {
+            "OpenAIGenerator",
+            "OpenAIChatGenerator",
+            "OpenAITextEmbedder",
+            "OpenAIDocumentEmbedder",
+        }
+        for cls in type(component).__mro__
+    ):
+        return
+    use_async_client = is_async and getattr(
+        component, "__haystack_supports_async__", False
+    )
+    client = getattr(component, "async_client" if use_async_client else "client", None)
+    endpoint = getattr(client, "base_url", None)
+    if endpoint is None:
+        return
+    host = urlsplit(str(endpoint)).hostname
+    if not host:
+        return
+    host = host.lower().rstrip(".")
+    if host == "api.openai.com":
+        provider = "openai"
+    elif host.endswith(
+        (
+            ".openai.azure.com",
+            ".openai.azure.us",
+            ".openai.azure.cn",
+            ".services.ai.azure.com",
+            ".cognitiveservices.azure.com",
+        )
+    ):
+        provider = "azure"
+    else:
+        provider = "openai_compatible"
+    yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider
 
 
 def _get_embedding_attributes(

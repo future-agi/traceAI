@@ -18,7 +18,8 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
-    "test:contract": "pnpm run build && node contract/run_real_sdk.mjs && node contract/otlp_wire.mjs",
+    "test:contract": "pnpm run build && node contract/run_real_sdk.mjs && node contract/client_lifecycle.mjs && node contract/otlp_wire.mjs && node contract/real_binary.mjs && node --expose-gc contract/weak_lifecycle.mjs",
+    "test:compat": "pnpm run build && bash contract/compatibility.sh",
     "prepare": "pnpm run build"
   },
   "keywords": [
@@ -65,7 +66,7 @@
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
-    "@openai/codex-sdk": ">=0.44.0 <1"
+    "@openai/codex-sdk": ">=0.162.1 <1"
   },
   "files": [
     "dist",

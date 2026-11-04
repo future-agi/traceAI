@@ -1,7 +1,37 @@
 import { context, Context } from "@opentelemetry/api";
+import { performance } from "node:perf_hooks";
 import { Data, object, list } from "./attributes";
 
-type Finish = (response: Data, error?: unknown, cancelled?: boolean) => void;
+type Finish = (response: Data, error?: unknown, cancelled?: boolean, timeToFirstTokenMs?: number) => void;
+
+/** Ignore metadata/empty deltas. Inspect content even when capture is disabled,
+ * without retaining it, so privacy does not change timing semantics.
+ */
+function hasGeneratedContent(value: unknown): boolean {
+  const event = object(value);
+  const type = event.type ?? event.eventType ?? event.event_type;
+  const message = object(object(event.delta).message);
+  const nonempty = (value: unknown) => typeof value === "string" && value.length > 0;
+  const toolContent = (value: unknown) => {
+    const tool = object(value);
+    const fn = object(tool.function);
+    return nonempty(tool.text) || nonempty(tool.name) || nonempty(tool.parameters) || nonempty(fn.name) || nonempty(fn.arguments);
+  };
+  switch (type) {
+    case "text-generation": return nonempty(event.text);
+    case "content-start":
+    case "content-delta": {
+      const content = object(message.content);
+      return nonempty(content.text) || nonempty(content.thinking);
+    }
+    case "tool-plan-delta": return nonempty(message.toolPlan ?? message.tool_plan);
+    case "tool-call-start":
+    case "tool-call-delta": return toolContent(message.toolCalls ?? message.tool_calls);
+    case "tool-calls-chunk": return toolContent(event.toolCallDelta ?? event.tool_call_delta);
+    case "tool-calls-generation": return nonempty(event.text) || list(event.toolCalls ?? event.tool_calls).some(toolContent);
+    default: return false;
+  }
+}
 
 /** Aggregate content, not the event log. Consumers still receive original events. */
 class ChatAccumulator {
@@ -9,6 +39,7 @@ class ChatAccumulator {
   private toolPlan = "";
   private content = new Map<number, Data>();
   private tools = new Map<number, Data>();
+  private citations = new Map<number, Data>();
   private response: Data = {};
   constructor(private captureContent: boolean) {}
 
@@ -17,7 +48,15 @@ class ChatAccumulator {
     const type = event.type ?? event.eventType ?? event.event_type;
     const delta = object(event.delta);
     const message = object(delta.message);
+    if (type === "message-start" || type === "stream-start") {
+      const id = event.id ?? event.generationId ?? event.generation_id;
+      if (typeof id === "string") this.response.id = id;
+    }
     if (this.captureContent) {
+      if ((type === "citation-start" || type === "citation-end") && message.citations) {
+        const index = typeof event.index === "number" ? event.index : 0;
+        this.citations.set(index, { ...this.citations.get(index), ...object(message.citations) });
+      }
       if (type === "text-generation" && typeof event.text === "string") this.text += event.text;
       if (type === "content-start" || type === "content-delta") {
         const content = object(message.content);
@@ -72,37 +111,42 @@ class ChatAccumulator {
       const response = object(event.response);
       // V1's terminal text is authoritative after provisional tool chunks.
       if (this.toolPlan && typeof response.text === "string" && response.text) this.toolPlan = response.text;
-      this.response = { ...response, finishReason: event.finishReason ?? event.finish_reason ?? response.finishReason ?? response.finish_reason };
+      this.response = { ...this.response, ...response, finishReason: event.finishReason ?? event.finish_reason ?? response.finishReason ?? response.finish_reason };
     }
-    if (type === "message-end") this.response = { usage: delta.usage, finishReason: delta.finishReason ?? delta.finish_reason };
+    if (type === "message-end") this.response = { ...this.response, usage: delta.usage, finishReason: delta.finishReason ?? delta.finish_reason };
     return type === "stream-end" || type === "message-end";
   }
 
   result(): Data {
-    if (!this.captureContent) return { usage: this.response.usage, meta: this.response.meta, finishReason: this.response.finishReason };
+    if (!this.captureContent) return {
+      id: this.response.id, generationId: this.response.generationId ?? this.response.generation_id,
+      usage: this.response.usage, meta: this.response.meta, finishReason: this.response.finishReason,
+    };
     // V1's terminal response has authoritative text/tool calls; v2 only sends usage.
     return {
       text: this.text,
       toolCalls: [...this.tools].sort(([a], [b]) => a - b).map(([, call]) => call),
-      ...(this.content.size || this.toolPlan ? { message: {
+      ...(this.content.size || this.toolPlan || this.citations.size ? { message: {
         role: "assistant",
         ...(this.content.size ? { content: [...this.content].sort(([a], [b]) => a - b).map(([, block]) => block) } : {}),
         ...(this.toolPlan ? { toolPlan: this.toolPlan } : {}),
+        ...(this.citations.size ? { citations: [...this.citations].sort(([a], [b]) => a - b).map(([, citation]) => citation) } : {}),
       } } : {}),
       ...this.response,
     };
   }
 }
 
-export function wrapStream<T extends object>(stream: T, execContext: Context, captureContent: boolean, finish: Finish): T {
+export function wrapStream<T extends object>(stream: T, execContext: Context, captureContent: boolean, finish: Finish, requestStart: number): T {
   const accumulator = new ChatAccumulator(captureContent);
+  let timeToFirstTokenMs: number | undefined;
   const signal = (stream as { controller?: AbortController }).controller?.signal;
   let ended = false;
   const end = (error?: unknown, cancelled = false) => {
     if (ended) return;
     ended = true;
     signal?.removeEventListener("abort", onAbort);
-    finish(accumulator.result(), error, cancelled);
+    finish(accumulator.result(), error, cancelled, timeToFirstTokenMs);
   };
   const onAbort = () => end(undefined, true);
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -128,6 +172,9 @@ export function wrapStream<T extends object>(stream: T, execContext: Context, ca
             }
             const result = await context.with(execContext, () => fn.call(iterator, value));
             if (!ended && !result.done) {
+              if (timeToFirstTokenMs === undefined && hasGeneratedContent(result.value)) {
+                timeToFirstTokenMs = performance.now() - requestStart;
+              }
               const terminal = accumulator.add(result.value);
               if (terminal) end();
             }
