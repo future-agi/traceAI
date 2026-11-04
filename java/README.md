@@ -212,7 +212,9 @@ TraceConfig config = TraceConfig.builder()
 - `hideInputMessages` and `hideOutputMessages` suppress only message attributes (including Cohere's preamble and tool calls respectively). They do not suppress values or raw payloads, which can contain the same content. Setting a message flag to `false` cannot override `hideInputs(true)` or `hideOutputs(true)`.
 - `hideErrorDetails` suppresses `error.message`, exception messages, exception stack traces and ERROR status descriptions written by `FITracer.setError`, including errors from Cohere chat, embed and rerank. ERROR status, `error.type` and an exception event containing `exception.type` remain available.
 
-Error-detail hiding is opt-in in Java: it defaults to `false`, independently of the input/output flags. Set `FI_HIDE_ERROR_DETAILS=true` to enable it through the environment; an explicit `.hideErrorDetails(true)` or `.hideErrorDetails(false)` overrides the environment.
+Input, output and error-detail hiding each default to `false`. Both `TraceConfig.builder().build()` and `TraceConfig.fromEnvironment()` read `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and `FI_HIDE_ERROR_DETAILS`. Each variable enables its flag only for `true` (case-insensitive); unset or other values mean `false`. Explicit builder values, including `false`, override the corresponding environment variable. For example, `.hideInputs(false)` intentionally disables input hiding even when `FI_HIDE_INPUTS=true`. Input/output hiding does not implicitly enable error-detail hiding. The message-only flags remain builder options.
+
+For Bedrock, input hiding also suppresses tool definitions; output hiding suppresses streamed text and tool arguments, and prevents content accumulation by the stream adapter. Model IDs, finish reasons and usage/cache counters remain available. Error details use their separate flag.
 
 These controls govern the tracing helpers and the Cohere content fields described above, not arbitrary attributes or events written directly to an OpenTelemetry span by your application or another instrumentor. Do not attach sensitive content directly to spans.
 
@@ -267,6 +269,34 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
+
+### AWS Bedrock
+
+The provided-scope AWS SDK dependency has a minimum version of `2.25.67`; add `software.amazon.awssdk:bedrockruntime` to your application. Use `BedrockRuntimeInterceptor` for synchronous `Converse` and `InvokeModel`, or `TracedBedrockRuntimeClient` around an existing synchronous client. For asynchronous operations use `TracedBedrockRuntimeAsyncClient`; the execution interceptor alone intentionally ignores async clients because it cannot reliably observe future cancellation.
+
+```java
+import ai.traceai.TraceAI;
+import ai.traceai.bedrock.TracedBedrockRuntimeAsyncClient;
+import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeAsyncClient;
+import software.amazon.awssdk.services.bedrockruntime.model.ConverseStreamResponseHandler;
+
+// Configure AWS credentials, region and model access in the application as usual.
+try (BedrockRuntimeAsyncClient sdk = BedrockRuntimeAsyncClient.create()) {
+    var traced = new TracedBedrockRuntimeAsyncClient(sdk, TraceAI.getTracer());
+    var handler = ConverseStreamResponseHandler.builder()
+        .subscriber(event -> { /* handle the original SDK event */ })
+        .build();
+    traced.converseStream(request, handler).join(); // request is a ConverseStreamRequest
+}
+```
+
+The async facade supports `converse`, `invokeModel` and `converseStream`. A stream span inherits the calling parent context, captures text/tool deltas and usage, and ends once on terminal completion, failure, or cancellation—not on receipt of response headers. Your handler callbacks run with the LLM span current. Original SDK response/event objects and subscriber demand are forwarded; the adapter makes no additional event requests. Cancelling the returned future forwards to the SDK; cancelling the subscription ends the span with a cancellation error and cancels the SDK future only if it has not already completed. AWS normally completes its future successfully on subscription cancellation (including cancellation by its Consumer subscriber after a callback throws); the adapter preserves that outcome rather than converting it into an application exception. Caller-side future timeouts are forwarded too. Consume, cancel, or time out every stream you start. A second instrumentor around the same operations can produce duplicate spans; do not enable both.
+
+Streaming telemetry stores at most 32,000 content characters and 128 content blocks per invocation; additional content still reaches your handler unchanged. `gen_ai.bedrock.output_truncated=true` marks this limit. Large JSON attributes use an omission marker to stay valid JSON. Stream `raw.output` is an assembled message, not the wire event sequence. `InvokeModelWithResponseStream` and streamed reasoning/media aggregation are not supported; unknown events are still forwarded. The facade does not close your SDK client.
+
+`InvokeModel` normalizes Titan text (`inputTextTokenCount` and all `results[].tokenCount`), Meta (`prompt_token_count`/`generation_token_count`), and Nova nested messages and camelCase usage, in addition to existing snake_case usage responses. Unknown provider payloads still receive a lifecycle span; raw content respects privacy controls.
+
+**Token and cache accounting:** `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` retain the provider's input/output counts without adding cache counts. `gen_ai.usage.total_tokens` retains a supplied total; when absent it is input plus output. Cache reads and writes are separate `gen_ai.usage.cache_read_tokens` and `gen_ai.usage.cache_write_tokens` attributes. Do not add them to the reported input or total without checking that model's billing semantics. Converse and ConverseStream expose cache counters only when the installed AWS SDK models them; older SDKs such as `2.25.67` discard those fields, so traceAI leaves them absent, not zero. Usage survives input/output hiding. No monetary cost is calculated.
 
 ### Azure AI Search paging
 
