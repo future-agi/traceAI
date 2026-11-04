@@ -1,6 +1,6 @@
 """Prepare telemetry-only message copies before any string/JSON serialization."""
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from fi_instrumentation import REDACTED_VALUE, TraceConfig
 from fi_instrumentation.fi_types import (
@@ -24,8 +24,12 @@ def _message_content_copy(content: Any, config: TraceConfig) -> Any:
     if callable(getattr(content, "model_dump", None)):
         content = content.model_dump()
     if not isinstance(content, Mapping):
-        return content
+        return REDACTED_VALUE if config.hide_input_text and isinstance(content, str) else content
     part = dict(content)
+    if config.hide_input_text:
+        for key in ("text", "refusal"):
+            if key in part:
+                part[key] = REDACTED_VALUE
     if "image_url" in part:
         image = part["image_url"]
         if config.hide_input_images:
@@ -42,7 +46,14 @@ def _message_content_copy(content: Any, config: TraceConfig) -> Any:
     return part
 
 
-def _messages_for_telemetry(messages: list, config: TraceConfig) -> list:
+def _messages_for_telemetry(messages: Any, config: TraceConfig) -> Optional[list]:
+    # SDK message inputs accept arbitrary iterables. Telemetry must not iterate a
+    # generator (or a custom one-shot iterable) before the SDK serializes it.
+    # Omit that optional telemetry instead of consuming or replacing caller data.
+    if not isinstance(messages, (list, tuple)):
+        return None
+    if config.hide_inputs or config.hide_input_messages:
+        return []
     result = []
     for message in messages:
         if isinstance(message, Mapping):
@@ -53,5 +64,17 @@ def _messages_for_telemetry(messages: list, config: TraceConfig) -> list:
             copy = {key: getattr(message, key) for key in ("role", "content") if hasattr(message, key)}
         if "content" in copy:
             copy["content"] = _message_content_copy(copy["content"], config)
+        if config.hide_input_text:
+            # Tool arguments, refusals and provider-specific message fields can
+            # also carry text. Keep identifiers, not opaque duplicate content.
+            for key in copy.keys() - {"role", "name", "tool_call_id", "content"}:
+                copy[key] = REDACTED_VALUE
         result.append(copy)
     return result
+
+
+def _hide_raw_output(config: TraceConfig) -> bool:
+    # Raw provider JSON is an opaque duplicate of message content (including
+    # tool arguments and provider extensions). Narrow message/text policies must
+    # cover it too. Accounting and model attribution are extracted separately.
+    return bool(config.hide_outputs or config.hide_output_messages or config.hide_output_text)

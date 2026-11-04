@@ -4,11 +4,13 @@ import logging
 import weakref
 from typing import Any, Dict, Optional
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import REDACTED_VALUE, TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
 from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 from wrapt import ObjectProxy
+
+from traceai_fireworks._privacy import _hide_raw_output
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -17,8 +19,10 @@ logger.addHandler(logging.NullHandler())
 def _get_stream_output_attributes(
     chunks: list,
     full_content: str,
+    *, config: Optional[TraceConfig] = None,
 ) -> Dict[str, AttributeValue]:
     """Extract output attributes from streaming response chunks."""
+    config = config if config is not None else TraceConfig()
     attributes: Dict[str, AttributeValue] = {
         SpanAttributes.OUTPUT_VALUE: full_content,
         f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}": "assistant",
@@ -44,12 +48,18 @@ def _get_stream_output_attributes(
                 if value is not None:
                     attributes[attribute] = value
     try:
-        attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps([
-            c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks
-        ])
+        attributes[SpanAttributes.OUTPUT_VALUE] = (
+            REDACTED_VALUE if _hide_raw_output(config) else safe_json_dumps([
+                c.model_dump() if callable(getattr(c, "model_dump", None)) else {}
+                for c in chunks
+            ])
+        )
     except Exception:
         pass
-    return attributes
+    return {
+        key: masked for key, value in attributes.items()
+        if (masked := config.mask(key, value)) is not None
+    }
 
 
 def _end_span(span: Span) -> None:
@@ -68,8 +78,9 @@ class _StreamState:
     Abandonment leaves status UNSET rather than claiming complete success.
     """
 
-    def __init__(self, span: Span) -> None:
+    def __init__(self, span: Span, config: Optional[TraceConfig] = None) -> None:
         self.span = span
+        self.config = config if config is not None else TraceConfig()
         self.chunks = []
         self.content = ""
         self.finished = False
@@ -82,14 +93,19 @@ class _StreamState:
             if isinstance(content, str):
                 self.content += content
 
-    def finish(self, error: Optional[BaseException] = None) -> None:
+    def finish(
+        self, error: Optional[BaseException] = None,
+        *, attributes: Optional[Dict[str, AttributeValue]] = None,
+    ) -> None:
         if self.finished:
             return
         self.finished = True
         self._finalizer.detach()
         try:
             self.span.set_attributes(
-                _get_stream_output_attributes(self.chunks, self.content)
+                attributes if attributes is not None else _get_stream_output_attributes(
+                    self.chunks, self.content, config=self.config,
+                )
             )
             if error is None:
                 self.span.set_status(Status(StatusCode.OK))
@@ -106,9 +122,10 @@ class _StreamState:
 class _StreamBase(ObjectProxy):
     def __init__(
         self, stream: Any, span: Span, state: Optional[_StreamState] = None,
+        *, config: Optional[TraceConfig] = None,
     ) -> None:
         super().__init__(stream)
-        self._self_state = state if state is not None else _StreamState(span)
+        self._self_state = state if state is not None else _StreamState(span, config)
         self._self_closed = False
 
     def _record_chunk(self, chunk: Any) -> None:

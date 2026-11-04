@@ -5,16 +5,21 @@ parse result. Importing that adapter here would require its newer SDK floor.
 """
 
 import inspect
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional
 
+from fi_instrumentation import TraceConfig
 from opentelemetry.trace import Span
+from opentelemetry.util.types import AttributeValue
 
 from traceai_fireworks._stream import _AsyncStream, _Stream, _StreamBase
 
 
 class _RawStreamResponse(_StreamBase):
-    def __init__(self, response: Any, span: Span, asynchronous: bool) -> None:
-        super().__init__(response, span)
+    def __init__(
+        self, response: Any, span: Span, asynchronous: bool,
+        *, config: Optional[TraceConfig] = None,
+    ) -> None:
+        super().__init__(response, span, config=config)
         self._self_asynchronous = asynchronous
         self._self_parsed = None
         self._self_parsed_raw = None
@@ -105,3 +110,32 @@ class _RawStreamResponse(_StreamBase):
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
         return await self.aclose(exc)
+
+
+class _RawNonStreamResponse(_RawStreamResponse):
+    """Keep with_streaming_response non-SSE bodies lazy, including async parse.
+
+    The SDK owns parsing/caching and the original public response API. This
+    proxy owns just span finalization; closing without parsing captures no body.
+    """
+
+    def __init__(
+        self, response: Any, span: Span, asynchronous: bool,
+        *, config: TraceConfig,
+        get_attributes: Callable[..., Dict[str, AttributeValue]],
+    ) -> None:
+        super().__init__(response, span, asynchronous, config=config)
+        self._self_get_attributes = get_attributes
+
+    def _wrap_parsed(self, parsed: Any) -> Any:
+        if not self._self_state.finished:
+            try:
+                attributes = self._self_get_attributes(parsed, config=self._self_state.config)
+            except Exception:
+                # Telemetry cannot turn a successful native parse into an error.
+                attributes = {}
+            self._self_state.finish(attributes=attributes)
+        return parsed
+
+    def _finish(self, error: Optional[BaseException] = None) -> None:
+        self._self_state.finish(error, attributes={})
