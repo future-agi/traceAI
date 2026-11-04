@@ -44,12 +44,15 @@ type Provider interface {
 // result with lambda.Start or lambda.StartHandler. Do not also wrap it with
 // otellambda.
 //
-// For handlers built with lambda.NewHandler, the runtime sends the result with
-// the Content-Type it would use without the wrapper: application/json for JSON
-// results, and the result's own ContentType for io.Reader results such as
-// lambdaurl.Wrap's function URL response. The result is read inside the
-// invocation span, so a function URL response is delivered whole rather than
-// incrementally. The event is decoded as JSON, so an empty payload fails even
+// For handlers built with lambda.NewHandler, JSON results that do not implement
+// io.Reader retain application/json. Reader results must be raw-only: their JSON
+// encoding must fail or produce an empty object, as with strings.Reader and
+// lambdaurl.Wrap. Readers that also encode to non-empty JSON are not supported;
+// return JSON as a non-reader value instead. Reader ContentType is captured when
+// the handler returns, before serialization, reading or closing, and must be
+// valid then. Untyped readers use application/octet-stream. The result is read
+// inside the invocation span, so a function URL response is delivered whole
+// rather than incrementally. The event is decoded as JSON, so an empty payload fails even
 // for a handler that takes no event. lambda.Start and lambda.StartWithOptions
 // use such a wrapped handler as it is, so pass runtime options such as
 // lambda.WithEnableSIGTERM, lambda.WithContextValue or
@@ -104,19 +107,28 @@ const (
 	contentTypeBytes = "application/octet-stream"
 )
 
-// resultCapture records the value an aws-lambda-go handler returned, which
-// decides the Content-Type the runtime would have sent for it.
+// resultCapture snapshots MIME metadata while the response is still live.
+// Handler.Invoke consumes/closes readers and exposes only bytes, not the SDK's
+// encoding decision. Re-encoding the value would call user serialization twice;
+// sniffing the bytes would mistake raw JSON-shaped reader content for JSON.
+// Consequently reader responses are supported only under the raw-only contract
+// documented on WrapHandler.
 type resultCapture struct {
-	seen  bool
-	value any
+	seen bool
+	mime string
 }
 
 func (c *resultCapture) record(_ context.Context, value any) {
-	c.seen, c.value = true, value
+	c.seen, c.mime = true, contentTypeJSON
+	if _, ok := value.(io.Reader); !ok {
+		return
+	}
+	c.mime = contentTypeBytes
+	if typed, ok := value.(interface{ ContentType() string }); ok {
+		c.mime = typed.ContentType()
+	}
 }
 
-// contentType mirrors aws-lambda-go: a result is encoded as JSON unless it is
-// an io.Reader that does not encode to a non-empty JSON object.
 func (c *resultCapture) contentType(body []byte) string {
 	if !c.seen {
 		// Handlers without a result value send JSON null. A handler built from a
@@ -126,16 +138,7 @@ func (c *resultCapture) contentType(body []byte) string {
 		}
 		return contentTypeBytes
 	}
-	if _, ok := c.value.(io.Reader); !ok {
-		return contentTypeJSON
-	}
-	if encoded, err := json.Marshal(c.value); err == nil && !bytes.HasPrefix(encoded, []byte("{}")) {
-		return contentTypeJSON
-	}
-	if typed, ok := c.value.(interface{ ContentType() string }); ok {
-		return typed.ContentType()
-	}
-	return contentTypeBytes
+	return c.mime
 }
 
 var errRawResponse = errors.New("traceai lambda: raw response")
