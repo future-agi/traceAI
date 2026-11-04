@@ -57,11 +57,13 @@ const maskingRules: MaskingRule[] = [
     action: () => undefined,
   },
   {
-    // Raw/value payloads are opaque duplicates. Do not attempt provider-specific
-    // JSON parsing here: granular hiding must also cover every copied payload.
+    // Opaque inputs include tool schemas (descriptions, enums, defaults) and
+    // their copies in invocation parameters. Do not parse provider-specific
+    // JSON: separately recorded model/token metadata remains available.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT),
+      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT ||
+        key === SemanticConventions.LLM_TOOLS || key === SemanticConventions.LLM_INVOCATION_PARAMETERS),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {

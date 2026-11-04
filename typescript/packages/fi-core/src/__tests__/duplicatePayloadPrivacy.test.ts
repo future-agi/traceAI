@@ -4,12 +4,13 @@ import { FITracer } from "../trace/trace-config/FITracer";
 import { TraceConfigOptions } from "../trace/trace-config/types";
 
 const retrievalKeys = ["retrieval.documents", "retrieval.documents.0.document.content", "retrieval.documents.0.document.metadata", "retrieval.documents.12.document.content", "retrieval.documents.12.document.metadata"];
+const toolSchemaKeys = [SC.LLM_TOOLS, SC.LLM_INVOCATION_PARAMETERS];
 const cases: [keyof TraceConfigOptions, string[]][] = [
   ["hideOutputs", retrievalKeys],
-  ["hideInputs", [SC.PROMPT_TEMPLATE_VARIABLES, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`, `${SC.EMBEDDING_EMBEDDINGS}.12.${SC.EMBEDDING_TEXT}`]],
-  ["hideInputText", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`]],
-  ["hideInputImages", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
-  ["hideInputMessages", [SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
+  ["hideInputs", [...toolSchemaKeys, SC.PROMPT_TEMPLATE_VARIABLES, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`, `${SC.EMBEDDING_EMBEDDINGS}.12.${SC.EMBEDDING_TEXT}`]],
+  ["hideInputText", [...toolSchemaKeys, SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_TEXT}`]],
+  ["hideInputImages", [...toolSchemaKeys, SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
+  ["hideInputMessages", [...toolSchemaKeys, SC.PROMPT_TEMPLATE_VARIABLES, SC.INPUT_VALUE, SC.RAW_INPUT]],
   ["hideOutputText", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT, ...retrievalKeys]],
   ["hideOutputMessages", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT]],
   ["hideEmbeddingVectors", [SC.OUTPUT_VALUE, SC.RAW_OUTPUT, `${SC.EMBEDDING_EMBEDDINGS}.0.${SC.EMBEDDING_VECTOR}`]],

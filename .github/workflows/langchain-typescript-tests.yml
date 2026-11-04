@@ -73,7 +73,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/langchain-consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/langchain-tarballs/"*.tgz "@langchain/core@$CORE_VERSION" "@langchain/openai@$OPENAI_VERSION" \
             @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0
-          cp typescript/packages/traceai_langchain/contract/{lifecycle,release,streaming}.mjs "$RUNNER_TEMP/langchain-consumer/"
+          cp typescript/packages/traceai_langchain/contract/{lifecycle,release,streaming,tool-schema}.mjs "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/types.cts"
       - name: Install the README Quick Start in an empty consumer
@@ -93,12 +93,17 @@ jobs:
         run: |
           typescript/node_modules/.bin/tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 \
             "$RUNNER_TEMP/langchain-consumer/types.mts" "$RUNNER_TEMP/langchain-consumer/types.cts"
-      - name: Unit regressions with outbound network disabled
+      - name: Runtime unit regressions against the selected core, localhost only
         working-directory: typescript
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+          OPENAI_VERSION: ${{ matrix.openai }}
         run: |
           sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            env LANGCHAIN_CONSUMER="$RUNNER_TEMP/langchain-consumer" \
+            CORE_VERSION="$CORE_VERSION" OPENAI_VERSION="$OPENAI_VERSION" \
             "$(command -v node)" packages/traceai_langchain/node_modules/jest/bin/jest.js \
-            --config packages/traceai_langchain/jest.config.js --runInBand
+            --config packages/traceai_langchain/contract/jest.runtime.config.cjs --runInBand
       - name: Real callback lifecycle and OTLP wire contracts, localhost only
         env:
           CORE_VERSION: ${{ matrix.core }}
@@ -123,6 +128,8 @@ jobs:
             for privacy in public options environment; do
               sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
                 "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/release.mjs" "$mode" "$privacy"
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/tool-schema.mjs" "$mode" "$privacy"
             done
           done
       - name: LangGraph pause and handoff spans, localhost only
