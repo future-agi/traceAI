@@ -8,15 +8,11 @@ Use Spring AI's native Micrometer observations and Spring Boot's OpenTelemetry p
 
 Keep your existing Spring AI model configuration. Add `com.futureagi:traceai-spring-ai` at the version built from this checkout, `spring-boot-starter-actuator`, `micrometer-tracing-bridge-otel`, and `opentelemetry-exporter-otlp`. Let your Boot BOM manage Micrometer and OpenTelemetry. Boot 4.1 also needs `org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry` for its native tracing auto-configuration.
 
-Register the maintained filter, handler, and tool-exception post-processor below. The handler replaces Boot's generic `DefaultTracingObservationHandler`; if you already define that handler yourself, replace it rather than registering both. The static post-processor decorates Spring AI's existing `ToolExecutionExceptionProcessor` bean without changing its recovery or rethrow policy:
+Register the maintained filter and handler below. The handler replaces Boot's generic `DefaultTracingObservationHandler`; if you already define that handler yourself, replace it rather than registering both. For handled tool failures, also wire the exception decorator at the [tool manager construction point](#tool-execution-failures); do not replace application processor beans.
 
 ```java
 import ai.traceai.spring.SpringAIObservationFilter;
 import ai.traceai.spring.SpringAITracingObservationHandler;
-import ai.traceai.spring.SpringAIToolExecutionExceptionProcessor;
-import io.micrometer.observation.ObservationRegistry;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.config.BeanPostProcessor;
 import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.otel.bridge.OtelTracer;
 import io.micrometer.observation.ObservationFilter;
@@ -25,11 +21,6 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 public class SpringAITracingConfiguration {
-    @Bean
-    static BeanPostProcessor springAIToolExceptionTracing(ObjectProvider<ObservationRegistry> registries) {
-        return SpringAIToolExecutionExceptionProcessor.beanPostProcessor(registries);
-    }
-
     @Bean
     DefaultTracingObservationHandler defaultTracingObservationHandler(OtelTracer tracer) {
         return new SpringAITracingObservationHandler(tracer);
@@ -66,15 +57,15 @@ management.opentelemetry.resource-attributes.project_name=${FI_PROJECT_NAME}
 
 Set `FI_BASE_URL` to `https://api.futureagi.com` (no trailing slash), your Future AGI keys through your secret manager, and `FI_PROJECT_NAME` to your project. Keep your own model-provider credentials separate. Sampling at `1.0` captures all requests; lower it if appropriate for production.
 
-Use your existing `ChatModel`/`ChatClient`, embedding model, and tool configuration unchanged. Models constructed manually must receive the application's `ObservationRegistry`. This path does not use `traceai-spring-boot-starter`; remove that starter when migrating. Do not call `TraceAI.init(...)`, register an additional generic tracing handler, or wrap a natively observed model in `TracedChatModel`/`TracedEmbeddingModel`. A native HTTP client span alongside a model span is expected, not a duplicate model span.
+Keep your existing `ChatModel`/`ChatClient`, embedding model, and tool definitions. To record handled tool failures, update the manager's processor argument as shown below. Models constructed manually must receive the application's `ObservationRegistry`. This path does not use `traceai-spring-boot-starter`; remove that starter when migrating. Do not call `TraceAI.init(...)`, register an additional generic tracing handler, or wrap a natively observed model in `TracedChatModel`/`TracedEmbeddingModel`. A native HTTP client span alongside a model span is expected, not a duplicate model span.
 
 ## Tool execution failures
 
 Spring AI can turn a thrown tool exception into a tool-result message and let the model recover. The tool-exception decorator marks only the current native `TOOL` observation as `ERROR`, using the original exception. The recovered model calls remain successful; the decorator creates no additional spans and does not infer failures from tool-result text.
 
-The Boot post-processor wraps the existing processor, preserving `spring.ai.tools.throw-exception-on-error`, Spring AI's exception allowlist, and any custom application policy. Keep your processor beans and injection points typed as `ToolExecutionExceptionProcessor`. The `static @Bean` registration resolves the registry lazily and does not initialize tracing early. It does not modify tool managers or processors constructed outside Spring.
+Decorate the processor **only when passing it to the manager**. Leave the original processor bean in place: its concrete type, identity, lifecycle, and existing consumers remain unchanged. There is no bean post-processor or proxy. Delegating to Spring AI's existing processor preserves `spring.ai.tools.throw-exception-on-error`, its exception allowlist, and custom application recovery/rethrow policy.
 
-For a manually built tool manager, pass your existing processor through the decorator using the **same registry** as the manager:
+If you already build a tool manager, change only its processor argument, using the **same registry** as the manager. Keep all your other builder settings:
 
 ```java
 var tracedProcessor = new SpringAIToolExecutionExceptionProcessor(observationRegistry, existingProcessor);
@@ -86,6 +77,39 @@ var toolManager = DefaultToolCallingManager.builder()
 ```
 
 Here `DefaultToolCallingManager` is `org.springframework.ai.model.tool.DefaultToolCallingManager`; `existingProcessor` is your current `org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor`. Give this manager to your existing model/tool-calling configuration. The observation filter and tracing handler alone cannot see errors that Spring AI handles internally.
+
+If Boot currently creates your manager, the following configuration opts into an explicitly constructed manager. It reuses the application's registry, resolver, processor, and optional observation convention. **It replaces Boot's manager auto-configuration**, using native defaults for other manager settings. If you already have a manager bean, update that bean instead of adding a second one.
+
+**Spring AI 2.x:** before adopting this example, carry over any configured tool-call limits, confirmation policies, and resolution-fallback settings to the builder. Those `spring.ai.tools.*` manager settings are not bound by this example; only the exception processor's policy remains auto-configured. Prefer changing your existing configured builder's processor argument rather than rebuilding the manager with defaults.
+
+```java
+import ai.traceai.spring.SpringAIToolExecutionExceptionProcessor;
+import io.micrometer.observation.ObservationRegistry;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
+import org.springframework.ai.tool.observation.ToolCallingObservationConvention;
+import org.springframework.ai.tool.resolution.ToolCallbackResolver;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration(proxyBeanMethods = false)
+public class SpringAIToolTracingConfiguration {
+    @Bean
+    DefaultToolCallingManager toolCallingManager(ObservationRegistry registry,
+            ToolCallbackResolver resolver, ToolExecutionExceptionProcessor existingProcessor,
+            ObjectProvider<ToolCallingObservationConvention> convention) {
+        var manager = DefaultToolCallingManager.builder()
+            .observationRegistry(registry)
+            .toolCallbackResolver(resolver)
+            .toolExecutionExceptionProcessor(new SpringAIToolExecutionExceptionProcessor(registry, existingProcessor))
+            // Retain any other manager settings here, including Spring AI 2.x policies/limits.
+            .build();
+        convention.ifAvailable(manager::setObservationConvention);
+        return manager;
+    }
+}
+```
 
 ## Content and privacy
 

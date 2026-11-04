@@ -17,7 +17,6 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.execution.ToolExecutionException;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.ai.tool.observation.ToolCallingObservationContext;
-import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import static org.assertj.core.api.Assertions.*;
 
 class SpringAIToolExecutionExceptionProcessorTest {
@@ -121,24 +120,11 @@ class SpringAIToolExecutionExceptionProcessorTest {
         }
     }
 
-    @Test void beanDecorationIsLazyAndIdempotentAndKeepsCustomPolicy() {
-        try (var f = new Fixture(true)) {
-            var beans = new DefaultListableBeanFactory();
-            var postProcessor = SpringAIToolExecutionExceptionProcessor.beanPostProcessor(
-                beans.getBeanProvider(ObservationRegistry.class));
-            ToolExecutionExceptionProcessor delegate = ex -> "custom policy";
-            var wrapped = (ToolExecutionExceptionProcessor) postProcessor.postProcessAfterInitialization(delegate, "processor");
-            assertThat(wrapped).isInstanceOf(SpringAIToolExecutionExceptionProcessor.class);
-            assertThat(postProcessor.postProcessAfterInitialization(wrapped, "processor")).isSameAs(wrapped);
-            var unrelated = new Object();
-            assertThat(postProcessor.postProcessAfterInitialization(unrelated, "other")).isSameAs(unrelated);
-            // Register after decoration: eager lookup would capture NOOP and miss this native span.
-            beans.registerSingleton("observationRegistry", f.registry);
-            assertThat(Observation.createNotStarted("tool", SpringAIToolExecutionExceptionProcessorTest::tool, f.registry)
-                .observe(() -> wrapped.process(new ToolExecutionException(TOOL, new IllegalStateException(SECRET)))))
-                .isEqualTo("custom policy");
-            assertFailure(f, true);
-        }
+    @Test void requiresTheManagersRegistryAndExistingPolicy() {
+        assertThatNullPointerException().isThrownBy(() ->
+            new SpringAIToolExecutionExceptionProcessor(null, ex -> "recovered")).withMessage("registry");
+        assertThatNullPointerException().isThrownBy(() ->
+            new SpringAIToolExecutionExceptionProcessor(ObservationRegistry.NOOP, null)).withMessage("delegate");
     }
 
     private static ToolCallingObservationContext tool() {

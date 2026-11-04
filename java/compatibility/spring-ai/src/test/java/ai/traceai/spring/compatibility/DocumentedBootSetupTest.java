@@ -4,7 +4,10 @@ import ai.traceai.spring.SpringAIObservationFilter;
 import ai.traceai.spring.SpringAITracingObservationHandler;
 import ai.traceai.spring.SpringAIToolExecutionExceptionProcessor;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
+import org.springframework.ai.tool.observation.ToolCallingObservationConvention;
+import org.springframework.ai.tool.resolution.ToolCallbackResolver;
 import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.otel.bridge.OtelTracer;
 import com.sun.net.httpserver.HttpServer;
@@ -120,8 +123,16 @@ class DocumentedBootSetupTest {
     @EnableAutoConfiguration
     static class Application {
         @Bean
-        static BeanPostProcessor springAIToolExceptionTracing(ObjectProvider<ObservationRegistry> registries) {
-            return SpringAIToolExecutionExceptionProcessor.beanPostProcessor(registries);
+        DefaultToolCallingManager toolCallingManager(ObservationRegistry registry,
+                ToolCallbackResolver resolver, ToolExecutionExceptionProcessor existingProcessor,
+                ObjectProvider<ToolCallingObservationConvention> convention) {
+            var manager = DefaultToolCallingManager.builder()
+                .observationRegistry(registry)
+                .toolCallbackResolver(resolver)
+                .toolExecutionExceptionProcessor(new SpringAIToolExecutionExceptionProcessor(registry, existingProcessor))
+                .build();
+            convention.ifAvailable(manager::setObservationConvention);
+            return manager;
         }
 
         @Bean

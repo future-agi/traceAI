@@ -92,7 +92,7 @@ class ToolExecutionFailureTest {
                 assertThat(context).hasNotFailed().hasSingleBean(ToolExecutionExceptionProcessor.class)
                     .hasSingleBean(ToolCallingManager.class);
                 assertThat(context.getBean(ToolExecutionExceptionProcessor.class))
-                    .isInstanceOf(SpringAIToolExecutionExceptionProcessor.class);
+                    .isNotInstanceOf(SpringAIToolExecutionExceptionProcessor.class);
                 var registry = context.getBean(ObservationRegistry.class);
                 var toolStopped = new AtomicReference<Observation.Context>();
                 registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
