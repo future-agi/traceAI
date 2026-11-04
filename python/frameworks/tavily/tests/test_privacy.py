@@ -256,16 +256,11 @@ def test_hidden_inputs_apply_error_policy_even_for_an_empty_query():
     assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
     assert event.attributes["exception.type"].endswith("ConnectionError")
-    if NATIVE_ERROR_POLICY:
-        assert span.status.description is None
-        assert "exception.message" not in event.attributes
-        assert "exception.stacktrace" not in event.attributes
-        assert str(info.value) not in traced.wire()
-    else:
-        assert span.status.description.startswith("ConnectionError: ")
-        assert "__REDACTED__" not in span.status.description
-        assert "__REDACTED__" not in event.attributes["exception.message"]
-        assert event.attributes["exception.message"] == str(info.value)[:1024]
+    expected = None if NATIVE_ERROR_POLICY else "ConnectionError"
+    assert span.status.description == expected
+    assert "exception.message" not in event.attributes
+    assert "exception.stacktrace" not in event.attributes
+    assert str(info.value) not in traced.wire()
 
 
 def test_query_is_capped_at_1024_utf8_bytes_on_a_character_boundary(fake):
