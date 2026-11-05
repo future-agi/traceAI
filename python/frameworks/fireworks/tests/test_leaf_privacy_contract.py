@@ -158,6 +158,49 @@ def test_unprojectable_messages_keep_independent_parameters(flag, invalid):
         assert config.mask("input.value", attrs["input.value"]) == "__REDACTED__"
 
 
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_input_text", "pii_redaction"])
+def test_plain_conversion_does_not_run_metaclass_hooks(flag):
+    calls = []
+
+    class HookMeta(type):
+        @property
+        def __module__(cls):
+            calls.append("module")
+            raise AssertionError("metaclass __module__ descriptor ran")
+
+        def __eq__(cls, other):
+            calls.append("eq")
+            raise AssertionError("metaclass equality ran")
+
+    class Hostile(metaclass=HookMeta):
+        pass
+
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", MESSAGES, config=config, temperature=Hostile())
+    config.mask("input.value", attrs["input.value"])
+    assert calls == []
+
+
+@pytest.mark.parametrize("flag", ["hide_input_text", "pii_redaction"])
+def test_plain_conversion_does_not_hash_custom_dict_keys(flag):
+    class Key:
+        calls = 0
+        def __hash__(self):
+            type(self).calls += 1
+            return 7
+        def __eq__(self, other):
+            type(self).calls += 1
+            return self is other
+
+    key = Key()
+    payload = {key: -100}  # constructing the original dict hashes once
+    Key.calls = 0
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", MESSAGES, config=config, logit_bias=payload)
+    config.mask("input.value", attrs["input.value"])
+    assert Key.calls == 0
+
+
 class _Hostile:
     evaluated = []
 

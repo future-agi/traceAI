@@ -115,7 +115,7 @@ def _shared_instrumentor_enabled() -> bool:
 
 _SDK_PLAIN_NODES = 10000  # same allowance as core's ChatInput copy budget
 _type_mro = type.__dict__["__mro__"].__get__
-_type_attribute = type.__getattribute__
+_type_dict = type.__dict__["__dict__"].__get__
 
 
 class _OverBudget(Exception):
@@ -123,11 +123,32 @@ class _OverBudget(Exception):
 
 
 def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
-    """Classify by the type alone: no isinstance, metaclass or instance hooks."""
+    """Classify canonical OpenAI classes without metaclass equality/descriptors."""
     try:
-        return (sdk_model in _type_mro(kind)
-                and str(_type_attribute(kind, "__module__")).startswith("openai.")
-                and "model_dump" not in _type_attribute(kind, "__dict__"))
+        mro = _type_mro(kind)
+        found_base = False
+        for base in mro:
+            if base is sdk_model:  # identity only; tuple membership may call metaclass __eq__
+                found_base = True
+                break
+            # A subclass override can install its own serializer or metaclass hooks.
+            if "model_dump" in _type_dict(base):
+                return False
+        if not found_base:
+            return False
+        namespace = _type_dict(kind)
+        module_name, class_name = namespace.get("__module__"), namespace.get("__name__")
+        if (type(module_name) is not str or not module_name.startswith("openai.")
+                or type(class_name) is not str):
+            return False
+        # Accept only the exact class exported by its already-loaded defining module.
+        # ModuleType's native dict descriptor and dict.get avoid user attribute hooks.
+        from types import ModuleType
+        module = __import__("sys").modules.get(module_name)
+        if type(module) is not ModuleType:
+            return False
+        module_dict = ModuleType.__dict__["__dict__"].__get__(module)
+        return module_dict.get(class_name) is kind
     except Exception:
         return False
 
@@ -154,9 +175,24 @@ def _sdk_plain(value: Any) -> Any:
             raise _OverBudget
         kind = type(item)
         if kind is dict:
-            return {str(key) if type(key) is int else key: walk(child, depth + 1)
-                    for key, child in item.items()}
-        if kind in (list, tuple):
+            copied = {}
+            for key, child in item.items():
+                key_kind = type(key)
+                if key_kind is str:
+                    normalized = key
+                elif key_kind is int:
+                    try:
+                        # This is the SDK/JSON wire normalization for integer keys.
+                        normalized = str(key)
+                    except (ValueError, OverflowError):
+                        return item
+                else:
+                    # Never rehash or stringify a caller-controlled key. Core's
+                    # strict validator will fail this original mapping closed.
+                    return item
+                copied[normalized] = walk(child, depth + 1)
+            return copied
+        if kind is list or kind is tuple:
             return [walk(child, depth + 1) for child in item]
         if _genuine_sdk_model(kind, sdk_model):
             try:
