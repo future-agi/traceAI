@@ -117,3 +117,27 @@ def test_pii_never_scans_unvalidated_string_subclasses():
         pass
     payload = {"model": "model", "messages": [{"role": "user", "content": CustomString("123\t45\t6789")}]}
     assert TraceConfig(hide_input_images=True, pii_redaction=True).mask("input.value", ChatInput(payload)) == REDACTED_VALUE
+
+
+@pytest.mark.parametrize("separator", ["\t", "\n", "\r", "\x0b", "\x0c"])
+def test_pii_dict_keys_are_scanned_before_escaping(separator):
+    pii = separator.join(["531", "72", "4086"])
+    payload = {"model": "model", "messages": [{"role": "user", "content": "x"}],
+               "response_format": {"type": "json_schema", "json_schema": {
+                   "name": "s", "schema": {"type": "object", "properties": {pii: {"type": "string"}}}}}}
+    config = TraceConfig(pii_redaction=True)
+    exported = config.mask("input.value", ChatInput(payload))
+    assert "531" not in exported and "<SSN>" in exported
+    assert pii in payload["response_format"]["json_schema"]["schema"]["properties"]
+
+
+@pytest.mark.parametrize("prefix", ["data:image/png;BASE64,", "DATA:IMAGE/PNG;BASE64,", "data:image/png;Base64,"])
+def test_base64_length_limit_marker_is_case_insensitive(prefix):
+    url = prefix + "A" * 230
+    payload = {"model": "model", "messages": [{"role": "user", "content": [
+        {"type": "text", "text": "visible"}, {"type": "image_url", "image_url": {"url": url}}]}]}
+    config = TraceConfig(hide_input_text=True, base64_image_max_length=64)
+    exported = config.mask("input.value", ChatInput(payload))
+    assert "A" * 230 not in exported
+    from fi_instrumentation.instrumentation.config import is_base64_url
+    assert is_base64_url(url)

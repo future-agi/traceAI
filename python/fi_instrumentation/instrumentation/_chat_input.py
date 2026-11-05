@@ -84,8 +84,9 @@ def _content(value: Any, config: "TraceConfig") -> Any:
                 raise ValueError("invalid image reference")
             if detail is not None and (type(detail) is not str or detail not in ("auto", "low", "high")):
                 raise ValueError("invalid image detail")
+            # Data URL markers are ASCII case-insensitive (";BASE64," is valid).
             hidden = config.hide_input_images or (
-                prefix == "data:image/" and "base64" in url
+                prefix == "data:image/" and "base64" in url.lower()
                 and len(url) > config.base64_image_max_length
             )
             if hidden:
@@ -148,7 +149,8 @@ def _redact_validated_leaves(value: Any) -> Any:
     if type(value) is list:
         return [_redact_validated_leaves(item) for item in value]
     if type(value) is dict:
-        return {key: _redact_validated_leaves(item) for key, item in value.items()}
+        # Keys (e.g. JSON-schema property names) are escaped by json.dumps too.
+        return {redact_pii_in_string(key): _redact_validated_leaves(item) for key, item in value.items()}
     return value
 
 

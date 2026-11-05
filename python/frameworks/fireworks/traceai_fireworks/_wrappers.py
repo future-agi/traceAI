@@ -113,6 +113,30 @@ def _shared_instrumentor_enabled() -> bool:
     return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
+def _sdk_plain(value: Any, depth: int = 0) -> Any:
+    """Copy built-in containers, converting only OpenAI SDK models to plain JSON.
+
+    Anything else is returned unchanged so core's strict validator still
+    rejects it. Caller objects are never modified.
+    """
+    if depth > 32:
+        return value
+    try:
+        from openai._models import BaseModel as _SDKModel
+    except ImportError:  # pragma: no cover - openai is a hard dependency
+        return value
+    if isinstance(value, _SDKModel):
+        try:
+            return _sdk_plain(value.model_dump(mode="json", exclude_unset=True), depth + 1)
+        except Exception:
+            return value
+    if type(value) is dict:
+        return {key: _sdk_plain(item, depth + 1) for key, item in value.items()}
+    if type(value) in (list, tuple):
+        return [_sdk_plain(item, depth + 1) for item in value]
+    return value
+
+
 def _get_input_attributes(
     model: str,
     messages: Any,
@@ -138,32 +162,39 @@ def _get_input_attributes(
     )
     kwargs = {k: v for k, v in kwargs.items()
               if not any(type(v) is kind for kind in omission_types)}
-    if ChatInput is not None and any((config.hide_inputs, config.hide_input_messages,
-                                      config.hide_input_text, config.hide_input_images,
-                                      config.pii_redaction)):
+    granular = any((config.hide_inputs, config.hide_input_messages,
+                    config.hide_input_text, config.hide_input_images))
+    if ChatInput is not None and (granular or config.pii_redaction):
         # Pass the ORIGINAL typed input, not a previously sanitized string.
         # Core applies policy independently for this copy and at the span setter.
+        # SDK models (e.g. a ChatCompletionMessage appended in a tool loop) are
+        # converted to the plain JSON the SDK itself sends; core still validates.
         raw_input = {"model": model}
         if type(messages) in (list, tuple):
-            raw_input["messages"] = messages
-        raw_input.update({k: v for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
+            raw_input["messages"] = _sdk_plain(messages)
+        raw_input.update({k: _sdk_plain(v) for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
         structured = ChatInput(raw_input)
-        attributes[SpanAttributes.INPUT_VALUE] = structured
         telemetry = ChatInput.masked(structured, config)
-        invocation_params = None
-        if telemetry is not None:
-            for i, message in enumerate(telemetry.get("messages", [])):
-                prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-                if "content" in message:
-                    content = message["content"]
-                    attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
-            invocation_params = {k: v for k, v in telemetry.items() if k not in ("model", "messages")}
-        elif config.hide_input_messages:
-            invocation_params = ChatInput.masked_invocation_parameters(structured, config)
-        if invocation_params:
-            attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
-        return attributes
+        if telemetry is not None or granular:
+            attributes[SpanAttributes.INPUT_VALUE] = structured
+            invocation_params = None
+            if telemetry is not None:
+                for i, message in enumerate(telemetry.get("messages", [])):
+                    prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+                    attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
+                    if "content" in message:
+                        content = message["content"]
+                        attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
+                invocation_params = {k: v for k, v in telemetry.items() if k not in ("model", "messages")}
+            else:
+                # Typed invocation metadata is allowed independently of whether
+                # the messages could be projected.
+                invocation_params = ChatInput.masked_invocation_parameters(structured, config)
+            if invocation_params:
+                attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
+            return attributes
+        # PII redaction alone hides nothing by modality: an input core cannot
+        # project falls back to the established redacted-copy path below.
 
     # Add invocation parameters
     invocation_params = {}

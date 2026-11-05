@@ -525,4 +525,6 @@ class TraceConfig:
 def is_base64_url(url: str) -> bool:
     if not isinstance(url, str):
         return False
-    return url.startswith("data:image/") and "base64" in url
+    # Data URL schemes, media types and the base64 marker are case-insensitive.
+    lowered = url.lower()
+    return lowered.startswith("data:image/") and "base64" in lowered

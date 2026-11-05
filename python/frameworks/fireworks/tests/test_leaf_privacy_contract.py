@@ -113,3 +113,46 @@ def test_message_hiding_does_not_inspect_hidden_messages_or_tools():
     assert json.loads(attrs["gen_ai.request.parameters"]) == {"temperature": 0.7, "tools": "__REDACTED__"}
     attrs = _get_input_attributes("model", MESSAGES, config=config, temperature=Active())
     assert "gen_ai.request.parameters" not in attrs
+
+
+def _assistant_tool_call_message():
+    from openai.types.chat import ChatCompletionMessage
+    return ChatCompletionMessage.construct(
+        role="assistant", content=None,
+        tool_calls=[{"id": "call-1", "type": "function",
+                     "function": {"name": "lookup", "arguments": '{"q": "tool-args"}'}}],
+    )
+
+
+@pytest.mark.parametrize("flag", ["pii_redaction", "hide_input_images", "hide_input_text"])
+def test_sdk_message_objects_in_a_tool_loop_keep_permitted_telemetry(flag):
+    sdk_message = _assistant_tool_call_message()
+    messages = [{"role": "user", "content": TEXT}, sdk_message,
+                {"role": "tool", "tool_call_id": "call-1", "content": "tool-result"}]
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", messages, config=config, temperature=0.7, max_tokens=100)
+    masked = config.mask("input.value", attrs["input.value"])
+    assert masked != "__REDACTED__"
+    assert attrs["gen_ai.input.messages.1.message.role"] == "assistant"
+    assert attrs["gen_ai.input.messages.2.message.role"] == "tool"
+    if flag == "hide_input_text":
+        assert TEXT not in json.dumps(masked) and "tool-args" not in masked
+    else:
+        assert TEXT in masked
+    params = json.loads(attrs["gen_ai.request.parameters"])
+    assert params["temperature"] == 0.7 and params["max_tokens"] == 100
+    assert messages[1] is sdk_message and sdk_message.tool_calls is not None
+
+
+@pytest.mark.parametrize("flag", ["hide_input_images", "hide_input_text", "pii_redaction"])
+@pytest.mark.parametrize("invalid", [{"url": "ftp://example.invalid/i.png"},
+                                     {"url": "https://example.invalid/i.png", "detail": "ultra"}])
+def test_unprojectable_messages_keep_independent_parameters(flag, invalid):
+    messages = [{"role": "user", "content": [{"type": "text", "text": TEXT},
+                                             {"type": "image_url", "image_url": invalid}]}]
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", messages, config=config, temperature=0.7, max_tokens=100)
+    params = json.loads(attrs["gen_ai.request.parameters"])
+    assert params["temperature"] == 0.7 and params["max_tokens"] == 100
+    if flag != "pii_redaction":
+        assert config.mask("input.value", attrs["input.value"]) == "__REDACTED__"
