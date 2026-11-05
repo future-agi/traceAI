@@ -53,6 +53,8 @@ The complete wrapper inventory is:
 | `BaseTool.run`, `BaseTool.arun`, `Tool.run`, `Tool.arun` | Tool name and application arguments bound to the tool callable; no callable/configuration serialization | Plain application result |
 | `Agent.kickoff`, `Agent.kickoff_async` | Application `messages`; no LLM configuration, response schema, files or checkpoints | `LiteAgentOutput.raw`; no cumulative usage counters |
 | `Flow.kickoff_async` (also covers `Flow.kickoff` and `Flow.akickoff`) | Explicit application `inputs`; no Flow state, memory, files or checkpoints | Plain application result, or the same explicit Crew/Task/Agent result projection above |
+| `Flow._execute_method` (1.15+) | Application node arguments; node name/type, no Flow state | Individual node's application result |
+| `Task._execute_task_async` (before 1.15) | Context handoff only: captures the caller's context when the worker target is bound | No additional span or content capture; native worker result/exception behavior is unchanged |
 
 Optional hooks are installed only when the installed CrewAI exposes them;
 standalone Agent hooks target CrewAI 1.15+ and its coroutine-factory contract. The
@@ -79,6 +81,13 @@ Cancellation does not forcibly stop native worker threads: if an Agent's tool is
 already running in a thread, cancelling the Agent ends its span with ERROR,
 while the tool span stays open until that worker actually returns or fails.
 Applications must still arrange for long-running tools to stop or finish.
+For legacy `Task(async_execution=True)` workers, the adapter propagates the caller's
+context, including OTel parentage and suppression, without patching Python threads
+or replacing CrewAI's executor. CrewAI 1.15+ retains its native propagation.
+Cancelling the returned Task future does not stop an already-running worker; its
+span ends when execution actually finishes. Upstream CrewAI 0.41.1 also leaves
+that future unresolved when its worker raises; the adapter records the task error
+but does not change this native failure behavior.
 
 Crew metadata selects only crew/task keys and UUIDs; agent role, goal, backstory,
 key, UUID, verbosity, iteration/rate limits, delegation flag and tool names;

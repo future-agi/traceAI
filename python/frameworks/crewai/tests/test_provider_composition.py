@@ -40,12 +40,20 @@ def provider_composition():
         llm_instrumentor = None
 
     calls = []
-    state = {"fail": False}
+    state = {
+        "fail": False,
+        "block": False,
+        "entered": threading.Event(),
+        "release": threading.Event(),
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append(body)
+            if state["block"]:
+                state["entered"].set()
+                assert state["release"].wait(10), "Test did not release provider request"
             if state["fail"]:
                 self.send_response(500)
                 self.send_header("Content-Length", "0")
@@ -139,7 +147,7 @@ def provider_composition():
     provider.add_span_processor(SimpleSpanProcessor(memory))
     crew_instrumentor = CrewAIInstrumentor()
 
-    def build(models=("gpt-4o-mini",), stream=False):
+    def build(models=("gpt-4o-mini",), stream=False, parallel=False):
         agents, tasks = [], []
         for model in models:
             settings = dict(
@@ -151,7 +159,7 @@ def provider_composition():
             if FLOOR:
                 from langchain_openai import ChatOpenAI
 
-                llm = ChatOpenAI(**settings, stream_usage=True)
+                llm = ChatOpenAI(**settings, streaming=stream, stream_usage=True)
             else:
                 from crewai import LLM
 
@@ -170,6 +178,7 @@ def provider_composition():
                     description="Return positive-input",
                     expected_output="sentence",
                     agent=agent,
+                    async_execution=parallel and not tasks,
                 )
             )
         return Crew(agents=agents, tasks=tasks)
@@ -184,11 +193,12 @@ def provider_composition():
     thread.join()
 
 
+@pytest.mark.parametrize("parallel", [False, True])
 @pytest.mark.parametrize("api", ["kickoff", "kickoff_async"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("hidden", [False, True])
 def test_composed_calls_have_model_usage_parentage_and_privacy(
-    provider_composition, api, stream, hidden
+    provider_composition, api, stream, hidden, parallel
 ):
     build, crew_inst, llm_inst, provider, memory, calls, _ = provider_composition
     if llm_inst is None:
@@ -204,7 +214,7 @@ def test_composed_calls_have_model_usage_parentage_and_privacy(
     crew_inst.instrument(tracer_provider=provider, config=config)
     llm_inst.instrument(tracer_provider=provider, config=config)
     with provider.get_tracer("caller").start_as_current_span("caller") as parent:
-        crew = build(("gpt-4o-mini", "gpt-4o"), stream=stream)
+        crew = build(("gpt-4o-mini", "gpt-4o"), stream=stream, parallel=parallel)
         result = getattr(crew, api)()
         if api.endswith("async"):
             result = asyncio.run(result)

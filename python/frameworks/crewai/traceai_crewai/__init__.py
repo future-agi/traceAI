@@ -24,6 +24,7 @@ from traceai_crewai._standalone import (
     _AsyncFlowKickoffWrapper,
     _AsyncFlowMethodWrapper,
 )
+from traceai_crewai._context import _ContextPropagatingMethod
 from traceai_crewai._privacy import _CrewAITraceConfig
 from traceai_crewai._tracer import _CrewAITracer
 from traceai_crewai.version import __version__
@@ -90,6 +91,15 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         # kickoff_async delegates to kickoff; wrapping both would double-count.
         self._optional_originals = []
         modern_runtime = Version(package_version("crewai")) >= Version("1.15.0")
+        if not modern_runtime:
+            # Legacy execute_async starts a bare Thread. Capture the caller's
+            # context when it binds the target, even when tracing is suppressed.
+            # 1.15+ already propagates context natively and needs no extra hook.
+            task = import_module("crewai").Task
+            original = vars(task).get("_execute_task_async")
+            if original is not None:
+                task._execute_task_async = _ContextPropagatingMethod(original)
+                self._optional_originals.append((task, "_execute_task_async", original))
         for module_name, class_name, method_name, wrapper_type in (
             ("crewai", "Crew", "akickoff", _AsyncKickoffWrapper),
             ("crewai", "Task", "_aexecute_core", _AsyncExecuteCoreWrapper),
