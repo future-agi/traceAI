@@ -228,12 +228,17 @@ class FakeDiscoveryEngine:
                 ),
             )
         )
-        self.port = self._server.add_insecure_port("127.0.0.1:0")
+        # macOS sandbox-exec permits native loopback, but not gRPC's IPv4-
+        # mapped IPv6 address. Use native ::1 there without relaxing the sandbox.
+        import sys
+
+        host = "[::1]" if sys.platform == "darwin" else "127.0.0.1"
+        self.port = self._server.add_insecure_port(host + ":0")
         self.secure_port = self._server.add_secure_port(
-            "127.0.0.1:0", grpc.local_server_credentials(grpc.LocalConnectionType.LOCAL_TCP)
+            host + ":0", grpc.local_server_credentials(grpc.LocalConnectionType.LOCAL_TCP)
         )
-        self.target = "127.0.0.1:{0}".format(self.port)
-        self.secure_target = "127.0.0.1:{0}".format(self.secure_port)
+        self.target = "{0}:{1}".format(host, self.port)
+        self.secure_target = "{0}:{1}".format(host, self.secure_port)
         self._server.start()
 
     # -- recording -----------------------------------------------------------

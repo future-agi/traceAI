@@ -1,4 +1,4 @@
-"""Scope: only v1 search, search_lite and answer_query (sync and async) are traced.
+"""Scope: only the seven semantic v1 operations (sync and async) are traced.
 
 AC-05: ``create_conversation`` and the other admin RPCs emit no span.
 AC-09: instrumenting Discovery Engine does not import or instrument
@@ -31,6 +31,12 @@ WRAPPED = {
     ("discoveryengine_v1", "SearchServiceAsyncClient", "search_lite"),
     ("discoveryengine_v1", "ConversationalSearchServiceClient", "answer_query"),
     ("discoveryengine_v1", "ConversationalSearchServiceAsyncClient", "answer_query"),
+    *{("discoveryengine_v1", cls + suffix, method)
+      for cls, methods in (
+          ("ConversationalSearchService", ("stream_answer_query", "converse_conversation")),
+          ("RankService", ("rank",)),
+          ("GroundedGenerationService", ("check_grounding",)),
+      ) for suffix in ("Client", "AsyncClient") for method in methods},
 }
 
 
@@ -57,7 +63,7 @@ def _client_methods():
     return methods
 
 
-def test_only_the_six_v1_methods_are_wrapped():
+def test_only_the_fourteen_v1_methods_are_wrapped():
     before = _client_methods()
     with instrumented():
         during = _client_methods()
@@ -104,14 +110,13 @@ def test_create_conversation_emits_no_span(fake):
     assert traced.spans() == []
 
 
-def test_stream_answer_query_is_not_traced(fake):
-    # The architecture lists search, search_lite and answer_query only.
+def test_stream_answer_query_is_traced(fake):
     with instrumented() as traced:
         responses = list(answer_client(fake).stream_answer_query(request=answer_request()))
 
     assert [response.answer.state.name for response in responses] == ["STREAMING", "SUCCEEDED"]
     assert fake.methods() == ["StreamAnswerQuery"]
-    assert traced.spans() == []
+    assert traced.names() == ["discoveryengine.stream_answer_query"]
 
 
 def test_instrumenting_does_not_import_or_instrument_google_genai():

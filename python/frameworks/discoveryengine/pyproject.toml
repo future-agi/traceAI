@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "traceAI-discoveryengine"
 version = "0.1.0"
-description = "OpenTelemetry instrumentation for Google Discovery Engine (Vertex AI Search) search and answer calls"
+description = "OpenTelemetry instrumentation for Google Discovery Engine (Vertex AI Search) semantic operations"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 packages = [

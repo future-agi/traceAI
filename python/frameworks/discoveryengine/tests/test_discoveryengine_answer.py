@@ -1,4 +1,4 @@
-"""J3, AC-04: ConversationalSearchServiceClient.answer_query is one RETRIEVER span."""
+"""J3, AC-04: ConversationalSearchServiceClient.answer_query is one CHAIN span."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def fake():
         yield server
 
 
-def test_answer_query_is_one_retriever_span_with_counts_not_the_answer(fake):
+def test_answer_query_is_one_chain_span_with_counts_not_the_answer(fake):
     with instrumented() as traced:
         response = answer_client(fake).answer_query(request=answer_request(QUERY))
 
@@ -39,7 +39,7 @@ def test_answer_query_is_one_retriever_span_with_counts_not_the_answer(fake):
     span = traced.one()
     assert span.name == "discoveryengine.answer_query"
     assert attrs(span) == {
-        "gen_ai.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "CHAIN",
         "discoveryengine.serving_config": SERVING_CONFIG,
         "discoveryengine.result_count": ANSWER_REFERENCES,
         "discoveryengine.answer.length": len(ANSWER_TEXT),

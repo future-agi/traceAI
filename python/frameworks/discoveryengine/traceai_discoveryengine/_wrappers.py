@@ -1,4 +1,4 @@
-"""wrapt wrappers for Discovery Engine search, search_lite and answer_query (sync and async)."""
+"""Semantic wrappers for Discovery Engine v1 client methods (sync and async)."""
 
 from __future__ import annotations
 
@@ -32,10 +32,29 @@ ANSWER_STATE = "discoveryengine.answer.state"
 ERROR_STATUS = "discoveryengine.error.status"
 ERROR_CODE = "discoveryengine.error.code"
 CANCELLED = "discoveryengine.cancelled"
+STREAM_CHUNKS = "discoveryengine.stream.chunk_count"
+GROUNDING_SCORE = "discoveryengine.grounding.support_score"
+RANKING_CONFIG = "discoveryengine.ranking_config"
+GROUNDING_CONFIG = "discoveryengine.grounding_config"
 
 SEARCH = "search"
 SEARCH_LITE = "search_lite"
 ANSWER_QUERY = "answer_query"
+STREAM_ANSWER_QUERY = "stream_answer_query"
+CONVERSE_CONVERSATION = "converse_conversation"
+RANK = "rank"
+CHECK_GROUNDING = "check_grounding"
+ANSWER_OPERATIONS = (ANSWER_QUERY, STREAM_ANSWER_QUERY)
+_KINDS = {
+    ANSWER_QUERY: "CHAIN",
+    STREAM_ANSWER_QUERY: "CHAIN",
+    CONVERSE_CONVERSATION: "CHAIN",
+    RANK: "RERANKER",
+    CHECK_GROUNDING: "EVALUATOR",
+}
+OUTPUT_VALUE = "output.value"
+MAX_CONTENT_BYTES = 16 * 1024
+MAX_ITEMS = 20
 REDACTED = "[redacted]"
 # Recorded instead of server-written text when the credentials the client
 # holds could not be read, so they cannot be removed from it.
@@ -79,14 +98,14 @@ class Options:
     """How a span's text is cleaned, from the ``TraceConfig`` that ``FITracer`` also applies.
 
     The query is recorded unless ``hide_inputs`` (``FI_HIDE_INPUTS``) is set,
-    as in every traceAI instrumentor. Result and answer text are never
-    recorded (counts and lengths only), so ``hide_outputs`` has nothing to
-    hide.
+    as in every traceAI instrumentor. Output content is opt-in and still
+    obeys ``hide_outputs``. Only complete streaming answers are captured.
     """
 
     hide_inputs: bool = False
     hide_outputs: bool = False
     pii_redaction: bool = False
+    capture_content: bool = False
 
 
 class _State:
@@ -164,7 +183,7 @@ def _field(message: Any, name: str) -> Any:
     if message is None:
         return None
     if isinstance(message, Mapping):
-        return message.get(name)
+        return message[name] if name in message else None
     return getattr(message, name, None)
 
 
@@ -173,7 +192,7 @@ def _has(message: Any, name: str) -> bool:
     if message is None:
         return False
     if isinstance(message, Mapping):
-        return message.get(name) is not None
+        return message[name] if name in message else None is not None
     try:
         return name in message
     except TypeError:
@@ -265,14 +284,22 @@ def _credential_values(instance: Any, metadata: Optional[Sequence[Any]]) -> List
 
 
 def _request(args: Tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
-    return args[0] if args else kwargs.get("request")
+    return (
+        args[0]
+        if args
+        else (kwargs.get("request") if kwargs.get("request") is not None else kwargs)
+    )
 
 
 def _query_text(operation: str, request: Any) -> Optional[str]:
     """``SearchRequest.query`` or ``AnswerQueryRequest.query.text``; None when empty."""
     query = _field(request, "query")
-    if operation == ANSWER_QUERY:
+    if operation in ANSWER_OPERATIONS:
         query = _field(query, "text")
+    elif operation == CONVERSE_CONVERSATION:
+        query = _field(query, "input")
+    elif operation == CHECK_GROUNDING:
+        query = _field(request, "answer_candidate")
     return query if isinstance(query, str) and query else None
 
 
@@ -286,11 +313,11 @@ def _request_attributes(
     operation: str, request: Any, secrets: Optional[Sequence[str]], options: Options
 ) -> Dict[str, Any]:
     pii = options.pii_redaction
-    attributes: Dict[str, Any] = {SPAN_KIND: RETRIEVER}
+    attributes: Dict[str, Any] = {SPAN_KIND: _KINDS.get(operation, RETRIEVER)}
     serving_config = _resource_name(_field(request, "serving_config"), secrets or (), pii)
     if serving_config is not None:
         attributes[SERVING_CONFIG] = serving_config
-    if operation == ANSWER_QUERY:
+    if operation in ANSWER_OPERATIONS:
         # "sessions/-" asks the server to start a session; the response names it.
         session = _resource_name(_field(request, "session"), secrets or (), pii)
         if session is not None:
@@ -303,9 +330,14 @@ def _request_attributes(
         attributes[INPUT_VALUE] = REDACTED_VALUE
     elif query and secrets is not None:
         text = _clean(query, secrets, pii=pii)
-        attributes[RETRIEVAL_QUERY] = text
+        if operation != CHECK_GROUNDING:
+            attributes["gen_ai.reranker.query" if operation == RANK else RETRIEVAL_QUERY] = text
         # The backend input panel reads input.value; keep both keys equal.
         attributes[INPUT_VALUE] = text
+    for field, key in (("ranking_config", RANKING_CONFIG), ("grounding_config", GROUNDING_CONFIG)):
+        value = _resource_name(_field(request, field), secrets or (), pii)
+        if value is not None:
+            attributes[key] = value
     return attributes
 
 
@@ -350,7 +382,7 @@ def _c_hex_escaped(text: str) -> str:
 
 def _hidden_inputs(
     operation: str, request: Any, secrets: Optional[Sequence[str]], options: Options
-) -> Tuple[str, ...]:
+) -> Hidden:
     """The query text to remove from server-written text, as it reads after scrubbing.
 
     Besides the verbatim text, the copies the client libraries escape: the
@@ -360,6 +392,11 @@ def _hidden_inputs(
     so a longer copy wins where two match at the same place. Empty when the
     query is recorded (``hide_inputs`` off, the default) or empty.
     """
+    # New calls accept records, facts and history; streaming errors can echo
+    # generated text. Fail closed rather than trying
+    # to reverse every possible server-side formatting of an entire request.
+    if operation in (RANK, CHECK_GROUNDING, CONVERSE_CONVERSATION, STREAM_ANSWER_QUERY):
+        return None
     if not _hides_query(options):
         return ()
     query = _query_text(operation, request)
@@ -385,11 +422,20 @@ def _response_attributes(
     error status description.
     """
     attributes: Dict[str, Any] = {}
-    if operation != ANSWER_QUERY:
-        # The pager reads through to the first SearchResponse.
-        results = _count(_field(result, "results"))
+    if operation not in ANSWER_OPERATIONS:
+        # The pager reads through to the first SearchResponse; never iterate it.
+        result_field = {
+            RANK: "records",
+            CONVERSE_CONVERSATION: "search_results",
+            CHECK_GROUNDING: "cited_facts",
+        }.get(operation, "results")
+        results = _count(_field(result, result_field))
         if results is not None:
             attributes[RESULT_COUNT] = results
+        if operation == CHECK_GROUNDING and _has(result, "support_score"):
+            score = _field(result, "support_score")
+            if isinstance(score, (int, float)):
+                attributes[GROUNDING_SCORE] = score
         return attributes, None
 
     failure = None
@@ -413,6 +459,97 @@ def _response_attributes(
         if session is not None:
             attributes[SESSION] = session
     return attributes, failure
+
+
+def _content_attributes(
+    operation: str, result: Any, secrets: Sequence[str], options: Options
+) -> Dict[str, Any]:
+    """A bounded, explicit output projection, never a dump of a vendor response.
+
+    Hiding inputs also disables content capture: an answer or retrieved document
+    can repeat the query, records, history or grounding facts. Streaming callers
+    invoke this only for the final, complete answer, never for text fragments
+    (which might split a credential across chunks).
+    """
+    if not options.capture_content or options.hide_outputs or options.hide_inputs:
+        return {}
+
+    def text(value: Any) -> Optional[str]:
+        if isinstance(value, str) and value:
+            return _clean(value, secrets, pii=options.pii_redaction, server=True)
+        return None
+
+    def fields(value: Any, names: Sequence[str]) -> Dict[str, str]:
+        return {
+            name: cleaned for name in names if (cleaned := text(_field(value, name))) is not None
+        }
+
+    def take(value: Any) -> Sequence[Any]:
+        # Only repeated fields on the response, never a pager or stream.
+        count = _count(value)
+        return [value[index] for index in range(min(count, MAX_ITEMS))] if count is not None else ()
+
+    output: Dict[str, Any] = {}
+    if operation in ANSWER_OPERATIONS:
+        answer = _field(result, "answer")
+        output.update(fields(answer, ("answer_text",)))
+        output["references"] = [
+            fields(_field(ref, "chunk_info"), ("content",))
+            for ref in take(_field(answer, "references"))
+        ]
+        output["citations"] = [
+            {
+                "start_index": _field(citation, "start_index"),
+                "end_index": _field(citation, "end_index"),
+                "sources": [
+                    fields(source, ("reference_id",))
+                    for source in take(_field(citation, "sources"))
+                ],
+            }
+            for citation in take(_field(answer, "citations"))
+        ]
+    elif operation == RANK:
+        output["records"] = [
+            dict(fields(record, ("id", "title", "content")), score=_field(record, "score"))
+            for record in take(_field(result, "records"))
+        ]
+    elif operation == CHECK_GROUNDING:
+        output["cited_facts"] = [
+            fields(fact, ("chunk_text",)) for fact in take(_field(result, "cited_facts"))
+        ]
+        output["claims"] = [
+            fields(claim, ("claim_text",)) for claim in take(_field(result, "claims"))
+        ]
+    else:
+        if operation == CONVERSE_CONVERSATION:
+            summary = _field(_field(result, "reply"), "summary")
+            results = _field(result, "search_results")
+        else:
+            summary = _field(result, "summary")
+            results = _field(result, "results")
+        output.update(fields(summary, ("summary_text",)))
+        output["results"] = []
+        for item in take(results):
+            document = _field(item, "document")
+            derived = _field(document, "derived_struct_data")
+            record = fields(document, ("id",))
+            record.update(fields(derived, ("title",)))
+            record["snippets"] = [
+                fields(snippet, ("snippet",)) for snippet in take(_field(derived, "snippets"))
+            ]
+            record.update(fields(_field(item, "chunk"), ("content",)))
+            output["results"].append(record)
+    # Keep valid JSON even at the cap; remove complete collection items rather
+    # than cutting a serialized string in the middle of a JSON escape.
+    while True:
+        encoded = json.dumps(output, ensure_ascii=False)
+        if len(encoded.encode("utf-8", "replace")) <= MAX_CONTENT_BYTES:
+            return {OUTPUT_VALUE: encoded, "output.mime_type": "application/json"}
+        collections = [value for value in output.values() if isinstance(value, list) and value]
+        if not collections:
+            return {}
+        max(collections, key=len).pop()
+        output["truncated"] = True
 
 
 def _describe(error: BaseException) -> str:
@@ -473,7 +610,10 @@ def _error_attributes(error: BaseException) -> Dict[str, Any]:
     A REST-transport error has no gRPC status; its JSON body's status is used.
     """
     source: Any = error
-    if getattr(error, "grpc_status_code", None) is None and getattr(error, "cause", None) is not None:
+    if (
+        getattr(error, "grpc_status_code", None) is None
+        and getattr(error, "cause", None) is not None
+    ):
         source = error.cause  # type: ignore[attr-defined]
     attributes: Dict[str, Any] = {}
     status = getattr(getattr(source, "grpc_status_code", None), "name", None)
@@ -572,13 +712,21 @@ class _Call:
         self.hidden = hidden
         self.instance = instance
         self.metadata = metadata
+        self.ended = False
 
     def ok(self, result: Any) -> None:
+        if self.ended:
+            return
         failure = None
         try:
+            secrets = self._secrets_after_call()
             attributes, failure = _response_attributes(
-                self.operation, result, self.secrets or [], self.options
+                self.operation, result, secrets or [], self.options
             )
+            if secrets is not None:
+                attributes.update(
+                    _content_attributes(self.operation, result, secrets, self.options)
+                )
             for key, value in attributes.items():
                 self.span.set_attribute(key, value)
         except Exception:
@@ -611,6 +759,8 @@ class _Call:
         return sorted(dict.fromkeys(self.secrets + current), key=len, reverse=True)
 
     def error(self, error: BaseException) -> None:
+        if self.ended:
+            return
         # No result count: nothing was returned, so the count is unknown.
         secrets = self._secrets_after_call()
         try:
@@ -644,6 +794,8 @@ class _Call:
         self._end()
 
     def cancelled(self) -> None:
+        if self.ended:
+            return
         # Cancellation is not an exception: no event and no result count.
         try:
             self.span.set_attribute(CANCELLED, True)
@@ -653,10 +805,171 @@ class _Call:
         self._end()
 
     def _end(self) -> None:
+        if self.ended:
+            return
+        self.ended = True
         try:
             self.span.end()
         except Exception:
             logger.debug("Could not end the Discovery Engine span", exc_info=True)
+
+
+class _StreamBase:
+    """Lazy stream proxy: keep no chunks and attach context only during reads.
+
+    Google streams text deltas followed by a full SUCCEEDED answer. Only that
+    terminal snapshot is captured, so its text and references are not doubled.
+    See https://cloud.google.com/generative-ai-app-builder/docs/stream-answer.
+    """
+
+    def __init__(self, stream: Any, call: _Call) -> None:
+        self._stream = stream
+        self._call = call
+        self._chunks = 0
+        self._terminal = False
+        self._failure: Optional[str] = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def _observe(self, result: Any) -> None:
+        if self._call.ended:
+            return
+        self._chunks += 1
+        try:
+            self._call.span.set_attribute(STREAM_CHUNKS, self._chunks)
+            answer = _field(result, "answer")
+            state = getattr(_field(answer, "state"), "name", None)
+            secrets = self._call._secrets_after_call()
+            if _has(result, "session"):
+                session = _resource_name(
+                    _field(_field(result, "session"), "name"),
+                    secrets or [],
+                    self._call.options.pii_redaction,
+                )
+                if session is not None:
+                    self._call.span.set_attribute(SESSION, session)
+            if state not in ("SUCCEEDED", "FAILED"):
+                return
+            self._terminal = True
+            attributes, failure = _response_attributes(
+                STREAM_ANSWER_QUERY, result, secrets or [], self._call.options
+            )
+            # A FAILED snapshot must not be undone by later status-only chunks.
+            self._failure = self._failure or failure
+            if secrets is not None:
+                attributes.update(
+                    _content_attributes(STREAM_ANSWER_QUERY, result, secrets, self._call.options)
+                )
+            for key, value in attributes.items():
+                self._call.span.set_attribute(key, value)
+        except Exception:
+            logger.debug("Could not read the Discovery Engine stream chunk", exc_info=True)
+
+    def _finish(self) -> None:
+        if self._call.ended:
+            return
+        try:
+            failure = self._failure or (None if self._terminal else "incomplete answer stream")
+            self._call.span.set_status(
+                Status(StatusCode.ERROR, failure) if failure else Status(StatusCode.OK)
+            )
+        except Exception:
+            logger.debug("Could not set the stream status", exc_info=True)
+        self._call._end()
+
+    def cancel(self) -> Any:
+        try:
+            return self._stream.cancel()
+        finally:
+            self._call.cancelled()
+
+    def __del__(self) -> None:
+        # A dropped, partly consumed stream must not leave a recording span.
+        # Do not invoke transport methods during interpreter shutdown.
+        call = self.__dict__.get("_call")
+        if call is not None and not call.ended:
+            call.cancelled()
+
+
+class _Stream(_StreamBase):
+    def __init__(self, stream: Any, call: _Call) -> None:
+        super().__init__(stream, call)
+        self._iterator = None
+
+    def __iter__(self) -> "_Stream":
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            with _current(self._call.span):
+                if self._iterator is None:
+                    self._iterator = iter(self._stream)
+                result = next(self._iterator)
+        except StopIteration:
+            self._finish()
+            raise
+        except BaseException as error:
+            self._call.error(error)
+            raise
+        self._observe(result)
+        return result
+
+    def close(self) -> Any:
+        try:
+            close = getattr(self._stream, "close", None) or getattr(self._stream, "cancel", None)
+            return close() if close is not None else None
+        finally:
+            self._call.cancelled()
+
+    def __enter__(self) -> "_Stream":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+
+class _AsyncStream(_StreamBase):
+    def __init__(self, stream: Any, call: _Call) -> None:
+        super().__init__(stream, call)
+        self._iterator = None
+
+    def __aiter__(self) -> "_AsyncStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            with _current(self._call.span):
+                if self._iterator is None:
+                    self._iterator = self._stream.__aiter__()
+                result = await self._iterator.__anext__()
+        except StopAsyncIteration:
+            self._finish()
+            raise
+        except asyncio.CancelledError:
+            self._call.cancelled()
+            raise
+        except BaseException as error:
+            self._call.error(error)
+            raise
+        self._observe(result)
+        return result
+
+    async def aclose(self) -> Any:
+        try:
+            close = getattr(self._stream, "aclose", None)
+            if close is not None:
+                return await close()
+            cancel = getattr(self._stream, "cancel", None)
+            return cancel() if cancel is not None else None
+        finally:
+            self._call.cancelled()
+
+    async def __aenter__(self) -> "_AsyncStream":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.aclose()
 
 
 class _BaseWrapper:
@@ -698,7 +1011,7 @@ class _BaseWrapper:
             attributes = _request_attributes(self._operation, request, secrets, self._options)
         except Exception:  # an attribute must never break the user's call
             logger.debug("Could not read the Discovery Engine request", exc_info=True)
-            attributes = {SPAN_KIND: RETRIEVER}
+            attributes = {SPAN_KIND: _KINDS.get(self._operation, RETRIEVER)}
         hidden: Hidden = ()
         try:
             hidden = _hidden_inputs(self._operation, request, secrets, self._options)
@@ -734,6 +1047,8 @@ class OperationWrapper(_BaseWrapper):
         except BaseException as error:
             call.error(error)
             raise
+        if self._operation == STREAM_ANSWER_QUERY:
+            return _Stream(result, call)
         call.ok(result)
         return result
 
@@ -760,5 +1075,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         except BaseException as error:
             call.error(error)
             raise
+        if self._operation == STREAM_ANSWER_QUERY:
+            return _AsyncStream(result, call)
         call.ok(result)
         return result
