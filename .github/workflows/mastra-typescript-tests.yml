@@ -1,0 +1,106 @@
+name: Mastra TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_mastra/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/packages/traceai_vercel/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/mastra-typescript-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_mastra/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/mastra-typescript-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Mastra ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: floor, core: '1.16.0', observability: '1.0.0', exporter: '1.0.0' }
+          - { version: latest, core: latest, observability: latest, exporter: latest }
+          - { version: latest-runtime-floor-converter, core: latest, observability: latest, exporter: '1.0.0' }
+          - { version: floor-runtime-latest-converter, core: latest, observability: '1.0.0', exporter: latest }
+    defaults:
+      run:
+        shell: bash
+        working-directory: typescript
+    env:
+      CORE_VERSION: ${{ matrix.core }}
+      OBSERVABILITY_VERSION: ${{ matrix.observability }}
+      EXPORTER_VERSION: ${{ matrix.exporter }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install frozen workspace dependencies
+        run: |
+          corepack enable
+          pnpm --filter @traceai/mastra... install --frozen-lockfile --ignore-scripts
+          git diff --exit-code -- pnpm-lock.yaml
+      - name: Install matrix SDKs, build and run the official package suite
+        run: |
+          # This is a disposable matrix install, not a lockfile update to commit.
+          pnpm --filter @traceai/mastra add --save-dev --save-exact --ignore-scripts \
+            "@mastra/core@$CORE_VERSION" "@mastra/observability@$OBSERVABILITY_VERSION" \
+            "@mastra/otel-exporter@$EXPORTER_VERSION"
+          pnpm --filter @traceai/mastra... run build
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+            "$(command -v node)" "$PWD/packages/traceai_mastra/node_modules/vitest/vitest.mjs" \
+            run --root "$PWD/packages/traceai_mastra"
+      - name: Pack and install in a clean consumer
+        run: |
+          mkdir -p "$RUNNER_TEMP/mastra-package" "$RUNNER_TEMP/mastra-consumer"
+          for package in fi-semantic-conventions fi-core traceai_vercel traceai_mastra; do
+            pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/mastra-package"
+          done
+          npm install --prefix "$RUNNER_TEMP/mastra-consumer" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP"/mastra-package/*.tgz \
+            "@mastra/core@$CORE_VERSION" "@mastra/observability@$OBSERVABILITY_VERSION" \
+            "@mastra/otel-exporter@$EXPORTER_VERSION" \
+            @opentelemetry/api@1.9.0 @opentelemetry/exporter-trace-otlp-proto@0.201.1 \
+            @opentelemetry/otlp-transformer@0.201.1 @ai-sdk/openai@2.0.0 \
+            zod@3.25.76 typescript@5.9.3 @types/node@22.15.29
+      - name: CJS and ESM native lifecycle, HTTP/SSE and README contracts
+        run: |
+          export MASTRA_TEST_DEPS="$RUNNER_TEMP/mastra-consumer"
+          for entrypoint in src esm; do
+            export MASTRA_TEST_PACKAGE="$MASTRA_TEST_DEPS/node_modules/@traceai/mastra/dist/$entrypoint/index.js"
+            sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+              env MASTRA_TEST_DEPS="$MASTRA_TEST_DEPS" MASTRA_TEST_PACKAGE="$MASTRA_TEST_PACKAGE" \
+              "$(command -v node)" --test \
+              "$PWD/packages/traceai_mastra/contract/recall.test.cjs" \
+              "$PWD/packages/traceai_mastra/contract/http.test.cjs" \
+              "$PWD/packages/traceai_mastra/contract/tool-errors.test.cjs" \
+              "$PWD/packages/traceai_mastra/contract/continued-history.test.cjs" \
+              "$PWD/packages/traceai_mastra/contract/terminal-history.test.cjs"
+          done
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+            "$(command -v node)" "$PWD/packages/traceai_mastra/contract/readme.test.mjs" "$MASTRA_TEST_DEPS"
+      - name: Verify the packed privacy dependency floor
+        run: |
+          node - "$RUNNER_TEMP/mastra-consumer" <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.argv[2];
+          const manifest = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/@traceai/mastra/package.json')));
+          assert.equal(manifest.dependencies['@traceai/fi-core'], '^1.1.1');
+          NODE

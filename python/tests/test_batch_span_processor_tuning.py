@@ -13,7 +13,9 @@ import warnings
 from unittest.mock import patch
 
 import pytest
-from opentelemetry.sdk.trace import SpanLimits
+import requests
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider as SDKTracerProvider
+OTelTracerProvider = SDKTracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
@@ -123,21 +125,87 @@ class TestBatchSpanProcessorTuning:
         assert _queue_batch(p)[0] == 9000
 
 
+@pytest.fixture
+def assert_http_export_timeout(monkeypatch):
+    """Observe an actual OTLP export at requests' public transport boundary.
+
+    Recent OTel releases delegate HTTP exporting to a shared client and no
+    longer store `_timeout` on the exporter. Verify behavior, not its layout.
+    """
+    timeouts = []
+
+    def send(session, request, **kwargs):
+        assert request.method == "POST"
+        assert request.body  # An encoded OTLP payload, not just construction.
+        timeouts.append(kwargs["timeout"])
+        response = requests.Response()
+        response.status_code = 200
+        response.request = request
+        return response
+
+    # Older OTel calls Session.post(), newer releases call Session.request().
+    # Both reach this public method with the effective per-attempt timeout.
+    monkeypatch.setattr(requests.Session, "send", send)
+
+    def check(processor, expected):
+        provider = SDKTracerProvider()
+        provider.add_span_processor(processor)
+        try:
+            with provider.get_tracer(__name__).start_as_current_span("timeout-contract"):
+                pass
+            assert provider.force_flush()
+            assert len(timeouts) == 1
+            # OTel subtracts elapsed serialization time from the export budget.
+            assert 0 < timeouts[0] <= expected
+            assert timeouts[0] == pytest.approx(expected, abs=1)
+        finally:
+            provider.shutdown()
+
+    return check
+
+
 class TestExporterTuning:
     """timeout must reach the default OTLP exporter (both processors)."""
 
-    def test_batch_forwards_timeout(self):
-        p = BatchSpanProcessor(timeout=42)
-        assert _exporter_of(p)._timeout == 42
+    def test_batch_forwards_timeout(self, assert_http_export_timeout):
+        assert_http_export_timeout(BatchSpanProcessor(timeout=42), 42)
 
-    def test_simple_forwards_timeout(self):
-        p = SimpleSpanProcessor(timeout=7)
-        assert p.span_exporter._timeout == 7
+    def test_simple_forwards_timeout(self, assert_http_export_timeout):
+        assert_http_export_timeout(SimpleSpanProcessor(timeout=7), 7)
 
-    def test_unset_timeout_uses_upstream_default(self, clean_exporter_env):
+    def test_unset_timeout_uses_upstream_default(self, clean_exporter_env, assert_http_export_timeout):
         """Backward-compat: no timeout -> upstream default (10s)."""
-        p = BatchSpanProcessor(span_exporter=None)
-        assert _exporter_of(p)._timeout == 10
+        assert_http_export_timeout(BatchSpanProcessor(span_exporter=None), 10)
+
+    @pytest.mark.parametrize("traces_timeout", [None, "19"])
+    def test_unset_timeout_respects_exporter_env(
+        self, clean_exporter_env, monkeypatch, assert_http_export_timeout, traces_timeout
+    ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "17")
+        if traces_timeout is not None:
+            monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", traces_timeout)
+        assert_http_export_timeout(SimpleSpanProcessor(), 19 if traces_timeout else 17)
+
+    @pytest.mark.parametrize("processor_type", [BatchSpanProcessor, SimpleSpanProcessor])
+    @pytest.mark.parametrize("timeout", [7, 42, None])
+    def test_timeout_reaches_http_request(self, processor_type, timeout, clean_exporter_env):
+        """Observe transport behavior, not private exporter/client storage layout."""
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        # Patch the actual transport so this test cannot contact a collector.
+        with patch.object(requests.Session, "send", return_value=response) as send:
+            provider = OTelTracerProvider()
+            provider.add_span_processor(processor_type(timeout=timeout))
+            try:
+                provider.get_tracer("timeout-contract").start_span("synthetic").end()
+                assert provider.force_flush()
+            finally:
+                provider.shutdown()
+        send.assert_called_once()
+        expected = timeout if timeout is not None else 10
+        # OTel subtracts encoding/elapsed time from the deadline before sending.
+        assert send.call_args.kwargs["timeout"] == pytest.approx(expected, abs=1)
 
     def test_prebuilt_span_exporter_is_used_as_is(self):
         """A caller-supplied exporter is used verbatim; timeout ignored."""

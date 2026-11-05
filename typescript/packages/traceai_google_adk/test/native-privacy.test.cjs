@@ -4,14 +4,14 @@ const { test } = require('node:test');
 const { GoogleADKSpanExporter } = require('../dist/src');
 const { BasicTracerProvider, SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 
-const flags = ['FI_HIDE_INPUTS', 'FI_HIDE_OUTPUTS', 'FI_HIDE_INPUT_TEXT', 'FI_HIDE_OUTPUT_TEXT', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_INPUT_IMAGES', 'FI_PII_REDACTION'];
-async function exported(flag, operation, input, output) {
+const flags = ['FI_HIDE_INPUTS', 'FI_HIDE_OUTPUTS', 'FI_HIDE_INPUT_TEXT', 'FI_HIDE_OUTPUT_TEXT', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_INPUT_IMAGES', 'FI_PII_REDACTION', 'FI_HIDE_ERROR_DETAILS'];
+async function exported(flag, operation, input, output, flagValue = 'true') {
   const saved = Object.fromEntries(flags.map(key => [key, process.env[key]]));
   const spans = [];
   let provider;
   try {
     flags.forEach(key => delete process.env[key]);
-    if (flag) process.env[flag] = 'true';
+    if (flag) process.env[flag] = flagValue;
     const exporter = new GoogleADKSpanExporter({export(batch, done) { spans.push(...batch); done({code: 0}); }, shutdown: async () => {}}, {captureContent: true});
     provider = new BasicTracerProvider({spanProcessors: [new SimpleSpanProcessor(exporter)]});
     const tool = operation === 'execute_tool';
@@ -33,7 +33,7 @@ async function exported(flag, operation, input, output) {
 }
 
 const input = {contents: [{role: 'user', parts: [{text: 'PRIVATE_INPUT'}, {functionResponse: {response: {nested: ['PRIVATE_INPUT']}}}]}], config: {systemInstruction: 'PRIVATE_INPUT'}};
-const output = {content: {role: 'model', parts: [{text: 'PRIVATE_OUTPUT'}, {functionCall: {args: {nested: ['PRIVATE_OUTPUT']}}}]}, usageMetadata: {promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18}};
+const output = {content: {role: 'model', parts: [{text: 'PRIVATE_OUTPUT'}, {functionCall: {args: {nested: ['PRIVATE_OUTPUT']}}}]}, usageMetadata: {promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18, promptTokensDetails: [{modality: 'TEXT', tokenCount: 5}, {modality: 'AUDIO', tokenCount: 6}], candidatesTokensDetails: [{modality: 'AUDIO', tokenCount: 3}, {modality: 'IMAGE', tokenCount: 4}]}};
 for (const flag of flags.slice(0, 6)) {
   test(`${flag} masks native model and tool payloads, including nested strings`, async () => {
     const side = flag.includes('OUTPUT') ? 'output' : 'input';
@@ -47,7 +47,13 @@ for (const flag of flags.slice(0, 6)) {
         assert.equal(a[`${side}.value`], '__REDACTED__');
         assert.equal(a[`${side}.mime_type`], undefined);
       }
-      if (operation !== 'execute_tool') assert.equal(a['gen_ai.usage.total_tokens'], 18);
+      if (operation !== 'execute_tool') {
+        assert.equal(a['gen_ai.usage.total_tokens'], 18);
+        assert.equal(a['gen_ai.usage.input_tokens.audio'], 6, 'usage is extracted before content redaction');
+        assert.equal(a['gen_ai.usage.output_tokens.audio'], 3);
+        assert.equal(a['gen_ai.usage.output_tokens.image'], 4);
+        assert.equal(a['gen_ai.usage.output_tokens'], 7);
+      }
     }
   });
 }
@@ -139,5 +145,50 @@ test('malformed or excessively nested content fails closed without losing the sp
     const a = await exported(undefined, 'execute_tool', value, value);
     assert(!JSON.stringify(a).includes('synthetic-'));
     assert.equal(a['fi.span.kind'], 'TOOL');
+  }
+});
+
+
+test('native error envelopes remain private in tool output and later model history', async () => {
+  const failure = {error: "Error in tool 'echo': PRIVATE_TOOL_ERROR"};
+  const structured = {error: {type: 'ToolError', code: 400, status: 'INVALID_ARGUMENT', message: 'PRIVATE_ERROR_MESSAGE', stack: 'PRIVATE_STACK', details: ['PRIVATE_DETAIL'], cause: {message: 'PRIVATE_CAUSE'}}};
+  const payload = {
+    contents: [{parts: [{functionResponse: {name: 'echo', response: failure}}, {functionResponse: {response: structured}}]}],
+    encoded: JSON.stringify({nested: [failure, structured]}),
+    provider: {errorCode: '400', errorMessage: 'PRIVATE_PROVIDER_ERROR'},
+    mcp: {isError: true, content: [{type: 'text', text: 'PRIVATE_MCP_ERROR'}]},
+    result: {message: 'ordinary visible message', count: 42},
+  };
+  for (const policy of [undefined, 'true', 'false']) {
+    const flag = policy === undefined ? undefined : 'FI_HIDE_ERROR_DETAILS';
+    for (const operation of ['generate_content', 'execute_tool']) {
+      const a = await exported(flag, operation, payload, payload, policy);
+      for (const side of ['input', 'output']) {
+        const value = a[`${side}.value`];
+        assert(!value.includes('PRIVATE_'), 'error details must not survive content opt-in');
+        const safe = JSON.parse(value);
+        assert.equal(safe.contents[0].parts[0].functionResponse.response.error, '__REDACTED__');
+        const error = safe.contents[0].parts[1].functionResponse.response.error;
+        assert.equal(error.type, 'ToolError');
+        assert.equal(error.code, 400);
+        assert.equal(error.status, 'INVALID_ARGUMENT');
+        assert.equal(safe.provider.errorCode, '400');
+        assert.equal(safe.mcp.isError, true);
+        assert.equal(safe.result.message, 'ordinary visible message');
+        assert.equal(safe.result.count, 42);
+      }
+    }
+  }
+});
+
+
+test('error summaries still obey PII and text privacy controls', async () => {
+  const payload = {error: {type: 'ToolError', code: 4111111111111111, message: 'PRIVATE_ERROR'}};
+  for (const operation of ['generate_content', 'execute_tool']) {
+    const pii = await exported('FI_PII_REDACTION', operation, payload, payload);
+    assert.equal(JSON.parse(pii['input.value']).error.code, '<CREDIT_CARD>');
+    assert(!JSON.stringify(pii).includes('4111111111111111'));
+    const text = await exported('FI_HIDE_OUTPUT_TEXT', operation, payload, payload);
+    assert.equal(JSON.parse(text['output.value']).error.type, '__REDACTED__');
   }
 });

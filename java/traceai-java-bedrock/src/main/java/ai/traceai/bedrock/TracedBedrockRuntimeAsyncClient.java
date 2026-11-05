@@ -10,6 +10,8 @@ import software.amazon.awssdk.core.SdkResponse;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeAsyncClient;
 import software.amazon.awssdk.services.bedrockruntime.model.ConverseRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.ConverseResponse;
+import software.amazon.awssdk.services.bedrockruntime.model.ConverseStreamRequest;
+import software.amazon.awssdk.services.bedrockruntime.model.ConverseStreamResponseHandler;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest;
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelResponse;
 
@@ -22,7 +24,8 @@ import java.util.function.Supplier;
  * Traces non-streaming async Converse and InvokeModel through completion,
  * failure or cancellation. The returned future completes after tracing finishes
  * and forwards cancellation and caller completion (including successful and exceptional
- * timeouts) to the SDK future. Streaming operations are not supported.
+ * timeouts) to the SDK future. ConverseStream is supported through an event-stream adapter;
+ * InvokeModelWithResponseStream is not supported.
  */
 public final class TracedBedrockRuntimeAsyncClient {
     private final BedrockRuntimeAsyncClient client;
@@ -56,6 +59,20 @@ public final class TracedBedrockRuntimeAsyncClient {
      */
     public CompletableFuture<InvokeModelResponse> invokeModel(InvokeModelRequest request) {
         return execute(request, () -> client.invokeModel(request));
+    }
+
+    /**
+     * Traces a Converse event stream through completion, failure or cancellation.
+     * Original response/events and downstream demand are forwarded unchanged. Headers
+     * alone never finish the span. Closing the subscription ends the span and cancels
+     * the SDK future if still pending; AWS may complete it normally during cancellation.
+     *
+     * @param request the streaming request
+     * @param handler the application's event-stream response handler
+     * @return a cancellation-forwarding future completed after the span ends
+     */
+    public CompletableFuture<Void> converseStream(ConverseStreamRequest request, ConverseStreamResponseHandler handler) {
+        return new BedrockConverseStream(tracing, request, handler).execute(client);
     }
 
     /** @return the original SDK client; calls through it are not traced */

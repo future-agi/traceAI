@@ -1224,21 +1224,19 @@ async def test_installed_complete_guard_current_messages_and_privacy(
     assert await invoke() == baseline == (answer, answer, True)
     assert observed == ([messages, messages] if messages_api else [question, question])
     spans = exporter.get_finished_spans()
-    assert len(spans) == (1 if asynchronous else 2)
+    assert len(spans) == 2
     prompt, = [span for span in spans if span.attributes["gen_ai.span.kind"] == "LLM"]
-    if asynchronous:
-        assert prompt.parent is None
-    else:
-        runner, = [span for span in spans if span.name == "Runner.step"]
-        assert runner.parent is None
-        assert prompt.parent.span_id == runner.context.span_id
-        if not hide_inputs:
-            inputs = json.loads(runner.attributes["input.value"])
-            if messages_api:
-                assert inputs["messages"] == messages
-            else:
-                assert inputs["prompt"] == question
-            assert "call_log" not in inputs and "api" not in inputs
+    runner_name = "AsyncRunner.async_step" if asynchronous else "Runner.step"
+    runner, = [span for span in spans if span.name == runner_name]
+    assert runner.parent is None
+    assert prompt.parent.span_id == runner.context.span_id
+    if not hide_inputs:
+        inputs = json.loads(runner.attributes["input.value"])
+        if messages_api:
+            assert inputs["messages"] == messages
+        else:
+            assert inputs["prompt"] == question
+        assert "call_log" not in inputs and "api" not in inputs
 
     for span in spans:
         assert span.status.status_code == StatusCode.OK

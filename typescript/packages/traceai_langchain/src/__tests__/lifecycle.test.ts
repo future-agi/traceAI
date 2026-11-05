@@ -11,6 +11,9 @@ async function runWithPendingRoot(drainBeforeShutdown: boolean) {
   let releaseRoot!: () => void;
   const rootGate = new Promise<void>((resolve) => { releaseRoot = resolve; });
   class PendingRootTracer extends LangChainTracer {
+    // The floor awaits handlers by default. This fixture intentionally tests
+    // background callbacks, so opt in explicitly rather than relying on defaults.
+    awaitHandlers = false;
     protected async persistRun(run: Run): Promise<void> {
       await rootGate;
       await super.persistRun(run);

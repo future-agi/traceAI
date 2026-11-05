@@ -12,6 +12,7 @@ import {
   } from "@opentelemetry/api";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes } from "./maskingRules";
+  import { redactPiiInString } from "./piiRedaction";
   import {
     ERROR_TYPE,
     ERROR_TYPE_OTHER,
@@ -20,7 +21,6 @@ import {
     getErrorType,
     getExceptionEventAttributes,
     sanitizeStatus,
-    stripErrorDetailAttributes,
   } from "./errorDetails";
   
   /**
@@ -140,12 +140,12 @@ import {
           this.recordedErrorType = exceptionType;
         }
       }
-      if (!this.config.hideErrorDetails) {
-        this.span.addEvent(name, attributesOrStartTime, startTime);
-        return this;
-      }
-      // A denylist, for "exception" and other events alike (as Python's strip_error_details)
-      this.span.addEvent(name, stripErrorDetailAttributes(attributes), time);
+      // Events are another export path for the same content: apply error-detail hiding,
+      // content masking and PII redaction, just as for span and link attributes.
+      this.span.addEvent(name, attributes == null ? undefined : maskAttributes({
+        config: this.config,
+        attributes,
+      }), time);
       return this;
     }
   
@@ -153,8 +153,12 @@ import {
       if (this.isEnded) return this;
       // The SDK keeps the last status set, so the last one decides whether error.type is added
       this.hasErrorStatus = status.code === SpanStatusCode.ERROR;
+      const sanitized = sanitizeStatus(status, this.config.hideErrorDetails, this.lastException);
+      // Hiding takes precedence; redact only retained text, without mutating caller-owned status.
       this.span.setStatus(
-        sanitizeStatus(status, this.config.hideErrorDetails, this.lastException),
+        this.config.piiRedaction && typeof sanitized.message === "string"
+          ? { ...sanitized, message: redactPiiInString(sanitized.message) }
+          : sanitized,
       );
       return this;
     }
@@ -171,7 +175,8 @@ import {
         return;
       }
       if (this.hasErrorStatus && !this.hasExplicitErrorType) {
-        this.span.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
+        // Derived classifications need the same masking as explicit error.type attributes.
+        this.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
       }
       this.span.end(endTime);
       this.isEnded = true;
@@ -188,16 +193,16 @@ import {
      * Records the "exception" event the way the OpenTelemetry SDK does (`exception.type`,
      * `exception.message`, `exception.stacktrace`), with an `exception.type` that is the same in
      * both modes (see {@link getExceptionEventAttributes}); the message and stack trace are left
-     * out when error details are hidden.
+     * out when error details are hidden. Retained attributes use the shared masking/PII policy.
      */
     recordException(exception: Exception, time?: TimeInput): void {
       if (this.isEnded) return;
       this.recordedErrorType = getErrorType(exception);
       this.lastException = exception;
-      const attributes = getExceptionEventAttributes(
-        exception,
-        this.config.hideErrorDetails,
-      );
+      const attributes = maskAttributes({
+        config: this.config,
+        attributes: getExceptionEventAttributes(exception, this.config.hideErrorDetails),
+      });
       if (Object.keys(attributes).length === 0) {
         // Same as the SDK: an exception event needs a type or a message
         diag.warn(`FISpan.recordException: nothing to record for ${typeof exception}`);

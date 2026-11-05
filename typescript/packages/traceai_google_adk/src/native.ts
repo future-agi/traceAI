@@ -34,7 +34,7 @@ const METADATA = new Set([
   "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
   "gen_ai.response.finish_reasons", "gen_ai.tool.name", "gen_ai.tool.type",
   "adk.workflow.name", "adk.node.path", "adk.node.attempt", "adk.node.status",
-  "adk.node.interrupt_count", "error.type",
+  "adk.node.interrupt_count", "error.type", "http.response.status_code",
 ]);
 
 function objectFromJson(value: unknown): Record<string, unknown> | undefined {
@@ -48,6 +48,21 @@ function objectFromJson(value: unknown): Record<string, unknown> | undefined {
 
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function modalityTokens(details: unknown, modality: "AUDIO" | "IMAGE"): number | undefined {
+  if (!Array.isArray(details)) return undefined;
+  let total: number | undefined;
+  for (const detail of details) {
+    if (detail === null || typeof detail !== "object" || Array.isArray(detail)) continue;
+    if (detail.modality !== modality) continue;
+    const tokens = count(detail.tokenCount);
+    if (tokens === undefined || !Number.isSafeInteger(tokens)) continue;
+    const sum = (total ?? 0) + tokens;
+    if (!Number.isSafeInteger(sum)) return undefined;
+    total = sum;
+  }
+  return total;
 }
 
 /** Translate only native ADK spans; never create or reparent spans. */
@@ -71,9 +86,32 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     const usage = response?.usageMetadata as Record<string, unknown> | undefined;
     const candidates = count(usage?.candidatesTokenCount);
     const thoughts = count(usage?.thoughtsTokenCount);
-    const prompt = count(usage?.promptTokenCount);
     const total = count(usage?.totalTokenCount);
-    if (prompt !== undefined) attributes["gen_ai.usage.input_tokens"] = prompt;
+    const cached = count(usage?.cachedContentTokenCount);
+    // Media has distinct pricing. Extract only reported modality counts before
+    // content redaction; they are subsets of input/output, not additional tokens.
+    const inputAudio = modalityTokens(usage?.promptTokensDetails, "AUDIO");
+    const outputAudio = modalityTokens(usage?.candidatesTokensDetails, "AUDIO");
+    const outputImage = modalityTokens(usage?.candidatesTokensDetails, "IMAGE");
+    if (inputAudio !== undefined) attributes["gen_ai.usage.input_tokens.audio"] = inputAudio;
+    if (outputAudio !== undefined) attributes["gen_ai.usage.output_tokens.audio"] = outputAudio;
+    if (outputImage !== undefined) attributes["gen_ai.usage.output_tokens.image"] = outputImage;
+    // Cached input is a subset of promptTokenCount, not additional input.
+    if (cached !== undefined) attributes["gen_ai.usage.cache_read_tokens"] = cached;
+    // Provider-side tool prompts are additional input; cache/modality details
+    // and the native input attribute are summaries, not additional counts.
+    if (usage?.promptTokenCount !== undefined || usage?.toolUsePromptTokenCount !== undefined) {
+      const prompt = count(usage?.promptTokenCount);
+      const toolPrompt = usage?.toolUsePromptTokenCount === undefined ? 0 : count(usage.toolUsePromptTokenCount);
+      // Do not retain a prompt-only native summary as a complete input count
+      // when a reported component is invalid, missing or overflows the sum.
+      delete attributes["gen_ai.usage.input_tokens"];
+      if (prompt !== undefined && toolPrompt !== undefined &&
+          Number.isSafeInteger(prompt) && Number.isSafeInteger(toolPrompt) &&
+          Number.isSafeInteger(prompt + toolPrompt)) {
+        attributes["gen_ai.usage.input_tokens"] = prompt + toolPrompt;
+      }
+    }
     if (candidates !== undefined) attributes["gen_ai.usage.output_tokens"] = candidates + (thoughts ?? 0);
     if (thoughts !== undefined) attributes["gen_ai.usage.output_tokens.reasoning"] = thoughts;
     // Never invent a total when upstream omitted it (e.g. content disabled).
@@ -132,7 +170,9 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
 
 /** Wrap the sole export path in an existing OTel SDK. Does not install a provider. */
 export class GoogleADKSpanExporter implements SpanExporter {
-  private readonly config = generateTraceConfig();
+  // Native error details are excluded even with content opt-in. Environment
+  // controls can make capture stricter, never relax this native-route default.
+  private readonly config = { ...generateTraceConfig(), hideErrorDetails: true };
 
   constructor(private readonly exporter: SpanExporter, private readonly options: GoogleADKNativeOptions = {}) {}
 

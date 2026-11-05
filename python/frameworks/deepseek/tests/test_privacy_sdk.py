@@ -1,8 +1,10 @@
 """Exercise real OpenAI parsing, including DeepSeek reasoning and tool streams."""
 import json
+from importlib.metadata import version
 
 import openai
 import pytest
+from packaging.version import Version
 from fi_instrumentation import TraceConfig
 from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from opentelemetry.sdk.trace import TracerProvider
@@ -10,6 +12,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from traceai_deepseek import DeepSeekInstrumentor
+
+# Older published cores predate the opaque-payload privacy repair.
+GRANULAR_RAW_PRIVACY = Version(version("fi-instrumentation-otel")) >= Version("1.2.3")
 
 # Use the transport accepted by the installed OpenAI SDK (1.x and 3.x).
 try:
@@ -122,7 +127,7 @@ async def test_reasoning_and_tool_output_privacy(
         tool_key = "deepseek.tool_calls.0.function.arguments"
         content_key = "gen_ai.output.messages.0.message.content"
         if hide_content:
-            if policy == "hide_outputs":
+            if policy == "hide_outputs" or GRANULAR_RAW_PRIVACY:
                 assert attributes["output.value"] == REDACTED_VALUE
             if policy == "hide_output_text":
                 for key in (*reasoning_keys, tool_key, content_key):
@@ -131,10 +136,10 @@ async def test_reasoning_and_tool_output_privacy(
                 assert not any(key.startswith("gen_ai.output.messages") for key in attributes)
                 for key in (*reasoning_keys, tool_key):
                     assert key not in attributes
-            # Text/message policies intentionally do not hide the separate raw
-            # output.value field. Everything else must be free of private output.
+            # Core >=1.2.3 also hides the raw duplicate. Retain the older
+            # expectation only when qualifying a previously published core.
             masked_attributes = dict(attributes)
-            if policy != "hide_outputs":
+            if policy != "hide_outputs" and not GRANULAR_RAW_PRIVACY:
                 masked_attributes.pop("output.value")
             for private in (answer, reasoning, arguments, "PRIVATE_TOOL_ARGUMENTS_6823"):
                 assert private not in json.dumps(masked_attributes)
@@ -143,7 +148,7 @@ async def test_reasoning_and_tool_output_privacy(
                 assert attributes[key] == reasoning
             assert attributes[tool_key] == arguments
             assert attributes[content_key] == answer
-        if not hide_content or policy != "hide_outputs":
+        if not hide_content or (policy != "hide_outputs" and not GRANULAR_RAW_PRIVACY):
             payload = json.loads(attributes["output.value"])
             output = payload if streaming else payload["choices"][0]["message"]
             assert output["content"] == answer

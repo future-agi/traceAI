@@ -3,15 +3,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const packageDir = path.join(__dirname, '..');
-const [tarball, consumer] = process.argv.slice(2);
+const [tarball, consumer, coreTarball] = process.argv.slice(2);
 if (!tarball || !consumer || fs.existsSync(consumer)) {
-  throw new Error('Usage: node test/prepare-packed.cjs <tarball> <new-consumer-directory>');
+  throw new Error('Usage: node test/prepare-packed.cjs <tarball> <new-consumer-directory> [core-tarball]');
 }
 fs.mkdirSync(consumer, { recursive: true });
 const manifest = require('../package.json');
 fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({
   private: true,
-  dependencies: { ...manifest.devDependencies, [manifest.name]: path.resolve(tarball) },
+  dependencies: { ...manifest.devDependencies, [manifest.name]: path.resolve(tarball),
+    ...(coreTarball ? { "@traceai/fi-core": path.resolve(coreTarball) } : {}),
+  },
 }, null, 2));
 const install = spawnSync('npm', ['install', '--prefix', consumer, '--ignore-scripts', '--no-audit', '--no-fund'], { stdio: 'inherit' });
 if (install.status !== 0) process.exit(install.status ?? 1);

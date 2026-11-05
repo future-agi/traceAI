@@ -60,7 +60,7 @@ def test_sync_workflow_releases_source(workflow_tracing, exit_kind):
     assert underlying.gi_frame is None
     span = exporter.get_finished_spans()[0]
     assert span.status.status_code == (
-        trace.StatusCode.OK if exit_kind == "complete" else trace.StatusCode.ERROR
+        trace.StatusCode.ERROR if exit_kind == "error" else trace.StatusCode.OK
     )
 
 
@@ -95,7 +95,7 @@ async def test_async_workflow_releases_source(workflow_tracing, exit_kind):
     assert underlying.ag_frame is None
     span = exporter.get_finished_spans()[0]
     assert span.status.status_code == (
-        trace.StatusCode.OK if exit_kind == "complete" else trace.StatusCode.ERROR
+        trace.StatusCode.ERROR if exit_kind == "error" else trace.StatusCode.OK
     )
 
 
@@ -178,3 +178,81 @@ async def test_async_workflow_cleanup_failure_finishes_span(workflow_tracing):
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].status.status_code == trace.StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("completed", [False, True])
+@pytest.mark.parametrize("cleanup_error", [False, True])
+async def test_close_snapshots_terminal_result_and_cleanup_wins(
+    workflow_tracing, asynchronous, completed, cleanup_error
+):
+    tracer, exporter = workflow_tracing
+    workflow = Workflow(name="Synthetic", steps=[])
+    event = SimpleNamespace(
+        event="WorkflowCompleted" if completed else "WorkflowStarted",
+        content="completed-output" if completed else None,
+        run_id="synthetic-run",
+    )
+    cleaned = []
+
+    def cleanup():
+        cleaned.append(trace.get_current_span().get_span_context().span_id)
+        event.content = "mutated-during-close"
+        event.event = "WorkflowCancelled"
+        if cleanup_error:
+            raise ValueError("synthetic cleanup failure")
+
+    def source():
+        try:
+            yield event
+        finally:
+            cleanup()
+
+    async def async_source():
+        try:
+            yield event
+        finally:
+            cleanup()
+
+    wrapper = _WorkflowWrapper(tracer)
+    if asynchronous:
+        stream = wrapper.arun(async_source, workflow, (), {})
+        await anext(stream)
+    else:
+        stream = wrapper.run(source, workflow, (), {})
+        next(stream)
+    before = trace.get_current_span().get_span_context()
+    if cleanup_error:
+        with pytest.raises(ValueError, match="synthetic cleanup failure"):
+            if asynchronous:
+                await stream.aclose()
+            else:
+                stream.close()
+    elif asynchronous:
+        await stream.aclose()
+    else:
+        stream.close()
+    assert trace.get_current_span().get_span_context() == before
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert cleaned == [span.context.span_id]
+    assert span.status.status_code == (
+        trace.StatusCode.OK
+        if completed and not cleanup_error
+        else trace.StatusCode.ERROR
+    )
+    if completed:
+        assert span.attributes["output.value"] == "completed-output"
+        assert span.attributes["agno.run.id"] == "synthetic-run"
+    if cleanup_error:
+        assert any(
+            event.attributes["exception.message"] == "synthetic cleanup failure"
+            for event in span.events
+        )
+    if asynchronous:
+        await stream.aclose()
+    else:
+        stream.close()
+    assert len(exporter.get_finished_spans()) == 1

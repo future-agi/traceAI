@@ -74,6 +74,12 @@ jobs:
               "$node_bin" packages/traceai_anthropic/contract/native-boundary.cjs \
               "$RUNNER_TEMP/anthropic-contract" "$sdk" \
               packages/traceai_anthropic/dist/src/instrumentation.js
+            for mode in normal privacy; do
+              sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
+                env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \
+                "$node_bin" packages/traceai_anthropic/contract/release-lifecycle.cjs \
+                "$sdk" "$mode" "$RUNNER_TEMP/anthropic-contract"
+            done
           done
           sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
             env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \

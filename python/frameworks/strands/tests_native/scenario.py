@@ -16,7 +16,9 @@ from fi_instrumentation import TraceConfig, register
 from fi_instrumentation.fi_types import ProjectType
 from fi_instrumentation.otel import HTTPSpanExporter
 from google.protobuf.json_format import MessageToJson, Parse
+from openai import BadRequestError
 from opentelemetry import trace
+from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
@@ -30,6 +32,7 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from strands import Agent, tool
 from strands.models.model import Model
+from strands.models.openai import OpenAIModel
 from traceai_strands import (
     StrandsInstrumentor,
     StrandsSpanExporter,
@@ -47,8 +50,17 @@ parser.add_argument("--tool-error", action="store_true")
 parser.add_argument("--long-tool-error", action="store_true")
 parser.add_argument("--readme", action="store_true")
 parser.add_argument("--async-stream", action="store_true")
+parser.add_argument("--http-error", action="store_true")
 args = parser.parse_args()
+args.error = args.error or args.http_error
 received = []
+model_requests = []
+started = {}
+
+
+class TrackStarts(SpanProcessor):
+    def on_start(self, span, parent_context=None):
+        started[span.context.span_id] = span.name
 
 
 def convert_ids(value, to_wire):
@@ -77,6 +89,17 @@ class Handler(BaseHTTPRequestHandler):
             # replaced by a loopback SSE endpoint. The README runs verbatim.
             data = json.loads(body)
             assert data["model"] == "gpt-4o-mini"
+            model_requests.append(data)
+            if args.http_error:
+                payload = json.dumps({"error": {
+                    "message": "ERROR-SENTINEL", "type": "invalid_request_error",
+                }}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             chunks = [
                 {
                     "id": "offline",
@@ -197,7 +220,7 @@ class OfflineModel(Model):
 
     async def stream(self, messages, *unused, **kwargs):
         if args.error:
-            raise RuntimeError("ERROR-SENTINEL")
+            raise ValueError("ERROR-SENTINEL")
         yield {"messageStart": {"role": "assistant"}}
         if messages[-1]["role"] != "user" or not any(
             "toolResult" in b for b in messages[-1]["content"]
@@ -259,6 +282,18 @@ if args.readme:
         for s in ss.spans
     ]
     assert len(spans) == 3, len(spans)
+    attributes = [{a.key: a.value for a in span.attributes} for span in spans]
+    (model,) = [a for a in attributes if a["gen_ai.span.kind"].string_value == "LLM"]
+    # Provider attribution must reach the billable model, not only its agent.
+    assert model["gen_ai.provider.name"].string_value == "openai", model
+    assert model["gen_ai.request.model"].string_value == "gpt-4o-mini"
+    assert model["gen_ai.usage.input_tokens"].int_value == 3
+    assert model["gen_ai.usage.output_tokens"].int_value == 4
+    for attrs in attributes:
+        if attrs["gen_ai.span.kind"].string_value != "LLM":
+            assert not any(key.startswith("gen_ai.usage.") for key in attrs)
+    span_ids = {span.span_id for span in spans}
+    assert all(not span.parent_span_id or span.parent_span_id in span_ids for span in spans)
     assert (
         sum(
             next(
@@ -295,6 +330,7 @@ else:
     )
     raw = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(raw))
+    provider.add_span_processor(TrackStarts())
     # Even ambient OTLP settings must not create a raw/privacy-bypassing copy.
     os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = base + "/tracer/v1/traces"
     before = dict(os.environ)
@@ -317,14 +353,22 @@ else:
         assert StrandsInstrumentor()._tracer_provider is provider
     assert dict(os.environ) == before
     agent = Agent(
-        model=OfflineModel(),
+        model=(
+            OpenAIModel(
+                model_id="gpt-4o-mini",
+                client_args={"base_url": base + "/v1", "max_retries": 0},
+            )
+            if args.http_error else OfflineModel()
+        ),
         tools=[echo],
         callback_handler=None,
         trace_attributes={
             "session.id": "synthetic-session",
             "custom.content": "PRIVATE-SENTINEL",
+            **({"gen_ai.provider.name": "openai"} if args.http_error else {}),
         },
     )
+    caught_error = None
     try:
         if args.async_stream:
 
@@ -336,10 +380,30 @@ else:
         else:
             agent("INPUT-SENTINEL")
             agent("INPUT-SENTINEL second turn")
-    except RuntimeError:
+    except (ValueError, BadRequestError) as error:
         assert args.error
+        caught_error = error
     provider.force_flush()
     originals = raw.get_finished_spans()
+    if args.error:
+        assert caught_error is not None, "model error must reach the caller"
+        if args.http_error:
+            assert isinstance(caught_error, BadRequestError)
+            assert caught_error.status_code == 400 and len(model_requests) == 1
+        else:
+            assert isinstance(caught_error, ValueError)
+            assert str(caught_error) == "ERROR-SENTINEL"
+        # Comparing only exported spans misses native spans that never end.
+        ended = {s.context.span_id for s in originals}
+        assert len(started) == len(originals) == 3, (started, originals)
+        assert set(started) == ended, "native model-error spans must all end"
+        assert all(s.status.status_code.name == "ERROR" for s in originals)
+        (model,) = [s for s in originals if s.name == "chat"]
+        (cycle,) = [s for s in originals if s.name == "execute_event_loop_cycle"]
+        (root,) = [s for s in originals if s.parent is None]
+        assert model.parent.span_id == cycle.context.span_id
+        assert cycle.parent.span_id == root.context.span_id
+        assert len({s.context.trace_id for s in originals}) == 1
     if args.long_tool_error:
         # Prove the real SDK truncated the serialized error, not merely that a
         # short/well-formed tool result was removed by the existing redactor.
@@ -387,6 +451,11 @@ else:
             "TOOL",
         }
         assert "custom.content" not in attributes
+        if args.error:
+            assert span.status.code == 2
+            if args.http_error and attributes["gen_ai.span.kind"].string_value == "LLM":
+                assert attributes["gen_ai.provider.name"].string_value == "openai"
+                assert attributes["gen_ai.request.model"].string_value == "gpt-4o-mini"
         if args.tool_error and attributes["gen_ai.span.kind"].string_value == "TOOL":
             assert span.status.code == 2
         if attributes["gen_ai.span.kind"].string_value != "LLM":
