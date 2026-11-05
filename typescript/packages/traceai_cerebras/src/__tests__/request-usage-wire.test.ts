@@ -210,6 +210,71 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
       },
     );
 
+    describe.each([false, true])("accessor body hideInputs=%s", (hideInputs) => {
+      it.each([
+        "model", "temperature", "messages", "message content", "tool description",
+      ])("preserves %s accessors without extra reads or unsent telemetry", async (field) => {
+        streaming = stream;
+        if (stream) reply = [{ choices: [], usage: totals }];
+        const c = client({ hideInputs });
+        const originalError = new Error("request field accessor failure");
+        for (const kind of ["one-shot", "changing", "throws"] as const) {
+          for (const override of [false, true]) {
+            async function invoke() {
+              let reads = 0;
+              const content = { role: "user", content: "EFFECTIVE_INPUT" };
+              const tool = { name: "offline_tool", description: "public description" };
+              const body = {
+                ...effective, stream, messages: [content],
+                tools: [{ type: "function", function: tool }],
+              };
+              const holder = field === "message content" ? content
+                : field === "tool description" ? tool : body;
+              const key = field === "message content" ? "content"
+                : field === "tool description" ? "description" : field;
+              const getter = jest.fn(function () {
+                reads++;
+                if (kind === "throws") throw originalError;
+                if (kind === "one-shot" && reads > 1)
+                  throw new Error("request field accessor read twice");
+                const text = kind === "changing" && reads === 1
+                  ? "PRIVATE_UNSENT_SENTINEL" : "public-value";
+                return key === "temperature" ? 0.2
+                  : key === "messages" ? [{ role: "user", content: text }] : text;
+              });
+              Object.defineProperty(holder, key, { enumerable: true, get: getter });
+              const start = wire.length;
+              let value: unknown;
+              let error: unknown;
+              try {
+                value = await consume(await c.chat.completions.create(
+                  override ? { ...positional, stream } : body,
+                  override ? { body } : undefined,
+                ), stream);
+              } catch (failure) {
+                error = failure;
+              }
+              expect(getter.mock.contexts.every((receiver) => receiver === holder)).toBe(true);
+              return { reads, value, error, bodies: wire.slice(start) };
+            }
+            instrumentation!.disable();
+            const expected = await invoke();
+            expect(expected.reads).toBe(1);
+            expect(expected.error).toBe(kind === "throws" ? originalError : undefined);
+            expect(expected.value).toEqual(kind === "throws" ? undefined : reply);
+            expect(expected.bodies).toHaveLength(kind === "throws" ? 0 : 1);
+            instrumentation!.enable();
+            const actual = await invoke();
+            expect(actual.error).toBe(expected.error);
+            expect(actual).toEqual(expected);
+            // Accessors are opaque even under privacy controls. Only the SDK
+            // may evaluate them; do not export a different evaluation's value.
+            expect(exporter.getFinishedSpans()).toHaveLength(0);
+          }
+        }
+      });
+    });
+
     describe.each([
       "own method",
       "inherited method",
@@ -365,6 +430,76 @@ describe("Cerebras effective request and usage HTTP contracts", () => {
         }
       });
     });
+  });
+
+  it.each(["inherited model", "non-enumerable model", "symbol"])(
+    "does not evaluate a body accessor ignored by JSON: %s",
+    async (kind) => {
+      const c = client();
+      const getter = jest.fn(() => { throw new Error("unsent accessor evaluated"); });
+      const holder = Object.defineProperty({}, kind === "symbol" ? Symbol("private") : "model", {
+        enumerable: kind !== "non-enumerable model", get: getter,
+      });
+      const body = Object.assign(kind === "inherited model" ? Object.create(holder) : holder, {
+        messages: effective.messages,
+      });
+      instrumentation!.disable();
+      const expected = await c.chat.completions.create(positional, { body });
+      instrumentation!.enable();
+      expect(await c.chat.completions.create(positional, { body })).toEqual(expected);
+      expect(wire).toHaveLength(2);
+      expect(wire[1]).toBe(wire[0]);
+      expect(getter).not.toHaveBeenCalled();
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    },
+  );
+
+  it("forwards setter-only request fields without invoking or tracing them", async () => {
+    const c = client();
+    const setter = jest.fn();
+    const body = Object.defineProperty({ ...effective }, "temperature", {
+      enumerable: true, set: setter,
+    });
+    instrumentation!.disable();
+    const expected = await c.chat.completions.create(positional, { body });
+    instrumentation!.enable();
+    expect(await c.chat.completions.create(positional, { body })).toEqual(expected);
+    expect(wire).toHaveLength(2);
+    expect(wire[1]).toBe(wire[0]);
+    expect(setter).not.toHaveBeenCalled();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it("preserves nested one-shot serializers without exporting private fields", async () => {
+    const c = client();
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      let calls = 0;
+      const message = {
+        private: "NESTED_UNSENT_SENTINEL",
+        toJSON() {
+          if (++calls > 1) throw new Error("nested serializer called twice");
+          return effective.messages[0];
+        },
+      };
+      expect(await c.chat.completions.create(positional, {
+        body: { ...effective, messages: [message] },
+      })).toEqual(reply);
+      expect(calls).toBe(1);
+      expect(JSON.parse(wire[wire.length - 1])).toEqual(effective);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
+
+  it("traces ordinary data with repeated nested references", async () => {
+    const c = client();
+    const body = { ...effective, messages: [effective.messages[0], effective.messages[0]] };
+    await c.chat.completions.create(positional, { body });
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.parse(attrs[S.INPUT_VALUE] as string)).toEqual(JSON.parse(wire[0]));
+    expect(attrs[S.LLM_MODEL_NAME]).toBe(effective.model);
   });
 
   it.each([undefined, null, "replacement", false, 0, []])(

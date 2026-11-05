@@ -96,6 +96,35 @@ function resources(
   ];
 }
 
+// Inspect descriptors, never values obtained through getters. Both telemetry
+// serialization and the SDK traverse nested messages/tools, so a shallow check
+// would still evaluate those accessors twice. Repeated references are harmless.
+function hasOpaqueRequestValue(body: object): boolean {
+  const pending = [body];
+  const seen = new WeakSet<object>();
+  while (pending.length) {
+    const value = pending.pop()!;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if ("toJSON" in value) return true;
+    for (
+      let holder: object | null = value;
+      holder && holder !== Object.prototype && holder !== Array.prototype;
+      holder = Object.getPrototypeOf(holder)
+    ) {
+      for (const key of Reflect.ownKeys(holder)) {
+        const descriptor = Object.getOwnPropertyDescriptor(holder, key)!;
+        if (!("value" in descriptor)) return true;
+        if (
+          holder === value && descriptor.enumerable && descriptor.value &&
+          (typeof descriptor.value === "object" || typeof descriptor.value === "function")
+        ) pending.push(descriptor.value);
+      }
+    }
+  }
+  return false;
+}
+
 export class CerebrasInstrumentation extends InstrumentationBase {
   private _traceConfig?: TraceConfigOptions;
   private manualModules?: Set<SDKModule>;
@@ -192,10 +221,9 @@ export class CerebrasInstrumentation extends InstrumentationBase {
         // Leave non-request bodies to the SDK; never fall back to unsent input.
         if (!body || typeof body !== "object" || Array.isArray(body))
           return original.apply(this, args);
-        // Custom serializers may be stateful or omit private fields. Check for
-        // own/inherited toJSON without invoking getters, and let only the SDK
-        // evaluate these opaque bodies rather than tracing their raw properties.
-        if ("toJSON" in body) return original.apply(this, args);
+        // Accessors and serializers may be stateful or omit private fields.
+        // Let only the SDK evaluate opaque bodies, before starting any span.
+        if (hasOpaqueRequestValue(body)) return original.apply(this, args);
         const { messages, prompt: _prompt, ...parameters } = body;
         const config = generateTraceConfig(instrumentation._traceConfig);
         // Raw payloads duplicate canonical messages. Omit every representation
