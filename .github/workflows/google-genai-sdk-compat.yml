@@ -10,18 +10,12 @@ on:
       - '.github/scripts/loopback-network-diagnostics.cjs'
       - '.github/scripts/check-loopback-network.cjs'
   workflow_dispatch:
-    inputs:
-      current_macos_comparison:
-        description: Temporary additive runner-image comparison; not a macOS 14 gate replacement
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
   packed-consumer:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.current_macos_comparison) }}
     runs-on: macos-14
     timeout-minutes: 15
     strategy:
@@ -75,115 +69,3 @@ jobs:
       - name: Sandbox denial diagnostics
         if: failure()
         run: /usr/bin/log show --last 5m --style compact --predicate 'eventMessage CONTAINS "Sandbox"'
-
-  current-macos-comparison:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.current_macos_comparison }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, macos-26]
-        node: [20, 22, 24]
-        sdk: ['1.33.0', '2.32.0']
-        include:
-          - runner: macos-15
-            node: 22
-            sdk: '1.44.0'
-          - runner: macos-15
-            node: 22
-            sdk: '2.0.0'
-          - runner: macos-26
-            node: 22
-            sdk: '1.44.0'
-          - runner: macos-26
-            node: 22
-            sdk: '2.0.0'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Build and pack with published shared dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          source="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk"
-          cp -R "$source" "$RUNNER_TEMP/build"
-          cd "$RUNNER_TEMP/build"
-          npm install --ignore-scripts
-          sandbox-exec -f "$source/test/network.sb" npm run build
-          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
-      - name: Install clean customer application
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir "$RUNNER_TEMP/consumer"
-          cd "$RUNNER_TEMP/consumer"
-          npm init -y
-          tarball=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'traceai-google-genai-sdk-*.tgz' -print)
-          npm install --ignore-scripts "$tarball" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
-      - name: Real SDK, OTLP, privacy and exact customer snippet without internet
-        shell: bash
-        env:
-          CONSUMER_DIR: ${{ runner.temp }}/consumer
-        run: |
-          set -euo pipefail
-          tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          # Verify the unchanged OS-level network boundary before the SDK suite.
-          sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" "$GITHUB_WORKSPACE/.github/scripts/check-loopback-network.cjs" --check-denial
-          # Repetitions fail immediately; they are a stability check, not retries.
-          for repetition in 1 2 3 4 5; do
-            echo "Loopback stability repetition $repetition/5"
-            sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
-          done
-      - name: Sandbox denial diagnostics
-        if: failure()
-        run: /usr/bin/log show --last 5m --style compact --predicate 'eventMessage CONTAINS "Sandbox"'
-      - name: Retain runner identity and exact consumer evidence
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/current-macos-evidence"
-          mkdir -p "$evidence"
-          {
-            printf 'requested_runner=%s\n' '${{ matrix.runner }}'
-            printf 'runner_os=%s\nrunner_arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
-            printf 'image_os=%s\nimage_version=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
-            printf 'checkout_commit='; git rev-parse HEAD
-            printf 'checkout_tree='; git rev-parse 'HEAD^{tree}'
-            sw_vers
-            uname -srm
-            node -p 'JSON.stringify({version:process.version,arch:process.arch,platform:process.platform,versions:process.versions})'
-            npm --version
-          } > "$evidence/identity.txt"
-          cat "$evidence/identity.txt"
-          git archive --format=tar HEAD --             .github/workflows/google-genai-sdk-compat.yml             .github/scripts/check-loopback-network.cjs             .github/scripts/loopback-network-diagnostics.cjs             typescript/packages/traceai_google_genai_sdk > "$evidence/executed-source.tar"
-          git ls-files -z --             .github/workflows/google-genai-sdk-compat.yml             .github/scripts/check-loopback-network.cjs             .github/scripts/loopback-network-diagnostics.cjs             typescript/packages/traceai_google_genai_sdk | xargs -0 shasum -a 256 > "$evidence/source-sha256.txt"
-          for phase in build consumer; do
-            mkdir -p "$evidence/$phase"
-            for filename in package.json package-lock.json; do
-              if test -f "$RUNNER_TEMP/$phase/$filename"; then
-                cp "$RUNNER_TEMP/$phase/$filename" "$evidence/$phase/$filename"
-              fi
-            done
-            if test -d "$RUNNER_TEMP/$phase/node_modules"; then
-              if npm --prefix "$RUNNER_TEMP/$phase" ls --all --json > "$evidence/$phase/dependencies.json"; then
-                printf '0\n' > "$evidence/$phase/dependencies-exit-code.txt"
-              else
-                printf '%s\n' "$?" > "$evidence/$phase/dependencies-exit-code.txt"
-              fi
-            fi
-          done
-          for tarball in "$RUNNER_TEMP"/traceai-google-genai-sdk-*.tgz; do
-            if test -f "$tarball"; then cp "$tarball" "$evidence/"; fi
-          done
-          find "$evidence" -type f ! -name evidence-sha256.txt -exec shasum -a 256 {} + > "$evidence/evidence-sha256.txt"
-      - name: Export comparison evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: current-macos-${{ matrix.runner }}-node${{ matrix.node }}-sdk${{ matrix.sdk }}
-          path: ${{ runner.temp }}/current-macos-evidence
-          if-no-files-found: error
