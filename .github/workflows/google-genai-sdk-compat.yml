@@ -15,56 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  # Temporary one-factor comparison; not a qualified harness correction.
-  source-binding-comparison:
-    runs-on: macos-14
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [20, 24]
-        first: [baseline, source-bound]
-        observation: [1, 2, 3]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Cold ordered source-binding comparison under unchanged Seatbelt
-        shell: bash
-        env:
-          FIRST: ${{ matrix.first }}
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/source-binding"
-          mkdir "$evidence" "$RUNNER_TEMP/synthetic-home"
-          policy="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test/network.sb"
-          probe="$GITHUB_WORKSPACE/.github/scripts/check-loopback-source-binding.cjs"
-          cp "$policy" "$evidence/network.sb"
-          git rev-parse HEAD > "$evidence/head.txt"
-          node --version > "$evidence/node.txt"
-          second=source-bound
-          if [[ "$FIRST" == source-bound ]]; then second=baseline; fi
-          status=0
-          for arm in "$FIRST" "$second"; do
-            # Fixed independent observations: preserve BOTH exit statuses and
-            # every error, never retry an operation or convert a failure to green.
-            code=0
-            env -i PATH="$PATH" HOME="$RUNNER_TEMP/synthetic-home" TMPDIR="$RUNNER_TEMP" \
-              sandbox-exec -f "$policy" node "$probe" "$arm" > "$evidence/$arm.log" 2>&1 || code=$?
-            printf '%s\n' "$code" > "$evidence/$arm.exit"
-            cat "$evidence/$arm.log"
-            if [[ "$code" != 0 ]]; then status=1; fi
-          done
-          exit "$status"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: source-binding-node${{ matrix.node }}-${{ matrix.first }}-${{ matrix.observation }}
-          path: ${{ runner.temp }}/source-binding
-          retention-days: 7
   packed-consumer:
     runs-on: macos-14
     timeout-minutes: 15
