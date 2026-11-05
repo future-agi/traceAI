@@ -31,7 +31,7 @@ function connect(port, mode) {
   const summary = { label: process.argv[2], pid: process.pid, node: process.version, platform: process.platform, passed: 0, failed: 0, byMode: {} };
   for (const mode of ['net', 'http', 'fetch']) {
     summary.byMode[mode] = { passed: 0, failed: 0 };
-    for (let iteration = 0; iteration < 100; iteration++) {
+    for (let iteration = 0; iteration < 300; iteration++) {
       const server = http.createServer((_request, response) => response.end('ok'));
       server.listen(0, '127.0.0.1');
       await once(server, 'listening');

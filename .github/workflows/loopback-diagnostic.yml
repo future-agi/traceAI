@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         node: [20, 24]
-        order: [forward, reverse]
+        first: [original, tcp]
+        sample: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,40 +27,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Equivalent-denial policy controls
+      - name: Counterbalanced first-use policy controls
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/empty-home"
           { sw_vers; uname -a; node --version; sysctl net.inet.ip.portrange; git rev-parse HEAD HEAD^{tree}; } > "$RUNNER_TEMP/evidence/platform.txt"
           cp typescript/packages/traceai_google_genai_sdk/test/network.sb "$RUNNER_TEMP/evidence/original.sb"
-          # TCP-specific predicate narrows the existing IP allowance; it does not
-          # permit any additional outbound destination.
           sed 's/remote ip/remote tcp/' "$RUNNER_TEMP/evidence/original.sb" > "$RUNNER_TEMP/evidence/tcp.sb"
-          # Logical complement of the same remote IP/Unix allowance. Do not use
-          # a local/source-address predicate, which would allow external egress.
-          cat > "$RUNNER_TEMP/evidence/complement.sb" <<'POLICY'
-          (version 1)
-          (allow default)
-          (deny network-outbound
-            (require-all
-              (require-not (remote ip "localhost:*"))
-              (require-not (remote unix-socket))))
-          POLICY
           probe="$GITHUB_WORKSPACE/.github/scripts/diagnose-loopback.cjs"
-          policies='original tcp complement'
-          if [[ '${{ matrix.order }}' == reverse ]]; then policies='complement tcp original'; fi
+          policies='original tcp'
+          if [[ '${{ matrix.first }}' == tcp ]]; then policies='tcp original'; fi
           failed=0
-          for round in 1 2 3 4 5 6 7 8; do
-            for mode in $policies; do
-              status=0
-              # Each process is a separate fixed observation, not a retry; every
-              # failure is retained and makes the diagnostic job red.
-              env -i PATH="$PATH" HOME="$RUNNER_TEMP/empty-home" TMPDIR="$RUNNER_TEMP" sandbox-exec -f "$RUNNER_TEMP/evidence/$mode.sb" node "$probe" "$mode-$round" > "$RUNNER_TEMP/evidence/$mode-$round.log" 2>&1 || status=$?
-              cat "$RUNNER_TEMP/evidence/$mode-$round.log"
-              echo "$mode-$round exit=$status" | tee -a "$RUNNER_TEMP/evidence/status.txt"
-              if [[ "$status" != 0 ]]; then failed=1; fi
-            done
+          # Experiment 2 failures were first-process-only; TCP was always second.
+          # Fresh runners counterbalance first use rather than accept a warm pass.
+          for mode in $policies; do
+            status=0
+            env -i PATH="$PATH" HOME="$RUNNER_TEMP/empty-home" TMPDIR="$RUNNER_TEMP" sandbox-exec -f "$RUNNER_TEMP/evidence/$mode.sb" node "$probe" "$mode" > "$RUNNER_TEMP/evidence/$mode.log" 2>&1 || status=$?
+            cat "$RUNNER_TEMP/evidence/$mode.log"
+            echo "$mode exit=$status" | tee -a "$RUNNER_TEMP/evidence/status.txt"
+            if [[ "$status" != 0 ]]; then failed=1; fi
           done
           for mode in $policies; do
             status=0
@@ -77,6 +64,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: policy-node${{ matrix.node }}-${{ matrix.order }}
+          name: first-use-node${{ matrix.node }}-${{ matrix.first }}-${{ matrix.sample }}
           path: ${{ runner.temp }}/evidence
           retention-days: 7
