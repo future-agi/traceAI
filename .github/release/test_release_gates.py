@@ -11,13 +11,14 @@ WORKFLOW = Path(__file__).resolve().parents[1] / 'workflows/release.yml'
 
 
 class CredentialGateTests(unittest.TestCase):
-    def run_gate(self, *, token=False, trusted=False, release=True, pending=True):
+    def run_gate(self, *, token=False, trusted=False, release=True, pending=True, nuget_user='nvjkkartik'):
         workflow = WORKFLOW.read_text()
         step = workflow.split('      - name: Credential and event gates\n', 1)[1].split('\n  python-core-build:', 1)[0]
         # Bind the exercised booleans to the real workflow inputs. Never expose a token.
         self.assertIn("NPM_TOKEN_AVAILABLE: ${{ secrets.NPM_TOKEN != '' }}", step)
         self.assertIn("NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}", step)
         self.assertIn("TYPESCRIPT_PENDING: ${{ steps.plan.outputs.typescript != '[]' }}", step)
+        self.assertIn("NUGET: ${{ vars.NUGET_USER != '' }}", step)
         self.assertIn("RELEASE_EVENT: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.dry_run != true }}", step)
         script = textwrap.dedent(step.split('        run: |\n', 1)[1])
         with tempfile.TemporaryDirectory() as d:
@@ -29,7 +30,7 @@ class CredentialGateTests(unittest.TestCase):
                 'NPM_TOKEN_AVAILABLE': str(token).lower(),
                 'NPM_TRUSTED_PUBLISHING': str(trusted).lower(),
                 'TYPESCRIPT_PENDING': str(pending).lower(),
-                'PYPI': 'true', 'MAVEN': 'true', 'NUGET': 'true',
+                'PYPI': 'true', 'MAVEN': 'true', 'NUGET': str(bool(nuget_user)).lower(),
                 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary),
             }
             result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script],
@@ -68,6 +69,28 @@ class CredentialGateTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(all(value == 'false' for value in outputs.values()))
                 self.assertNotIn('::error::', result.stdout)
+
+    def test_nuget_profile_variable_enables_keyless_publishing(self):
+        result, outputs = self.run_gate(pending=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs['nuget'], 'true')
+        self.assertNotIn('::warning::nuget', result.stdout)
+
+    def test_missing_nuget_profile_warns_without_disabling_other_ecosystems(self):
+        result, outputs = self.run_gate(token=True, nuget_user='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(outputs['nuget'], 'false')
+        self.assertIn('::warning::nuget publishing disabled: complete the RELEASING.md checklist. Builds still run.', result.stdout)
+        for eco in ('python', 'typescript', 'java', 'go'):
+            self.assertEqual(outputs[eco], 'true')
+
+    def test_nuget_profile_never_overrides_non_release_event_gate(self):
+        for user in ('', 'nvjkkartik'):
+            with self.subTest(nuget_user=user):
+                result, outputs = self.run_gate(release=False, nuget_user=user)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(outputs['nuget'], 'false')
+                self.assertNotIn('::warning::', result.stdout)
 
     def test_non_npm_selection_does_not_require_npm_credentials(self):
         result, outputs = self.run_gate(pending=False)

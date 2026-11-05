@@ -96,9 +96,11 @@ Sources: [PyPI publisher setup](https://docs.pypi.org/trusted-publishers/adding-
 
 Sources: [namespace verification](https://central.sonatype.org/register/namespace/) and [Central publishing Maven plugin](https://central.sonatype.org/publish/publish-portal-maven/).
 
-### NuGet
+### NuGet: trusted publishing only
 
-- [ ] Add **`NUGET_API_KEY`** with push rights for **`fi-instrumentation-otel`** and track its expiration. Grant new-package creation only if needed for a future package, not by default.
+- [ ] On nuget.org, create a Trusted Publishing policy for **`fi-instrumentation-otel`**: Package owner **`nvjkkartik`** (the account that currently owns the package), Repository owner **`future-agi`**, Repository **`traceAI`**, Workflow file **`release.yml`**, Environment **`nuget`**.
+- [ ] Set repository **variable** **`NUGET_USER`** to the nuget.org profile name used for the policy (**not** an email address). No stored NuGet API key or token fallback is used.
+- [ ] Create the GitHub environment **`nuget`** and restrict deployment branches to **`main`**. OIDC login and publishing run in the top-level `release.yml`; `release-nuget.yml` only builds, verifies and uploads the artifact.
 - [ ] The build targets **.NET 10** (`net10.0` in the current project), installs the exact packed nupkg into a fresh consumer, and uses `dotnet nuget push --skip-duplicate`. Registry verification precedes tagging.
 
 Missing credentials disable uploads for that ecosystem and emit a warning; build/check jobs still run. Go can create its source tags on main without registry credentials. Setup does not retroactively start a failed/finished run: rerun Release after finishing the checklist.
