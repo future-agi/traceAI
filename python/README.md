@@ -4,6 +4,24 @@ OpenTelemetry instrumentation for AI applications. Install the core and the inst
 
 [All languages](../README.md) · [Integration guides](https://docs.futureagi.com/docs/integrations/traceai) · [Core API and configuration](fi_instrumentation/README.md)
 
+## Supported Python versions
+
+Core tracing supports Python 3.10–3.15, with either the default HTTP exporter
+or the optional `grpc` exporter:
+
+```bash
+pip install fi-instrumentation-otel         # HTTP tracing, Python 3.10–3.15
+pip install 'fi-instrumentation-otel[grpc]' # gRPC tracing, Python 3.10–3.15
+```
+
+The optional `evaluation` extra (including `[grpc,evaluation]`) supports Python
+3.10–3.14. Its dependency chain, including LiteLLM/fastuuid, is not yet compatible
+with Python 3.15. Use Python 3.14 or earlier for
+`pip install 'fi-instrumentation-otel[evaluation]'`; installing this extra on
+3.15 can fail while resolving or building those dependencies. It is never
+silently omitted, and it does not restrict core-only or `[grpc]` installs.
+Framework instrumentors have their own runtime constraints.
+
 ## Quickstart
 
 Use Python 3.10–3.13 for this OpenAI example.

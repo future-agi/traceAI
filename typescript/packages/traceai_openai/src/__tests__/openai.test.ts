@@ -1226,7 +1226,7 @@ describe("OpenAIInstrumentation with TraceConfig", () => {
   "gen_ai.operation.name": "text_completion",
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo-instruct",
-  "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo-instruct"}",
+  "gen_ai.request.parameters": "__REDACTED__",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9",
   "gen_ai.response.model": "gpt-3.5-turbo-instruct",

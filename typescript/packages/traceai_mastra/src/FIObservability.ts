@@ -133,26 +133,36 @@ export interface FIObservabilityOptions extends FIMastraExporterOptions {
  */
 export function createFIObservability(
   options: FIObservabilityOptions = {},
-): Observability {
+): Observability & { flush(): Promise<void> } {
   const {
     serviceName = "mastra-app",
     excludeSpanTypes = [SpanType.MODEL_CHUNK],
     ...exporterOptions
   } = options;
-  return new Observability({
-    configs: {
-      otel: {
+  // The peer floor accepts this structural config but predates the optional
+  // excludeSpanTypes field; newer runtimes apply it natively.
+  const config = {
+    serviceName,
+    excludeSpanTypes,
+    exporters: [
+      createFIMastraExporter({
+        ...exporterOptions,
         serviceName,
-        excludeSpanTypes,
-        exporters: [
-          createFIMastraExporter({
-            ...exporterOptions,
-            serviceName,
-            // Default the FI project to the service name so a project is created.
-            projectName: exporterOptions.projectName ?? serviceName,
-          }),
-        ],
-      },
+        // Explicit option wins, then the environment, then the service fallback.
+        projectName: exporterOptions.projectName ?? process.env.FI_PROJECT_NAME ?? serviceName,
+      }),
+    ],
+  };
+  const observability = new Observability({ configs: { otel: config } });
+  // Observability 1.0 has per-instance flush only. Expose that same native
+  // lifecycle through the entrypoint required by newer core versions, without
+  // replacing the implementation on runtimes that already provide it.
+  if ("flush" in observability && typeof observability.flush === "function") {
+    return observability as Observability & { flush(): Promise<void> };
+  }
+  return Object.assign(observability, {
+    flush: async (): Promise<void> => {
+      await observability.getDefaultInstance()?.flush();
     },
   });
 }

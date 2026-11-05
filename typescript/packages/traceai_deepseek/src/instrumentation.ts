@@ -171,13 +171,13 @@ export class DeepSeekInstrumentation extends InstrumentationBase {
       });
       const execContext = trace.setSpan(context.active(), span);
       let ended = false;
-      const finish = (error?: unknown) => {
+      const finish = (error?: unknown, cancelled = false) => {
         if (ended) return;
         ended = true;
         if (error !== undefined) {
           span.recordException(error instanceof Error ? error : new Error(String(error)));
           span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
-        } else {
+        } else if (!cancelled) {
           span.setStatus({ code: SpanStatusCode.OK });
         }
         span.end();
@@ -285,13 +285,13 @@ function outputAttributes(response: ChatCompletion, hideOutput: boolean): Attrib
 
 /** Observe only the caller's consumption; never tee or drain the stream in the background. */
 function observeStream(stream: StreamResponse, span: Span, hideOutput: boolean,
-  finish: (error?: unknown) => void, execContext: ReturnType<typeof context.active>) {
+  finish: (error?: unknown, cancelled?: boolean) => void, execContext: ReturnType<typeof context.active>) {
   const response: ChatCompletion = { choices: [] };
   const choices = new Map<number, NonNullable<ChatCompletion["choices"][number]["message"]>>();
   const tools = new Map<number, Map<number, ToolCall>>();
   const chunks: ChatCompletion[] = [];
   let completed = false;
-  const complete = (error?: unknown) => {
+  const complete = (error?: unknown, cancelled = false) => {
     if (completed) return;
     completed = true;
     stream.controller?.signal.removeEventListener("abort", aborted);
@@ -301,14 +301,14 @@ function observeStream(stream: StreamResponse, span: Span, hideOutput: boolean,
       [S.OUTPUT_MIME_TYPE]: MimeType.TEXT,
       [S.RAW_OUTPUT]: json(chunks),
     });
-    finish(error);
+    finish(error, cancelled);
   };
   // The SDK also aborts internally while propagating iteration failures. Let the
   // pending next/return report that failure instead of ending an OK span first.
   let pendingNext = false;
-  const aborted = () => { if (!pendingNext) complete(); };
+  const aborted = () => { if (!pendingNext) complete(undefined, true); };
   stream.controller?.signal.addEventListener("abort", aborted, { once: true });
-  if (stream.controller?.signal.aborted) complete();
+  if (stream.controller?.signal.aborted) complete(undefined, true);
 
   const collect = (chunk: ChatCompletion) => {
     if (chunk.id) response.id = chunk.id;
@@ -350,7 +350,7 @@ function observeStream(stream: StreamResponse, span: Span, hideOutput: boolean,
       pendingNext = true;
       try {
         const next = await context.with(execContext, operation);
-        if (closing || next.done) complete();
+        if (closing || next.done) complete(undefined, closing || stream.controller?.signal.aborted);
         else if (capture) collect(next.value);
         return next;
       } catch (error) {

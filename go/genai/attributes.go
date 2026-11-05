@@ -46,6 +46,20 @@ const (
 	EmbeddingModelName = "embedding.model_name"
 	EmbeddingCount     = "embedding.count"
 
+	// GenAIUsageDetails contains allow-listed per-modality usage counts as JSON.
+	GenAIUsageDetails = "gen_ai.usage.details"
+	// GenAIUsageToolUsePromptTokens is the tool-use subset of input tokens.
+	GenAIUsageToolUsePromptTokens = "gen_ai.usage.input_tokens.tool_use"
+
+	// Gemini-specific, bounded metadata (not OTel semantic conventions).
+	// GenAIRequestToolChoice is JSON with mode and allowed_function_names.
+	GenAIRequestToolChoice = "gen_ai.request.tool_choice"
+	// GenAIRequestBuiltinTools contains only allow-listed built-in tool identities.
+	GenAIRequestBuiltinTools = "gen_ai.request.builtin_tools"
+	// GenAIResponseGrounding is JSON with candidate-indexed sources, search
+	// queries and citations. It excludes HTML, blobs and retrieved document text.
+	GenAIResponseGrounding = "gen_ai.response.grounding"
+
 	// traceAI names (shared with Python/TypeScript/Java traceAI).
 	GenAIUsageTotalTokens         = "gen_ai.usage.total_tokens"
 	GenAIUsageCacheReadTokens     = "gen_ai.usage.cache_read_tokens"

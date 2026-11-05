@@ -1,6 +1,6 @@
 # Native Anthropic Java tracing
 
-Use the Anthropic Java SDK's native OpenTelemetry spans with the standard OTLP/HTTP exporter. This example needs Java 17+, Anthropic Java 3.2.0+, and OpenTelemetry 1.57.0+. The POM pins Anthropic 3.3.0.
+Use the Anthropic Java SDK's native OpenTelemetry spans with the standard OTLP/HTTP exporter. This example supports Anthropic Java 3.2.0–3.4.0 and needs Java 17+ and OpenTelemetry 1.57.0+. The POM pins Anthropic 3.3.0.
 
 Set your credentials through your environment or secret manager:
 
@@ -21,11 +21,18 @@ The example selects metadata-only tracing explicitly. To export prompt and respo
 
 Do not combine native tracing with `TracedAnthropicClient`. The released `com.futureagi:traceai-java-anthropic:1.0.0` wrapper remains available for existing blocking-call integrations. If retaining it with a modern SDK, build that SDK client with `.openTelemetry(false)` so only the wrapper emits request spans. No wrapper or traceAI initialization is needed for the native example.
 
+## Server-tool billing
+
+Native spans do not record Anthropic's `usage.server_tool_use.web_search_requests` or `web_fetch_requests` counts. Cost views based on these spans may under-report server-tool charges even though token and cache usage are recorded.
+
+There is no traceAI Java tracing route that currently exports these counts as structured billing metrics. The retained wrapper is not a workaround: raw response capture is not a billing metric and requires exporting response content. Keep native tracing as the only request-span owner, and use Anthropic's usage and billing records to reconcile server-tool charges rather than relying on span-based cost totals. Track support in [the server-tool billing follow-up](https://github.com/future-agi/traceAI/issues/584).
+
 ## Contract tests
 
 ```bash
 mvn test
 mvn -Danthropic.version=3.2.0 clean test
+mvn -Danthropic.version=3.4.0 -Dotel.version=1.67.0 clean test
 ```
 
 Tests use the real SDK against loopback API and OTLP receivers, with synthetic credentials. They cover sync/async requests, complete and cancelled streams, tool-runner parenting, privacy, cache-inclusive usage, protobuf with and without gzip, the documented executable in a fresh process, and the duplicate-span boundary with the published legacy wrapper. The Java exporter uses protobuf; the example does not implement a JSON exporter.

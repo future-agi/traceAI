@@ -2,7 +2,15 @@ import { Attributes, Context, Span, SpanStatusCode, context } from "@opentelemet
 import { SemanticConventions as S, MimeType } from "@traceai/fi-semantic-conventions";
 import { safelyJSONStringify } from "@traceai/fi-core";
 
-interface Usage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+interface Usage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  completion_tokens_details?: { reasoning_tokens?: number } | null;
+  dram_cached_tokens?: number;
+  sram_cached_tokens?: number;
+}
 interface ToolCall {
   index?: number;
   id?: string;
@@ -21,22 +29,66 @@ interface Completion {
   model?: string;
   choices: Choice[];
   usage?: Usage | null;
-  x_groq?: { usage?: Usage | null };
+  x_groq?: { usage?: Usage | null; error?: string | null };
 }
 interface Stream extends AsyncIterable<Completion> {
   controller: AbortController;
 }
 type Result = Completion | Stream;
-interface ResponsePromise extends Promise<Result> {
+interface ResponsePromise<T> extends Promise<T> {
   asResponse?(): Promise<unknown>;
-  withResponse?(): Promise<{ data: Result; [key: string]: unknown }>;
+  withResponse?(): Promise<{ data: T; [key: string]: unknown }>;
 }
 
-function usageAttributes(usage?: Usage | null): Attributes {
+/** Audio returns either JSON (including verbose segments) or a plain text transcript. */
+export function audioResponseAttributes(result: unknown): Attributes {
+  const text = typeof result === "string";
+  const output = text ? result : safelyJSONStringify(result) ?? undefined;
+  return {
+    [S.OUTPUT_VALUE]: output,
+    [S.OUTPUT_MIME_TYPE]: text ? MimeType.TEXT : MimeType.JSON,
+    [S.RAW_OUTPUT]: output,
+  };
+}
+
+/** Usage values are snapshots, not deltas. Prefer present newer fields, including zero. */
+function mergeUsage(previous?: Usage | null, next?: Usage | null): Usage | undefined {
+  if (!next) return previous ?? undefined;
+  if (!previous) return next;
+  return {
+    ...previous, ...next,
+    prompt_tokens: next.prompt_tokens ?? previous.prompt_tokens,
+    completion_tokens: next.completion_tokens ?? previous.completion_tokens,
+    total_tokens: next.total_tokens ?? previous.total_tokens,
+    prompt_tokens_details: {
+      ...previous.prompt_tokens_details, ...next.prompt_tokens_details,
+      cached_tokens: next.prompt_tokens_details?.cached_tokens ?? previous.prompt_tokens_details?.cached_tokens,
+    },
+    completion_tokens_details: {
+      ...previous.completion_tokens_details, ...next.completion_tokens_details,
+      reasoning_tokens: next.completion_tokens_details?.reasoning_tokens ?? previous.completion_tokens_details?.reasoning_tokens,
+    },
+    dram_cached_tokens: next.dram_cached_tokens ?? previous.dram_cached_tokens,
+    sram_cached_tokens: next.sram_cached_tokens ?? previous.sram_cached_tokens,
+  };
+}
+
+function responseUsage(result: Completion): Usage | undefined {
+  // New SDKs split standard usage and hardware cache metrics; older streams
+  // put all usage in x_groq. Neither source should hide fields in the other.
+  return mergeUsage(result.x_groq?.usage, result.usage);
+}
+
+function usageAttributes(usage?: Usage): Attributes {
   return {
     [S.LLM_TOKEN_COUNT_PROMPT]: usage?.prompt_tokens,
     [S.LLM_TOKEN_COUNT_COMPLETION]: usage?.completion_tokens,
     [S.LLM_TOKEN_COUNT_TOTAL]: usage?.total_tokens,
+    [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]: usage?.prompt_tokens_details?.cached_tokens,
+    [S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING]: usage?.completion_tokens_details?.reasoning_tokens,
+    // Hardware cache counters are provider-specific, not additional billable tokens.
+    "groq.usage.dram_cached_tokens": usage?.dram_cached_tokens,
+    "groq.usage.sram_cached_tokens": usage?.sram_cached_tokens,
   };
 }
 
@@ -50,7 +102,7 @@ function completionAttributes(result: Completion): Attributes {
     [S.GEN_AI_RESPONSE_MODEL]: result.model,
     [S.GEN_AI_RESPONSE_ID]: result.id,
     [S.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(choices.map(c => c.finish_reason).filter(Boolean)) ?? undefined,
-    ...usageAttributes(result.usage ?? result.x_groq?.usage),
+    ...usageAttributes(responseUsage(result)),
   };
 }
 
@@ -60,12 +112,17 @@ class Accumulator {
   private id?: string;
   private model?: string;
   private usage?: Usage;
+  error?: string;
 
   add(chunk: Completion) {
+    // Groq yields provider-stopped streams normally. Keep the diagnostic out of
+    // output payloads and route it through FISpan's error-detail policy at end.
+    if (typeof chunk.x_groq?.error === "string" && chunk.x_groq.error.length > 0) {
+      this.error = chunk.x_groq.error;
+    }
     this.id = chunk.id ?? this.id;
     this.model = chunk.model ?? this.model;
-    const usage = chunk.usage ?? chunk.x_groq?.usage;
-    if (usage) this.usage = { ...this.usage, ...usage };
+    this.usage = mergeUsage(this.usage, responseUsage(chunk));
     for (const choice of chunk.choices ?? []) {
       let acc = this.choices.get(choice.index);
       if (!acc) {
@@ -112,7 +169,10 @@ class Accumulator {
 }
 
 /** Observe only consumption requested by the application, keeping SDK helpers and brands. */
-export function observeResponse(promise: ResponsePromise, span: Span, execContext: Context): ResponsePromise {
+export function observeResponse<T>(
+  promise: ResponsePromise<T>, span: Span, execContext: Context,
+  attributes?: (result: T) => Attributes,
+): ResponsePromise<T> {
   let ended = false;
   const end = (attributes: Attributes = {}, error?: unknown, cancelled = false) => {
     if (ended) return;
@@ -128,19 +188,24 @@ export function observeResponse(promise: ResponsePromise, span: Span, execContex
     span.end();
   };
   const fail = (error: unknown): never => { end({}, error); throw error; };
-  const observed = new WeakMap<object, Result>();
-  const observe = (result: Result): Result => {
-    if (observed.has(result)) return observed.get(result)!;
-    if (Symbol.asyncIterator in result) {
-      const stream = observeStream(result, execContext, end);
-      observed.set(result, stream);
+  const observed = new WeakMap<object, T>();
+  const observe = (result: T): T => {
+    if (attributes) {
+      end(attributes(result));
+      return result;
+    }
+    const completion = result as Result;
+    if (observed.has(completion)) return observed.get(completion)!;
+    if (Symbol.asyncIterator in completion) {
+      const stream = observeStream(completion, execContext, end) as T;
+      observed.set(completion, stream);
       return stream;
     }
-    end(completionAttributes(result));
-    observed.set(result, result);
+    end(completionAttributes(completion));
+    observed.set(completion, result);
     return result;
   };
-  let parsed: Promise<Result> | undefined;
+  let parsed: Promise<T> | undefined;
   let parsingRequested = false;
   const parse = () => {
     parsingRequested = true;
@@ -150,9 +215,9 @@ export function observeResponse(promise: ResponsePromise, span: Span, execContex
     get(target, key) {
       // Calling then here (rather than when create returns) preserves the SDK's
       // lazy JSON parsing and prevents an unrequested background stream reader.
-      if (key === "then") return (...args: Parameters<Promise<Result>["then"]>) => parse().then(...args);
-      if (key === "catch") return (...args: Parameters<Promise<Result>["catch"]>) => parse().catch(...args);
-      if (key === "finally") return (...args: Parameters<Promise<Result>["finally"]>) => parse().finally(...args);
+      if (key === "then") return (...args: Parameters<Promise<T>["then"]>) => parse().then(...args);
+      if (key === "catch") return (...args: Parameters<Promise<T>["catch"]>) => parse().catch(...args);
+      if (key === "finally") return (...args: Parameters<Promise<T>["finally"]>) => parse().finally(...args);
       if (key === "withResponse" && target.withResponse) {
         return () => {
           parsingRequested = true;
@@ -185,7 +250,7 @@ function observeStream(
     if (finished) return;
     finished = true;
     stream.controller.signal.removeEventListener("abort", onAbort);
-    end(acc.attributes(), error, cancelled);
+    end(acc.attributes(), error === undefined ? acc.error : error, cancelled);
   };
   const onAbort = () => {
     // SDK iterators abort in their error cleanup too. Let the pending next()

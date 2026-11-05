@@ -371,6 +371,48 @@ describe.each(drivers)("mongodb %s command monitoring", (_version, mongo) => {
     expect(exporter.getFinishedSpans()).toHaveLength(1);
   });
 
+  test.each([false, true])("ends spans when onStart disables instrumentation (re-enable: %s)", async (reenable) => {
+    const reentrantExporter = new InMemorySpanExporter();
+    let disabledOnStart = false;
+    const reentrantProvider = new BasicTracerProvider({ spanProcessors: [
+      {
+        onStart: () => {
+          if (disabledOnStart) return;
+          disabledOnStart = true;
+          instrumentation.disable();
+          if (reenable) instrumentation.enable();
+        },
+        onEnd: () => {},
+        forceFlush: async () => {},
+        shutdown: async () => {},
+      },
+      new SimpleSpanProcessor(reentrantExporter),
+    ] });
+    try {
+      instrumentation.setTracerProvider(reentrantProvider);
+      const result = await client.db("synthetic").collection("rows").findOne({});
+      expect(result?._id).toBe(1);
+      expect(disabledOnStart).toBe(true);
+      expect(instrumentation.isEnabled()).toBe(reenable);
+      expect(client.listenerCount("commandStarted")).toBe(reenable ? 1 : 0);
+      const spans = reentrantExporter.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      // Cleanup is not a successful database response, even if onStart re-enables.
+      expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
+      expect(spans[0].attributes).not.toHaveProperty("db.response.returned_rows");
+      if (!reenable) instrumentation.enable();
+      expect((await client.db("synthetic").collection("rows").findOne({}))?._id).toBe(1);
+      expect(reentrantExporter.getFinishedSpans()).toHaveLength(2);
+      expect(reentrantExporter.getFinishedSpans()[1].status.code).toBe(SpanStatusCode.OK);
+      expect(client.listenerCount("commandStarted")).toBe(1);
+      instrumentation.disable();
+      expect(reentrantExporter.getFinishedSpans()).toHaveLength(2);
+    } finally {
+      instrumentation.setTracerProvider(provider);
+      await reentrantProvider.shutdown();
+    }
+  });
+
   test("OTLP HTTP wire contains command/vector metadata, not sensitive contents", async () => {
     const bodies: string[] = [];
     const receiver = createHTTPServer((request, response) => {

@@ -10,7 +10,7 @@ import {
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
 import { ContentPolicy } from "./spans";
 import { AgentClassLike, CursorSDKModuleLike } from "./types";
 import { VERSION } from "./version";
@@ -218,10 +218,9 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
   private tracingContext(): TracingContext | undefined {
     if (!this.isEnabled() || this.stopped) return undefined;
     const policy = this.contentPolicy;
-    const tracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
-    });
+    const traceConfig = generateTraceConfig({ ...this.traceConfig, ...policy });
+    policy.hideErrorDetails = traceConfig.hideErrorDetails;
+    const tracer = new FITracer({ tracer: this.tracer, traceConfig });
     return { tracer, policy, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry };
   }
 }

@@ -46,8 +46,12 @@ def run_crew():
     else:
         from crewai import LLM
 
+        # Explicit routing also supports 1.15.0's strict model-name registry.
         llm = LLM(
-            model="openai/synthetic", api_key=SECRET, base_url="http://127.0.0.1:1/v1"
+            model="openai/synthetic",
+            provider="openai",
+            api_key=SECRET,
+            base_url="http://127.0.0.1:1/v1",
         )
         agent = Agent(
             role="Synthetic worker",

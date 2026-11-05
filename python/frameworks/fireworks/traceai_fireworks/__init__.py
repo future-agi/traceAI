@@ -107,7 +107,7 @@ class FireworksInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
+            wrapper=_CompletionsWrapper(tracer=self._tracer, config=config),
         )
 
         # Wrap asynchronous completions
@@ -115,7 +115,7 @@ class FireworksInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
+            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, config=config),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
