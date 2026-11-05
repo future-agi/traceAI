@@ -1,6 +1,7 @@
 """Copy and project native spans at the exporter boundary."""
 import json
 import math
+import re
 from fi_instrumentation.instrumentation.config import TraceConfig
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Event
@@ -19,6 +20,17 @@ _INPUT_CONTENT = ('langfuse.observation.input', 'memory.query.text',
                   'cognee.search.query', 'cognee.db.query')
 _OUTPUT_CONTENT = ('langfuse.observation.output',)
 _KIND_KEYS = ('fi.span.kind', 'gen_ai.span.kind', 'llm.request.type', 'openinference.span.kind')
+_MODEL_KEYS = frozenset({'gen_ai.request.model', 'gen_ai.response.model'})
+# Model IDs may be local paths, including a provider-prefixed absolute path
+# (openai//models/llama-3.2). Only that boundary allows a double slash; reject
+# URL schemes, userinfo, query/fragment material and other empty path segments.
+# Unicode \w preserves str.isalnum() plus underscore; [^\W_] is alphanumeric
+# only, keeping provider prefixes and tags from starting with punctuation.
+_MODEL_ID = re.compile(
+    r'(?:/|[^\W_][\w.-]*//)?'
+    r'[\w.-]+(?:/[\w.-]+)*'
+    r'(?::[^\W_][\w.-]*)?'
+)
 
 def _wire_number(value):
     if type(value) is bool:
@@ -30,6 +42,12 @@ def _wire_number(value):
 
 def _safe_value(value):
     return _wire_number(value) or (isinstance(value, str) and len(value) <= 256 and all(c.isalnum() or c in '._-/' for c in value))
+
+def _safe_metadata(key, value):
+    if key in _MODEL_KEYS:
+        return isinstance(value, str) and len(value) <= 256 and _MODEL_ID.fullmatch(value) is not None
+    return _safe_value(value)
+
 
 def _kind(name, attrs):
     if attrs.get('gen_ai.operation.name') == 'embeddings':
@@ -47,7 +65,7 @@ def _content(value):
 
 def project(span, project_name, capture_content, trace_config=None):
     attrs = dict(span.attributes or {})
-    out = {k: v for k, v in attrs.items() if k in _SAFE and _safe_value(v)}
+    out = {k: v for k, v in attrs.items() if k in _SAFE and _safe_metadata(k, v)}
     for key in _KIND_KEYS:
         if key in attrs and _safe_value(attrs[key]):
             out[key] = attrs[key]
@@ -65,6 +83,10 @@ def project(span, project_name, capture_content, trace_config=None):
                 continue
             for key in keys:
                 value = _content(attrs.get(key))
+                if value is not None:
+                    # Structural credential redaction and shared PII masking
+                    # both precede aliases; the original span stays untouched.
+                    value = config.mask(key, value)
                 if value is not None:
                     out[key] = value
         for dest, sources in (('input', ('langfuse.observation.input', 'memory.query.text', 'cognee.search.query')),

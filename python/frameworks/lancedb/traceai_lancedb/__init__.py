@@ -6,6 +6,7 @@ import logging
 from collections.abc import Collection
 from typing import Any
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import FunctionWrapper
@@ -59,8 +60,9 @@ class LanceDBInstrumentor(BaseInstrumentor):
         self._originals.append((cls, method, original, replacement))
 
     def _instrument(self, **kwargs: Any) -> None:
-        tracer = trace_api.get_tracer(
-            __name__, __version__, kwargs.get("tracer_provider")
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, kwargs.get("tracer_provider")),
+            config=kwargs.get("config") or TraceConfig(),
         )
         self._originals = []
         try:

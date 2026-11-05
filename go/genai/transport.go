@@ -328,7 +328,11 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 	} else {
 		acc := newAccumulator()
 		acc.addResponse(b)
-		span.SetAttributes(c.tc.Filter(acc.attributes())...)
+		span.SetAttributes(c.tc.Filter(acc.attributes(c.tc))...)
+		if acc.decodeFailed {
+			endWithFailure(span, failure{"decode", "failed to decode generation response"})
+			return
+		}
 	}
 	span.End()
 }

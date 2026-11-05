@@ -18,8 +18,11 @@ export function addTracerToHandlers(
   tracer: FITracer,
   handlers?: CallbackManagerModuleV02.Callbacks,
 ): CallbackManagerModuleV02.Callbacks {
+  // The injected tracer has no persistence I/O. Await its callbacks so stream
+  // return/cancellation cannot race a background span start or end. Leave user
+  // handlers (including subclasses with async persistence) unchanged.
   if (handlers == null) {
-    return [new LangChainTracer(tracer)];
+    return [new LangChainTracer(tracer, true)];
   }
   if (Array.isArray(handlers)) {
     const tracerAlreadyRegistered = handlers.some(
@@ -27,7 +30,7 @@ export function addTracerToHandlers(
     );
     if (!tracerAlreadyRegistered) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      handlers.push(new LangChainTracer(tracer) as any);
+      handlers.push(new LangChainTracer(tracer, true) as any);
     }
     return handlers;
   }
@@ -40,6 +43,6 @@ export function addTracerToHandlers(
     return handlers;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handlers.addHandler(new LangChainTracer(tracer) as any, true);
+  handlers.addHandler(new LangChainTracer(tracer, true) as any, true);
   return handlers;
 }

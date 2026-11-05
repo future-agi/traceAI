@@ -135,6 +135,8 @@ describe("createFIObservability", () => {
     });
     expect(observability).toBeDefined();
     expect(typeof observability.shutdown).toBe("function");
+    expect(typeof observability.flush).toBe("function");
+    await observability.flush();
     await observability.shutdown();
   });
 

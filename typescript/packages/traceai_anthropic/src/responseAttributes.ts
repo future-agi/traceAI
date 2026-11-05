@@ -86,14 +86,25 @@ export function getAnthropicOutputMessagesAttributes(
 export function getAnthropicUsageAttributes(
   response: Anthropic.Message | { usage?: Anthropic.Usage },
 ): Attributes {
-  const usage = response.usage;
+  const usage = response.usage as (Anthropic.Usage & {
+    cache_creation_input_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+  }) | undefined;
   if (usage) {
+    const inputTokens = usage.input_tokens === undefined ? undefined : usage.input_tokens
+      + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
     const attributes: Attributes = {
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: usage.input_tokens,
+      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: inputTokens,
       [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: usage.output_tokens,
     };
-    if (usage.input_tokens !== undefined && usage.output_tokens !== undefined) {
-        attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = usage.input_tokens + usage.output_tokens;
+    if (inputTokens !== undefined && usage.output_tokens !== undefined) {
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = inputTokens + usage.output_tokens;
+    }
+    if (usage.cache_creation_input_tokens != null) {
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE] = usage.cache_creation_input_tokens;
+    }
+    if (usage.cache_read_input_tokens != null) {
+      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ] = usage.cache_read_input_tokens;
     }
     return attributes;
   }
@@ -145,17 +156,17 @@ export function aggregateAnthropicStreamEvents(
         reconstructedMessage.role = event.message.role;
         reconstructedMessage.type = event.message.type;
         if (event.message.usage) {
-            reconstructedMessage.usage = { 
-                input_tokens: event.message.usage.input_tokens,
-                output_tokens: reconstructedMessage.usage?.output_tokens || 0 
-            };
+            reconstructedMessage.usage = { ...event.message.usage };
         }
         break;
       case "message_delta":
         if (event.delta.stop_reason) reconstructedMessage.stop_reason = event.delta.stop_reason;
         if (event.delta.stop_sequence) reconstructedMessage.stop_sequence = event.delta.stop_sequence;
-        if (event.usage?.output_tokens && reconstructedMessage.usage) {
-             reconstructedMessage.usage.output_tokens = (reconstructedMessage.usage.output_tokens || 0) + event.usage.output_tokens;
+        if (event.usage && reconstructedMessage.usage) {
+          // Delta usage is cumulative. Missing/null fields keep the start snapshot.
+          for (const [key, value] of Object.entries(event.usage)) {
+            if (value != null) Object.assign(reconstructedMessage.usage, { [key]: value });
+          }
         }
         break;
       case "content_block_start":
