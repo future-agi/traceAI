@@ -32,7 +32,7 @@ pytest_plugins = ("tests.test_vercel_gateway",)
 def test_readme_request_blocks(collector, monkeypatch, section, host, provider, model):
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
     quickstart = readme.split("## Quickstart\n", 1)[1].split(
-        "## Vercel AI Gateway\n", 1
+        "## Transcribe audio\n", 1
     )[0]
     setup, instrument, openai_request = re.findall(
         r"```python\n(.*?)```", quickstart, flags=re.DOTALL
