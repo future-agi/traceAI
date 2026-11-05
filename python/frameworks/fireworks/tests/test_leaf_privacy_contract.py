@@ -144,6 +144,27 @@ def test_sdk_message_objects_in_a_tool_loop_keep_permitted_telemetry(flag):
     assert messages[1] is sdk_message and sdk_message.tool_calls is not None
 
 
+@pytest.mark.parametrize("flag", ["pii_redaction", "hide_input_images", "hide_input_text"])
+def test_parsed_structured_output_messages_keep_permitted_telemetry(flag):
+    chat_types = pytest.importorskip("openai.types.chat")
+    parsed_message = getattr(chat_types, "ParsedChatCompletionMessage", None)
+    if parsed_message is None:
+        pytest.skip("parse() structured outputs are not available in this SDK")
+    import pydantic
+
+    class Answer(pydantic.BaseModel):
+        answer: str
+
+    message = parsed_message[Answer].construct(
+        role="assistant", content='{"answer": "x"}', parsed=Answer(answer="x"))
+    messages = [{"role": "user", "content": TEXT}, message]
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", messages, config=config, temperature=0.7)
+    assert config.mask("input.value", attrs["input.value"]) != "__REDACTED__"
+    assert attrs["gen_ai.input.messages.1.message.role"] == "assistant"
+    assert messages[1] is message
+
+
 @pytest.mark.parametrize("flag", ["hide_input_images", "hide_input_text", "pii_redaction"])
 @pytest.mark.parametrize("invalid", [{"url": "ftp://example.invalid/i.png"},
                                      {"url": "https://example.invalid/i.png", "detail": "ultra"}])

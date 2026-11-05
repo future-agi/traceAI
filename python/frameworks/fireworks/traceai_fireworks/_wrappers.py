@@ -123,6 +123,22 @@ class _OverBudget(Exception):
     pass
 
 
+def _exported_openai_class(kind: type) -> bool:
+    """True only for the exact class exported by its already-loaded openai.* module."""
+    module_name = _type_dict(kind).get("__module__")
+    # __name__ is stored in type's native slot, not the class namespace.
+    class_name = _type_name(kind)
+    if (type(module_name) is not str or not module_name.startswith("openai.")
+            or type(class_name) is not str):
+        return False
+    # ModuleType's native dict descriptor and dict.get avoid user attribute hooks.
+    from types import ModuleType
+    module = __import__("sys").modules.get(module_name)
+    if type(module) is not ModuleType:
+        return False
+    return ModuleType.__dict__["__dict__"].__get__(module).get(class_name) is kind
+
+
 def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
     """Classify canonical OpenAI classes without metaclass equality/descriptors."""
     try:
@@ -137,21 +153,21 @@ def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
                 return False
         if not found_base:
             return False
-        namespace = _type_dict(kind)
-        module_name = namespace.get("__module__")
-        # __name__ is stored in type's native slot, not the class namespace.
-        class_name = _type_name(kind)
-        if (type(module_name) is not str or not module_name.startswith("openai.")
-                or type(class_name) is not str):
+        if _exported_openai_class(kind):
+            return True
+        # parse() returns runtime pydantic parametrizations such as
+        # ParsedChatCompletionMessage[T], which their module does not export.
+        # Accept one only when its recorded generic origin is itself an exported
+        # OpenAI class and sits in its own MRO (identity comparison only).
+        metadata = _type_dict(kind).get("__pydantic_generic_metadata__")
+        if type(metadata) is not dict:
             return False
-        # Accept only the exact class exported by its already-loaded defining module.
-        # ModuleType's native dict descriptor and dict.get avoid user attribute hooks.
-        from types import ModuleType
-        module = __import__("sys").modules.get(module_name)
-        if type(module) is not ModuleType:
+        origin = metadata.get("origin")
+        if origin is None or origin is kind:
             return False
-        module_dict = ModuleType.__dict__["__dict__"].__get__(module)
-        return module_dict.get(class_name) is kind
+        if not any(base is origin for base in mro):
+            return False
+        return _exported_openai_class(origin)
     except Exception:
         return False
 
