@@ -45,7 +45,7 @@ trace_provider = register(
 ```
 
 ### Configure Bedrock Instrumentation
-Instrument the Bedrock client to enable telemetry collection. This step ensures that all interactions with the Bedrock SDK are tracked and monitored.
+Call the instrumentor before creating your boto3 clients to trace supported Bedrock model, retrieval, and agent operations.
 
 ```python
 from traceai_bedrock import BedrockInstrumentor
@@ -53,10 +53,61 @@ from traceai_bedrock import BedrockInstrumentor
 BedrockInstrumentor().instrument(tracer_provider=trace_provider)
 ```
 
+### Stream with Converse (Python)
+
+Use `client.converse_stream(...)` with the same arguments as `client.converse(...)`.
+The span records the response as you consume `response["stream"]`, including text,
+tool calls, stop reason, and token usage when returned by Bedrock. Consume the
+whole stream: usage arrives after `messageStop` in a metadata event.
+
+```python
+import os
+import boto3
+
+client = boto3.client("bedrock-runtime", region_name=os.environ["AWS_REGION"])
+response = client.converse_stream(
+    modelId=os.environ["BEDROCK_MODEL_ID"],
+    messages=[{"role": "user", "content": [{"text": "Suggest three places to visit in Lisbon."}]}],
+)
+stream = response["stream"]
+try:
+    for event in stream:
+        text = event.get("contentBlockDelta", {}).get("delta", {}).get("text")
+        if text:
+            print(text, end="", flush=True)
+finally:
+    stream.close()
+    trace_provider.force_flush()
+```
+
+Create `client` as a boto3 `bedrock-runtime` client after instrumenting, with your
+AWS region and usual credential chain. If you stop early, call `stream.close()`;
+the span contains only consumed output and usage, and closing never drains the
+response. A stream that is neither consumed nor closed remains open. Request and
+stream exceptions propagate unchanged.
+
+For async applications, install `aiobotocore` (tested from 2.23.0) and create its
+client after calling the same `BedrockInstrumentor().instrument(...)`. Await
+`client.converse(...)` or `client.converse_stream(...)`, and consume streaming
+responses with `async for event in response["stream"]`. The aiobotocore stream's
+`close()` is synchronous. No second instrumentor is needed.
+
+Async coverage is limited to these two Runtime methods. `invoke_inline_agent`
+and `apply_guardrail` are not instrumented. Do not enable another Bedrock
+instrumentor for the same client operations. This package requires
+`fi-instrumentation-otel>=1.2.2` so content-hiding settings also protect exception
+details. Pass `config=TraceConfig(hide_inputs=True, hide_outputs=True)` to the
+instrumentor to hide prompt, response, and tool-argument content.
+
 ### Create Bedrock Components
 Set up your Bedrock client with built-in observability.
 
 ```python
+import os
+import boto3
+
+client = boto3.client("bedrock-runtime", region_name=os.environ["AWS_REGION"])
+
 def converse_with_claude():
     system_prompt = [{"text": "You are an expert at creating music playlists"}]
     messages = [
@@ -69,7 +120,7 @@ def converse_with_claude():
 
     try:
         response = client.converse(
-            modelId="model_id",
+            modelId=os.environ["BEDROCK_MODEL_ID"],
             system=system_prompt,
             messages=messages,
             inferenceConfig=inference_config,
