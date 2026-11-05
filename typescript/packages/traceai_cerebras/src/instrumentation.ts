@@ -61,6 +61,8 @@ interface Completion {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
   };
   time_info?: Record<string, number>;
 }
@@ -92,6 +94,35 @@ function resources(
     [sdk.Chat?.Completions?.prototype, "chat"],
     [sdk.Completions?.prototype, "text_completion"],
   ];
+}
+
+// Inspect descriptors, never values obtained through getters. Both telemetry
+// serialization and the SDK traverse nested messages/tools, so a shallow check
+// would still evaluate those accessors twice. Repeated references are harmless.
+function hasOpaqueRequestValue(body: object): boolean {
+  const pending = [body];
+  const seen = new WeakSet<object>();
+  while (pending.length) {
+    const value = pending.pop()!;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if ("toJSON" in value) return true;
+    for (
+      let holder: object | null = value;
+      holder && holder !== Object.prototype && holder !== Array.prototype;
+      holder = Object.getPrototypeOf(holder)
+    ) {
+      for (const key of Reflect.ownKeys(holder)) {
+        const descriptor = Object.getOwnPropertyDescriptor(holder, key)!;
+        if (!("value" in descriptor)) return true;
+        if (
+          holder === value && descriptor.enumerable && descriptor.value &&
+          (typeof descriptor.value === "object" || typeof descriptor.value === "function")
+        ) pending.push(descriptor.value);
+      }
+    }
+  }
+  return false;
 }
 
 export class CerebrasInstrumentation extends InstrumentationBase {
@@ -174,10 +205,25 @@ export class CerebrasInstrumentation extends InstrumentationBase {
           isTracingSuppressed(context.active())
         )
           return original.apply(this, args);
-        const body = args[0] as Request | undefined;
-        // Leave invalid requests to the SDK rather than changing its error contract.
-        if (!body || typeof body !== "object")
+        // The SDK spreads RequestOptions over its body. An own enumerable body
+        // replaces the positional payload, even when explicitly null/undefined.
+        // Inspect without reading accessors: the SDK must evaluate them exactly
+        // once. Headers and other transport options are not trace data.
+        const options = args[1];
+        const bodyDescriptor = options == null
+          ? undefined
+          : Object.getOwnPropertyDescriptor(options, "body");
+        if (bodyDescriptor?.enumerable && !("value" in bodyDescriptor))
           return original.apply(this, args);
+        const body = (
+          bodyDescriptor?.enumerable ? bodyDescriptor.value : args[0]
+        ) as Request | undefined;
+        // Leave non-request bodies to the SDK; never fall back to unsent input.
+        if (!body || typeof body !== "object" || Array.isArray(body))
+          return original.apply(this, args);
+        // Accessors and serializers may be stateful or omit private fields.
+        // Let only the SDK evaluate opaque bodies, before starting any span.
+        if (hasOpaqueRequestValue(body)) return original.apply(this, args);
         const { messages, prompt: _prompt, ...parameters } = body;
         const config = generateTraceConfig(instrumentation._traceConfig);
         // Raw payloads duplicate canonical messages. Omit every representation
@@ -378,8 +424,16 @@ function metadataAttributes(response: Completion): Attributes {
       [S.LLM_TOKEN_COUNT_PROMPT, response.usage.prompt_tokens],
       [S.LLM_TOKEN_COUNT_COMPLETION, response.usage.completion_tokens],
       [S.LLM_TOKEN_COUNT_TOTAL, response.usage.total_tokens],
+      [
+        S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+        response.usage.prompt_tokens_details?.cached_tokens,
+      ],
+      [
+        S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+        response.usage.completion_tokens_details?.reasoning_tokens,
+      ],
     ] as const)
-      if (value != null) attrs[key] = value;
+      if (typeof value === "number" && Number.isFinite(value)) attrs[key] = value;
   }
   for (const key of [
     "queue_time",
