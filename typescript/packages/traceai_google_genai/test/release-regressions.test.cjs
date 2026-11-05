@@ -12,21 +12,28 @@ const { NodeTracerProvider } = req('@opentelemetry/sdk-trace-node');
 const { InMemorySpanExporter, SimpleSpanProcessor } = req('@opentelemetry/sdk-trace-base');
 const { context, trace } = req('@opentelemetry/api');
 const { suppressTracing } = req('@opentelemetry/core');
+const { OTLPTraceExporter } = req('@opentelemetry/exporter-trace-otlp-http');
 const memory = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(memory)] });
+let provider;
 const nativeFetch = global.fetch;
 const answer = {
   candidates: [{ content: { role: 'model', parts: [{ text: 'OUTPUT_SENTINEL' }] }, finishReason: 'STOP' }],
   usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
+  modelVersion: 'gemini-resolved',
 };
 let server, response, bodies, providerFailure;
+let exportedPayloads = [];
 before(async () => {
-  provider.register();
   server = http.createServer(async (request, res) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
+    const body = JSON.parse(Buffer.concat(chunks).toString());
     res.setHeader('content-type', 'application/json');
+    if (request.url === '/v1/traces') {
+      exportedPayloads.push(body);
+      return res.end('{}');
+    }
+    bodies.push(body);
     if (providerFailure) {
       res.statusCode = 400;
       return res.end(JSON.stringify({ error: { message: 'synthetic failure', code: 400, status: 'INVALID_ARGUMENT' } }));
@@ -35,6 +42,11 @@ before(async () => {
       : request.url.includes('embedContent') ? { embedding: { values: [0.2] } } : response));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  provider = new NodeTracerProvider({ spanProcessors: [
+    new SimpleSpanProcessor(memory),
+    new SimpleSpanProcessor(new OTLPTraceExporter({ url: `http://127.0.0.1:${server.address().port}/v1/traces` })),
+  ] });
+  provider.register();
   global.fetch = (url, options) => nativeFetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}`, options);
 });
 after(async () => {
@@ -44,6 +56,8 @@ after(async () => {
   await new Promise(resolve => server.close(resolve));
 });
 async function fixture(traceConfig, callback) {
+  await provider.forceFlush();
+  exportedPayloads = [];
   memory.reset(); bodies = []; response = answer; providerFailure = false;
   const instrumentation = new GoogleGenAIInstrumentation({ instrumentationConfig: { enabled: false }, traceConfig });
   instrumentation.setTracerProvider(provider);
@@ -251,7 +265,8 @@ for (const option of ['hideOutputText', 'hideOutputMessages', 'hideOutputs', 'hi
           const attributes = memory.getFinishedSpans()[0].attributes;
           assert.equal(attributes['gen_ai.usage.input_tokens'], 5);
           assert.equal(attributes['gen_ai.usage.output_tokens'], 3);
-          assert.equal(attributes['gen_ai.response.model'], model.model);
+          assert.equal(attributes['gen_ai.request.model'], model.model);
+          assert.equal(attributes['gen_ai.response.model'], answer.modelVersion);
           if (option === 'hideEmbeddingVectors' || option === 'hideOutputs') {
             memory.reset();
             const single = await model.embedContent('INPUT_SENTINEL');
@@ -260,6 +275,159 @@ for (const option of ['hideOutputText', 'hideOutputMessages', 'hideOutputs', 'hi
             assert.deepEqual(batch.embeddings[0].values, [0.2]);
             assert.doesNotMatch(telemetry(), /0\.2/);
             assert.equal(memory.getFinishedSpans().length, 2);
+          }
+        });
+      } finally {
+        if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+      }
+    });
+  }
+}
+
+async function exportedAttributes() {
+  await provider.forceFlush();
+  const spans = exportedPayloads.flatMap(p => p.resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
+  assert.equal(spans.length, 1, 'one actual OTLP span per generation');
+  const attributes = Object.fromEntries(spans[0].attributes.map(({ key, value }) => [key,
+    value.stringValue ?? Number(value.intValue ?? value.doubleValue)]));
+  assert.equal(attributes['gen_ai.usage.input_tokens'], 5);
+  assert.equal(attributes['gen_ai.usage.output_tokens'], 3);
+  assert.equal(attributes['gen_ai.usage.total_tokens'], 8);
+  assert.doesNotMatch(JSON.stringify(exportedPayloads), /SYNTHETIC_GOOGLE_KEY/);
+  return attributes;
+}
+
+function configuredModel() {
+  return new google.GoogleGenerativeAI('SYNTHETIC_GOOGLE_KEY').getGenerativeModel({
+    model: 'gemini-request-alias',
+    generationConfig: { temperature: 0.73, topP: 0.91, stopSequences: ['STOP_PRIVATE_SENTINEL'] },
+    systemInstruction: 'SYSTEM_PRIVATE_SENTINEL',
+  });
+}
+
+for (const input of ['INPUT_SENTINEL', ['INPUT_SENTINEL'], [{ text: 'INPUT_SENTINEL' }],
+  { contents: [{ role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] }] }]) {
+  test(`effective model defaults match provider HTTP and OTLP (${JSON.stringify(input)})`, async () => {
+    await fixture({}, async instrumentation => {
+      const model = configuredModel();
+      const configBefore = JSON.stringify(model.generationConfig);
+      const baseline = await model.generateContent(input);
+      instrumentation.manuallyInstrument(google);
+      const result = await model.generateContent(input);
+      assert.deepEqual(bodies[1], bodies[0], 'instrumentation must not change the wire request');
+      assert.equal(result.response.text(), baseline.response.text());
+      assert.equal(JSON.stringify(model.generationConfig), configBefore);
+      const attributes = await exportedAttributes();
+      assert.equal(bodies[1].generationConfig.temperature, 0.73);
+      assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), bodies[1].generationConfig);
+      for (const key of ['input.value', 'raw.input']) {
+        const captured = JSON.parse(attributes[key]);
+        assert.deepEqual(captured.generationConfig, bodies[1].generationConfig);
+        assert.deepEqual(captured.systemInstruction, bodies[1].systemInstruction);
+      }
+      const messages = JSON.parse(attributes['gen_ai.input.messages']);
+      if (sdkVersion === '0.1.0') {
+        // This SDK predates model-level system instructions; do not invent support.
+        assert.equal(bodies[1].systemInstruction, undefined);
+        assert.doesNotMatch(JSON.stringify(exportedPayloads), /SYSTEM_PRIVATE_SENTINEL/);
+      } else {
+        assert.equal(bodies[1].systemInstruction.parts[0].text, 'SYSTEM_PRIVATE_SENTINEL');
+        assert.deepEqual(messages[0], { role: 'system', content: 'SYSTEM_PRIVATE_SENTINEL' });
+      }
+    });
+  });
+}
+
+test('per-call generation config replaces model defaults, including empty and undefined values', async () => {
+  for (const generationConfig of [{ temperature: 0.12 }, {}, undefined, null]) {
+    await fixture({}, async instrumentation => {
+      const model = configuredModel();
+      const input = { contents: [{ role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] }], generationConfig };
+      const before = JSON.stringify(model.generationConfig);
+      await model.generateContent(structuredClone(input));
+      instrumentation.manuallyInstrument(google);
+      await model.generateContent(input);
+      assert.deepEqual(bodies[1], bodies[0]);
+      assert.equal(JSON.stringify(model.generationConfig), before);
+      assert.equal(input.generationConfig, generationConfig, 'retain the caller object');
+      const attributes = await exportedAttributes();
+      if (generationConfig != null) {
+        assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), generationConfig);
+      } else {
+        assert.equal(attributes['gen_ai.request.parameters'], undefined);
+      }
+      assert.equal(bodies[1].generationConfig?.topP, undefined, 'the SDK does not deep-merge defaults');
+      assert.doesNotMatch(JSON.stringify(exportedPayloads), /STOP_PRIVATE_SENTINEL/);
+    });
+  }
+});
+
+test('per-call system instruction forms override defaults without extra argument mutation', async () => {
+  for (const systemInstruction of ['CALL_SYSTEM_SENTINEL', { text: 'CALL_SYSTEM_SENTINEL' },
+    { role: 'system', parts: [{ text: 'CALL_SYSTEM_SENTINEL' }] }, undefined, null]) {
+    await fixture({}, async instrumentation => {
+      const model = configuredModel();
+      const input = { contents: [{ role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] }], systemInstruction };
+      const nativeInput = structuredClone(input);
+      const modelBefore = JSON.stringify(model.systemInstruction);
+      await model.generateContent(nativeInput);
+      instrumentation.manuallyInstrument(google);
+      await model.generateContent(input);
+      assert.deepEqual(input, nativeInput, 'only native SDK normalization may change input');
+      assert.equal(JSON.stringify(model.systemInstruction), modelBefore);
+      assert.deepEqual(bodies[1], bodies[0]);
+      const attributes = await exportedAttributes();
+      assert.doesNotMatch(JSON.stringify(exportedPayloads), /SYSTEM_PRIVATE_SENTINEL/);
+      const messages = JSON.parse(attributes['gen_ai.input.messages']);
+      if (systemInstruction != null) {
+        assert.deepEqual(messages[0], { role: 'system', content: 'CALL_SYSTEM_SENTINEL' });
+        assert.match(JSON.stringify(bodies[1].systemInstruction), /CALL_SYSTEM_SENTINEL/);
+      } else {
+        assert.equal(messages.some(m => m.role === 'system'), false);
+        assert.equal(bodies[1].systemInstruction ?? null, null);
+      }
+    });
+  }
+});
+
+test('response model comes only from returned modelVersion, never the request alias', async () => {
+  for (const modelVersion of ['gemini-resolved', undefined, '', '  ', null, 123]) {
+    await fixture({}, async instrumentation => {
+      const model = configuredModel();
+      response = { ...answer, modelVersion };
+      instrumentation.manuallyInstrument(google);
+      const result = await model.generateContent('INPUT_SENTINEL');
+      assert.equal(result.response.modelVersion, modelVersion);
+      const attributes = await exportedAttributes();
+      assert.equal(attributes['gen_ai.request.model'], model.model);
+      assert.equal(attributes['gen_ai.response.model'], modelVersion === 'gemini-resolved' ? modelVersion : undefined);
+    });
+  }
+});
+
+for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideInputImages',
+  'hideOutputs', 'hideOutputText', 'hideOutputMessages']) {
+  for (const environment of [false, true]) {
+    test(`effective metadata privacy over OTLP: ${option} (${environment ? 'environment' : 'config'})`, async () => {
+      const key = 'FI_' + option.replace(/[A-Z]/g, c => '_' + c).toUpperCase();
+      const previous = process.env[key];
+      if (environment) process.env[key] = 'true';
+      try {
+        await fixture(environment ? {} : { [option]: true }, async instrumentation => {
+          const model = configuredModel();
+          instrumentation.manuallyInstrument(google);
+          const result = await model.generateContent('INPUT_SENTINEL');
+          assert.equal(result.response.text(), 'OUTPUT_SENTINEL');
+          assert.equal(bodies[0].generationConfig.temperature, 0.73);
+          assert.match(JSON.stringify(bodies), /INPUT_SENTINEL|STOP_PRIVATE_SENTINEL/);
+          const attributes = await exportedAttributes();
+          assert.equal(attributes['gen_ai.request.model'], model.model);
+          assert.equal(attributes['gen_ai.response.model'], 'gemini-resolved');
+          if (option.startsWith('hideInput')) {
+            assert.doesNotMatch(JSON.stringify(exportedPayloads), /INPUT_SENTINEL|SYSTEM_PRIVATE_SENTINEL|STOP_PRIVATE_SENTINEL/);
+          } else {
+            assert.doesNotMatch(JSON.stringify(exportedPayloads), /OUTPUT_SENTINEL/);
+            assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), bodies[0].generationConfig);
           }
         });
       } finally {

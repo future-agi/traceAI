@@ -69,14 +69,21 @@ interface GenerateContentRequest {
       parameters?: Record<string, unknown>;
     }>;
   }>;
-  systemInstruction?: {
+  systemInstruction?: string | { text: string } | {
     parts: Array<{ text: string }>;
   };
+}
+
+interface GenerationModelMetadata {
+  model?: string;
+  generationConfig?: GenerateContentRequest["generationConfig"];
+  systemInstruction?: GenerateContentRequest["systemInstruction"];
 }
 
 interface GenerateContentResponse {
   response: {
     text: () => string;
+    modelVersion?: string;
     candidates?: Array<{
       content: {
         role: string;
@@ -201,7 +208,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
       if (typeof prototype[method] !== "function") continue;
       this._wrap(prototype, method, original => {
         if (typeof original !== "function") return original;
-        return function (this: { model?: string }, ...args: unknown[]) {
+        return function (this: GenerationModelMetadata, ...args: unknown[]) {
           return instrumentation.traceCall(
             method, this, () => original.apply(this, args),
             () => {
@@ -213,7 +220,14 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
               // the installed fi-core masking version. Never modify the SDK request.
               if (config.hideInputs || config.hideInputText || config.hideInputMessages || config.hideInputImages) return {};
               if (method === "generateContent") {
-                const normalized = normalizeGeneration(request);
+                // The SDK shallowly overlays the call on model defaults: a supplied
+                // generationConfig replaces (not deep-merges) the model config.
+                // Copy only capture fields, never credentials or request options.
+                const normalized = {
+                  generationConfig: this.generationConfig,
+                  systemInstruction: this.systemInstruction,
+                  ...normalizeGeneration(request),
+                };
                 return {
                   [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(normalized) ?? "",
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
@@ -245,10 +259,13 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
               const config = generateTraceConfig(instrumentation._traceConfig);
               if (method === "generateContent") {
                 const response = result as GenerateContentResponse;
-                const metadata = {
-                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: this.model || "unknown",
-                  ...getUsageAttributes(response),
-                };
+                const responseModel = response.response?.modelVersion;
+                const metadata: Attributes = { ...getUsageAttributes(response) };
+                // The request alias is already recorded separately. A provider that
+                // omits modelVersion has not identified a response model.
+                if (typeof responseModel === "string" && responseModel.trim()) {
+                  metadata[SemanticConventions.GEN_AI_RESPONSE_MODEL] = responseModel;
+                }
                 if (config.hideOutputs || config.hideOutputText || config.hideOutputMessages) return metadata;
                 // SDK text() throws on SAFETY / blocked responses, although the call resolved.
                 const text = response.response?.candidates?.[0]?.content?.parts
@@ -362,8 +379,10 @@ function getLLMInputMessagesAttributes(request: GenerateContentRequest): Attribu
   const messages: Array<Record<string, unknown>> = [];
 
   // Add system instruction if present
-  if (request.systemInstruction?.parts) {
-    const systemText = request.systemInstruction.parts.map(p => p.text).join('');
+  const system = request.systemInstruction;
+  if (system != null) {
+    const systemText = typeof system === "string" ? system
+      : "parts" in system ? system.parts.map(p => p.text).join('') : system.text;
     messages.push({ role: 'system', content: systemText });
   }
 
