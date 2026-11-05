@@ -4,6 +4,7 @@ import inspect
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Dict  # Older SDKs misclassify dict[str, object] on Python 3.10.
 
 import anthropic
 import pytest
@@ -508,7 +509,7 @@ def test_retained_raw_headers_finish_before_parse(harness, monkeypatch, async_, 
         parsed = await parse()
         assert parsed.id == MESSAGE["id"]
         assert await parse() is parsed
-        assert await parse(to=dict[str, object]) == MESSAGE
+        assert await parse(to=Dict[str, object]) == MESSAGE
         assert json.loads(await parse(to=str)) == MESSAGE
         if hasattr(raw.__wrapped__, "close"):
             result = raw.close()
@@ -521,7 +522,7 @@ def test_retained_raw_headers_finish_before_parse(harness, monkeypatch, async_, 
         parsed = raw.parse()
         assert parsed.id == MESSAGE["id"]
         assert raw.parse() is parsed
-        assert raw.parse(to=dict[str, object]) == MESSAGE
+        assert raw.parse(to=Dict[str, object]) == MESSAGE
         assert json.loads(raw.parse(to=str)) == MESSAGE
         if hasattr(raw.__wrapped__, "close"):
             raw.close()
