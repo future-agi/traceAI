@@ -152,6 +152,20 @@ function maskToolErrorHistory(value: AttributeValue, failedToolMessage: (message
       if (!Array.isArray(items)) return;
       for (const message of items) {
         if (message?.role !== "tool") continue;
+        // GenAI_v1_38_0 flattens the same result into parts[].response and
+        // JSON-encodes string values. Its ID survives even when isError does not.
+        if (Array.isArray(message.parts)) {
+          for (const part of message.parts) {
+            if (part?.type !== "tool_call_response" || typeof part.id !== "string"
+              || typeof part.response !== "string") continue;
+            let response: unknown = part.response;
+            try { response = JSON.parse(part.response); } catch { /* Unencoded text. */ }
+            if (typeof response === "string" && failedToolMessage(response, part.id)) {
+              part.response = REDACTED_VALUE;
+              changed = true;
+            }
+          }
+        }
         if (typeof message.content === "string" && typeof message.tool_call_id === "string"
           && failedToolMessage(message.content, message.tool_call_id)) {
           message.content = REDACTED_VALUE;

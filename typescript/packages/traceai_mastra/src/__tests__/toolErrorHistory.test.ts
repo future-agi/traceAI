@@ -172,3 +172,29 @@ describe("continued native tool history", () => {
     expect(history.matches("later", secret, "call-16384")).toBe(false);
   });
 });
+
+
+describe("native GenAI continued tool history", () => {
+  it("matches JSON-encoded tool_call_response strings by call ID without masking successful JSON", () => {
+    const history = new ToolErrorHistory();
+    history.remember("first", secret);
+    history.matches("first", secret, "failed-call");
+    history.forget("first");
+    const failed = { type: "tool_call_response", id: "failed-call", name: "lookup", response: JSON.stringify(secret) };
+    const successful = { ...failed, id: "success-call" };
+    const business = { ...successful, response: JSON.stringify({ error: "ordinary tool field" }) };
+    const user = { role: "user", parts: [failed] };
+    const source = span([{ role: "tool", parts: [failed, successful, business] }, user]);
+    const before = JSON.stringify(source);
+    const masked = sanitizeSpan(source, generateTraceConfig({ hideErrorDetails: true }),
+      (message, id) => history.matches("later", message, id));
+    for (const attributes of [masked.attributes, masked.events[0].attributes!]) {
+      for (const key of aliases) expect(JSON.parse(attributes[key] as string)).toEqual([
+        { role: "tool", parts: [{ ...failed, response: REDACTED_VALUE }, successful, business] }, user]);
+    }
+    expect(JSON.stringify(source)).toBe(before);
+    const plain = span([{ role: "tool", parts: [{ ...failed, response: secret }] }]);
+    expect(JSON.stringify(sanitizeSpan(plain, generateTraceConfig({ hideErrorDetails: true }),
+      (message, id) => history.matches("later", message, id)))).not.toContain(secret);
+  });
+});
