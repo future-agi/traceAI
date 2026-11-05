@@ -67,35 +67,55 @@ import { SemanticAttributePrefixes } from '@traceai/fi-semantic-conventions';
 | `audio` | Audio attributes |
 | `prompt` | Prompt attributes |
 
-## LLM Attributes
+## GenAI Attributes
+
+Use the `GEN_AI_*` constants for GenAI attributes. Their names and values match
+Python's `SpanAttributes`, and they are available as both named exports and
+properties of `SemanticConventions`.
 
 ```typescript
-import { LLMAttributePostfixes } from '@traceai/fi-semantic-conventions';
+import {
+    GEN_AI_INPUT_MESSAGES,
+    SemanticConventions,
+} from '@traceai/fi-semantic-conventions';
+
+// Both are "gen_ai.input.messages".
+GEN_AI_INPUT_MESSAGES;
+SemanticConventions.GEN_AI_INPUT_MESSAGES;
 ```
 
-| Postfix | Full Attribute | Description |
-|---------|----------------|-------------|
-| `provider` | `llm.provider` | LLM provider (aws, azure, google) |
-| `system` | `llm.system` | LLM system (openai, anthropic) |
-| `model_name` | `llm.model_name` | Model identifier |
-| `token_count` | `llm.token_count.*` | Token usage |
-| `input_messages` | `llm.input_messages` | Input message array |
-| `output_messages` | `llm.output_messages` | Output message array |
-| `invocation_parameters` | `llm.invocation_parameters` | Model parameters |
-| `prompts` | `llm.prompts` | Prompt strings |
-| `prompt_template` | `llm.prompt_template.*` | Template tracking |
-| `function_call` | `llm.function_call` | Function call details |
-| `tools` | `llm.tools` | Available tools |
+The old `LLM_*` constants remain available as deprecated aliases with the same
+literal types and wire values. Existing instrumentation does not need to change.
+In particular, both `LLM_PROVIDER` and `LLM_SYSTEM` alias `GEN_AI_PROVIDER_NAME`;
+`LLM_SYSTEM` is not an alias for Python's distinct `GEN_AI_SYSTEM` (`gen_ai.system`).
 
-### Token Count Attributes
+| Canonical constant | Deprecated alias | Attribute key |
+|--------------------|------------------|---------------|
+| `GEN_AI_INPUT_MESSAGES` | `LLM_INPUT_MESSAGES` | `gen_ai.input.messages` |
+| `GEN_AI_PROMPTS` | `LLM_PROMPTS` | `gen_ai.prompts` |
+| `GEN_AI_REQUEST_PARAMETERS` | `LLM_INVOCATION_PARAMETERS` | `gen_ai.request.parameters` |
+| `GEN_AI_OUTPUT_MESSAGES` | `LLM_OUTPUT_MESSAGES` | `gen_ai.output.messages` |
+| `GEN_AI_REQUEST_MODEL` | `LLM_MODEL_NAME` | `gen_ai.request.model` |
+| `GEN_AI_PROVIDER_NAME` | `LLM_PROVIDER` | `gen_ai.provider.name` |
+| `GEN_AI_PROVIDER_NAME` | `LLM_SYSTEM` | `gen_ai.provider.name` |
+| `GEN_AI_USAGE_OUTPUT_TOKENS` | `LLM_TOKEN_COUNT_COMPLETION` | `gen_ai.usage.output_tokens` |
+| `GEN_AI_USAGE_OUTPUT_TOKENS_REASONING` | `LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING` | `gen_ai.usage.output_tokens.reasoning` |
+| `GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO` | `LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO` | `gen_ai.usage.output_tokens.audio` |
+| `GEN_AI_USAGE_INPUT_TOKENS` | `LLM_TOKEN_COUNT_PROMPT` | `gen_ai.usage.input_tokens` |
+| `GEN_AI_USAGE_CACHE_WRITE_TOKENS` | `LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE` | `gen_ai.usage.cache_write_tokens` |
+| `GEN_AI_USAGE_CACHE_READ_TOKENS` | `LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ` | `gen_ai.usage.cache_read_tokens` |
+| `GEN_AI_USAGE_INPUT_TOKENS_AUDIO` | `LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO` | `gen_ai.usage.input_tokens.audio` |
+| `GEN_AI_USAGE_TOTAL_TOKENS` | `LLM_TOKEN_COUNT_TOTAL` | `gen_ai.usage.total_tokens` |
+| `GEN_AI_TOOL_CALL` | `LLM_FUNCTION_CALL` | `gen_ai.tool.call` |
+| `GEN_AI_TOOL_DEFINITIONS` | `LLM_TOOLS` | `gen_ai.tool.definitions` |
 
-| Attribute | Description |
-|-----------|-------------|
-| `llm.token_count.prompt` | Input/prompt tokens |
-| `llm.token_count.completion` | Output/completion tokens |
-| `llm.token_count.total` | Total tokens |
-| `llm.token_count.cache_read` | Cached tokens read |
-| `llm.token_count.cache_creation` | Cached tokens created |
+These names include traceAI extensions such as prompts, request parameters,
+aggregated tool calls, and detailed token usage; they are not all upstream OTEL
+standard attributes.
+
+`SemanticAttributePrefixes.llm` and `LLMAttributePostfixes` are retained for
+compatibility with legacy `llm.*` keys. Do not compose new GenAI keys from them;
+use the complete constants above. Prompt template attributes below are unchanged.
 
 ### Prompt Template Attributes
 
@@ -162,10 +182,7 @@ import { ToolAttributePostfixes } from '@traceai/fi-semantic-conventions';
 
 ```typescript
 import { trace } from '@opentelemetry/api';
-import {
-    SemanticAttributePrefixes,
-    LLMAttributePostfixes,
-} from '@traceai/fi-semantic-conventions';
+import { SemanticConventions } from '@traceai/fi-semantic-conventions';
 
 const tracer = trace.getTracer('my-app');
 
@@ -174,12 +191,12 @@ const span = tracer.startSpan('llm.chat');
 
 // Set attributes using conventions
 span.setAttributes({
-    [`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.system}`]: 'openai',
-    [`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.model_name}`]: 'gpt-4',
-    [`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.token_count}.prompt`]: 100,
-    [`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.token_count}.completion`]: 50,
-    [`${SemanticAttributePrefixes.input}.value`]: 'User input text',
-    [`${SemanticAttributePrefixes.output}.value`]: 'Model response',
+    [SemanticConventions.GEN_AI_PROVIDER_NAME]: 'openai',
+    [SemanticConventions.GEN_AI_REQUEST_MODEL]: 'gpt-4',
+    [SemanticConventions.GEN_AI_USAGE_INPUT_TOKENS]: 100,
+    [SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS]: 50,
+    [SemanticConventions.INPUT_VALUE]: 'User input text',
+    [SemanticConventions.OUTPUT_VALUE]: 'Model response',
 });
 
 span.end();
