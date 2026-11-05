@@ -132,13 +132,21 @@ class _ResponsesAccumulator:
             if output_items:
                 output_content = " ".join(output_items)
 
-        if output_content:
+        if output_content and not any(
+            getattr(item, "type", None) in {
+                "mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response"
+            }
+            for item in result.output
+        ):
             yield SpanAttributes.OUTPUT_VALUE, output_content
         else:
-            # Keep response-owned data, never echoed request fields.
-            yield from _as_output_attributes(
-                _io_value_and_type(response_output(result, self._config)),
-            )
+            # Text alone would discard MCP results in a mixed response.
+            # Keep response-owned data, never echoed request fields, and lead
+            # with the answer just as non-streaming Responses previews do.
+            output = response_output(result, self._config)
+            if output_content:
+                output = {"output_text": output_content, **output}
+            yield from _as_output_attributes(_io_value_and_type(output))
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
