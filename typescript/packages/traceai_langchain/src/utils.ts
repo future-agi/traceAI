@@ -574,9 +574,10 @@ function formatTokenCounts(
     if (isObject(usageMetadata.input_token_details)) {
       tokenCountAttributes[
         SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
-      ] =
-        getTokenCount(usageMetadata.input_token_details.cache_read) ||
-        undefined;
+      ] = getTokenCount(usageMetadata.input_token_details.cache_read);
+      tokenCountAttributes[
+        SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE
+      ] = getTokenCount(usageMetadata.input_token_details.cache_creation);
       tokenCountAttributes[
         SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO
       ] = getTokenCount(usageMetadata.input_token_details.audio) || undefined;

@@ -8,6 +8,7 @@ import io.weaviate.client.v1.graphql.query.argument.NearVectorArgument;
 import io.weaviate.client.v1.graphql.query.fields.Field;
 import io.weaviate.client.v1.data.model.WeaviateObject;
 import io.weaviate.client.v1.batch.model.ObjectGetResponse;
+import io.weaviate.client.v1.batch.model.ObjectGetResponseStatus;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -99,7 +100,7 @@ public class TracedWeaviateClient {
             // Capture results
             if (result.hasErrors()) {
                 span.setAttribute("weaviate.has_errors", true);
-                if (result.getError() != null) {
+                if (!tracer.getConfig().isHideErrorDetails() && result.getError() != null) {
                     span.setAttribute("weaviate.error", result.getError().toString());
                 }
             } else if (result.getResult() != null && result.getResult().getData() != null) {
@@ -196,14 +197,32 @@ public class TracedWeaviateClient {
                 .withObjects(objects)
                 .run();
 
-            // Capture result
-            if (result.hasErrors()) {
+            // HTTP success can still contain rejected objects. Record counts/status
+            // only: per-object error bodies can contain customer documents.
+            boolean hasErrors = result.hasErrors();
+            if (!hasErrors) {
+                ObjectGetResponse[] responses = result.getResult();
+                int responseCount = responses == null ? 0 : responses.length;
+                long imported = 0;
+                if (responses != null) {
+                    for (ObjectGetResponse item : responses) {
+                        if (isSuccessful(item)) {
+                            imported++;
+                        }
+                    }
+                }
+                // Count rejected items and requested objects with no confirmed outcome.
+                // Extra responses must also flag an inconsistent batch, never negative counts.
+                long failed = Math.max(objects.length, responseCount) - imported;
+                span.setAttribute("weaviate.imported_count", imported);
+                span.setAttribute("weaviate.failed_count", failed);
+                hasErrors = failed > 0 || responseCount != objects.length;
+            }
+            if (hasErrors) {
                 span.setAttribute("weaviate.has_errors", true);
-            } else if (result.getResult() != null) {
-                span.setAttribute("weaviate.imported_count", (long) result.getResult().length);
             }
 
-            span.setStatus(result.hasErrors() ? StatusCode.ERROR : StatusCode.OK);
+            span.setStatus(hasErrors ? StatusCode.ERROR : StatusCode.OK);
             return result;
 
         } catch (Exception e) {
@@ -212,6 +231,18 @@ public class TracedWeaviateClient {
         } finally {
             span.end();
         }
+    }
+
+    private static boolean isSuccessful(ObjectGetResponse item) {
+        // Do not report incomplete or unconfirmed responses as successful imports.
+        if (item == null || item.getResult() == null) {
+            return false;
+        }
+        var result = item.getResult();
+        var errors = result.getErrors();
+        // The batch response schema defaults an omitted status to SUCCESS.
+        return (result.getStatus() == null || ObjectGetResponseStatus.SUCCESS.equals(result.getStatus()))
+                && (errors == null || errors.getError() == null || errors.getError().isEmpty());
     }
 
     /**

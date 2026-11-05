@@ -27,6 +27,11 @@ yarn add @traceai/ollama
 
 ### Basic Setup
 
+CommonJS `require("ollama")` calls can be instrumented automatically when the
+instrumentation is registered before loading the SDK. Native ESM imports need
+an OpenTelemetry loader hook or explicit manual instrumentation. The examples
+below use manual instrumentation and do not require a loader.
+
 ```typescript
 import { OllamaInstrumentation } from "@traceai/ollama";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -37,12 +42,16 @@ const provider = new NodeTracerProvider();
 provider.register();
 
 // Register the Ollama instrumentation
+const instrumentation = new OllamaInstrumentation();
 registerInstrumentations({
-  instrumentations: [new OllamaInstrumentation()],
+  tracerProvider: provider,
+  instrumentations: [instrumentation],
 });
 
-// Now use the Ollama SDK as normal
-import { Ollama } from "ollama";
+// Patch the imported namespace explicitly for native ESM
+const OllamaModule = await import("ollama");
+instrumentation.manuallyInstrument(OllamaModule);
+const { Ollama } = OllamaModule;
 
 const ollama = new Ollama({ host: "http://localhost:11434" });
 
@@ -67,7 +76,8 @@ const embedResponse = await ollama.embed({
 
 ### Manual Instrumentation
 
-If automatic instrumentation doesn't work (e.g., with bundlers), you can manually instrument:
+For native ESM or bundlers, instrument the module namespace explicitly after
+setting up your tracer provider:
 
 ```typescript
 import { OllamaInstrumentation } from "@traceai/ollama";
@@ -107,14 +117,17 @@ const tracerProvider = register({
   sessionName: "ollama-session-" + Date.now(),
 });
 
-// 2. Register instrumentation BEFORE importing Ollama SDK
+// 2. Register instrumentation with the provider
+const instrumentation = new OllamaInstrumentation();
 registerInstrumentations({
   tracerProvider: tracerProvider,
-  instrumentations: [new OllamaInstrumentation()],
+  instrumentations: [instrumentation],
 });
 
-// 3. NOW import and use Ollama
-const { Ollama } = await import("ollama");
+// 3. Import and explicitly instrument the namespace (native ESM, no loader)
+const OllamaModule = await import("ollama");
+instrumentation.manuallyInstrument(OllamaModule);
+const { Ollama } = OllamaModule;
 const client = new Ollama();
 
 // 4. Use normally - all calls are traced
@@ -126,6 +139,12 @@ const response = await client.chat({
 // 5. Shutdown when done
 await tracerProvider.shutdown();
 ```
+
+Calling `instrumentation.disable()` stops tracing new calls for both automatic
+and manually instrumented clients. `instrumentation.enable()` restores those
+registrations. Calls already in progress may still finish their spans.
+`instrumentation.setTracerProvider(nextProvider)` routes subsequent spans to the
+new provider while preserving the configured input/output masking.
 
 ## Real-World Use Cases
 
@@ -184,6 +203,19 @@ async function streamChat(message: string) {
   return fullText;
 }
 ```
+
+Streamed chat and generation retain the native SDK's `abort()` method when it is
+available. Call `stream.abort()` to cancel one request, or `ollama.abort()` to
+cancel that client's active requests. Handle an abort rejection if a read is in
+progress. Ollama SDK 0.4.x does not expose transport cancellation.
+
+Exiting a `for await` loop with `break`, calling the iterator's `return()`, or
+aborting closes the span with the output received so far. These cancellation
+paths leave the span status unset rather than reporting a completed response.
+Upstream errors and explicit iterator `throw()` calls record an error; normal
+exhaustion records success. Final token counts are captured only when supplied by
+Ollama. Chat tool calls and thinking are aggregated into the output message;
+`hideOutputs: true` hides those messages and raw output from exported traces.
 
 ### 3. Local Embeddings for Semantic Search
 

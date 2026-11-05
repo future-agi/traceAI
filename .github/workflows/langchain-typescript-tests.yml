@@ -38,7 +38,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        core: ['0.2.0', '0.3.0', '0.3.80', '1.0.0', '1.3.2']
+        include:
+          - { core: '0.2.0', openai: '0.0.34' }
+          - { core: '0.3.0', openai: '0.3.16' }
+          - { core: '0.3.80', openai: '0.3.16' }
+          - { core: '1.0.0', openai: '1.0.0' }
+          - { core: '1.3.2', openai: '1.8.0' }
+          - { core: '1.3.4', openai: '1.8.0' }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -61,12 +67,13 @@ jobs:
       - name: Install isolated consumer without bypassing peers
         env:
           CORE_VERSION: ${{ matrix.core }}
+          OPENAI_VERSION: ${{ matrix.openai }}
         run: |
           mkdir -p "$RUNNER_TEMP/langchain-consumer"
           npm install --prefix "$RUNNER_TEMP/langchain-consumer" --ignore-scripts --no-audit --no-fund \
-            "$RUNNER_TEMP/langchain-tarballs/"*.tgz "@langchain/core@$CORE_VERSION" \
+            "$RUNNER_TEMP/langchain-tarballs/"*.tgz "@langchain/core@$CORE_VERSION" "@langchain/openai@$OPENAI_VERSION" \
             @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/exporter-trace-otlp-http@0.202.0
-          cp typescript/packages/traceai_langchain/contract/lifecycle.mjs "$RUNNER_TEMP/langchain-consumer/"
+          cp typescript/packages/traceai_langchain/contract/{lifecycle,release,streaming,tool-schema,privacy-copies}.mjs "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/types.cts"
       - name: Install the README Quick Start in an empty consumer
@@ -86,12 +93,17 @@ jobs:
         run: |
           typescript/node_modules/.bin/tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 \
             "$RUNNER_TEMP/langchain-consumer/types.mts" "$RUNNER_TEMP/langchain-consumer/types.cts"
-      - name: Unit regressions with outbound network disabled
+      - name: Runtime unit regressions against the selected core, localhost only
         working-directory: typescript
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+          OPENAI_VERSION: ${{ matrix.openai }}
         run: |
           sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            env LANGCHAIN_CONSUMER="$RUNNER_TEMP/langchain-consumer" \
+            CORE_VERSION="$CORE_VERSION" OPENAI_VERSION="$OPENAI_VERSION" \
             "$(command -v node)" packages/traceai_langchain/node_modules/jest/bin/jest.js \
-            --config packages/traceai_langchain/jest.config.js --runInBand
+            --config packages/traceai_langchain/contract/jest.runtime.config.cjs --runInBand
       - name: Real callback lifecycle and OTLP wire contracts, localhost only
         env:
           CORE_VERSION: ${{ matrix.core }}
@@ -103,9 +115,75 @@ jobs:
             0.2.0|0.3.0) ;;
             *) modes="$modes automatic" ;;
           esac
+          # The same stalled-SSE timeout assertion must pass without our patches.
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/streaming.mjs" disabled
           for mode in $modes; do
             for privacy in public private; do
               sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
                 "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/lifecycle.mjs" "$mode" "$privacy"
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/streaming.mjs" "$mode" "$privacy"
+            done
+            for privacy in public options environment; do
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/release.mjs" "$mode" "$privacy"
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/tool-schema.mjs" "$mode" "$privacy"
+              for flag in combined hideInputs hideInputText hideInputImages hideInputMessages hideOutputs hideOutputText hideOutputMessages; do
+                sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                  "$(command -v node)" "$RUNNER_TEMP/langchain-consumer/privacy-copies.mjs" "$mode" "$privacy" "$flag"
+              done
             done
           done
+      - name: LangGraph pause and handoff spans, localhost only
+        if: matrix.core == '0.3.80' || matrix.core == '1.3.2'
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+        run: |
+          # The last 0.2 and 0.x releases on core 0.3, the first 1.x and the latest on core 1.x.
+          case "$CORE_VERSION" in
+            0.3.80) langgraph_versions='0.2.74 0.4.10' ;;
+            1.3.2) langgraph_versions='1.0.0 1.6.0' ;;
+          esac
+          for langgraph in $langgraph_versions; do
+            consumer="$RUNNER_TEMP/langgraph-$langgraph"
+            mkdir -p "$consumer"
+            npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund \
+              "$RUNNER_TEMP/langchain-tarballs/"*.tgz "@langchain/core@$CORE_VERSION" \
+              "@langchain/langgraph@$langgraph" @opentelemetry/sdk-trace-base@2.0.1
+            cp typescript/packages/traceai_langchain/contract/langgraph.mjs "$consumer/"
+            for mode in manual-cjs manual-esm; do
+              sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+                "$(command -v node)" "$consumer/langgraph.mjs" "$mode"
+            done
+          done
+      - name: Load the packed package with strict pnpm (no hoisting)
+        if: matrix.core == '1.3.2'
+        working-directory: typescript
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+        run: |
+          # Only declared dependencies are resolvable, as with Yarn PnP.
+          consumer="$RUNNER_TEMP/langchain-strict"
+          mkdir -p "$consumer"
+          node -e '
+            const [consumer, tarballs, core] = process.argv.slice(1);
+            const fs = require("node:fs");
+            const tarball = (prefix) => "file:" + tarballs + "/" +
+              fs.readdirSync(tarballs).find((name) => name.startsWith(prefix) && /^[0-9]/.test(name.slice(prefix.length)));
+            const local = {
+              "@traceai/fi-core": tarball("traceai-fi-core-"),
+              "@traceai/fi-semantic-conventions": tarball("traceai-fi-semantic-conventions-"),
+            };
+            fs.writeFileSync(consumer + "/package.json", JSON.stringify({
+              private: true,
+              dependencies: { ...local, "@traceai/langchain": tarball("traceai-langchain-"), "@langchain/core": core },
+              pnpm: { overrides: local },
+            }));
+          ' "$consumer" "$RUNNER_TEMP/langchain-tarballs" "$CORE_VERSION"
+          printf 'hoist=false\n' > "$consumer/.npmrc"
+          corepack pnpm --dir "$consumer" install --ignore-scripts
+          cd "$consumer"
+          node -e 'require("@traceai/langchain").LangChainInstrumentation.name'
+          node --input-type=module -e 'await import("@traceai/langchain")'

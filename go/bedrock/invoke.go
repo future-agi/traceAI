@@ -19,6 +19,8 @@ type invocation struct {
 	Temperature *float64        `json:"temperature"`
 	TopP        *float64        `json:"top_p"`
 	Tools       []invokeTool    `json:"tools"`
+
+	contentOmitted bool
 }
 type invokeMessage struct {
 	Role    string          `json:"role"`
@@ -39,14 +41,30 @@ type invokeTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 type invokeUsage struct {
-	Input      *int64 `json:"input_tokens"`
-	Output     *int64 `json:"output_tokens"`
-	CacheRead  *int64 `json:"cache_read_input_tokens"`
-	CacheWrite *int64 `json:"cache_creation_input_tokens"`
+	Input         *int64              `json:"input_tokens"`
+	Output        *int64              `json:"output_tokens"`
+	CacheRead     *int64              `json:"cache_read_input_tokens"`
+	CacheWrite    *int64              `json:"cache_creation_input_tokens"`
+	CacheCreation invokeCacheCreation `json:"cache_creation"`
+}
+type invokeCacheCreation struct {
+	FiveMinutes *int64 `json:"ephemeral_5m_input_tokens"`
+	OneHour     *int64 `json:"ephemeral_1h_input_tokens"`
+}
+
+// Recognize the Messages array without retaining its contents. encoding/json
+// validates the whole document before invoking this method; schema recognition
+// needs only the array shape, while the provider remains responsible for validity.
+// Do not use RawMessage here: it would copy an arbitrarily large prompt or media.
+type invokeMessageArray bool
+
+func (a *invokeMessageArray) UnmarshalJSON(data []byte) error {
+	*a = len(data) > 0 && data[0] == '['
+	return nil
 }
 
 func parseInvocation(model *string, body []byte) *invocation {
-	if model == nil || len(body) > 2*maxCapture {
+	if model == nil {
 		return nil
 	}
 	// Match only the final resource component, including regional inference
@@ -60,6 +78,25 @@ func parseInvocation(model *string, body []byte) *invocation {
 	}
 	if !strings.HasPrefix(id, "anthropic.") {
 		return nil
+	}
+	if len(body) > 2*maxCapture {
+		// A capture limit must not suppress usage, completion or error telemetry.
+		// Decode only bounded metadata; skip system, tools and unknown fields,
+		// and inspect messages without allocating its contents or element slice.
+		var metadata struct {
+			Version     boundedMetadataString `json:"anthropic_version"`
+			Messages    invokeMessageArray    `json:"messages"`
+			MaxTokens   *int64                `json:"max_tokens"`
+			Temperature *float64              `json:"temperature"`
+			TopP        *float64              `json:"top_p"`
+		}
+		if json.Unmarshal(body, &metadata) != nil || metadata.Version != "bedrock-2023-05-31" || !metadata.Messages {
+			return nil
+		}
+		return &invocation{
+			Version: string(metadata.Version), MaxTokens: metadata.MaxTokens,
+			Temperature: metadata.Temperature, TopP: metadata.TopP, contentOmitted: true,
+		}
 	}
 	var in invocation
 	if json.Unmarshal(body, &in) != nil || in.Version != "bedrock-2023-05-31" || in.Messages == nil {
@@ -129,6 +166,10 @@ func (r *record) invokeInput(in *invocation) {
 	if !r.privacy.input() {
 		return
 	}
+	if in.contentOmitted {
+		r.truncated = true
+		return
+	}
 	ms := make([]message, 0)
 	if len(in.System) > 0 {
 		ms = append(ms, message{Role: "system", Content: r.invokeBlocks(in.System)})
@@ -174,6 +215,14 @@ func (r *record) invokeUsage(u *invokeUsage) {
 	if u.CacheWrite != nil {
 		r.usage.CacheWrite = u.CacheWrite
 	}
+	// Stream usage updates are cumulative and can omit either TTL. Replace only
+	// reported valid counts, retaining message_start values across output deltas.
+	if n := u.CacheCreation.FiveMinutes; n != nil && *n >= 0 {
+		r.usage.CacheWrite5m = n
+	}
+	if n := u.CacheCreation.OneHour; n != nil && *n >= 0 {
+		r.usage.CacheWrite1h = n
+	}
 	// Anthropic input_tokens excludes cache reads/writes. Keep the authoritative
 	// counters separately; do not invent a total when fields are absent.
 }
@@ -187,10 +236,10 @@ type invokeResponse struct {
 // Metadata is independent of the content budget. Unmarshal skips unknown fields
 // (including content) without copying their values; never decode the entire
 // response into a map or RawMessage merely to read usage from a large completion.
-// Bound stop_reason too, so a malformed response cannot allocate arbitrary text.
-type stopReason string
+// Bound metadata strings too, so a malformed response cannot allocate arbitrary text.
+type boundedMetadataString string
 
-func (s *stopReason) UnmarshalJSON(data []byte) error {
+func (s *boundedMetadataString) UnmarshalJSON(data []byte) error {
 	*s = ""
 	if len(data) > 512 {
 		return nil
@@ -199,14 +248,14 @@ func (s *stopReason) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
-	*s = stopReason(value)
+	*s = boundedMetadataString(value)
 	return nil
 }
 
 func (r *record) invokeOutput(data []byte) {
 	var metadata struct {
-		Usage      *invokeUsage `json:"usage"`
-		StopReason stopReason   `json:"stop_reason"`
+		Usage      *invokeUsage          `json:"usage"`
+		StopReason boundedMetadataString `json:"stop_reason"`
 	}
 	if json.Unmarshal(data, &metadata) != nil {
 		return
@@ -234,12 +283,24 @@ func (r *record) invokeEvent(ev types.ResponseStream) {
 	if !ok {
 		return
 	}
+	// Completion is protocol state, not captured content. Bedrock may attach
+	// large guardrail traces to message_stop; skip those fields without copying
+	// them, and recognize the terminal event regardless of size or privacy gates.
+	var metadata struct {
+		Type boundedMetadataString `json:"type"`
+	}
+	if json.Unmarshal(v.Value.Bytes, &metadata) != nil {
+		return
+	}
+	if metadata.Type == "message_stop" {
+		r.streamComplete = true
+		return
+	}
 	if len(v.Value.Bytes) > 2*maxCapture {
 		r.truncated = true
 		return
 	}
 	var e struct {
-		Type         string          `json:"type"`
 		Index        int32           `json:"index"`
 		Message      *invokeResponse `json:"message"`
 		ContentBlock *invokeBlock    `json:"content_block"`
@@ -254,7 +315,7 @@ func (r *record) invokeEvent(ev types.ResponseStream) {
 	if json.Unmarshal(v.Value.Bytes, &e) != nil {
 		return
 	}
-	switch e.Type {
+	switch metadata.Type {
 	case "message_start":
 		if e.Message != nil {
 			r.invokeUsage(e.Message.Usage)

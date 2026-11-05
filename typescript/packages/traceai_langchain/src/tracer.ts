@@ -25,10 +25,14 @@ import {
   safelyGetFISpanKindFromRunType,
 } from "./utils";
 import { FITracer, getErrorMessage } from "@traceai/fi-core";
+import { isStreamCancelled, registerStreamRun } from "./streamLifecycle";
 
 type RunWithSpan = {
   run: Run;
   span: Span;
+  unregisterStream: () => void;
+  startedAt: number;
+  firstTokenRecorded: boolean;
 };
 
 /**
@@ -79,14 +83,55 @@ function recordRunError(span: Span, error: unknown, runError: string) {
   span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
 
+/** LangGraph control-flow signals, for errors that do not expose `is_bubble_up` */
+const GRAPH_BUBBLE_UP_NAMES = new Set([
+  "GraphBubbleUp",
+  "GraphInterrupt",
+  "NodeInterrupt",
+  "ParentCommand",
+  "GraphDrained",
+]);
+/** The bubble-ups that pause a graph for human input (`interrupt()`, `NodeInterrupt`) */
+const GRAPH_INTERRUPT_NAMES = new Set(["GraphInterrupt", "NodeInterrupt"]);
+
+/**
+ * The name of a LangGraph control-flow signal, or undefined for a real error.
+ * LangGraph pauses (`interrupt()`) and hands off (`Command.PARENT`) by throwing a
+ * `GraphBubbleUp` through the chain callbacks; the run itself did not fail.
+ * Matches LangGraph's own `isGraphBubbleUp` without importing LangGraph.
+ */
+function getGraphBubbleUpName(
+  error: unknown,
+  runError: string,
+): string | undefined {
+  if (error != null && typeof error === "object") {
+    const { name, is_bubble_up } = error as {
+      name?: unknown;
+      is_bubble_up?: unknown;
+    };
+    if (is_bubble_up === true) {
+      return typeof name === "string" ? name : "GraphBubbleUp";
+    }
+    return typeof name === "string" && GRAPH_BUBBLE_UP_NAMES.has(name)
+      ? name
+      : undefined;
+  }
+  if (error != null) {
+    return undefined;
+  }
+  const { name } = parseRunError(runError);
+  return name != null && GRAPH_BUBBLE_UP_NAMES.has(name) ? name : undefined;
+}
+
 export class LangChainTracer extends BaseTracer {
   private tracer: FITracer;
   private runs: Record<string, RunWithSpan | undefined> = {};
   /** The error objects passed to handle*Error, keyed by run id, until the run's trace ends */
   private runErrors: Record<string, unknown> = {};
-  constructor(tracer: FITracer) {
+  constructor(tracer: FITracer, awaitHandlers?: boolean) {
     super();
     this.tracer = tracer;
+    if (awaitHandlers != null) this.awaitHandlers = awaitHandlers;
   }
   name: string = "FILangChainTracer";
   protected persistRun(_run: Run): Promise<void> {
@@ -107,6 +152,19 @@ export class LangChainTracer extends BaseTracer {
     } finally {
       delete this.runErrors[runId];
     }
+  }
+
+  async onLLMNewToken(run: Run): Promise<void> {
+    this.recordFirstToken(run.id);
+  }
+
+  private recordFirstToken(runId: string): void {
+    const state = this.runs[runId];
+    if (state == null || state.firstTokenRecorded) return;
+    state.firstTokenRecorded = true;
+    // Seconds, matching the traceAI streaming response-latency convention. No
+    // token text is inspected or retained; this survives all content privacy modes.
+    state.span.setAttribute("gen_ai.response.time_to_first_token", (performance.now() - state.startedAt) / 1000);
   }
 
   async handleLLMError(
@@ -205,36 +263,72 @@ export class LangChainTracer extends BaseTracer {
       activeContext,
     );
 
-    this.runs[run.id] = { run, span };
+    const runWithSpan: RunWithSpan = {
+      run, span, unregisterStream: () => {}, startedAt: performance.now(), firstTokenRecorded: false,
+    };
+    this.runs[run.id] = runWithSpan;
+    runWithSpan.unregisterStream = registerStreamRun(run.id, async () => {
+      if (this.runs[run.id] == null) return;
+      span.setAttribute("langchain.stream.cancelled", true);
+      // Do not fabricate successful output or usage from a partial response.
+      // Use the existing error path to release both our spans and BaseTracer's
+      // run map. This does not synthesize callbacks for other integrations.
+      const error = new Error("Stream closed before completion");
+      error.name = "AbortError";
+      if (run.run_type === "llm") await this.handleLLMError(error, run.id);
+      else if (run.run_type === "tool") await this.handleToolError(error, run.id);
+      else if (run.run_type === "retriever") await this.handleRetrieverError(error, run.id);
+      else await this.handleChainError(error, run.id);
+    }, run.parent_run_id, run.run_type === "llm" ? () => this.recordFirstToken(run.id) : undefined);
   }
 
   protected async _endTrace(run: Run) {
     await super._endTrace(run);
-    if (isTracingSuppressed(context.active())) {
-      return;
-    }
+    // Suppression prevents new spans, not cleanup of spans already started.
     const runWithSpan = this.runs[run.id];
     if (!runWithSpan) {
       return;
     }
     const { span } = runWithSpan;
-    if (run.error != null) {
+    const cancelled = isStreamCancelled(run.id);
+    if (cancelled) span.setAttribute("langchain.stream.cancelled", true);
+    const bubbleUp =
+      !cancelled && run.error != null
+        ? getGraphBubbleUpName(this.runErrors[run.id], run.error)
+        : undefined;
+    if (bubbleUp != null) {
+      // A pause or handoff, not a failure: no exception, and no status message that
+      // could carry the interrupt payload.
+      if (GRAPH_INTERRUPT_NAMES.has(bubbleUp)) {
+        span.setAttribute("langgraph.interrupt", true);
+        span.addEvent("interrupt", { "langgraph.interrupt": true });
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+    } else if (run.error != null) {
       recordRunError(span, this.runErrors[run.id], run.error);
+    } else if (cancelled) {
+      // An adapter may swallow abort and emit handle*End from a finally block.
+      // A returned partial stream is still not a successful generation.
+      const error = new Error("Stream closed before completion");
+      error.name = "AbortError";
+      recordRunError(span, error, error.message);
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
     const attributes = safelyFlattenAttributes({
       ...safelyFormatIO({ io: run.inputs, ioType: "input" }),
-      ...safelyFormatIO({ io: run.outputs, ioType: "output" }),
       ...safelyFormatInputMessages(run.inputs),
-      ...safelyFormatOutputMessages(run.outputs),
-      ...safelyFormatRetrievalDocuments(run),
       ...safelyFormatLLMParams(run.extra),
       ...safelyFormatPromptTemplate(run),
-      ...safelyFormatTokenCounts(run.outputs),
-      ...safelyFormatFunctionCalls(run.outputs),
-      ...safelyFormatToolCalls(run),
+      ...(!cancelled ? {
+        ...safelyFormatIO({ io: run.outputs, ioType: "output" }),
+        ...safelyFormatOutputMessages(run.outputs),
+        ...safelyFormatRetrievalDocuments(run),
+        ...safelyFormatTokenCounts(run.outputs),
+        ...safelyFormatFunctionCalls(run.outputs),
+        ...safelyFormatToolCalls(run),
+      } : {}),
       ...safelyFormatMetadata(run),
       ...safelyFormatSessionId(run),
     });
@@ -243,6 +337,7 @@ export class LangChainTracer extends BaseTracer {
     }
 
     runWithSpan.span.end();
+    runWithSpan.unregisterStream();
     delete this.runs[run.id];
   }
 

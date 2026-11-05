@@ -4,6 +4,24 @@ OpenTelemetry instrumentation for AI applications. Install the core and the inst
 
 [All languages](../README.md) · [Integration guides](https://docs.futureagi.com/docs/integrations/traceai) · [Core API and configuration](fi_instrumentation/README.md)
 
+## Supported Python versions
+
+Core tracing supports Python 3.10–3.15, with either the default HTTP exporter
+or the optional `grpc` exporter:
+
+```bash
+pip install fi-instrumentation-otel         # HTTP tracing, Python 3.10–3.15
+pip install 'fi-instrumentation-otel[grpc]' # gRPC tracing, Python 3.10–3.15
+```
+
+The optional `evaluation` extra (including `[grpc,evaluation]`) supports Python
+3.10–3.14. Its dependency chain, including LiteLLM/fastuuid, is not yet compatible
+with Python 3.15. Use Python 3.14 or earlier for
+`pip install 'fi-instrumentation-otel[evaluation]'`; installing this extra on
+3.15 can fail while resolving or building those dependencies. It is never
+silently omitted, and it does not restrict core-only or `[grpc]` installs.
+Framework instrumentors have their own runtime constraints.
+
 ## Quickstart
 
 Use Python 3.10–3.13 for this OpenAI example.
@@ -81,7 +99,7 @@ def lambda_handler(event, context):
     return {"statusCode": 200, "body": "Order accepted"}
 ```
 
-The wrapper emits one `lambda.handler` server span with the invocation ID, trigger and cold-start flag. It imports only W3C `traceparent` from API Gateway v1/v2, function URL and ALB events (including multi-value headers). Other events start fresh traces. The invocation wrapper never captures event/result content, request URLs, headers, exception messages or stacks; errors carry only their type. Child instrumentors retain their own privacy settings.
+The wrapper emits one `lambda.handler` server span with the invocation ID, trigger and cold-start flag. It imports only W3C `traceparent` from API Gateway v1/v2, function URL and ALB events (including multi-value headers). Other events start fresh traces. The invocation wrapper never captures event/result content, request URLs, headers, exception messages or stacks; errors carry only their type. For HTTP triggers it reads only the integer `statusCode` of the returned response: the span records `http.response.status_code`, and a 5xx response marks it as an error with `error.type` set to the code, so frameworks that turn exceptions into 500 responses (Mangum, for example) still report failed requests. Child instrumentors retain their own privacy settings.
 
 After the span ends, it waits up to two seconds for a flush, capped by the remaining invocation time minus 250 ms. Configure those limits with `flush_timeout_millis` and `reserve_millis`. A timed-out flush is **not cancelled** and may continue; later invocations skip flushing while it is in flight, preventing additional flush workers from accumulating. Delivery remains best effort. Use a batch processor and a finite exporter timeout; synchronous span processors can block inside span end, outside this wait budget.
 

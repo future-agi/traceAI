@@ -44,6 +44,7 @@ jobs:
           corepack enable
           corepack pnpm --filter @traceai/guardrails... install --frozen-lockfile --ignore-scripts
           corepack pnpm --filter @traceai/guardrails... run build
+          corepack pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
           corepack pnpm --dir packages/traceai_guardrails pack --pack-destination "$RUNNER_TEMP/packed"
       - name: Install real bridge and clean tarball consumer
         run: |
@@ -52,7 +53,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/test-home"
           npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP"/packed/*.tgz '@guardrails-ai/core@${{ matrix.sdk }}' \
-            '@traceai/fi-core@1.1.0' '@opentelemetry/sdk-trace-node@1.30.1' \
+            "$RUNNER_TEMP/fi-core.tgz" '@opentelemetry/sdk-trace-node@1.30.1' \
             '@opentelemetry/exporter-trace-otlp-http@0.57.2' \
             '@opentelemetry/exporter-trace-otlp-proto@0.57.2' \
             '@opentelemetry/otlp-transformer@0.57.2'

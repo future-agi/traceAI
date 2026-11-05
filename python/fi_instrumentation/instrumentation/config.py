@@ -19,6 +19,7 @@ from opentelemetry.context import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from ._chat_input import ChatInput, mask_chat_input
 from ._errors import is_error_detail_key
 from .logging import logger
 from .pii_redaction import redact_pii_in_value
@@ -154,6 +155,13 @@ _MIXED_CONTENT_PREFIXES = (
 
 def _has_content_prefix(key: str, prefixes: tuple) -> bool:
     return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
+
+
+def _is_embedding_text_key(key: str) -> bool:
+    # embedding.embeddings.<index>.embedding.text: the text that was embedded.
+    return key.startswith(SpanAttributes.EMBEDDING_EMBEDDINGS + ".") and key.endswith(
+        "." + EmbeddingAttributes.EMBEDDING_TEXT
+    )
 
 
 DEFAULT_HIDE_LLM_INVOCATION_PARAMETERS = False
@@ -352,8 +360,13 @@ class TraceConfig:
     def mask(
         self,
         key: str,
-        value: Union[AttributeValue, Callable[[], AttributeValue]],
+        value: Union[AttributeValue, Callable[[], AttributeValue], ChatInput],
     ) -> Optional[AttributeValue]:
+        # Opaque payloads can duplicate structured messages. Treat their whole
+        # value as private before evaluating a lazy serializer; no safe modality
+        # boundary exists inside arbitrary JSON or strings.
+        private_input = self.hide_inputs or self.hide_input_messages or self.hide_input_text
+        private_output = self.hide_outputs or self.hide_output_messages or self.hide_output_text
         if self.hide_error_details and is_error_detail_key(key):
             return None
         elif (
@@ -361,20 +374,24 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
-        elif self.hide_inputs and _has_content_prefix(key, (SpanAttributes.INPUT_VALUE,)):
+        elif type(value) is ChatInput:
+            # Exact type and exact input keys only. Core validates and masks the
+            # passive structure itself; a caller cannot mark an opaque string safe.
+            value = (mask_chat_input(value, self)
+                     if key in (SpanAttributes.INPUT_VALUE, SpanAttributes.RAW_INPUT)
+                     else REDACTED_VALUE)
+        elif (private_input or self.hide_input_images) and _has_content_prefix(
+            key, (SpanAttributes.INPUT_VALUE, *tuple(_HIDDEN_WITH_INPUTS))
+        ):
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
             return None
-        elif self.hide_inputs and _has_content_prefix(key, tuple(_HIDDEN_WITH_INPUTS)):
-            # The raw request body (messages included) and the values filled
-            # into a prompt template are inputs too.
-            value = REDACTED_VALUE
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.OUTPUT_VALUE,)):
+        elif private_output and _has_content_prefix(
+            key, (SpanAttributes.OUTPUT_VALUE, SpanAttributes.RAW_OUTPUT)
+        ):
             value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_MIME_TYPE:
             return None
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.RAW_OUTPUT,)):
-            value = REDACTED_VALUE
         # The aggregate tool call can contain both arguments and results; hide
         # it if either direction is private. Specific child fields remain
         # directional, and identifiers like gen_ai.tool.name stay visible.
@@ -419,6 +436,11 @@ class TraceConfig:
             and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
+            value = REDACTED_VALUE
+        elif (
+            self.hide_inputs or self.hide_input_messages or self.hide_input_text
+        ) and _is_embedding_text_key(key):
+            # Embedding input text is input content for all three flags.
             value = REDACTED_VALUE
         elif self.hide_input_images and _has_content_prefix(key, (SpanAttributes.INPUT_IMAGES,)):
             return None
@@ -503,4 +525,6 @@ class TraceConfig:
 def is_base64_url(url: str) -> bool:
     if not isinstance(url, str):
         return False
-    return url.startswith("data:image/") and "base64" in url
+    # Data URL schemes, media types and the base64 marker are case-insensitive.
+    lowered = url.lower()
+    return lowered.startswith("data:image/") and "base64" in lowered

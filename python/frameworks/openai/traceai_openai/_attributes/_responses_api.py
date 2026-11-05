@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Tuple, Union
 
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import assert_never
 
-from fi_instrumentation import safe_json_dumps  
+from fi_instrumentation import safe_json_dumps
+from traceai_openai._privacy import safe_tool
 from fi_instrumentation.fi_types import (
     ImageAttributes,
     MessageAttributes,
@@ -237,7 +238,7 @@ class _ResponsesApiAttributes:
         obj: responses.tool.Tool,
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield (f"{prefix}{ToolAttributes.TOOL_JSON_SCHEMA}", obj.model_dump_json())
+        yield (f"{prefix}{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(safe_tool(obj.model_dump(mode="json"))))
 
     @classmethod
     @stop_on_exception
@@ -595,12 +596,23 @@ class _ResponsesApiAttributes:
         obj: responses.response_reasoning_item.ResponseReasoningItem,
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        if isinstance(obj.summary, Iterable):
-            for i, item in enumerate(obj.summary):
-                yield from cls._get_attributes_from_response_reasoning_item_summary(
-                    item,
-                    f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}.",
-                )
+        summary = list(obj.summary or [])
+        for i, item in enumerate(summary):
+            yield from cls._get_attributes_from_response_reasoning_item_summary(
+                item,
+                f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}.",
+            )
+        # DeepSeek returns plaintext reasoning in content, not summary. Older
+        # SDKs retain these extra items as dictionaries; newer SDKs type them.
+        for i, item in enumerate(getattr(obj, "content", None) or [], start=len(summary)):
+            if isinstance(item, Mapping):
+                kind, text = item.get("type"), item.get("text")
+            else:
+                kind, text = getattr(item, "type", None), getattr(item, "text", None)
+            if kind == "reasoning_text" and isinstance(text, str):
+                inner_prefix = f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}."
+                yield f"{inner_prefix}{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "text"
+                yield f"{inner_prefix}{MessageContentAttributes.MESSAGE_CONTENT_TEXT}", text
 
     @classmethod
     @stop_on_exception

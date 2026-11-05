@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--client-version", default="6.3.2")
+    parser.add_argument("--client-version", help="Override only client6 for the compatibility matrix")
     args = parser.parse_args()
     module = Path(__file__).resolve().parents[1]
     ns = {"m": "http://maven.apache.org/POM/4.0.0"}
@@ -27,12 +27,13 @@ def main():
             example = next(s for s in snippets if "public class WeaviateExample" in s)
             (main_src / "WeaviateExample.java").write_text(example + "\n")
             shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateV6Fixture.java", test)
+            shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateAsyncLifecycleTest.java", test)
+            shutil.copy(module / "src/test/java/ai/traceai/weaviate/WeaviateCancellationTest.java", test)
             shutil.copy(module / "src/consumer-test/WeaviateReadmeConsumerTest.java", test)
         else:
             shutil.copy(module / "src/consumer-test/WeaviateLegacyConsumerTest.java", test)
+            shutil.copy(module / "src/test/java/ai/traceai/weaviate/TracedWeaviateLegacyTest.java", test)
         dependencies = [
-            ("com.futureagi", "traceai-java-weaviate", version, "compile"),
-            ("io.weaviate", sdk, sdk_version, "compile"),
             ("org.junit.jupiter", "junit-jupiter", "5.10.1", "test"),
             ("org.assertj", "assertj-core", "3.24.2", "test"),
             ("io.opentelemetry", "opentelemetry-sdk-testing", "1.35.0", "test"),
@@ -45,6 +46,19 @@ def main():
         props = ET.SubElement(project, "properties")
         ET.SubElement(props, "maven.compiler.release").text = "17"
         deps = ET.SubElement(project, "dependencies")
+        if name == "v6":
+            # Exercise the install block verbatim; never substitute the reactor
+            # version here, which would hide stale customer coordinates.
+            snippet = re.search(r"```xml\n(.*?)\n```", (module / "README.md").read_text(), re.S).group(1)
+            for dep in ET.fromstring("<dependencies>" + snippet + "</dependencies>"):
+                if dep.findtext("artifactId") == "client6" and args.client_version:
+                    dep.find("version").text = args.client_version
+                deps.append(dep)
+        else:
+            dependencies[:0] = [
+                ("com.futureagi", "traceai-java-weaviate", version, "compile"),
+                ("io.weaviate", sdk, sdk_version, "compile"),
+            ]
         for group, artifact, ver, scope in dependencies:
             dep = ET.SubElement(deps, "dependency")
             for tag, value in [("groupId", group), ("artifactId", artifact), ("version", ver), ("scope", scope)]:

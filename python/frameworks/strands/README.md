@@ -5,10 +5,15 @@ Send Strands' native agent, model, event-loop and tool spans to Future AGI with 
 ## Install
 
 ```bash
-pip install -U traceai-strands 'strands-agents[otel,openai]' 'fi-instrumentation-otel>=1.2.2'
+pip install -U traceai-strands 'strands-agents[otel,openai]>=1.24.0' 'fi-instrumentation-otel>=1.2.2'
 ```
 
-Strands Agents 1.0.0 or newer and Python 3.10 or newer are required. The example uses your own OpenAI API key; you can instead use any model supported by Strands.
+| Dependency | Minimum supported version |
+| --- | --- |
+| Python | 3.10 |
+| Strands Agents | 1.24.0 |
+
+Upgrade older Strands installations to preserve explicit provider metadata on the model span and complete event-loop spans when a model call raises an ordinary error. This does not resolve the [early-stream-close limitation](#known-limitation-stopping-a-python-stream-early). The example uses your own OpenAI API key; you can instead use any model supported by Strands.
 
 ## Configure and run
 
@@ -81,6 +86,12 @@ Keep `traceai-strands` installed. Replace the old `register(...)` plus `configur
 
 The optional callback handler is a legacy manual event API, not a replacement for native agent/model/tool tracing. Do not attach it to an Agent just to obtain those spans: Strands already emits them. Applications that explicitly call its `on_agent_*`, `on_model_*`, or `on_tool_*` methods can retain those calls; they create additional application spans and should not duplicate native operations. To stop exporting native traces, shut down the provider at application exit. `uninstrument()` only resets the legacy setup helper; it cannot remove Strands' own tracing or undo OpenTelemetry's global provider.
 
+## Known limitation: stopping a Python stream early
+
+In `strands-agents==1.63.0`, stopping `Agent.stream_async()` after a content event and calling `await stream.aclose()` can leave the native model (`chat`) and event-loop (`execute_event_loop_cycle`) spans unfinished. Unfinished spans never reach an OpenTelemetry exporter, so the trace can be incomplete or lack model usage. This also occurs with plain Strands and an in-memory OpenTelemetry exporter, without traceAI. See [the upstream early-close report](https://github.com/strands-agents/harness-sdk/issues/5331) and [the related cancellation report](https://github.com/strands-agents/harness-sdk/issues/3609).
+
+For complete spans on successful calls, consume the async iterator **until it is exhausted**, rather than breaking on a content or result event. If appropriate for your application, stop displaying output but continue consuming the iterator to completion; this continues model/tool execution and may incur additional cost. Still close iterators when abandoning them for resource cleanup, but neither `aclose()` nor flushing the tracer provider repairs these unfinished native spans. There is no verified early-close or cancellation workaround here that guarantees complete spans. Do not rely on these traces for complete usage accounting when an invocation is interrupted.
+
 ## Troubleshoot
 
 - **No traces:** install the global provider before creating the first Agent. Restart the process after changing a previously installed global provider; OpenTelemetry does not support replacing it.
@@ -91,5 +102,5 @@ The optional callback handler is a legacy manual event API, not a replacement fo
 ## Resources
 
 - [Strands observability](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/traces/)
-- [Strands model providers](https://strandsagents.com/docs/user-guide/concepts/model-providers/)
+- [Strands model providers](https://strandsagents.com/docs/user-guide/sdk/model-providers/)
 - [Future AGI documentation](https://docs.futureagi.com/)

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fi-instrumentation-otel"
-version = "1.2.2"
+version = "1.2.3"
 description = "OpenTelemetry tracing for AI applications: tracer setup, span helpers, exporters, and semantic conventions for Future AGI."
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Framework :: OpenTelemetry",
     "Framework :: OpenTelemetry :: Instrumentations",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -31,7 +33,9 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.14"
+# Core tracing and grpc support 3.15 independently of evaluation's native
+# dependencies. Keep evaluation opt-in; do not silently drop it via markers.
+python = ">=3.10,<3.16"
 opentelemetry-api = "^1.29.0"
 opentelemetry-sdk = "^1.29.0"
 opentelemetry-exporter-otlp-proto-http = "^1.29.0"

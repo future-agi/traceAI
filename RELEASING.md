@@ -12,7 +12,9 @@ This extends **Tanmay's [#300](https://github.com/future-agi/traceAI/pull/300)**
 
 ### Exactly one owner for tags
 
-**Publishers own all tags and GitHub releases.** release-please runs with `skip-github-release: true`; it only authors the release PR. Tags are created after registry availability is verified (Go necessarily creates its tag first, then verifies the proxy). The publisher acknowledges completed merged release PRs by replacing `autorelease: pending` with `autorelease: tagged`. It does this only after every publishable current manifest version has a GitHub release, so missing credentials or a partial release cannot silently unblock the next release.
+**Publishers own all tags and GitHub releases.** release-please runs with `skip-github-release: true`; it only authors the release PR. Tags are created after registry availability is verified (Go necessarily creates its tag first, then verifies the proxy).
+
+The publisher acknowledges each completed merged release PR by replacing `autorelease: pending` with `autorelease: tagged`. Completion is checked against the **versions changed by that release PR**, not every version in the current manifest: each publishable changed version must have a GitHub release and be served by its registry. Later version bumps and unrelated unpublished packages do not hold that PR open. If the PR's changed versions cannot be read, a changed path is missing from the current inventory, or a required release or registry version is unavailable, that PR stays pending.
 
 | Ecosystem | Version source | Tag | Delivery |
 |---|---|---|---|
@@ -90,7 +92,7 @@ Sources: [PyPI publisher setup](https://docs.pypi.org/trusted-publishers/adding-
 - [ ] Generate a Central Portal user token and add **`MAVEN_CENTRAL_USERNAME`** and **`MAVEN_CENTRAL_PASSWORD`** as repository secrets. These are the Portal token's username/password, not your interactive login password.
 - [ ] Create a release GPG signing key, publish its **public key** to a public keyserver accessible to Central, and verify the fingerprint. Export the **ASCII-armored private signing key** into **`MAVEN_GPG_PRIVATE_KEY`** and its passphrase into **`MAVEN_GPG_PASSPHRASE`**. Keep the private key out of git and command output.
 - [ ] Merge the Java release-profile PR: groupId `com.futureagi`, unchanged artifactIds, sources/javadocs, signing, and `central-publishing-maven-plugin` server id **`central`**. setup-java provides Central credentials; the release profile's BC signer reads the private key and passphrase directly from the deployment step's environment (no persistent GnuPG keyring). The publisher runs **`mvn -B -ntp -P release deploy` from `java/`**.
-- [ ] The planner skips a version only when **every reactor artifact** has its POM on Central. Central deployments are verified against canonical repository files, not the delayed search index. Check the Portal for a failed/incomplete deployment before retrying; do not replace immutable artifacts.
+- [ ] Planning and historical release/tag reconciliation check only the reactor's **parent POM** on Central. If it exists, the version is already published and must not be deployed again; modules added later ship in the next reactor version. Verification after a **fresh deployment** requires **every reactor artifact** to have its POM on Central. Both checks use canonical repository files, not the delayed search index. Check the Portal for a failed/incomplete deployment before retrying; do not replace immutable artifacts.
 
 Sources: [namespace verification](https://central.sonatype.org/register/namespace/) and [Central publishing Maven plugin](https://central.sonatype.org/publish/publish-portal-maven/).
 

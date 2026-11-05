@@ -46,18 +46,60 @@ The complete wrapper inventory is:
 
 | Wrapper | Explicit input projection | Explicit result projection |
 | --- | --- | --- |
-| `Task._execute_core` | Task description, expected output and application context; no agent or tool argument object | `TaskOutput.json_dict` when it is a plain dictionary, otherwise `TaskOutput.raw`; plain application results |
-| `Crew.kickoff` | Application `inputs`; named agent/task business metadata below | `CrewOutput.json_dict` when it is a plain dictionary, otherwise `CrewOutput.raw`; prompt/completion/total usage counts |
+| `Task._execute_core`, `Task._aexecute_core` | Task description, expected output and application context; no agent or tool argument object | `TaskOutput.json_dict` when it is a plain dictionary, otherwise `TaskOutput.raw`; plain application results |
+| `Crew.kickoff`, `Crew.akickoff` | Application `inputs`; named agent/task business metadata below | `CrewOutput.json_dict` when it is a plain dictionary, otherwise `CrewOutput.raw`; crew-level prompt/completion/total usage roll-up |
 | `ToolUsage._use` | `ToolCalling.tool_name`, `ToolCalling.arguments`; tool name only from the runtime tool | Plain application result; no tool configuration |
+| `CrewStructuredTool.invoke`, `CrewStructuredTool.ainvoke` | Tool name and application `input`; no config, callbacks or schema | Plain application result |
+| `BaseTool.run`, `BaseTool.arun`, `Tool.run`, `Tool.arun` | Tool name and application arguments bound to the tool callable; no callable/configuration serialization | Plain application result |
+| `Agent.kickoff`, `Agent.kickoff_async` | Application `messages`; no LLM configuration, response schema, files or checkpoints | `LiteAgentOutput.raw`; no cumulative usage counters |
+| `Flow.kickoff_async` (also covers `Flow.kickoff` and `Flow.akickoff`) | Explicit application `inputs`; no Flow state, memory, files or checkpoints | Plain application result, or the same explicit Crew/Task/Agent result projection above |
+| `Flow._execute_method` (1.15+) | Application node arguments; node name/type, no Flow state | Individual node's application result |
+| `Task._execute_task_async` (before 1.15) | Context handoff only: captures the caller's context when the worker target is bound | No additional span or content capture; native worker result/exception behavior is unchanged |
+
+Optional hooks are installed only when the installed CrewAI exposes them;
+standalone Agent hooks target CrewAI 1.15+ and its coroutine-factory contract. The
+legacy CrewAI 0.41.1 floor retains Crew/Task/ToolUsage coverage without importing
+unavailable Agent/Flow APIs. `Crew.kickoff_async` delegates to `Crew.kickoff`;
+`Agent.akickoff` delegates to `Agent.kickoff_async`. They are not wrapped twice.
+Flow's defining `kickoff_async` method is wrapped once, including when inherited.
+Private executor Flows marked `is_crewai_internal` are omitted, while nested user
+Flows remain separate child spans. Tool delegates deduplicate the same tool only.
+All hooks honor OTel suppression and are restored on `uninstrument()`.
+
+#### Streaming and async lifecycle
+
+Crew and Flow streaming factories are lazy. They emit no execution span until
+consumed; the native worker calls the non-streaming entry point, so the span uses
+the **consuming context**, not the context where the stream object was created.
+The adapter preserves native iterators, cancellation and close behavior, and
+records the final result/usage on the execution span rather than serializing a
+stream object. An unconsumed factory emits no span. Async spans remain open until
+the operation completes, fails or is cancelled. When `Agent.kickoff` returns a
+coroutine inside a Flow/event loop, the awaited `Agent.kickoff_async` execution
+owns its span; creating the coroutine alone is not a second execution.
+Cancellation does not forcibly stop native worker threads: if an Agent's tool is
+already running in a thread, cancelling the Agent ends its span with ERROR,
+while the tool span stays open until that worker actually returns or fails.
+Applications must still arrange for long-running tools to stop or finish.
+For legacy `Task(async_execution=True)` workers, the adapter propagates the caller's
+context, including OTel parentage and suppression, without patching Python threads
+or replacing CrewAI's executor. CrewAI 1.15+ retains its native propagation.
+Cancelling the returned Task future does not stop an already-running worker; its
+span ends when execution actually finishes. Upstream CrewAI 0.41.1 also leaves
+that future unresolved when its worker raises; the adapter records the task error
+but does not change this native failure behavior.
 
 Crew metadata selects only crew/task keys and UUIDs; agent role, goal, backstory,
 key, UUID, verbosity, iteration/rate limits, delegation flag and tool names;
 and task description, expected output, UUID, execution/human-input flags,
 assigned agent role/key, context task descriptions and tool names. Task description
 and expected output are also emitted as formatted aliases when `share_crew=True`.
-`Agent.execute_task` and LLM calls have no additional wrappers in this package:
-they execute inside the task span and their arguments/results are not serialized
-independently. Separately installed LLM instrumentors have their own policies.
+`Agent.execute_task` has no additional wrapper: it executes inside the task span.
+LLM calls are owned by a separately installed maintained provider instrumentor,
+not a second CrewAI LLM wrapper or event listener. Follow the composition recipe
+below for per-call model, provider, messages and usage. Provider instrumentors
+have their own projections; the CrewAI-specific field-name policy does not
+implicitly apply to those other adapters.
 
 Opaque runtime objects nested in application data are replaced with
 `[omitted runtime object]`, without inspecting their attributes. The guarantee is
@@ -174,13 +216,66 @@ trace_provider = register(
 ```
 
 ### Configure Crewai Instrumentation
-Instrument the Crewai client to enable telemetry collection. This step ensures that all interactions with the Crewai SDK are tracked and monitored.
+Instrument CrewAI to trace the framework entry points listed above.
 
 ```python
 from traceai_crewai import CrewAIInstrumentor
 
 CrewAIInstrumentor().instrument(tracer_provider=trace_provider)
 ```
+
+### Per-call LLM attribution with OpenAI
+
+Install and enable the maintained provider adapter **as well as** the CrewAI
+adapter. This covers CrewAI's native OpenAI client and the `ChatOpenAI` client
+used by CrewAI 0.41.1, including streamed responses. It does not require a second
+LangChain or LiteLLM instrumentor for those OpenAI calls.
+
+```bash
+pip install traceAI-crewai 'traceAI-openai>=0.1.12'
+```
+
+Use the same provider and privacy configuration for both adapters, before
+executing any crews, agents or flows. This replaces the framework-only
+instrumentation call above, rather than registering it a second time.
+
+```python
+from fi_instrumentation import TraceConfig
+from traceai_crewai import CrewAIInstrumentor
+from traceai_openai import OpenAIInstrumentor
+
+# Privacy-first: model/provider/usage remain visible, content does not.
+config = TraceConfig(
+    hide_inputs=True,
+    hide_outputs=True,
+    hide_error_details=True,
+)
+CrewAIInstrumentor().instrument(tracer_provider=trace_provider, config=config)
+OpenAIInstrumentor().instrument(tracer_provider=trace_provider, config=config)
+```
+
+To capture application messages/results, explicitly set `hide_inputs=False` and
+`hide_outputs=False` for both adapters; never put credentials in those fields.
+The composition yields Crew/Task (or standalone Agent) parents and one LLM span
+per SDK call, with `gen_ai.request.model`, `gen_ai.provider.name`, input/output,
+and provider-reported `gen_ai.usage.input_tokens`, `output_tokens` and
+`total_tokens` when returned by the provider. Streaming usage requires usage
+chunks; on legacy `ChatOpenAI`, use `stream_usage=True`. For CrewAI 0.152.0's
+intermediate LiteLLM transport, this OpenAI composition does not expose streamed
+per-call usage: use non-streaming calls for usage accounting, or upgrade to the
+native OpenAI route in CrewAI 1.15+.
+
+For mixed-model accounting, **sum only LLM spans**. Crew usage is a compatibility
+roll-up, not an additional charge; legacy CrewAI can estimate it using its own
+tokenizer. Standalone Agent/Flow spans deliberately do not copy cumulative LLM
+usage. Do not enable overlapping OpenAI, LangChain, LiteLLM or event-based LLM
+adapters for the same SDK call: that would duplicate spans and token totals.
+Other provider SDKs need their corresponding maintained provider adapter;
+OpenAI composition does not claim coverage for every CrewAI LLM transport.
+
+To remove the composition, call both `CrewAIInstrumentor().uninstrument()` and
+`OpenAIInstrumentor().uninstrument()`. Removing the framework adapter alone does
+not disable independently configured provider tracing.
 
 ### Create Crewai Components
 Set up your Crewai client with built-in observability.

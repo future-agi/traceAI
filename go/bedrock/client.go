@@ -6,6 +6,7 @@ package traceaibedrock
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -129,6 +130,8 @@ func (c *Client) start(ctx context.Context, op string, model *string) (context.C
 func failure(span trace.Span, err error) {
 	kind := "request_error"
 	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		kind = "incomplete_stream"
 	case errors.Is(err, context.Canceled):
 		kind = "canceled"
 	case errors.Is(err, context.DeadlineExceeded):

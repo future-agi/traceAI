@@ -6,6 +6,10 @@ Trace each Lambda invocation with OpenTelemetry's maintained [`otellambda`](http
 
 Requires Go 1.26.0+, `aws-lambda-go` v1.55.1+, `otellambda` v0.72.0 and OpenTelemetry v1.47.0. The dependencies are resolved by the module.
 
+```sh
+go get github.com/future-agi/traceAI/go/lambda@latest
+```
+
 ```go
 import (
     "github.com/aws/aws-lambda-go/lambda"
@@ -19,6 +23,23 @@ lambda.StartHandler(traceailambda.WrapHandler(lambda.NewHandler(handle), provide
 
 For a complete application with standard OTLP/HTTP exporter setup, see [example/main.go](example/main.go). Set `FI_API_KEY`, `FI_SECRET_KEY` and `FI_PROJECT_NAME` on the function; the example sends the two keys only to the trace endpoint at `{FI_BASE_URL}/tracer/v1/traces` (base defaults to `https://api.futureagi.com`). Missing either key disables exporting without failing the handler. The resource carries `project_name`, `project_type=observe` and `service.name`.
 
+For handlers built with `lambda.NewHandler`, supported responses are JSON values that do not implement `io.Reader`, and **raw-only readers** whose JSON encoding fails or produces an empty object. These retain the unwrapped runtime's Content-Type: `application/json` for JSON values, the reader's `ContentType()` when provided, and `application/octet-stream` otherwise. `strings.Reader`, `bytes.Buffer` and `lambdaurl.Wrap` responses on `RESPONSE_STREAM` function URLs satisfy the raw-only reader contract. Reader MIME metadata must be valid when the handler returns; the adapter captures it before serialization, reading or closing, so readers may release it during consumption.
+
+Readers that also successfully encode to non-empty JSON are **not supported**. AWS's `Handler.Invoke` returns only bytes and hides which encoding it chose. The adapter does not re-run application serialization or sniff the body to guess that decision: a hybrid response's bytes are unchanged, but it uses the reader's Content-Type (or `application/octet-stream`), not necessarily `application/json`. Return JSON as a non-reader value instead.
+
+The result is read inside the invocation span, so a function URL response is delivered whole rather than streamed incrementally. The event is decoded as JSON, so an invocation with an empty payload fails even for a handler that takes no event; send `{}` instead.
+
+`lambda.Start` and `lambda.StartWithOptions` use the wrapped handler as it is, so pass runtime options such as `lambda.WithEnableSIGTERM`, `lambda.WithContextValue` and `lambdaurl.WithDetectContentType` to `WrapHandler` instead. JSON options such as `lambda.WithUseNumber` stay on `lambda.NewHandlerWithOptions` for the handler you wrap.
+
+```go
+import "github.com/aws/aws-lambda-go/lambdaurl"
+
+lambda.StartHandler(traceailambda.WrapHandler(
+    lambda.NewHandler(lambdaurl.Wrap(mux)), provider,
+    lambdaurl.WithDetectContentType(true), lambda.WithEnableSIGTERM(onShutdown),
+))
+```
+
 Keep the provider alive across warm invocations. Pass the invocation context to model clients and tools so their spans are children of `lambda.handler`. Use the relevant traceAI model-client integration separately: Lambda invocation instrumentation does not trace model internals. Do not add another `otellambda.WrapHandler`, a second invocation span, or a second deferred flush around this adapter.
 
 ## Lifecycle and privacy
@@ -29,7 +50,8 @@ Keep the provider alive across warm invocations. Pass the invocation context to 
 - No event bodies, results, error messages, exception events or stack traces are recorded by the adapter. Error and panic spans contain only the Go type in `error.type` and their ERROR status. Application errors and panics still reach the runtime unchanged. Other instrumentors retain their own privacy settings.
 - The root span ends before each flush attempt, including the error and panic paths. Flushing ignores invocation cancellation but honors the earlier of two seconds and the invocation deadline minus 250 ms. If that reserve is exhausted, flushing is skipped. Standard SDK providers honor this deadline; custom providers must do so too.
 - Export failures do not replace the application result. Flush diagnostics are generic and do not include exporter error text. A hard runtime timeout or process kill can still lose spans; flushing is not a delivery guarantee.
-- A nil provider returns the original handler without instrumentation. The adapter never shuts down your provider.
+- A nil provider disables instrumentation. Without Lambda options it returns the original handler. The adapter never shuts down your provider.
+- Run wrapped `lambda.NewHandler` handlers with one invocation per execution environment, the Lambda default (`AWS_LAMBDA_MAX_CONCURRENCY` unset or 1). When aws-lambda-go v1.55.1 runs invocations concurrently, `Handler.Invoke` returns JSON results in a pooled buffer that another invocation can reuse before the result is sent. This affects any `lambda.Handler` middleware, including `otellambda.WrapHandler`.
 
 ## Migrate from the copied docs helper
 

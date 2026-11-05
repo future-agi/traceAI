@@ -17,9 +17,11 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.util.ReflectionUtils;
 import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +52,9 @@ public class TracedChatModel implements ChatModel {
 
     static final String SPAN_NAME_CALL = "Spring AI Chat";
     static final String SPAN_NAME_STREAM = "Spring AI Chat (Stream)";
+
+    // Resolve on the public interface, not the delegate class (which may be non-public).
+    private static final Method OPTIONS_ACCESSOR = ReflectionUtils.findMethod(ChatModel.class, "getOptions");
 
     private final ChatModel delegate;
     private final FITracer tracer;
@@ -89,7 +94,7 @@ public class TracedChatModel implements ChatModel {
 
             ChatResponse response = delegate.call(prompt);
 
-            captureResponse(span, prompt, response);
+            captureResponse(span, response);
             span.setStatus(StatusCode.OK);
             completed = true;
             return response;
@@ -115,6 +120,19 @@ public class TracedChatModel implements ChatModel {
     @Override
     public ChatOptions getDefaultOptions() {
         return delegate.getDefaultOptions();
+    }
+
+    /**
+     * Delegates Spring AI 2.x's options accessor without linking the distributable to the 2.x API.
+     * On 1.1.x, where that accessor does not exist, returns the delegate's default options instead.
+     * No options are copied and no model-operation span is started.
+     *
+     * @return the delegate's options, including {@code null} when supplied by the delegate
+     */
+    // No @Override: this module compiles against the Spring AI 1.1.x API.
+    public ChatOptions getOptions() {
+        return OPTIONS_ACCESSOR == null ? delegate.getDefaultOptions()
+            : (ChatOptions) ReflectionUtils.invokeMethod(OPTIONS_ACCESSOR, delegate);
     }
 
     /**
@@ -159,7 +177,13 @@ public class TracedChatModel implements ChatModel {
             tracer.setInputMessages(span, inputMessages);
             tracer.setInputValue(span, inputValue.toString());
         }
-        ChatOptions options = prompt.getOptions();
+        // Resolve metadata only. Preserve the exact Prompt and provider-specific options sent to
+        // the delegate, whose own request builder remains responsible for effective options.
+        captureOptions(span, delegate.getDefaultOptions());
+        captureOptions(span, prompt.getOptions());
+    }
+
+    private static void captureOptions(Span span, ChatOptions options) {
         if (options != null) {
             if (options.getModel() != null) {
                 span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, options.getModel());
@@ -176,7 +200,7 @@ public class TracedChatModel implements ChatModel {
         }
     }
 
-    private void captureResponse(Span span, Prompt prompt, ChatResponse response) {
+    private void captureResponse(Span span, ChatResponse response) {
         if (response == null) {
             return;
         }
@@ -185,10 +209,6 @@ public class TracedChatModel implements ChatModel {
             String responseModel = metadata.getModel();
             if (responseModel != null && !responseModel.isEmpty()) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
-                boolean requestModelKnown = prompt != null && prompt.getOptions() != null && prompt.getOptions().getModel() != null;
-                if (!requestModelKnown) {
-                    span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, responseModel);
-                }
             }
         }
 

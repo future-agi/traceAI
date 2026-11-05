@@ -17,16 +17,19 @@ from typing import (
     Type,
 )
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
+from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from opentelemetry.trace import Status, StatusCode
+from traceai_openai._privacy import response_output
 from traceai_openai._utils import _as_output_attributes, _to_dict, _ValueAndType, _io_value_and_type
 
 if TYPE_CHECKING:
     from openai.types import Completion
     from openai.types.chat import ChatCompletion
     from openai.types.responses.response import Response
-    from openai.types.responses.response_completed_event import ResponseCompletedEvent
+    from openai.types.responses import ResponseStreamEvent
 
 __all__ = (
     "_CompletionAccumulator",
@@ -43,8 +46,29 @@ class _CanGetAttributesFromResponse(Protocol):
     ) -> Iterator[Tuple[str, AttributeValue]]: ...
 
 
+def _response_status(response: Any) -> Status:
+    status = (
+        response.get("status")
+        if isinstance(response, Mapping)
+        else getattr(response, "status", None)
+    )
+    if isinstance(status, str) and status in {"failed", "cancelled", "incomplete"}:
+        # The vendor's error message can contain credentials or request content.
+        return Status(StatusCode.ERROR, "Response did not complete")
+    return Status(StatusCode.OK)
+
+
+def _raw_response_status(body: Any) -> Status:
+    """Raw HTTP success alone does not establish a completed generation."""
+    status = body.get("status") if isinstance(body, Mapping) else None
+    if isinstance(status, str) and status in {"completed", "failed", "cancelled", "incomplete"}:
+        return _response_status(body)
+    return Status(StatusCode.UNSET)
+
+
 class _ResponsesAccumulator:
     __slots__ = (
+        "_config",
         "_is_null",
         "_values",
         "_cached_result",
@@ -58,16 +82,20 @@ class _ResponsesAccumulator:
         request_parameters: Mapping[str, Any],
         chat_completion_type: Type["Response"],
         response_attributes_extractor: Optional[_CanGetAttributesFromResponse] = None,
+        config: Optional[TraceConfig] = None,
     ) -> None:
+        self._config = config
         self._chat_completion_type = chat_completion_type
         self._request_parameters = request_parameters
         self._response_attributes_extractor = response_attributes_extractor
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
-        self._values: Optional["ResponseCompletedEvent"] = None
+        self._values: Optional["ResponseStreamEvent"] = None
 
     def process_chunk(self, chunk: Any) -> None:
-        if type(chunk).__name__ == "ResponseCompletedEvent":
+        if getattr(chunk, "type", None) in {
+            "response.completed", "response.failed", "response.incomplete", "error"
+        }:
             self._is_null = False
             self._cached_result = None
             self._values = chunk
@@ -76,7 +104,14 @@ class _ResponsesAccumulator:
         if self._is_null:
             return None
         if self._values:
-            return self._values.response
+            return getattr(self._values, "response", None)
+
+    def get_status(self) -> Status:
+        if self._values is None:
+            return Status(StatusCode.ERROR, "Response stream ended before a terminal event")
+        if self._values.type != "response.completed":
+            return Status(StatusCode.ERROR, "Response stream did not complete")
+        return _response_status(self._result())
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -87,20 +122,31 @@ class _ResponsesAccumulator:
             # For Responses API, extract output items
             output_items = []
             for item in result.output:
-                if hasattr(item, "content") and item.content:
-                    for content in item.content:
-                        if hasattr(content, "text"):
+                if (
+                    getattr(item, "type", None) == "message"
+                    and getattr(item, "role", None) == "assistant"
+                ):
+                    for content in item.content or []:
+                        if getattr(content, "type", None) == "output_text":
                             output_items.append(content.text)
             if output_items:
                 output_content = " ".join(output_items)
 
-        if output_content:
+        if output_content and not any(
+            getattr(item, "type", None) in {
+                "mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response"
+            }
+            for item in result.output
+        ):
             yield SpanAttributes.OUTPUT_VALUE, output_content
         else:
-            # Fallback to full response if we can't extract content
-            yield from _as_output_attributes(
-                _io_value_and_type(result),
-            )
+            # Text alone would discard MCP results in a mixed response.
+            # Keep response-owned data, never echoed request fields, and lead
+            # with the answer just as non-streaming Responses previews do.
+            output = response_output(result, self._config)
+            if output_content:
+                output = {"output_text": output_content, **output}
+            yield from _as_output_attributes(_io_value_and_type(output))
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -224,6 +270,9 @@ class _ChatCompletionAccumulator:
                 output_value = safe_json_dumps(messages)
         yield SpanAttributes.OUTPUT_VALUE, output_value
 
+    def get_status(self) -> Optional[trace_api.Status]:
+        return None
+
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
             return
@@ -296,6 +345,9 @@ class _CompletionAccumulator:
             yield from _as_output_attributes(
                 _ValueAndType(json_string, FiMimeTypeValues.JSON),
             )
+
+    def get_status(self) -> Optional[trace_api.Status]:
+        return None
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):

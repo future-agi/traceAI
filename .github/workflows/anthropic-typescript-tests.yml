@@ -47,6 +47,8 @@ jobs:
             @anthropic-ai/sdk@1.3.0 \
             anthropic-floor@npm:@anthropic-ai/sdk@0.20.0 \
             anthropic-peer@npm:@anthropic-ai/sdk@0.27.3 \
+            anthropic-legacy-latest@npm:@anthropic-ai/sdk@0.133.0 \
+            anthropic-native-first@npm:@anthropic-ai/sdk@0.134.0 \
             @opentelemetry/api@1.9.0 \
             @opentelemetry/sdk-trace-base@2.4.0 \
             @opentelemetry/context-async-hooks@2.4.0 \
@@ -66,12 +68,18 @@ jobs:
           sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
             env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \
             "$node_bin" node_modules/jest/bin/jest.js --config packages/traceai_anthropic/jest.config.js --runInBand
-          for sdk in @anthropic-ai/sdk anthropic-floor anthropic-peer; do
+          for sdk in @anthropic-ai/sdk anthropic-floor anthropic-peer anthropic-legacy-latest anthropic-native-first; do
             sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
               env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \
               "$node_bin" packages/traceai_anthropic/contract/native-boundary.cjs \
               "$RUNNER_TEMP/anthropic-contract" "$sdk" \
               packages/traceai_anthropic/dist/src/instrumentation.js
+            for mode in normal privacy; do
+              sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
+                env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \
+                "$node_bin" packages/traceai_anthropic/contract/release-lifecycle.cjs \
+                "$sdk" "$mode" "$RUNNER_TEMP/anthropic-contract"
+            done
           done
           sudo unshare --net sh -c 'ip link set lo up; exec runuser -u runner -- "$@"' sh \
             env -i PATH="$PATH" HOME="$RUNNER_TEMP/anthropic-test-home" \

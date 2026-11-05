@@ -70,7 +70,7 @@
   "python/frameworks/weaviate": "0.1.2",
   "python/frameworks/xai": "0.1.1",
   "python/traceai": "0.1.0",
-  "typescript/packages/fi-core": "1.1.0",
+  "typescript/packages/fi-core": "1.1.1",
   "typescript/packages/fi-semantic-conventions": "1.0.0",
   "typescript/packages/traceai_anthropic": "0.1.4",
   "typescript/packages/traceai_bedrock": "0.1.2",
@@ -86,6 +86,7 @@
   "typescript/packages/traceai_genkit": "0.1.0",
   "typescript/packages/traceai_google_adk": "0.1.1",
   "typescript/packages/traceai_google_genai": "0.1.0",
+  "typescript/packages/traceai_google_genai_sdk": "0.1.0",
   "typescript/packages/traceai_groq": "0.1.0",
   "typescript/packages/traceai_guardrails": "0.1.1",
   "typescript/packages/traceai_huggingface": "0.1.1",
@@ -125,7 +126,9 @@
   "go/lambda": "0.1.0",
   "go/openai": "0.1.0",
   "csharp/src/FIInstrumentation": "1.0.0",
-  "python": "1.2.2",
+  "python": "1.2.3",
   "typescript/packages/traceai_elevenlabs": "0.1.0",
-  "go/bedrock": "0.1.0"
+  "go/bedrock": "0.1.0",
+  "typescript/packages/traceai_huggingface_transformers": "0.1.0",
+  "python/frameworks/transformers": "0.1.0"
 }

@@ -5,7 +5,7 @@ OpenTelemetry instrumentation for [Groq](https://groq.com/) - the fastest infere
 ## Features
 
 - Automatic tracing of Groq Chat Completions
-- Support for all Groq models (Mixtral, LLaMA 3, Gemma, etc.)
+- Support for Groq Chat Completions models available to your account
 - Tool/function calling tracing
 - Streaming response support
 - Token usage tracking
@@ -23,6 +23,14 @@ yarn add @traceai/groq
 
 ## Quick Start
 
+For a local OTLP collector, install the SDK and OpenTelemetry packages used below:
+
+```bash
+npm install groq-sdk @opentelemetry/sdk-trace-node@^2 @opentelemetry/sdk-trace-base@^2 @opentelemetry/exporter-trace-otlp-proto@^0.201.1
+```
+
+To send traces to Future AGI instead, use [With TraceAI Core](#with-traceai-core).
+
 ```typescript
 import { GroqInstrumentation } from "@traceai/groq";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -30,23 +38,25 @@ import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import Groq from "groq-sdk";
 
-// Initialize OpenTelemetry
-const provider = new NodeTracerProvider();
+// Initialize OpenTelemetry 2.x with your OTLP collector.
 const exporter = new OTLPTraceExporter({
   url: "http://localhost:4318/v1/traces",
 });
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(exporter)],
+});
 provider.register();
 
-// Initialize Groq instrumentation
+// Initialize Groq instrumentation.
 const groqInstrumentation = new GroqInstrumentation();
-groqInstrumentation.manuallyInstrument(require("groq-sdk"));
+groqInstrumentation.setTracerProvider(provider);
+groqInstrumentation.manuallyInstrument({ Groq });
 
 // Use Groq as normal - all calls are automatically traced
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const chatCompletion = await groq.chat.completions.create({
-  model: "mixtral-8x7b-32768",
+  model: "llama-3.1-8b-instant",
   messages: [
     { role: "user", content: "Explain quantum computing in simple terms" }
   ],
@@ -83,10 +93,16 @@ const instrumentation = new GroqInstrumentation({
 
 ### With TraceAI Core
 
+```bash
+npm install @traceai/fi-core groq-sdk
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `GROQ_API_KEY` in your application's environment.
+
 ```typescript
 import { register, ProjectType } from "@traceai/fi-core";
 import { GroqInstrumentation } from "@traceai/groq";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import Groq from "groq-sdk";
 
 // 1. Register TraceAI Core TracerProvider
 const tracerProvider = register({
@@ -95,14 +111,12 @@ const tracerProvider = register({
   sessionName: "groq-session-" + Date.now(),
 });
 
-// 2. Register instrumentation BEFORE importing Groq SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider,
-  instrumentations: [new GroqInstrumentation()],
-});
+// 2. Attach instrumentation to this provider and SDK instance.
+const instrumentation = new GroqInstrumentation();
+instrumentation.setTracerProvider(tracerProvider);
+instrumentation.manuallyInstrument({ Groq });
 
-// 3. NOW import and use Groq
-const Groq = (await import("groq-sdk")).default;
+// 3. Create the client.
 const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // 4. Use normally - all calls are traced
@@ -115,19 +129,9 @@ const response = await client.chat.completions.create({
 await tracerProvider.shutdown();
 ```
 
-## Supported Models
+## Models
 
-Groq offers blazing-fast inference for various open-source models:
-
-| Model | ID | Context Window |
-|-------|-----|----------------|
-| Mixtral 8x7B | `mixtral-8x7b-32768` | 32,768 tokens |
-| LLaMA 3.1 70B | `llama-3.1-70b-versatile` | 131,072 tokens |
-| LLaMA 3.1 8B | `llama-3.1-8b-instant` | 131,072 tokens |
-| LLaMA 3 70B | `llama3-70b-8192` | 8,192 tokens |
-| LLaMA 3 8B | `llama3-8b-8192` | 8,192 tokens |
-| Gemma 2 9B | `gemma2-9b-it` | 8,192 tokens |
-| LLaMA 3 Groq 70B (Tool Use) | `llama3-groq-70b-8192-tool-use-preview` | 8,192 tokens |
+The instrumentation traces Chat Completions independently of the model ID. The examples below use `llama-3.1-8b-instant` and `llama-3.3-70b-versatile`. Check [Groq's model list](https://console.groq.com/docs/models) for the models currently available to your account before running an example.
 
 ## Real-World Use Cases
 
@@ -142,7 +146,7 @@ async function chat(userMessage: string, conversationHistory: any[]) {
   conversationHistory.push({ role: "user", content: userMessage });
 
   const response = await groq.chat.completions.create({
-    model: "llama-3.1-8b-instant", // Fastest model for real-time chat
+    model: "llama-3.1-8b-instant", // Choose a model suited to your task
     messages: conversationHistory,
     temperature: 0.7,
     max_tokens: 500,
@@ -163,12 +167,12 @@ const response = await chat("I need help with my order", history);
 console.log(response);
 ```
 
-### 2. Code Generation with Mixtral
+### 2. Code generation
 
 ```typescript
 async function generateCode(prompt: string, language: string) {
   const response = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [
       {
         role: "system",
@@ -241,7 +245,7 @@ async function assistantWithTools(userQuery: string) {
   ];
 
   const response = await groq.chat.completions.create({
-    model: "llama3-groq-70b-8192-tool-use-preview",
+    model: "llama-3.3-70b-versatile",
     messages: [{ role: "user", content: userQuery }],
     tools,
     tool_choice: "auto",
@@ -270,7 +274,7 @@ const result = await assistantWithTools("What's the weather in Tokyo?");
 ```typescript
 async function streamChat(prompt: string) {
   const stream = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [{ role: "user", content: prompt }],
     stream: true,
   });
@@ -291,12 +295,16 @@ async function streamChat(prompt: string) {
 await streamChat("Write a short poem about artificial intelligence");
 ```
 
+Streaming is consumed only as your application reads it; tracing does not run a second reader in the background. A stream's span finishes when you finish reading or cancel it. Breaking out of `for await` preserves the SDK's cancellation behavior. Token counts are recorded when Groq supplies usage, usually in the final chunk, so a cancelled stream may not have token counts.
+
+SDK helpers remain available: `.withResponse()` gives you the parsed result and response headers, and streams retain `.tee()`, `.toReadableStream()`, and `.controller`. Use `.withResponse()` when you want both the headers and a traced response body. Calling only `.asResponse()` leaves the body untouched and finishes a metadata-only span; it does not record generated text or usage.
+
 ### 5. Document Summarization
 
 ```typescript
 async function summarizeDocument(document: string, maxWords: number = 100) {
   const response = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile", // Best for complex summarization
+    model: "llama-3.3-70b-versatile", // Choose a model suited to your task
     messages: [
       {
         role: "system",
@@ -320,7 +328,7 @@ async function summarizeDocument(document: string, maxWords: number = 100) {
 ```typescript
 async function extractStructuredData(text: string) {
   const response = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.1-8b-instant",
     messages: [
       {
         role: "system",
@@ -354,58 +362,21 @@ The instrumentation captures the following attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `llm.system` | Always "groq" |
-| `llm.provider` | Always "groq" |
-| `llm.model_name` | The model used (e.g., "mixtral-8x7b-32768") |
-| `llm.input_messages` | Input messages with role and content |
-| `llm.output_messages` | Output messages with role and content |
-| `llm.invocation_parameters` | Model parameters (temperature, max_tokens, etc.) |
-| `llm.token_count.prompt` | Number of input tokens |
-| `llm.token_count.completion` | Number of output tokens |
-| `llm.token_count.total` | Total tokens used |
-| `llm.tools` | Tool definitions if provided |
-| `message.tool_calls` | Tool calls made by the model |
+| `fi.span.kind` | `LLM` |
+| `gen_ai.provider.name` | `groq` |
+| `gen_ai.request.model` | Model requested by the application |
+| `gen_ai.response.model` | Model reported by Groq, when provided |
+| `gen_ai.input.messages` | Input messages with role and content |
+| `gen_ai.output.messages` | Output messages, including tool calls in the message JSON |
+| `gen_ai.request.parameters` | Requested model parameters |
+| `gen_ai.usage.input_tokens` | Input tokens, when provided |
+| `gen_ai.usage.output_tokens` | Output tokens, when provided |
+| `gen_ai.usage.total_tokens` | Total tokens, when provided |
+| `gen_ai.tool.definitions` | Tool definitions, when provided |
 
-## Integration with TraceAI Platform
+## Send traces to Future AGI
 
-```typescript
-import { GroqInstrumentation } from "@traceai/groq";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Resource } from "@opentelemetry/resources";
-
-// Configure for TraceAI platform
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    "service.name": "my-groq-app",
-    "deployment.environment": "production",
-  }),
-});
-
-const exporter = new OTLPTraceExporter({
-  url: "https://api.traceai.com/v1/traces",
-  headers: {
-    Authorization: `Bearer ${process.env.TRACEAI_API_KEY}`,
-  },
-});
-
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
-
-// Initialize instrumentation
-const instrumentation = new GroqInstrumentation();
-instrumentation.manuallyInstrument(require("groq-sdk"));
-```
-
-## Why Groq?
-
-Groq's LPU (Language Processing Unit) inference engine provides:
-
-- **Ultra-low latency**: Up to 10x faster than GPU-based solutions
-- **Consistent performance**: Predictable response times
-- **Cost-effective**: Pay per token with no idle costs
-- **Open-source models**: Access to Mixtral, LLaMA, Gemma, and more
+Use the maintained `@traceai/fi-core` setup in [With TraceAI Core](#with-traceai-core). Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment. The core package configures the Future AGI exporter and project resource attributes; you do not need a custom exporter or a second tracer provider.
 
 ## Running Examples
 
@@ -418,14 +389,6 @@ cp .env.example .env
 
 pnpm install
 pnpm run example
-```
-
-## E2E Testing
-
-Run E2E tests with real API keys:
-
-```bash
-GROQ_API_KEY=your_key pnpm test -- --testPathPattern=e2e
 ```
 
 ## License

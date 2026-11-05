@@ -40,11 +40,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Check literal README install coordinates
+        run: python3 -I java/traceai-java-weaviate/scripts/test_prepare_consumers.py
       - name: Test real SDK over loopback and decode OTLP
         run: >-
           mvn -B -ntp -f java/pom.xml -pl traceai-java-weaviate -am
           -Dweaviate6.version=${{ matrix.client }}
-          '-Dtest=TracedWeaviateV6Test,WeaviateOtlpWireTest,WeaviateTracingTest'
+          '-Dtest=TracedWeaviateLegacyTest,TracedWeaviateV6Test,WeaviateOtlpWireTest,WeaviateTracingTest,WeaviateAsyncLifecycleTest,WeaviateFutureTest,WeaviateCancellationTest'
           -Dsurefire.failIfNoSpecifiedTests=false verify
       - name: Package against the minimum client for binary compatibility
         run: >-

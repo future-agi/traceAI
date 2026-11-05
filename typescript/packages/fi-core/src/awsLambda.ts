@@ -1,5 +1,5 @@
 import { context, diag, ROOT_CONTEXT, Span, SpanKind, SpanStatusCode, trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { isTracingSuppressed, W3CTraceContextPropagator } from "@opentelemetry/core";
 import { FISpanKind, SemanticConventions } from "@traceai/fi-semantic-conventions";
 import { FISpan } from "./trace/trace-config/FISpan";
 import { generateTraceConfig } from "./trace/trace-config/traceConfig";
@@ -25,9 +25,18 @@ export interface LambdaTracingOptions {
 export type LambdaCallback<Result> = (error?: Error | string | null, result?: Result) => void;
 
 type PendingFlush = { waiters: Set<() => void> };
-// Shared across wrappers using the same provider, without retaining dead providers.
-const pendingFlushes = new WeakMap<object, PendingFlush>();
-const wrappedHandlers = new WeakSet<object>();
+type LambdaLifecycleState = {
+  pendingFlushes: WeakMap<object, PendingFlush>;
+  wrappedHandlers: WeakSet<object>;
+};
+// Share guards across CJS and ESM entry points. Version the shape and retain
+// weak ownership so providers and handlers can still be garbage collected.
+const lifecycleKey = Symbol.for("@traceai/fi-core/aws-lambda/lifecycle/v1");
+const sharedGlobal = globalThis as typeof globalThis & { [lifecycleKey]?: LambdaLifecycleState };
+const { pendingFlushes, wrappedHandlers } = sharedGlobal[lifecycleKey] ??= {
+  pendingFlushes: new WeakMap<object, PendingFlush>(),
+  wrappedHandlers: new WeakSet<object>(),
+};
 const propagator = new W3CTraceContextPropagator();
 
 function diagnostic(message: string): void {
@@ -35,12 +44,20 @@ function diagnostic(message: string): void {
   try { diag.debug(`traceLambdaHandler: ${message}`); } catch { /* A custom logger can fail too. */ }
 }
 
-function parentContext(event: unknown) {
-  if (!event || typeof event !== "object") return ROOT_CONTEXT;
+function isHttpProxyEvent(event: unknown): event is Record<string, unknown> {
+  if (!event || typeof event !== "object") return false;
   const carrier = event as Record<string, unknown>;
-  const request = carrier.requestContext as Record<string, unknown> | undefined;
+  const request = carrier.requestContext;
+  if (!request || typeof request !== "object") return false;
+  const { http, elb } = request as Record<string, unknown>;
+  return typeof carrier.httpMethod === "string" ||
+    (!!http && typeof http === "object") || (!!elb && typeof elb === "object");
+}
+
+function parentContext(event: unknown) {
   // HTTP events only. Never select one queue record as a batch's parent.
-  if (!request || !(typeof carrier.httpMethod === "string" || request.http || request.elb)) return ROOT_CONTEXT;
+  if (!isHttpProxyEvent(event)) return ROOT_CONTEXT;
+  const carrier = event;
   const values: string[] = [];
   for (const source of [carrier.headers, carrier.multiValueHeaders]) {
     if (!source || typeof source !== "object") continue;
@@ -59,6 +76,20 @@ function parentContext(event: unknown) {
     keys: () => ["traceparent"],
     get: (headers, key) => key === "traceparent" ? headers.traceparent : undefined,
   });
+}
+
+function recordHttpResponse(span: Span, event: unknown, result: unknown): void {
+  try {
+    if (!isHttpProxyEvent(event) || !result || typeof result !== "object") return;
+    // Only the numeric status is metadata. Never inspect body, headers or error text.
+    const status = (result as Record<string, unknown>).statusCode;
+    if (typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599) return;
+    span.setAttribute("http.response.status_code", status);
+    if (status >= 500) {
+      span.setAttribute("error.type", String(status));
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    }
+  } catch { diagnostic("HTTP response metadata recording failed"); }
 }
 
 function errorType(error: unknown): string {
@@ -166,14 +197,18 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
     let span: Span | undefined;
     let active = ROOT_CONTEXT;
     try {
-      const parent = parentContext(event);
-      if (tracer) span = new FISpan({ config, span: tracer.startSpan("aws.lambda.invoke", { kind: SpanKind.SERVER, attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "faas.coldstart": cold,
-        "faas.invocation_id": metadata(invocation.awsRequestId),
-        "faas.name": metadata(invocation.functionName),
-      } }, parent) });
-      if (span) active = trace.setSpan(parent, span);
+      // Check suppression before selecting a fresh invocation root: ROOT_CONTEXT
+      // intentionally drops warm-invocation parents, but must not bypass suppression.
+      if (tracer && !isTracingSuppressed(context.active())) {
+        const parent = parentContext(event);
+        span = new FISpan({ config, span: tracer.startSpan("aws.lambda.invoke", { kind: SpanKind.SERVER, attributes: {
+          [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
+          "faas.coldstart": cold,
+          "faas.invocation_id": metadata(invocation.awsRequestId),
+          "faas.name": metadata(invocation.functionName),
+        } }, parent) });
+        active = trace.setSpan(parent, span);
+      }
     } catch { diagnostic("invocation span creation failed"); }
 
     const run = () => new Promise<Result>((resolve, reject) => {
@@ -189,12 +224,15 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
     });
     let outcome: Promise<Result> | undefined;
     try {
+      // Disabled, suppressed and failed initialization paths preserve caller context.
       // A broken context manager must not run application code twice.
-      context.with(active, () => { outcome = run(); });
+      if (span) context.with(active, () => { outcome = run(); });
     } catch { diagnostic("context activation failed"); }
     if (!outcome) outcome = run();
     try {
-      return await outcome;
+      const result = await outcome;
+      if (span) recordHttpResponse(span, event, result);
+      return result;
     } catch (error) {
       try {
         span?.setAttribute("error.type", errorType(error));
@@ -203,7 +241,7 @@ export function traceLambdaHandler<Event, Result, C extends LambdaInvocationCont
       throw error;
     } finally {
       try { span?.end(); } catch { diagnostic("invocation span end failed"); }
-      try { await flush(options, invocation); } catch { diagnostic("flush waiting failed"); }
+      try { if (span) await flush(options, invocation); } catch { diagnostic("flush waiting failed"); }
     }
   }
 

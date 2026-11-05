@@ -7,12 +7,14 @@ on:
       - 'python/frameworks/llama_index/**'
       - 'python/fi_instrumentation/**'
       - '.github/workflows/llamaindex-workflows-tests.yml'
+      - '.github/scripts/llamaindex_core_floor.py'
   push:
     branches: [dev]
     paths:
       - 'python/frameworks/llama_index/**'
       - 'python/fi_instrumentation/**'
       - '.github/workflows/llamaindex-workflows-tests.yml'
+      - '.github/scripts/llamaindex_core_floor.py'
 
 permissions:
   contents: read
@@ -26,17 +28,63 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The instrumentor's declared floor (llama-index-core>=0.10.43). It
+          # predates every Workflow class, so the workflow tests skip here.
+          - name: legacy-floor
+            packages: >-
+              'llama-index-core==0.10.43'
+              'llama-index-llms-openai==0.1.26'
+              'openai==1.49.0'
+          # Core before 0.12.43 embeds its own Workflow class and names the
+          # run span "Workflow.run". 0.12.41 also exits a user-cancelled run
+          # with no result, so the instrumentor must read the outcome.
+          - name: embedded-core
+            embedded: true
+            packages: >-
+              'llama-index-core==0.12.41'
+              'llama-index-llms-openai==0.4.7'
           # Core 0.13 uses the shared standalone dispatcher and
           # declares workflows>=1.0.1,<2. This is that route's floor, not a
           # change to the instrumentor's legacy-core support range.
           - name: standalone-floor
-            core: '0.13.0'
-            workflows: '1.0.1'
-            openai: '0.5.6'
+            packages: >-
+              'llama-index-core==0.13.0'
+              'llama-index-workflows==1.0.1'
+              'llama-index-llms-openai==0.5.6'
+          # Before 2.16 Workflows leaves the run span's status to the
+          # instrumentor. 2.14.0 returns a handler that is not a Future;
+          # 2.15.1 is the last release before Workflows drops failed runs.
+          - name: handler-not-future
+            packages: >-
+              'llama-index-core==0.14.25'
+              'llama-index-workflows==2.14.0'
+              'llama-index-llms-openai==0.8.3'
+          - name: last-before-2.16
+            packages: >-
+              'llama-index-core==0.14.25'
+              'llama-index-workflows==2.15.1'
+              'llama-index-llms-openai==0.8.3'
+          # Current framework with the compatible Anthropic SDK, not all-latest
+          # provider coverage. Adapter 0.12.3 + anthropic 2.4.0/2.5.0 fails before
+          # HTTP even without traceAI: https://github.com/run-llama/llama_index/issues/23701
+          # See python/frameworks/llama_index/README.md#known-limitations.
+          # Keep the passing 0.75.0 control and every assertion; this cell is not
+          # known-broken and must not tolerate failures.
           - name: current
-            core: '0.14.25'
-            workflows: '2.26.1'
-            openai: '0.8.3'
+            packages: >-
+              'llama-index-core==0.14.25'
+              'llama-index-workflows==2.26.1'
+              'llama-index-llms-openai==0.8.3'
+              'llama-index-llms-anthropic==0.12.3'
+              'anthropic==0.75.0'
+          # The lowest fi-instrumentation-otel the package declares, from PyPI
+          # instead of this repo's core, with the latest LlamaIndex.
+          - name: core-floor
+            fi_core: declared-floor
+            packages: >-
+              'llama-index-core==0.14.25'
+              'llama-index-workflows==2.26.1'
+              'llama-index-llms-openai==0.8.3'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,12 +93,26 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install integration and framework
+        env:
+          FI_CORE: ${{ matrix.fi_core }}
+        run: |
+          if [ "$FI_CORE" = declared-floor ]; then
+            floor=$(python -I .github/scripts/llamaindex_core_floor.py)
+            core="fi-instrumentation-otel==$floor"
+          else
+            core="-e python"
+          fi
+          echo "core: $core"
+          python -m pip install $core -e python/frameworks/llama_index \
+            ${{ matrix.packages }} \
+            llama-index-llms-azure-openai llama-index-llms-openai-like \
+            'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
+          python -m pip show fi-instrumentation-otel
+      - name: Check the embedded Workflow class is under test
+        if: matrix.embedded
         run: >-
-          python -m pip install -e python -e python/frameworks/llama_index
-          'llama-index-core==${{ matrix.core }}'
-          'llama-index-workflows==${{ matrix.workflows }}'
-          'llama-index-llms-openai==${{ matrix.openai }}'
-          'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
+          python -I -c "from llama_index.core.workflow import Workflow;
+          assert Workflow.__module__.startswith('llama_index.core.'), Workflow.__module__"
       - name: Test real workflow and OTLP contract without outbound connections
         run: >-
           python -I -m pytest python/frameworks/llama_index/tests

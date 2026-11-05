@@ -41,12 +41,13 @@ jobs:
           pnpm --filter '@traceai/elevenlabs...' --workspace-concurrency=1 run build
           pnpm --filter '@traceai/elevenlabs' run lint
           pnpm --filter '@traceai/elevenlabs' run typecheck:contract
-      - name: Pack and install in a clean consumer with published dependencies
+      - name: Pack and install in a clean consumer with the staged core
         working-directory: typescript
         run: |
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
           pnpm --filter '@traceai/elevenlabs' pack --pack-destination "$RUNNER_TEMP/package"
           TARBALL="$(find "$RUNNER_TEMP/package" -maxdepth 1 -name '*.tgz' -print -quit)"
-          node packages/traceai_elevenlabs/scripts/packed.cjs prepare "$RUNNER_TEMP/consumer" "$TARBALL"
+          node packages/traceai_elevenlabs/scripts/packed.cjs prepare "$RUNNER_TEMP/consumer" "$TARBALL" "$RUNNER_TEMP/fi-core.tgz"
       - name: Real SDK floor/current, OTLP and ESM/CommonJS customer snippet (loopback only)
         run: |
           NODE="$(command -v node)"
