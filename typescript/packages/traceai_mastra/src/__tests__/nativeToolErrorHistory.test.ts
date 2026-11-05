@@ -27,6 +27,7 @@ for (const direct of [false, true]) {
         for (const span of order === "tool-first" ? [tool(direct), step()] : [step(), tool(direct)]) {
           history.capture(span, true);
         }
+        if (!direct) history.captureInvocation(step(), { toolCallId: "failed-call", error: new Error(secret) });
         history.capture(native("first", "root", "agent_run", { entityId: "agent-a", outcome }), true);
         history.forget("first");
         history.capture(root("later"), false);
@@ -77,7 +78,7 @@ it("scopes nested agents to their nearest native agent, not the outer trace owne
 it("bounds native joins and fails closed on saturation only in the affected agent", () => {
   const history = new NativeToolErrorHistory();
   history.capture(root(), false);
-  for (let i = 0; i < 130; i++) history.capture(native("first", `step-${i}`, "model_step", {
+  for (let i = 0; i < 1026; i++) history.capture(native("first", `step-${i}`, "model_step", {
     parentSpanId: "root", output: { toolCalls: [{ toolCallId: `call-${i}`, toolName: "lookup", args: i }] },
   }), true);
   history.forget("first");
@@ -85,4 +86,23 @@ it("bounds native joins and fails closed on saturation only in the affected agen
   expect(history.matches(root("later"), secret, "untracked-call")).toBe(true);
   history.capture(root("other", "agent-b"), false);
   expect(history.matches(root("other"), secret, "untracked-call")).toBe(false);
+});
+
+
+it("does not conflate successful and failed calls with identical parsed inputs or error text", () => {
+  const history = new NativeToolErrorHistory();
+  history.capture(root(), false);
+  history.capture(step(), false);
+  history.capture(tool(false), true);
+  history.captureInvocation(step(), { toolCallId: "failed-call", error: new Error(secret) });
+  // Original and parsed arguments are not consulted, even on the originating trace.
+  expect(history.matches(step(), secret, "failed-call")).toBe(true);
+  expect(history.matches(step(), secret, "safe-call")).toBe(false);
+  history.captureInvocation(step(), { toolCallId: "other-failure", error: new Error("different error") });
+  expect(history.matches(step(), secret, "other-failure")).toBe(false);
+  expect(history.matches(step(), "different error", "failed-call")).toBe(false);
+  history.forget("first");
+  history.capture(root("later"), false);
+  expect(history.matches(root("later"), secret, "failed-call")).toBe(true);
+  expect(history.matches(root("later"), secret, "safe-call")).toBe(false);
 });

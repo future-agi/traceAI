@@ -3,7 +3,7 @@ import * as observability from "@mastra/observability";
 import { coreFeatures } from "@mastra/core/features";
 import { SpanConverter } from "@mastra/otel-exporter";
 import { SpanType } from "@mastra/core/observability";
-import type { AnyExportedSpan, TracingEvent } from "@mastra/core/observability";
+import type { AnyExportedSpan, TracingEvent, InitExporterOptions } from "@mastra/core/observability";
 import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -12,6 +12,7 @@ import { SpanKind, SpanStatusCode, TraceFlags } from "@opentelemetry/api";
 import { generateTraceConfig } from "@traceai/fi-core";
 import { sanitizeSpan } from "./privacy.js";
 import { NativeToolErrorHistory } from "./toolErrorHistory.js";
+import { toolErrorLifecycle } from "./toolErrorLifecycle.js";
 import { VERSION } from "./version.js";
 
 function runtimeEmitsInference(): boolean {
@@ -219,6 +220,24 @@ export class FIMastraSpanExporter extends BaseExporter {
   private readonly pending = new Set<Promise<void>>();
   private readonly toolErrors = new NativeToolErrorHistory();
   private shutdownPromise?: Promise<void>;
+  private readonly errorLifecycle = toolErrorLifecycle(
+    span => this.traceConfig.hideErrorDetails && !this.shutdownPromise
+      && span.observabilityInstance.getExporters().includes(this),
+    (span, payload) => {
+      const exported = span.exportSpan(false);
+      if (!this.shutdownPromise && exported) this.toolErrors.captureInvocation(exported, payload);
+    },
+  );
+
+  init({ config }: InitExporterOptions): void {
+    // Mastra passes its instance's processor array here, including when this
+    // exporter is added to a caller-managed Observability configuration. Do not
+    // touch global prototypes, agents, tools, or another instance's exporters.
+    if (this.traceConfig.hideErrorDetails && config?.spanOutputProcessors
+      && !config.spanOutputProcessors.includes(this.errorLifecycle)) {
+      config.spanOutputProcessors.push(this.errorLifecycle);
+    }
+  }
 
   constructor(config: FISpanExporterConfig) {
     super();

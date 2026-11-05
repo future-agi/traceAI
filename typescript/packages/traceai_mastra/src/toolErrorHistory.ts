@@ -48,6 +48,13 @@ export class ToolErrorHistory {
     return failed || this.continuedOverflow || this.continuedCalls.has(call);
   }
 
+  /** Exact native invocation identity; never learn an ID from matching text. */
+  matchesCall(message: string, toolCallId: string): boolean {
+    return this.continuedOverflow || this.continuedCalls.has(fingerprint(JSON.stringify(
+      [fingerprint(toolCallId), fingerprint(message)],
+    )));
+  }
+
   saturate(): void { this.continuedOverflow = true; }
 
   /** Join native provenance without retaining the call ID or exception plaintext. */
@@ -69,16 +76,15 @@ export class ToolErrorHistory {
 
 type NativeTrace = {
   scopes: Map<string, string>;
-  pairs: Map<string, { calls: Set<string>; messages: Set<string> }>;
   saturated: boolean;
+  invocationIds: boolean;
 };
 
 /**
- * Establish call provenance at native tool/step completion, not at the next
- * model request (a terminal tool step has none). New runtimes supply toolCallId;
- * the floor supplies it on the parent model_step's output.toolCalls instead.
- * Join that declaration by parent step, tool identity and arguments, in either
- * event order. Only fingerprints survive the synchronous capture.
+ * Establish call provenance from the native tool-error lifecycle before root
+ * completion. New runtimes also supply toolCallId on the failed tool span.
+ * Parsed span inputs and original model arguments are never invocation identity.
+ * Only fingerprints survive synchronous capture.
  *
  * Each exporter owns this state. Agent entity identity scopes continuation, and
  * unknown ancestry stays trace-local rather than contaminating another agent.
@@ -108,7 +114,7 @@ export class NativeToolErrorHistory {
     let trace = this.traces.get(span.traceId);
     if (!trace) {
       if (this.traces.size >= 1024) { this.overflow = true; return; }
-      trace = { scopes: new Map(), pairs: new Map(), saturated: this.overflow };
+      trace = { scopes: new Map(), saturated: this.overflow, invocationIds: false };
       this.traces.set(span.traceId, trace);
     }
     const native = span as AnyExportedSpan & { entityId?: string };
@@ -120,64 +126,44 @@ export class NativeToolErrorHistory {
     if (!ended) return;
     const history = this.history(scope);
     if (!history) return;
-    // Arguments are part of the join, not retained customer data. Normalize key
-    // order because schema parsing can reorder a tool input's object properties.
-    const key = (step: string, tool: string, input: unknown): string => fingerprint(JSON.stringify(
-      [step, tool, input], (_key, value) => value && typeof value === "object" && !Array.isArray(value)
-        ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value,
-    ));
-    const pair = (id: string) => {
-      let entry = trace!.pairs.get(id);
-      if (!entry && trace!.pairs.size < 128) {
-        entry = { calls: new Set<string>(), messages: new Set<string>() };
-        trace!.pairs.set(id, entry);
+    const callId = (span.attributes as { toolCallId?: unknown } | undefined)?.toolCallId;
+    if (/^(?:tool_call|mcp_tool_call|client_tool_call|provider_tool_call)$/.test(span.type)
+      && typeof span.errorInfo?.message === "string") {
+      const message = span.errorInfo.message;
+      history.remember(span.traceId, message);
+      if (typeof callId === "string") {
+        trace.invocationIds = true;
+        history.link(fingerprint(callId), fingerprint(message));
       }
-      if (!entry) trace!.saturated = true;
-      return entry;
-    };
-    try {
-      const callId = (span.attributes as { toolCallId?: unknown } | undefined)?.toolCallId;
-      if (/^(?:tool_call|mcp_tool_call|client_tool_call|provider_tool_call)$/.test(span.type)
-        && typeof span.errorInfo?.message === "string") {
-        const message = span.errorInfo.message;
-        history.remember(span.traceId, message);
-        if (typeof callId === "string") history.link(fingerprint(callId), fingerprint(message));
-        else if (span.parentSpanId && native.entityId) {
-          const entry = pair(key(span.parentSpanId, native.entityId, span.input));
-          if (entry) {
-            if (entry.messages.size < 128) entry.messages.add(fingerprint(message));
-            else trace.saturated = true;
-            for (const id of entry.calls) history.link(id, fingerprint(message));
-          }
-        }
-      }
-      if (span.type === "model_step") {
-        const calls = (span.output as { toolCalls?: unknown } | undefined)?.toolCalls;
-        if (Array.isArray(calls)) {
-          for (const call of calls) {
-            if (typeof call?.toolCallId !== "string" || typeof call.toolName !== "string") continue;
-            const entry = pair(key(span.id, call.toolName, call.args));
-            if (!entry) continue;
-            if (entry.calls.size < 128) entry.calls.add(fingerprint(call.toolCallId));
-            else trace.saturated = true;
-            for (const message of entry.messages) history.link(fingerprint(call.toolCallId), message);
-          }
-        }
-      }
-    } catch {
-      // Unserializable custom inputs must not break export or silently drop the
-      // privacy boundary. Native framework inputs are bounded serializable views.
-      trace.saturated = true;
     }
     if (trace.saturated) history.saturate();
+  }
+
+  /** The emitting SDK pairs the call ID with its failure before schema views diverge. */
+  captureInvocation(span: AnyExportedSpan, payload: unknown): void {
+    const error = payload as { toolCallId?: unknown; error?: { message?: unknown } } | undefined;
+    if (typeof error?.toolCallId !== "string" || typeof error.error?.message !== "string") return;
+    this.capture(span, false);
+    const trace = this.traces.get(span.traceId);
+    if (trace) trace.invocationIds = true;
+    const history = this.history(this.scope(span));
+    history?.remember(span.traceId, error.error.message);
+    history?.link(fingerprint(error.toolCallId), fingerprint(error.error.message));
   }
 
   matches(span: AnyExportedSpan, message: string, toolCallId?: string): boolean {
     const trace = this.traces.get(span.traceId);
     if (trace?.saturated || (!trace && this.overflow)) return true;
-    const history = this.agents.get(this.scope(span));
-    return history ? history.matches(span.traceId, message, toolCallId)
-      : this.overflow || this.agents.size >= 128;
+    const scope = this.scope(span);
+    const history = this.agents.get(scope);
+    if (!history) return this.overflow || this.agents.size >= 128;
+    // Preserve the existing within-trace safety for manually emitted spans with
+    // neither agent nor invocation identity. Never infer continuation IDs from
+    // text: this anonymous scope is discarded at root completion. Real native
+    // invocations always use exact ID/message pairs, including in the first turn.
+    const anonymousLegacy = scope === fingerprint(span.traceId) && !trace?.invocationIds;
+    return toolCallId === undefined || anonymousLegacy ? history.matches(span.traceId, message)
+      : history.matchesCall(message, toolCallId);
   }
 
   forget(traceId: string): void {
