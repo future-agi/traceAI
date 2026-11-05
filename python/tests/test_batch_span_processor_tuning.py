@@ -13,7 +13,8 @@ import warnings
 from unittest.mock import patch
 
 import pytest
-from opentelemetry.sdk.trace import SpanLimits
+import requests
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider as OTelTracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
@@ -126,18 +127,26 @@ class TestBatchSpanProcessorTuning:
 class TestExporterTuning:
     """timeout must reach the default OTLP exporter (both processors)."""
 
-    def test_batch_forwards_timeout(self):
-        p = BatchSpanProcessor(timeout=42)
-        assert _exporter_of(p)._timeout == 42
-
-    def test_simple_forwards_timeout(self):
-        p = SimpleSpanProcessor(timeout=7)
-        assert p.span_exporter._timeout == 7
-
-    def test_unset_timeout_uses_upstream_default(self, clean_exporter_env):
-        """Backward-compat: no timeout -> upstream default (10s)."""
-        p = BatchSpanProcessor(span_exporter=None)
-        assert _exporter_of(p)._timeout == 10
+    @pytest.mark.parametrize("processor_type", [BatchSpanProcessor, SimpleSpanProcessor])
+    @pytest.mark.parametrize("timeout", [7, 42, None])
+    def test_timeout_reaches_http_request(self, processor_type, timeout, clean_exporter_env):
+        """Observe transport behavior, not private exporter/client storage layout."""
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        # Patch the actual transport so this test cannot contact a collector.
+        with patch.object(requests.Session, "send", return_value=response) as send:
+            provider = OTelTracerProvider()
+            provider.add_span_processor(processor_type(timeout=timeout))
+            try:
+                provider.get_tracer("timeout-contract").start_span("synthetic").end()
+                assert provider.force_flush()
+            finally:
+                provider.shutdown()
+        send.assert_called_once()
+        expected = timeout if timeout is not None else 10
+        # OTel subtracts encoding/elapsed time from the deadline before sending.
+        assert send.call_args.kwargs["timeout"] == pytest.approx(expected, abs=1)
 
     def test_prebuilt_span_exporter_is_used_as_is(self):
         """A caller-supplied exporter is used verbatim; timeout ignored."""

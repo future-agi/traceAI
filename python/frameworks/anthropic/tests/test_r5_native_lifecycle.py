@@ -38,7 +38,7 @@ def test_close_during_advance_preserves_late_result_and_usage(traced):
                 spans=x.get_finished_spans(); assert len(spans)==1
                 assert spans[0].attributes['gen_ai.usage.input_tokens']==4
                 assert spans[0].attributes['gen_ai.usage.output_tokens']==2
-                assert spans[0].status.status_code.name=='OK'
+                assert spans[0].status.status_code.name=='UNSET'
                 await s.close(); assert len(x.get_finished_spans())==1
         finally:
             wire.release.set()

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 from copy import copy
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable, Collection, Tuple, cast
@@ -104,19 +105,15 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", Any], None
     ]:
         async with wrapped(*args, **kwargs) as streams:
-            if len(streams) == 3:
-                read_stream, write_stream, get_session_id_callback = streams
+            reader = self._wrap_stream(streams[0], InstrumentedStreamReader)
+            try:
                 yield (
-                    self._wrap_stream(read_stream, InstrumentedStreamReader),
-                    self._wrap_stream(write_stream, InstrumentedStreamWriter),
-                    get_session_id_callback,
+                    reader,
+                    self._wrap_stream(streams[1], InstrumentedStreamWriter),
+                    *streams[2:],
                 )
-            else:
-                read_stream, write_stream = streams
-                yield (
-                    self._wrap_stream(read_stream, InstrumentedStreamReader),
-                    self._wrap_stream(write_stream, InstrumentedStreamWriter),
-                )
+            finally:
+                reader._restore_context()
 
     @asynccontextmanager
     async def _wrap_plain_transport(
@@ -125,10 +122,14 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None
     ]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream):
-            yield (
-                self._wrap_stream(read_stream, InstrumentedStreamReader),
-                self._wrap_stream(write_stream, InstrumentedStreamWriter),
-            )
+            reader = self._wrap_stream(read_stream, InstrumentedStreamReader)
+            try:
+                yield (
+                    reader,
+                    self._wrap_stream(write_stream, InstrumentedStreamWriter),
+                )
+            finally:
+                reader._restore_context()
 
     def _base_session_init_wrapper(
         self, wrapped: Callable[..., None], instance: Any, args: Any, kwargs: Any
@@ -159,44 +160,119 @@ class _SwitchableProxy(ObjectProxy):  # type: ignore
         self._self_state = state if state is not None else _StreamState()
 
 
-class InstrumentedStreamReader(_SwitchableProxy):
-    # ObjectProxy missing context manager - https://github.com/GrahamDumpleton/wrapt/issues/73
+# A token from this marker proves ownership of the exact Context, not just
+# the task: copied contexts inherit values but cannot reset each other's tokens.
+_context_owner: ContextVar[None] = ContextVar("traceai_mcp_context_owner", default=None)
+
+
+class _ContextIterator:
+    def __init__(self, reader: "_ContextStreamReader", wrapped: Any) -> None:
+        self._reader = reader
+        self._wrapped = wrapped
+        self._key = object()
+        self._closed = False
+
+    def __aiter__(self) -> "_ContextIterator":
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._closed:
+            # Another Context can close this iterator without restoring the
+            # owner's tokens. Finish cleanup when the owner observes EOF,
+            # but do not detach an attachment from a newer iterator.
+            self._reader._restore_context(self._key)
+            raise StopAsyncIteration
+        # A caller may start a fresh async-for after breaking out of the last
+        # one. Its previous message is finished even if its iterator was lost.
+        self._reader._restore_context()
+        try:
+            item = await self._wrapped.__anext__()
+            item, ctx = self._reader._prepare_item(item)
+        except BaseException:
+            self._closed = True
+            raise
+        if ctx is not None:
+            self._reader._attach_context(self._key, ctx)
+        return item
+
+    async def aclose(self) -> None:
+        self._reader._restore_context(self._key)
+        self._closed = True
+
+
+class _ContextStreamReader(_SwitchableProxy):
+    def __init__(self, wrapped: Any, state: Any = None) -> None:
+        super().__init__(wrapped, state)
+        self._self_attachment: ContextVar[tuple[object, Token, Token] | None] = ContextVar(
+            "traceai_mcp_stream_context", default=None
+        )
+
+    def _attach_context(self, key: object, ctx: context.Context) -> None:
+        restore = context.attach(ctx)
+        owner = _context_owner.set(None)
+        self._self_attachment.set((key, restore, owner))
+
+    def _restore_context(self, key: Any = None) -> None:
+        attachment = self._self_attachment.get()
+        if attachment is None:
+            return
+        iterator_key, restore, owner = attachment
+        if key is not None and iterator_key is not key:
+            return
+        self._self_attachment.set(None)
+        try:
+            _context_owner.reset(owner)
+        except (ValueError, RuntimeError):
+            # A different Context may close the shared native stream. It
+            # drops only its inherited bookkeeping; the consuming Context
+            # still owns its tokens and restores them on its own exit.
+            return
+        context.detach(restore)
+
+    def __aiter__(self) -> _ContextIterator:
+        # Never suspend a generator with context attached: async-generator GC
+        # may run in a different task, and async-for break does not close it.
+        return _ContextIterator(self, self.__wrapped__.__aiter__())
+
+    def _prepare_item(self, item: Any) -> Tuple[Any, Any]:
+        raise NotImplementedError
+
     async def __aenter__(self) -> Any:
-        return await self.__wrapped__.__aenter__()
+        await self.__wrapped__.__aenter__()
+        return self
 
     async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Any:
+        self._restore_context()
         return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
 
-    async def __aiter__(self) -> AsyncGenerator[Any, None]:
+    def close(self) -> Any:
+        self._restore_context()
+        return self.__wrapped__.close()
+
+    async def aclose(self) -> Any:
+        # Restore synchronously, before a cancellation checkpoint in native IO.
+        self._restore_context()
+        return await self.__wrapped__.aclose()
+
+
+class InstrumentedStreamReader(_ContextStreamReader):
+    def _prepare_item(self, item: Any) -> Tuple[Any, Any]:
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCRequest
 
-        async for item in self.__wrapped__:
-            # SDK receive streams carry transport exceptions as values.
-            if not self._self_state.active or isinstance(item, Exception):
-                yield item
-                continue
-            session_message = cast(SessionMessage, item)
-            message = session_message.message
-            # MCP 1.x uses a JSONRPCMessage root model; 2.x stores the
-            # concrete JSONRPC variant directly.
-            request = getattr(message, "root", message)
-
-            if not isinstance(request, JSONRPCRequest):
-                yield item
-                continue
-
-            if request.params:
-                meta = request.params.get("_meta")
-                if meta:
-                    ctx = propagate.extract(meta)
-                    restore = context.attach(ctx)
-                    try:
-                        yield item
-                        continue
-                    finally:
-                        context.detach(restore)
-            yield item
+        # SDK receive streams carry transport exceptions as values.
+        if not self._self_state.active or isinstance(item, Exception):
+            return item, None
+        session_message = cast(SessionMessage, item)
+        message = session_message.message
+        # MCP 1.x uses a JSONRPCMessage root model; 2.x stores the
+        # concrete JSONRPC variant directly.
+        request = getattr(message, "root", message)
+        if isinstance(request, JSONRPCRequest) and request.params:
+            meta = request.params.get("_meta")
+            if meta:
+                return item, propagate.extract(meta)
+        return item, None
 
 
 class InstrumentedStreamWriter(_SwitchableProxy):
@@ -262,26 +338,10 @@ class ContextSavingStreamWriter(_SwitchableProxy):
         return await self.__wrapped__.send(ItemWithContext(item, ctx))
 
 
-class ContextAttachingStreamReader(_SwitchableProxy):
-    async def __aenter__(self) -> Any:
-        return await self.__wrapped__.__aenter__()
-
-    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Any:
-        return await self.__wrapped__.__aexit__(exc_type, exc_value, traceback)
-
-    async def __aiter__(self) -> AsyncGenerator[Any, None]:
-        async for item in self.__wrapped__:
-            # Items can cross a lifecycle transition while queued. Always
-            # unwrap our envelope, but attach only while currently enabled.
-            if not isinstance(item, ItemWithContext):
-                yield item
-                continue
-            if not self._self_state.active:
-                yield item.item
-                continue
-            item_with_context = item
-            restore = context.attach(item_with_context.ctx)
-            try:
-                yield item_with_context.item
-            finally:
-                context.detach(restore)
+class ContextAttachingStreamReader(_ContextStreamReader):
+    def _prepare_item(self, item: Any) -> Tuple[Any, Any]:
+        # Items can cross a lifecycle transition while queued. Always
+        # unwrap our envelope, but attach only while currently enabled.
+        if isinstance(item, ItemWithContext):
+            return item.item, item.ctx if self._self_state.active else None
+        return item, None

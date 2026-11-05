@@ -17,6 +17,7 @@ import os
 import re
 import socket
 from typing import Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import unquote, urlsplit
 
 from fi_instrumentation import REDACTED_VALUE
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
@@ -70,6 +71,46 @@ _LOCAL_PATH = re.compile(
     r"(?<![\w:/.])(?:[A-Za-z]:\\[^\s\"'<>|:*?]+"
     r"|/(?:Users|home|root|private|var|tmp|opt|usr|srv|mnt|app|workspace|etc|Volumes)/[^\s\"'<>|:*?,;)\]\\]+)"
 )
+# Unlike HTTP(S) paths, file-URI paths refer to a filesystem. Decode only
+# these candidates for matching; leave non-sensitive URI text byte-for-byte.
+_FILE_URI = re.compile(r"(?<![\w/.+-])file:[^\s\"'<>|,;)\]]+", re.I)
+
+
+def _home_file_uri(home: str) -> "re.Pattern[str]":
+    # Match the entire known HOME before treating punctuation as surrounding
+    # text. Commas, semicolons and ')' are legal URI path characters: stopping
+    # at one inside HOME hides the prefix from the filesystem-path check.
+    # Each character may be literal or percent-encoded (including mixed forms).
+    parts = []
+    for char in home:
+        encoded = "".join("%{:02x}".format(byte) for byte in os.fsencode(char))
+        forms = [re.escape(char), encoded]
+        if char == "/":
+            forms.append(r"\\/")  # JSON-escaped forward slash
+        parts.append("(?:" + "|".join(forms) + ")")
+    return re.compile(
+        r"(?<![\w/.+-])file:(?:(?:/|\\/){2}[^/\\\s\"'<>|?#]*)?"
+        + "".join(parts)
+        + r"(?=$|[/\s\"'<>|?#,;)\]]|%2f|\\/)[^\s\"'<>|,;)\]]*",
+        re.I,
+    )
+
+
+def _scrub_file_uri(match: "re.Match[str]", home: str) -> str:
+    uri = match.group(0)
+    try:
+        # JSON may escape forward slashes; percent escapes belong to the URI.
+        path = unquote(urlsplit(uri.replace(r"\/", "/")).path)
+    except ValueError:
+        return uri
+    if home.startswith("/") and (path == home or path.startswith(home + "/")):
+        return PATH_REMOVED
+    # Windows drive URIs use /C:/... rather than the bare C:\\... form.
+    if re.match(r"^/[A-Za-z]:[/\\]", path):
+        path = path[1:].replace("/", "\\")
+    return PATH_REMOVED if _LOCAL_PATH.match(path) else uri
+
+
 # Account names too generic to replace inside ordinary text.
 _GENERIC_NAMES = frozenset(
     "root admin administrator user users app ubuntu runner node nobody guest test dev "
@@ -127,6 +168,21 @@ def scrub_local(text: str) -> str:
                 pass
         if _TRACEBACK_HEAD in text:
             text = _TRACEBACK.sub(STACK_TRACE_REMOVED, text)
+    # POSIX homes can live under arbitrary mounts, not just the roots below.
+    # Read at call time and escape the exact prefix (including spaces). Match
+    # whole paths only, never siblings or paths embedded in URLs/API routes.
+    # An unset or root HOME must not turn this into a catch-all for /api/...
+    home = os.path.expanduser("~").rstrip("/")
+    if home.startswith("/") and any(char in home for char in ",;)"):
+        text = _home_file_uri(home).sub(lambda match: _scrub_file_uri(match, home), text)
+    text = _FILE_URI.sub(lambda match: _scrub_file_uri(match, home), text)
+    if home.startswith("/"):
+        text = re.sub(
+            r"(?<![\w:/.])" + re.escape(home)
+            + r"(?=$|[/\s\"'<>|:*?,;)\]\\])(?:/[^\s\"'<>|:*?,;)\]\\]*)?",
+            PATH_REMOVED,
+            text,
+        )
     text = _LOCAL_PATH.sub(PATH_REMOVED, text)
     for pattern, token in _IDENTITY:
         text = pattern.sub(token, text)

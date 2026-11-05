@@ -96,6 +96,61 @@ def test_real_cursor_getmore_error_and_parent(driver, asynchronous):
         assert "SECRET" not in str(dict(span.attributes)) + str(span.status.description)
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("operation_error", [False, True])
+def test_client_bulk_write_per_operation_status_and_privacy(driver, asynchronous, operation_error):
+    if not hasattr(pymongo.MongoClient, "bulk_write"):
+        pytest.skip("MongoClient.bulk_write requires PyMongo 4.9 or later")
+    if asynchronous and not hasattr(pymongo, "AsyncMongoClient"):
+        pytest.skip("AsyncMongoClient is not available at the PyMongo 4.6 floor")
+    server, _, exporter = driver
+    operations = [pymongo.InsertOne(
+        {"private": "SECRET-DOCUMENT"}, namespace="testdb.SECRET-COLLECTION",
+    )]
+
+    async def async_write():
+        async with pymongo.AsyncMongoClient(server.uri, serverSelectionTimeoutMS=3000) as client:
+            if operation_error:
+                with pytest.raises(pymongo.errors.ClientBulkWriteException):
+                    await client.bulk_write(operations)
+            else:
+                assert (await client.bulk_write(operations)).inserted_count == 1
+
+    def sync_write():
+        with pymongo.MongoClient(server.uri, serverSelectionTimeoutMS=3000) as client:
+            if operation_error:
+                with pytest.raises(pymongo.errors.ClientBulkWriteException):
+                    client.bulk_write(operations)
+            else:
+                assert client.bulk_write(operations).inserted_count == 1
+
+    result = go(lambda: asyncio.run(async_write())) if asynchronous else go(sync_write)
+    request = server.receives(timeout=5)
+    assert request.command_name == "bulkWrite"
+    assert exporter.get_finished_spans() == ()
+    request.ok(
+        nErrors=1 if operation_error else 0,
+        nInserted=0 if operation_error else 1,
+        nMatched=0, nModified=0, nUpserted=0, nDeleted=0,
+        cursor={"id": 0, "ns": "admin.$cmd.bulkWrite", "firstBatch": [
+            {"ok": 0, "idx": 0, "code": 11000, "errmsg": "SECRET-SERVER-ERROR"},
+        ] if operation_error else []},
+    )
+    result(timeout=5)
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "admin.bulkWrite"
+    if operation_error:
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.status.description == "MongoDB command failed"
+        assert span.attributes["error.type"] == "MongoDBCommandError"
+    else:
+        assert span.status.status_code is not StatusCode.ERROR
+        assert "error.type" not in span.attributes
+    assert "SECRET" not in span.to_json()
+
+
 def test_otlp_wire_preserves_vector_metadata_without_payloads(driver):
     server, provider, _ = driver
     bodies = []

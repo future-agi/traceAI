@@ -10,6 +10,26 @@ function redactPii(value: string, config: TraceConfig): string {
   return config.piiRedaction ? fiCore.redactPiiInString(value) : value;
 }
 
+// Keep only bounded machine-readable classifications from an error object.
+// Error messages can be copied into tool responses and subsequent LLM history;
+// dropping exception events alone does not protect these content attributes.
+function errorSummary(value: unknown, config: TraceConfig, hideText: boolean): unknown {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value !== "object" || Array.isArray(value)) return REDACTED_VALUE;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => {
+    const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    const classification = ["type", "name", "code", "status", "errorcode", "iserror"].includes(normalized);
+    const safe = classification && (
+      typeof child === "boolean"
+      || typeof child === "number" && Number.isFinite(child)
+      || typeof child === "string" && !hideText && /^[A-Za-z0-9_.-]{1,64}$/.test(child)
+    );
+    // Allowed classifications still obey PII and text redaction, including
+    // numeric values that the shared scanner recognizes as sensitive.
+    return [redactPii(key, config), safe ? sanitize(child, config, hideText, false) : REDACTED_VALUE];
+  }));
+}
+
 function sanitize(value: unknown, config: TraceConfig, hideText: boolean, input: boolean, depth = 0): unknown {
   // Bound recursive JSON-in-JSON and fail closed on unexpectedly deep payloads.
   if (depth > MAX_DEPTH) return REDACTED_VALUE;
@@ -32,11 +52,22 @@ function sanitize(value: unknown, config: TraceConfig, hideText: boolean, input:
   }
   if (Array.isArray(value)) return value.map(item => sanitize(item, config, hideText, input, depth + 1));
   if (value !== null && typeof value === "object") {
+    const envelope = value as Record<string, unknown>;
+    // ADK model errors and MCP tool failures can carry details outside `error`.
+    if (config.hideErrorDetails && (envelope.isError === true ||
+      typeof envelope.errorCode === "string" && envelope.errorCode.length > 0 ||
+      typeof envelope.errorCode === "number" && envelope.errorCode !== 0)) {
+      return errorSummary(value, config, hideText);
+    }
     return Object.fromEntries(Object.entries(value).map(([key, child]) => {
       const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
       const hiddenImage = input && config.hideInputImages && (normalized === "inlinedata" || normalized === "filedata");
-      return [redactPii(key, config), CREDENTIAL_KEY.test(normalized) || hiddenImage
-        ? REDACTED_VALUE : sanitize(child, config, hideText, input, depth + 1)];
+      const hiddenError = config.hideErrorDetails && ["errormessage", "exceptionmessage", "stack", "stacktrace", "traceback"].includes(normalized);
+      if (CREDENTIAL_KEY.test(normalized) || hiddenImage || hiddenError) return [redactPii(key, config), REDACTED_VALUE];
+      if (config.hideErrorDetails && ["error", "errors", "exception"].includes(normalized)) {
+        return [redactPii(key, config), errorSummary(child, config, hideText)];
+      }
+      return [redactPii(key, config), sanitize(child, config, hideText, input, depth + 1)];
     }));
   }
   return value;

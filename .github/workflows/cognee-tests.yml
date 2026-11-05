@@ -49,7 +49,7 @@ jobs:
         env:
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
         run: |
-          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
-          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
-          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
-          python -I -m pytest --noconftest python/frameworks/cognee/tests python/examples/cognee/tests -q
+          # Keep the runner's heartbeats and log uploads online; only tests are offline.
+          sudo --preserve-env=LITELLM_LOCAL_MODEL_COST_MAP unshare --net -- bash -c '
+            ip link set lo up && exec "$@"
+          ' bash "$(command -v python)" -I -m pytest --noconftest python/frameworks/cognee/tests python/examples/cognee/tests -q

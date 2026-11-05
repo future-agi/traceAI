@@ -44,14 +44,15 @@ class TestCrewAIInstrumentor:
         """Test instrumentation with default parameters."""
         mock_tracer_provider = Mock()
         mock_task_module = Mock()
-        mock_crew_module = Mock()
         mock_tool_module = Mock()
 
-        mock_import.side_effect = [
-            mock_task_module,
-            mock_crew_module,
-            mock_tool_module,
-        ]
+        # Simulate the floor: the optional modern methods are absent from
+        # these class dictionaries. Real modern APIs are covered over HTTP.
+        mock_import.side_effect = lambda name: {
+            "crewai": mock_task_module,
+            "crewai.tools.tool_usage": mock_tool_module,
+            "crewai.flow.flow": Mock(Flow=None),
+        }.get(name, Mock())
 
         instrumentor = CrewAIInstrumentor()
         instrumentor._instrument(tracer_provider=mock_tracer_provider)
@@ -96,6 +97,7 @@ class TestCrewAIInstrumentor:
         instrumentor._original_execute_core = original_execute
         instrumentor._original_kickoff = original_kickoff
         instrumentor._original_tool_use = original_tool_use
+        instrumentor._optional_originals = []
 
         instrumentor._uninstrument()
 
@@ -157,6 +159,7 @@ class TestExecuteCoreWrapper:
         """Test task execution with crew information."""
         # Mock objects with crew
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.key = "crew_key_789"
         mock_crew.id = "crew_id_101"
         mock_crew.share_crew = True
@@ -251,6 +254,7 @@ class TestKickoffWrapper:
         """Test basic crew kickoff wrapping."""
         # Mock crew object
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key_123"
         mock_crew.id = "crew_id_456"
@@ -314,6 +318,7 @@ class TestKickoffWrapper:
 
         # Mock crew
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key"
         mock_crew.id = "crew_id"
@@ -348,6 +353,7 @@ class TestKickoffWrapper:
     def test_crew_kickoff_with_new_usage_metrics(self):
         """Test crew kickoff with new usage metrics format (v0.51+)."""
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key"
         mock_crew.id = "crew_id"
@@ -382,6 +388,7 @@ class TestKickoffWrapper:
     def test_crew_kickoff_error_handling(self):
         """Test error handling in crew kickoff."""
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key"
         mock_crew.id = "crew_id"
@@ -404,6 +411,7 @@ class TestKickoffWrapper:
     def test_crew_output_without_to_dict(self):
         """Test crew output that doesn't have to_dict method."""
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key"
         mock_crew.id = "crew_id"
@@ -461,6 +469,7 @@ class TestKickoffWrapperTaskContext:
         mock_task.tools = []
 
         mock_crew = Mock()
+        mock_crew.stream = False
         mock_crew.__class__.__name__ = "Crew"
         mock_crew.key = "crew_key"
         mock_crew.id = "crew_id"

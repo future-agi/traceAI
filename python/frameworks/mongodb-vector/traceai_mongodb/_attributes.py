@@ -58,10 +58,15 @@ def response_hook(span: Span, event: monitoring.CommandSucceededEvent) -> None:
     reply = event.reply
     errors = reply.get("writeErrors")
     concern = reply.get("writeConcernError")
+    error_count = reply.get("nErrors")
     if isinstance(errors, list) and errors:
         _error(span, errors[0])
     elif concern:
         _error(span, concern)
+    elif isinstance(error_count, (int, float)) and not isinstance(error_count, bool) and error_count > 0:
+        # Client bulkWrite reports per-operation failures in an ok=1 reply.
+        # Do not inspect error documents in the result cursor for their messages.
+        _error(span, reply)
 
     cursor = reply.get("cursor")
     if isinstance(cursor, Mapping):

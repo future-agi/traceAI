@@ -1,6 +1,9 @@
 package ai.traceai.spring.compatibility;
 
 import io.micrometer.observation.ObservationRegistry;
+import ai.traceai.spring.SpringAIToolExecutionExceptionProcessor;
+import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.document.MetadataMode;
@@ -13,6 +16,10 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.retry.support.RetryTemplate;
 
 final class Models {
+    static org.springframework.ai.chat.prompt.ChatOptions chatOptions(ChatModel model) {
+        return model.getDefaultOptions();
+    }
+
     static ChatModel chat(String baseUrl, ObservationRegistry registry) {
         return OpenAiChatModel.builder()
             .openAiApi(api(baseUrl))
@@ -30,7 +37,19 @@ final class Models {
         return OpenAiApi.builder().baseUrl(baseUrl).apiKey("synthetic-key").build();
     }
     static org.springframework.ai.chat.model.ChatResponse toolChat(String baseUrl, ObservationRegistry registry, org.springframework.ai.chat.prompt.Prompt prompt) {
-        return chat(baseUrl, registry).call(prompt);
+        var processor = new SpringAIToolExecutionExceptionProcessor(registry,
+            DefaultToolExecutionExceptionProcessor.builder().build());
+        var manager = DefaultToolCallingManager.builder().observationRegistry(registry)
+            .toolExecutionExceptionProcessor(processor).build();
+        return toolChat(baseUrl, registry, prompt, manager);
+    }
+
+    static org.springframework.ai.chat.model.ChatResponse toolChat(String baseUrl, ObservationRegistry registry,
+            org.springframework.ai.chat.prompt.Prompt prompt, ToolCallingManager manager) {
+        return OpenAiChatModel.builder().openAiApi(api(baseUrl))
+            .defaultOptions(OpenAiChatOptions.builder().model("synthetic-model").build())
+            .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
+            .toolCallingManager(manager).observationRegistry(registry).build().call(prompt);
     }
 
 }

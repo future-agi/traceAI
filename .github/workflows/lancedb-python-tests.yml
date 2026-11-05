@@ -1,0 +1,58 @@
+name: LanceDB Python compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/lancedb/**'
+      - '.github/workflows/lancedb-python-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/lancedb/**'
+      - '.github/workflows/lancedb-python-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: LanceDB Python ${{ matrix.python }} / SDK ${{ matrix.lancedb }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+        lancedb: ['0.25.0', '0.41.0']
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Clean install of the published dependency contract
+        env:
+          LANCEDB: ${{ matrix.lancedb }}
+        run: |
+          python -m venv "$RUNNER_TEMP/lancedb"
+          echo "$RUNNER_TEMP/lancedb/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/lancedb/bin/python" -m pip install \
+            ./python/frameworks/lancedb "lancedb==$LANCEDB" \
+            'fi-instrumentation-otel==1.2.2'
+          # No NumPy, Arrow or pandas constraints, and no test dependencies yet.
+          "$RUNNER_TEMP/lancedb/bin/python" -m pip check
+          "$RUNNER_TEMP/lancedb/bin/python" -c 'import lancedb, traceai_lancedb'
+      - name: Install test tools
+        run: python -m pip install pytest pandas
+      - name: Native SDK and OTLP contracts with loopback-only networking
+        run: |
+          python -m pip check
+          sudo unshare --net -- bash -eu -c '
+            ip link set lo up
+            "$1" -I -m pytest --import-mode=importlib python/frameworks/lancedb/tests -q -p no:cacheprovider
+          ' _ "$(command -v python)"
