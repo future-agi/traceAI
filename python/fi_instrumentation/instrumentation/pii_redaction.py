@@ -24,29 +24,21 @@ _QUICK_CHECK = re.compile(
 # ---------------------------------------------------------------------------
 # Individual PII patterns — order matters (more specific first).
 # ---------------------------------------------------------------------------
-_EMAIL_RE = re.compile(
-    r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"
-)
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 
-_SSN_RE = re.compile(
-    r"\b\d{3}[\-\.\s]\d{2}[\-\.\s]\d{4}\b"
-)
+_SSN_RE = re.compile(r"\b\d{3}[\-\.\s]\d{2}[\-\.\s]\d{4}\b")
 
-_CREDIT_CARD_RE = re.compile(
-    r"\b(?:\d[ \-]*?){13,19}\b"
-)
+_CREDIT_CARD_RE = re.compile(r"\b(?:\d[ \-]*?){13,19}\b")
 
 _PHONE_RE = re.compile(
-    r"(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b"
+    r"(?<!\d)(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}(?!\d)"
 )
 
 _IP_RE = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
 )
 
-_API_KEY_RE = re.compile(
-    r"\b(?:sk|pk)[-_](?:live|test|prod)[-_][A-Za-z0-9]{20,}\b"
-)
+_API_KEY_RE = re.compile(r"\b(?:sk|pk)[-_](?:live|test|prod)[-_][A-Za-z0-9]{20,}\b")
 
 # Ordered: most specific → least specific to avoid partial overlaps.
 _PII_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -59,12 +51,38 @@ _PII_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def _luhn_check(digits: str) -> bool:
+    """Verify Luhn algorithm checksum for credit card numbers."""
+    if not (13 <= len(digits) <= 19):
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        n = int(d)
+        if i % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def _replace_credit_card(match: re.Match[str]) -> str:
+    matched = match.group(0)
+    digits = re.sub(r"\D", "", matched)
+    if _luhn_check(digits):
+        return "<CREDIT_CARD>"
+    return matched
+
+
 def redact_pii_in_string(text: str) -> str:
     """Scan *text* for PII patterns and replace each match with its entity token."""
     if not text or not _QUICK_CHECK.search(text):
         return text
     for pattern, replacement in _PII_PATTERNS:
-        text = pattern.sub(replacement, text)
+        if pattern is _CREDIT_CARD_RE:
+            text = pattern.sub(_replace_credit_card, text)
+        else:
+            text = pattern.sub(replacement, text)
     return text
 
 
