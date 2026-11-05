@@ -77,6 +77,11 @@ class ForwarderConfig:
     paused: bool = False
     elevenlabs_api_key: str = field(default="", repr=False)
     elevenlabs_base_url: str = DEFAULT_ELEVENLABS_BASE_URL
+    enrich_rag: bool = False
+
+    def __post_init__(self) -> None:
+        if self.enrich_rag and not self.elevenlabs_api_key:
+            raise ConfigError("ELEVENLABS_API_KEY is required when FI_ELEVENLABS_ENRICH_RAG is enabled")
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None, *, require_webhook_secret: bool = True) -> "ForwarderConfig":
@@ -107,6 +112,7 @@ class ForwarderConfig:
             signature_tolerance_secs=tolerance,
             paused=_flag(env, "FI_ELEVENLABS_PAUSED"),
             elevenlabs_api_key=env.get("ELEVENLABS_API_KEY", ""),
+            enrich_rag=_flag(env, "FI_ELEVENLABS_ENRICH_RAG"),
             elevenlabs_base_url=env.get("FI_ELEVENLABS_API_BASE_URL", "").strip() or DEFAULT_ELEVENLABS_BASE_URL,
         )
 
