@@ -63,6 +63,28 @@ import {
     if (existingFISpanKind != null && typeof existingFISpanKind === "string") {
       return existingFISpanKind;
     }
+    // AI SDK 7's @ai-sdk/otel emits standard GenAI operations instead of ai.*.
+    const nativeOperation = attributes["gen_ai.operation.name"];
+    const nativeKinds: Record<string, FISpanKind> = {
+      invoke_agent: FISpanKind.AGENT,
+      agent_step: FISpanKind.CHAIN,
+      chat: FISpanKind.LLM,
+      text_completion: FISpanKind.LLM,
+      execute_tool: FISpanKind.TOOL,
+      embeddings: FISpanKind.EMBEDDING,
+      rerank: FISpanKind.RERANKER,
+      decide: FISpanKind.EVALUATOR,
+      "ai.generateSpeech": FISpanKind.LLM,
+      "ai.transcribe": FISpanKind.LLM,
+      "ai.streamTranscribe": FISpanKind.LLM,
+    };
+    // Legacy SDK 6 also emits gen_ai.operation.name on provider spans. Prefer
+    // its more precise ai.* operation when available.
+    if (attributes["operation.name"] == null && typeof nativeOperation === "string") {
+      return Object.prototype.hasOwnProperty.call(nativeKinds, nativeOperation)
+        ? nativeKinds[nativeOperation]
+        : undefined;
+    }
     const maybeOperationName = attributes["operation.name"];
     if (maybeOperationName == null || typeof maybeOperationName !== "string") {
       return;
@@ -229,11 +251,18 @@ import {
     onError: onErrorCallback("embedding"),
   });
   
-  /**
-   * Gets the input_messages FI attributes
-   * @param promptMessages the attribute value of the Vercel prompt messages
-   * @returns input_messages attributes
-   */
+  const serializeMessageValue = (value: unknown): string | undefined =>
+    typeof value === "string" ? value : safelyJSONStringify(value) ?? undefined;
+
+  const formatToolCall = (toolCall: Record<string, unknown>) => ({
+    id: typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined,
+    function: {
+      name: typeof toolCall.toolName === "string" ? toolCall.toolName : undefined,
+      arguments: serializeMessageValue("input" in toolCall ? toolCall.input : toolCall.args),
+    },
+  });
+
+  /** Convert native prompt messages without losing tool-call/result pairs. */
   const getInputMessageAttributes = (promptMessages?: AttributeValue) => {
     if (typeof promptMessages !== "string") {
       return null;
@@ -245,47 +274,42 @@ import {
       return null;
     }
 
-    // Convert Vercel messages to JSON blob format
-    const serialized = messages.map((message) => {
+    // AI SDK 5+ uses input/output; older telemetry uses args/result. A tool
+    // message can contain several results, each with its own call identifier.
+    const serialized = messages.flatMap((message): Record<string, unknown>[] => {
       const msg: Record<string, unknown> = {};
       if (typeof message.role === "string") msg.role = message.role;
 
-      if (message.role === "tool") {
-        const toolContent = Array.isArray(message.content)
-          ? typeof message.content[0]?.result === "string"
-            ? message.content[0].result
-            : message.content[0]?.result
-              ? JSON.stringify(message.content[0].result)
-              : undefined
-          : typeof message.content === "string"
-            ? message.content
-            : undefined;
-        if (toolContent) msg.content = toolContent;
-        const toolCallId = Array.isArray(message.content)
-          ? message.content[0]?.toolCallId
-          : message.toolCallId;
-        if (typeof toolCallId === "string") msg.tool_call_id = toolCallId;
+      if (message.role === "tool" && isArrayOfObjects(message.content)) {
+        return message.content.map((part) => {
+          const result: Record<string, unknown> = { role: "tool" };
+          if (typeof part.toolCallId === "string") result.tool_call_id = part.toolCallId;
+          const output = "output" in part ? part.output : part.result;
+          // ModelMessage tool outputs wrap values in { type, value }. Keep
+          // structured/multimodal outputs intact instead of throwing them away.
+          const value = "output" in part && output !== null && typeof output === "object" &&
+            "type" in output && "value" in output ? output.value : output;
+          const content = serializeMessageValue(value);
+          if (content !== undefined) result.content = content;
+          return result;
+        });
       } else if (isArrayOfObjects(message.content)) {
-        // Extract text content and tool calls from multi-part content
         const textParts = message.content
-          .filter((c: any) => typeof c.text === "string")
-          .map((c: any) => c.text)
+          .filter((part) => typeof part.text === "string")
+          .map((part) => part.text)
           .join("");
         if (textParts) msg.content = textParts;
         const toolCalls = message.content
-          .filter((c: any) => c.toolName || c.toolCallId)
-          .map((c: any) => ({
-            id: c.toolCallId,
-            function: {
-              name: c.toolName,
-              arguments: typeof c.args === "string" ? c.args : typeof c.args === "object" ? JSON.stringify(c.args) : undefined,
-            },
-          }));
+          .filter((part) => part.type === "tool-call" || part.toolName || part.toolCallId)
+          .map(formatToolCall);
         if (toolCalls.length > 0) msg.tool_calls = toolCalls;
       } else if (typeof message.content === "string") {
         msg.content = message.content;
+        if (message.role === "tool" && typeof message.toolCallId === "string") {
+          msg.tool_call_id = message.toolCallId;
+        }
       }
-      return msg;
+      return [msg];
     });
 
     return {
@@ -320,12 +344,7 @@ import {
     // Convert to JSON blob format
     const msg: Record<string, unknown> = {
       role: "assistant",
-      tool_calls: parsedToolCalls.map((toolCall) => ({
-        function: {
-          name: isAttributeValue(toolCall.toolName) ? toolCall.toolName : undefined,
-          arguments: safelyJSONStringify(toolCall.args) ?? undefined,
-        },
-      })),
+      tool_calls: parsedToolCalls.map(formatToolCall),
     };
 
     return {
@@ -561,6 +580,10 @@ import {
     // newer versions of opentelemetry will not allow you to reassign
     // the attributes object, so you must edit it by keyname instead
     Object.entries(newAttributes).forEach(([key, value]) => {
-      span.attributes[key] = value as AttributeValue;
+      // Preserve native GenAI attributes (including their current message
+      // schema), and never add undefined values to unrelated spans.
+      if (value !== undefined && span.attributes[key] === undefined) {
+        span.attributes[key] = value;
+      }
     });
   };
