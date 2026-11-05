@@ -42,11 +42,11 @@ def _passive(value: Any, budget: list, depth: int = 0) -> Any:
     if budget[0] < 0 or depth > 32:
         raise ValueError("chat input exceeds copy limits")
     kind = type(value)
-    if value is None or kind in (str, bool, int):
+    if value is None or kind is str or kind is bool or kind is int:
         return value
     if kind is float and math.isfinite(value):
         return value
-    if kind in (list, tuple):
+    if kind is list or kind is tuple:
         return [_passive(item, budget, depth + 1) for item in value]
     if _object(value):
         return {key: _passive(item, budget, depth + 1) for key, item in value.items()}
@@ -113,7 +113,7 @@ def _parameters(payload: dict, config: "TraceConfig", budget: list) -> dict:
         if value is None:
             continue
         if key in _NUMBERS:
-            if type(value) not in (int, float) or (type(value) is float and not math.isfinite(value)):
+            if (type(value) is not int and type(value) is not float) or (type(value) is float and not math.isfinite(value)):
                 raise ValueError("invalid numeric parameter")
             result[key] = value
         elif key in _BOOLEANS:
@@ -187,7 +187,7 @@ class ChatInput:
             budget = [10000]
             if "messages" in payload:
                 messages = payload["messages"]
-                if type(messages) not in (list, tuple) or len(messages) > 10000:
+                if (type(messages) is not list and type(messages) is not tuple) or len(messages) > 10000:
                     return None
                 result["messages"] = []
                 for message in messages:

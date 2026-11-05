@@ -245,7 +245,7 @@ def _get_input_attributes(
         # Hidden inputs are never projected, so skip conversion entirely there.
         convert = (lambda value: value) if config.hide_inputs else _sdk_plain
         raw_input = {"model": model}
-        if type(messages) in (list, tuple):
+        if type(messages) is list or type(messages) is tuple:
             raw_input["messages"] = messages if config.hide_input_messages else convert(messages)
         raw_input.update({k: convert(v) for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
         structured = ChatInput(raw_input)
