@@ -226,6 +226,14 @@
         "traceai_google_genai_live/version.py"
       ]
     },
+    "python/frameworks/grafi": {
+      "release-type": "python",
+      "component": "traceai-grafi",
+      "package-name": "traceAI-grafi",
+      "extra-files": [
+        "traceai_grafi/__init__.py"
+      ]
+    },
     "python/frameworks/groq": {
       "release-type": "python",
       "component": "traceai-groq",
