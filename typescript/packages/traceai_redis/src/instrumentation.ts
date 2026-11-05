@@ -15,7 +15,7 @@ import { types } from "node:util";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
-const VERSION = "0.1.2"; // x-release-please-version
+const VERSION = "0.1.3"; // x-release-please-version
 
 // node-redis generates different client types for standalone, cluster, pool and
 // sentinel clients. Only the public methods below are inspected, not internals.
