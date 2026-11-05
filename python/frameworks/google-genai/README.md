@@ -38,7 +38,18 @@ trace_provider = register(
 ```
 
 ### Configure Google Gen AI Instrumentation
-Instrument the Google Gen AI client to enable telemetry collection. This step ensures that all interactions with the Google Gen AI SDK are tracked and monitored.
+Instrument the Google Gen AI client before making requests. The same instrumentor supports synchronous and asynchronous calls to:
+
+- `models.generate_content` and `models.generate_content_stream`;
+- `models.embed_content`, with embedding model, dimensions and vectors;
+- `caches.create`, `caches.get`, `caches.update` and `caches.delete`;
+- `interactions.create` and `interactions.get`, including streaming, when available in your installed SDK.
+
+Cache operations appear as `CHAIN` spans, not model generations. Their cached token counts are recorded separately from inference usage. Interactions support both the legacy resource classes and the newer NextGen classes. Other SDK resources, image-generation methods and Live sessions are not instrumented by this package. Use the separate Live integration for Live sessions, and do not enable two Google GenAI instrumentors for the same client.
+
+Interactions stream spans stay open until you exhaust the stream or close it. Use `with stream:` or `async with stream:` when stopping early. Stream output contains distinct content/step event fragments rather than a reconstructed model response, with a 64 KiB capture limit; larger content is omitted and marked `google.genai.content_truncated`. Automatic-continuation usage is summed across completed hops.
+
+Request and response content is captured by default. Set `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` before instrumentation to disable content capture. Set `FI_HIDE_EMBEDDING_VECTORS=true` to omit embedding vectors independently. The new resource spans exclude transport headers and HTTP options; review any custom attributes your application adds separately.
 
 ```python
 from traceai_google_genai import GoogleGenAIInstrumentor
