@@ -150,6 +150,7 @@ export class TransformersInstrumentation {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SC.FI_SPAN_KIND]: embedding ? FISpanKind.EMBEDDING : qa ? FISpanKind.CHAIN : FISpanKind.LLM,
+        [SC.LLM_PROVIDER]: "huggingface",
         "transformers.task": task,
       },
     }, parent));

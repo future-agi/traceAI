@@ -3,7 +3,7 @@ const { test, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
-const { context, trace } = require('@opentelemetry/api');
+const { context, trace, SpanStatusCode } = require('@opentelemetry/api');
 const { suppressTracing } = require('@opentelemetry/core');
 const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
 const { SimpleSpanProcessor, InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
@@ -178,13 +178,13 @@ test('finishes partial streams when callers break and preserves cancellation', a
   const stream = await client().chat.completions.create({ ...body, stream: true });
   for await (const chunk of stream) { assert.deepEqual(chunk, chunks[0]); break; }
   assert.equal(stream.controller.signal.aborted, true);
-  await assertOne();
+  assert.equal((await assertOne()).status.code, SpanStatusCode.UNSET);
 });
 
 test('ends a stream cancelled before any consumption', async () => {
   const stream = await client().chat.completions.create({ ...body, stream: true });
   stream.controller.abort();
-  await assertOne();
+  assert.equal((await assertOne()).status.code, SpanStatusCode.UNSET);
 });
 
 test('exports iteration errors as ERROR even when the SDK aborts internally', async () => {
@@ -276,7 +276,7 @@ test('iterator return before the first next ends the span', async () => {
   const stream = await client().chat.completions.create({ ...body, stream: true });
   const iterator = stream[Symbol.asyncIterator]();
   await iterator.return();
-  await assertOne();
+  assert.equal((await assertOne()).status.code, SpanStatusCode.UNSET);
 });
 
 test('derived APIPromises used by SDK parsers remain traced', async () => {
@@ -325,4 +325,31 @@ test('does not claim DeepSeek Responses coverage or change that SDK resource', a
   assert.equal(typeof promise.withResponse, 'function');
   await promise;
   assert.equal((await spans()).length, 0);
+});
+
+// The SDK aborts internally on parse/transport errors too. Preserve the actual
+// exception and ERROR outcome instead of letting the abort event win the race.
+test('stream failure identity survives an internal abort', async () => {
+  const error = new Error('synthetic stream failure');
+  const controller = new AbortController();
+  const stream = { controller, async *[Symbol.asyncIterator]() {
+    try { throw error; } finally { controller.abort(); }
+  } };
+  const wrapper = inst.createChatCompletionWrapper(inst)(() => Promise.resolve(stream));
+  const result = await wrapper.call({ _client: { baseURL: 'https://api.deepseek.com' } }, { ...body, stream: true });
+  await assert.rejects(collect(result), value => value === error);
+  assert.equal((await assertOne()).status.code, SpanStatusCode.ERROR);
+});
+
+test('abort while next is pending does not report successful exhaustion', async () => {
+  const controller = new AbortController();
+  const stream = { controller, async *[Symbol.asyncIterator]() {
+    await new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }));
+  } };
+  const wrapper = inst.createChatCompletionWrapper(inst)(() => Promise.resolve(stream));
+  const result = await wrapper.call({ _client: { baseURL: 'https://api.deepseek.com' } }, { ...body, stream: true });
+  const next = result[Symbol.asyncIterator]().next();
+  controller.abort();
+  assert.equal((await next).done, true);
+  assert.equal((await assertOne()).status.code, SpanStatusCode.UNSET);
 });

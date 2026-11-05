@@ -1,13 +1,14 @@
 // Real Pipecat clients, with only media/network I/O replaced by a transport.
-function createClient(sdk, callbacks = {}) {
+function createClient(sdk, callbacks = {}, options = {}) {
   // Pipecat reads window.navigator to describe the client, even with media off.
   globalThis.window ??= { navigator: { userAgent: 'offline-contract' } };
   class LoopbackTransport extends sdk.Transport {
     initialize(options, onMessage) {
       this.callbacks = options.callbacks;
       this.onMessage = onMessage;
-      this._state = 'disconnected';
       this.sent = [];
+      // Daily/WebSocket transports notify through their state setter on reset.
+      this.state = 'disconnected';
     }
     get state() { return this._state; }
     set state(value) {
@@ -50,6 +51,7 @@ function createClient(sdk, callbacks = {}) {
     enableCam: false,
     params: { baseUrl: 'http://127.0.0.1/unused' },
     customConnectHandler: async () => ({}),
+    ...options,
   });
   return { client, transport };
 }

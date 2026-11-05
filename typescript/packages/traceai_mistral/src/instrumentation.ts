@@ -17,7 +17,7 @@ function telemetry<T>(work: () => T): T | null {
 }
 type Method = (this: unknown, ...args: unknown[]) => unknown;
 type Target = Record<string, unknown>;
-type Operation = "chat" | "embeddings" | "conversation";
+type Operation = "chat" | "embeddings" | "conversation" | "moderation" | "classification";
 interface Patch {
   target: Target;
   key: string;
@@ -49,6 +49,8 @@ const RESOURCES: ReadonlyArray<readonly [readonly string[], readonly string[], O
   [["fim"], ["complete", "stream"], "chat"],
   [["agents"], ["complete", "stream"], "chat"],
   [["embeddings"], ["create"], "embeddings"],
+  [["classifiers"], ["moderate", "moderateChat"], "moderation"],
+  [["classifiers"], ["classify", "classifyChat"], "classification"],
   [["beta", "conversations"], ["start", "append", "restart", "startStream", "appendStream", "restartStream"], "conversation"],
 ];
 

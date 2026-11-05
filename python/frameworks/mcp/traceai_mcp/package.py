@@ -1,1 +1,1 @@
-_instruments = ("mcp >= 1.8.1",)
+_instruments = ("mcp >= 1.30.0",)

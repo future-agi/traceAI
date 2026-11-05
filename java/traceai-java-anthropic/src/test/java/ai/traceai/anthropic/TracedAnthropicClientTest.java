@@ -2,7 +2,6 @@ package ai.traceai.anthropic;
 
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
-import com.anthropic.models.MessageCreateParams;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
@@ -24,13 +23,12 @@ class TracedAnthropicClientTest {
     @ParameterizedTest
     @NullSource
     @ValueSource(doubles = {0.0, 0.7})
-    void shouldUnwrapPinnedSdkTemperature(Double temperature) {
-        MessageCreateParams.Builder builder = MessageCreateParams.builder()
-            .model("test-model").maxTokens(10).addUserMessage("hello");
+    void shouldUnwrapPinnedSdkTemperature(Double temperature) throws Exception {
+        Object builder = SdkTestSupport.paramsBuilder("hello");
         if (temperature != null) {
-            builder.temperature(temperature);
+            SdkTestSupport.setTemperature(builder, temperature);
         }
-        assertTemperature(builder.build(), temperature);
+        assertTemperature(SdkTestSupport.call(builder, "build"), temperature);
     }
 
     @Test

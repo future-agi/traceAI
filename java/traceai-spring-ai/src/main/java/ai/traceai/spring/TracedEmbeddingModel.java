@@ -224,7 +224,8 @@ public class TracedEmbeddingModel implements EmbeddingModel {
             if (responseModel != null && !responseModel.isEmpty()) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
                 if (!requestModelKnown) {
-                    span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, responseModel);
+                    // The response identifies the embedding model, not the request's model/alias.
+                    // The floor EmbeddingModel API does not expose defaults; leave an unknown request absent.
                     span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, responseModel);
                 }
             }

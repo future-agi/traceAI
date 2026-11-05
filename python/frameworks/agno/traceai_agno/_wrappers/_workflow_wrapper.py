@@ -12,6 +12,7 @@ from typing import (
     Tuple,
 )
 
+from agno.run.base import RunStatus
 from agno.run.workflow import WorkflowRunEvent, WorkflowRunOutput
 from agno.workflow.types import StepOutput
 from openinference.instrumentation import get_attributes_from_context
@@ -31,7 +32,6 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 
-from ._runs_wrapper import _set_run_status
 from ._stream import (
     EagerSpanAsyncIterator,
     EagerSpanCoroutine,
@@ -194,22 +194,49 @@ def _workflow_run_arguments(
         yield USER_ID, user_id
 
 
-def _set_workflow_status(span: Any, response: Any) -> None:
-    """Prefer the real output status; older/event-only streams lack run_output."""
+def _workflow_status(response: Any) -> trace_api.Status | None:
+    """Snapshot status before yielding; Agno can mutate run_output during close."""
     run_output = getattr(response, "run_output", None)
     output = run_output if run_output is not None else response
     if isinstance(output, WorkflowRunOutput):
-        _set_run_status(span, output)
-        return
+        status = output.status
+        if status == RunStatus.completed:
+            return trace_api.Status(trace_api.StatusCode.OK)
+        if status in (RunStatus.error, RunStatus.cancelled):
+            return trace_api.Status(
+                trace_api.StatusCode.ERROR, f"run status: {status.value}"
+            )
+        return None
     event = getattr(response, "event", None)
     if event == WorkflowRunEvent.workflow_completed.value:
-        span.set_status(trace_api.StatusCode.OK)
-    elif event in (
+        return trace_api.Status(trace_api.StatusCode.OK)
+    if event in (
         WorkflowRunEvent.workflow_cancelled.value,
         WorkflowRunEvent.workflow_error.value,
     ):
-        span.set_status(trace_api.StatusCode.ERROR, f"workflow event: {event}")
+        return trace_api.Status(trace_api.StatusCode.ERROR, f"workflow event: {event}")
     # Paused and incomplete workflows are not successful runs.
+    return None
+
+
+def _set_workflow_status(span: Any, response: Any) -> None:
+    if status := _workflow_status(response):
+        span.set_status(status)
+
+
+def _set_workflow_stream_output(span: Any, response: Any, instance: Any) -> None:
+    if response is not None:
+        output, mime_type = _extract_output(response)
+        if output:
+            span.set_attribute(OUTPUT_VALUE, output)
+            span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
+        if run_id := getattr(response, "run_id", None):
+            span.set_attribute("agno.run.id", run_id)
+    if instance is not None:
+        if workflow_id := getattr(instance, "id", None):
+            span.set_attribute("agno.workflow.id", workflow_id)
+        if user_id := getattr(instance, "user_id", None):
+            span.set_attribute(USER_ID, user_id)
 
 
 class _WorkflowWrapper:
@@ -311,6 +338,8 @@ class _WorkflowWrapper:
     ) -> Any:
         """Continue streaming workflow with existing span"""
         final_response = None
+        terminal_status = None
+        failed = False
         iterator = iter(iterator)
         try:
             while True:
@@ -329,34 +358,27 @@ class _WorkflowWrapper:
                         context_api.detach(ctx_token)
 
                 final_response = response
+                if status := _workflow_status(response):
+                    terminal_status = status
+                    _set_workflow_stream_output(span, response, instance)
                 yield response
 
-            _set_workflow_status(span, final_response)
-            # Extract output only from the final response
-            if final_response is not None:
-                output, mime_type = _extract_output(final_response)
-                if output:
-                    span.set_attribute(OUTPUT_VALUE, output)
-                    span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
+            if terminal_status is None:
+                _set_workflow_stream_output(span, final_response, instance)
 
-            # Set workflow ID after execution (it's initialized inside the wrapped method)
-            if instance and hasattr(instance, "id") and instance.id:
-                span.set_attribute("agno.workflow.id", instance.id)
-
-            # Capture the workflow run_id
-            run_id = getattr(final_response, "run_id", None)
-            if run_id:
-                span.set_attribute("agno.run.id", run_id)
-
-            # Capture user_id from instance if available
-            if instance and hasattr(instance, "user_id") and instance.user_id:
-                span.set_attribute(USER_ID, instance.user_id)
-
-        except (StopIteration, StopAsyncIteration):
+        except GeneratorExit:
+            if terminal_status is None:
+                failed = True
+                span.set_status(
+                    trace_api.StatusCode.ERROR, "stream closed before completion"
+                )
             raise
-        except BaseException as e:
-            span.set_status(trace_api.StatusCode.ERROR, str(e))
-            span.record_exception(e)
+        except BaseException as error:
+            failed = True
+            span.set_status(
+                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+            )
+            span.record_exception(error)
             raise
 
         finally:
@@ -366,6 +388,8 @@ class _WorkflowWrapper:
             ):
                 if close := getattr(iterator, "close", None):
                     close()
+                if not failed and terminal_status is not None:
+                    span.set_status(terminal_status)
 
     def arun(
         self,
@@ -485,6 +509,8 @@ class _WorkflowWrapper:
     ) -> Any:
         """Continue streaming async workflow with existing span"""
         final_response = None
+        terminal_status = None
+        failed = False
         iterator = async_iter.__aiter__()
         try:
             while True:
@@ -507,34 +533,27 @@ class _WorkflowWrapper:
                         context_api.detach(ctx_token)
 
                 final_response = response
+                if status := _workflow_status(response):
+                    terminal_status = status
+                    _set_workflow_stream_output(span, response, instance)
                 yield response
 
-            _set_workflow_status(span, final_response)
-            # Extract output only from the final response
-            if final_response is not None:
-                output, mime_type = _extract_output(final_response)
-                if output:
-                    span.set_attribute(OUTPUT_VALUE, output)
-                    span.set_attribute(OUTPUT_MIME_TYPE, mime_type)
+            if terminal_status is None:
+                _set_workflow_stream_output(span, final_response, instance)
 
-            # Set workflow ID after execution (it's initialized inside the wrapped method)
-            if instance and hasattr(instance, "id") and instance.id:
-                span.set_attribute("agno.workflow.id", instance.id)
-
-            # Capture the workflow run_id
-            run_id = getattr(final_response, "run_id", None)
-            if run_id:
-                span.set_attribute("agno.run.id", run_id)
-
-            # Capture user_id from instance if available
-            if instance and hasattr(instance, "user_id") and instance.user_id:
-                span.set_attribute(USER_ID, instance.user_id)
-
-        except (StopIteration, StopAsyncIteration):
+        except GeneratorExit:
+            if terminal_status is None:
+                failed = True
+                span.set_status(
+                    trace_api.StatusCode.ERROR, "stream closed before completion"
+                )
             raise
-        except BaseException as e:
-            span.set_status(trace_api.StatusCode.ERROR, str(e))
-            span.record_exception(e)
+        except BaseException as error:
+            failed = True
+            span.set_status(
+                trace_api.StatusCode.ERROR, str(error) or type(error).__name__
+            )
+            span.record_exception(error)
             raise
 
         finally:
@@ -544,6 +563,8 @@ class _WorkflowWrapper:
             ):
                 if close := getattr(iterator, "aclose", None):
                     await close()
+                if not failed and terminal_status is not None:
+                    span.set_status(terminal_status)
 
 
 class _WorkflowExecuteWrapper:

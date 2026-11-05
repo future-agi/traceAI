@@ -8,6 +8,8 @@ Trace LanceDB query execution and table operations with OpenTelemetry. The same 
 pip install traceAI-lancedb
 ```
 
+Requires Python 3.10–3.13, LanceDB 0.25.0 or newer and `fi-instrumentation-otel` 1.2.2 or newer. Older LanceDB releases are not supported; upgrade them before enabling this instrumentor.
+
 ## Trace a local search
 
 Set `FI_API_KEY` and `FI_SECRET_KEY` in your application environment. For self-hosted Future AGI, set `FI_BASE_URL` to your collector origin.
@@ -85,7 +87,18 @@ provider.force_flush()
 
 ## Recorded data
 
-Spans include the operation, table name when available, output format, result count and query limit when exposed by the SDK. They do not capture vectors, query text, SQL filters, row contents, connection credentials or exception messages/stack traces. Error status and exception type are retained. Table names are metadata; avoid including sensitive information in them.
+Spans include the operation, table name when available, output format, result count and query limit when exposed by the SDK. They do not capture vectors, query text, SQL filters, row contents, connection credentials or exception messages/stack traces. Error status and exception type are retained. Table names are metadata; avoid including sensitive information in them. To redact recognized PII patterns in metadata before spans reach OpenTelemetry samplers, processors or exporters, set `FI_PII_REDACTION=true` before calling `instrument()`, or pass an explicit configuration:
+
+```python
+from fi_instrumentation import TraceConfig
+
+instrumentor.instrument(
+    tracer_provider=provider,
+    config=TraceConfig(pii_redaction=True),
+)
+```
+
+Choose the configuration when first enabling instrumentation (or uninstrument before changing it). Explicit options override environment defaults. Redaction is opt-in and pattern-based, not a guarantee that arbitrary secrets are detected. It does not enable content capture: vectors, row contents, filters and exception details remain excluded even when error-detail hiding is disabled.
 
 These limits apply to this instrumentor's spans. Other instrumentors and your application may capture additional information.
 

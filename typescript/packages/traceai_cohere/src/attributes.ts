@@ -86,6 +86,30 @@ export function inputAttributes(operation: Operation, request: Data, config: Tra
   return attrs;
 }
 
+/** Citation provenance is generated output, but source bodies echo inputs. Use an
+ * allowlist so document/tool payloads and future source fields cannot leak.
+ */
+function withoutCitationInputs(value: unknown): unknown {
+  if (!Array.isArray(value)) return undefined;
+  return value.map(item => {
+    const citation = object(item);
+    const projected: Data = {};
+    for (const key of ["start", "end", "text", "type"]) {
+      if (typeof citation[key] === "number" || typeof citation[key] === "string") projected[key] = citation[key];
+    }
+    if (Array.isArray(citation.sources)) projected.sources = citation.sources.map(item => {
+      const source = object(item);
+      return {
+        ...(typeof source.type === "string" ? { type: source.type } : {}),
+        ...(typeof source.id === "string" ? { id: source.id } : {}),
+      };
+    });
+    const documentIds = field(citation, "documentIds", "document_ids");
+    if (Array.isArray(documentIds)) projected.documentIds = documentIds.filter(id => typeof id === "string");
+    return projected;
+  });
+}
+
 /** Keep generated fields only when inputs are hidden. Responses can echo full
  * chat history, embedding texts, reranked documents and citation sources.
  * Project rather than mutate the SDK response or filter history by role: even
@@ -103,6 +127,7 @@ function withoutInputEchoes(operation: Operation, response: Data): Data {
   return {
     text: response.text,
     toolCalls: field(response, "toolCalls", "tool_calls"),
+    citations: withoutCitationInputs(response.citations),
     message: {
       role: message.role,
       content: Array.isArray(message.content) ? message.content.map((part) => {
@@ -111,12 +136,15 @@ function withoutInputEchoes(operation: Operation, response: Data): Data {
       }) : message.content,
       toolCalls: field(message, "toolCalls", "tool_calls"),
       toolPlan: field(message, "toolPlan", "tool_plan"),
+      citations: withoutCitationInputs(message.citations),
     },
   };
 }
 
 export function outputAttributes(operation: Operation, response: Data, config: TraceConfig): Attributes {
   const attrs: Attributes = usageAttributes(response);
+  const id = response.id ?? field(response, "generationId", "generation_id");
+  if (typeof id === "string") attrs[S.GEN_AI_RESPONSE_ID] = id;
   if (hideInput(config)) response = withoutInputEchoes(operation, response);
   if (operation === "embed") {
     // raw.output would otherwise bypass hideEmbeddingVectors.
@@ -149,6 +177,8 @@ export function outputAttributes(operation: Operation, response: Data, config: T
     const text = typeof response.text === "string" ? response.text : list(message.content).map((part) => object(part).text ?? "").join("");
     const calls = field(message, "toolCalls", "tool_calls") ?? field(response, "toolCalls", "tool_calls");
     const normalized: Data = { role: "assistant", content: message.content ?? text };
+    const citations = message.citations ?? response.citations;
+    if (Array.isArray(citations)) normalized.citations = citations;
     const toolPlan = field(message, "toolPlan", "tool_plan");
     if (typeof toolPlan === "string") normalized.tool_plan = toolPlan;
     if (calls) normalized.tool_calls = list(calls).map((item) => {
@@ -165,13 +195,26 @@ export function outputAttributes(operation: Operation, response: Data, config: T
 
 function usageAttributes(response: Data): Attributes {
   const usage = object(response.usage ?? response.meta);
-  // Actual tokens, when available, are not the same as discounted billed units.
-  const tokens = object(usage.tokens ?? field(usage, "billedUnits", "billed_units"));
+  // Keep the legacy billed-token fallback only when actual usage is absent;
+  // discounted billed units must never replace or be added to actual tokens.
+  const billed = object(field(usage, "billedUnits", "billed_units"));
+  const tokens = object(usage.tokens ?? billed);
   const input = field(tokens, "inputTokens", "input_tokens");
   const output = field(tokens, "outputTokens", "output_tokens");
   const attrs: Attributes = {};
-  if (typeof input === "number") attrs[S.LLM_TOKEN_COUNT_PROMPT] = input;
-  if (typeof output === "number") attrs[S.LLM_TOKEN_COUNT_COMPLETION] = output;
-  if (typeof input === "number" || typeof output === "number") attrs[S.LLM_TOKEN_COUNT_TOTAL] = (typeof input === "number" ? input : 0) + (typeof output === "number" ? output : 0);
+  const numeric = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  if (numeric(input)) attrs[S.LLM_TOKEN_COUNT_PROMPT] = input;
+  if (numeric(output)) attrs[S.LLM_TOKEN_COUNT_COMPLETION] = output;
+  if (numeric(input) || numeric(output)) attrs[S.LLM_TOKEN_COUNT_TOTAL] = (numeric(input) ? input : 0) + (numeric(output) ? output : 0);
+  const cached = field(usage, "cachedTokens", "cached_tokens");
+  if (numeric(cached)) attrs[S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ] = cached;
+  for (const [camel, snake] of [
+    ["inputTokens", "input_tokens"], ["outputTokens", "output_tokens"],
+    ["searchUnits", "search_units"], ["classifications", "classifications"],
+    ["images", "images"], ["imageTokens", "image_tokens"],
+  ]) {
+    const value = field(billed, camel, snake);
+    if (numeric(value)) attrs[`cohere.usage.billed_units.${snake}`] = value;
+  }
   return attrs;
 }

@@ -5,6 +5,7 @@ import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.BatchingStrategy;
@@ -33,6 +34,7 @@ class TracedEmbeddingModelTest {
     static class RecordingModel implements EmbeddingModel {
         final AtomicReference<String> invoked = new AtomicReference<>();
         EmbeddingRequest seenRequest;
+        Document seenContentDocument;
         EmbeddingOptions seenOptions;
         BatchingStrategy seenStrategy;
         final EmbeddingResponse response;
@@ -60,7 +62,7 @@ class TracedEmbeddingModelTest {
         }
         @Override public EmbeddingResponse embedForResponse(List<String> texts) { invoked.set("embedForResponse"); return response; }
         @Override public int dimensions() { invoked.set("dimensions"); return 3; }
-        @Override public String getEmbeddingContent(Document document) { invoked.set("getEmbeddingContent"); return "doc-text"; }
+        @Override public String getEmbeddingContent(Document document) { invoked.set("getEmbeddingContent"); seenContentDocument = document; return "doc-text"; }
     }
 
     private static TracedEmbeddingModel traced(SpanTestSupport support, RecordingModel delegate) {
@@ -90,7 +92,25 @@ class TracedEmbeddingModelTest {
     }
 
     @Test
-    void everyOverloadDelegatesDirectlyWithOriginalArguments() {
+    void responseModelDoesNotInventUnknownRequestModel() {
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            RecordingModel delegate = new RecordingModel();
+            TracedEmbeddingModel model = traced(support, delegate);
+            assertThat(model.call(new EmbeddingRequest(List.of("a"), null))).isSameAs(delegate.response);
+            assertThat(model.call(new EmbeddingRequest(List.of("a"), EmbeddingOptions.builder().build())))
+                .isSameAs(delegate.response);
+            assertThat(model.embedForResponse(List.of("a"))).isSameAs(delegate.response);
+
+            assertThat(support.finished()).hasSize(3).allSatisfy(span -> {
+                assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_REQUEST_MODEL))).isNull();
+                assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_MODEL)))
+                    .isEqualTo("embed-model");
+            });
+        }
+    }
+
+    @Test
+    void floorApiOverloadsDelegateDirectlyWithOriginalArguments() {
         try (SpanTestSupport support = new SpanTestSupport()) {
             RecordingModel delegate = new RecordingModel();
             TracedEmbeddingModel model = traced(support, delegate);
@@ -114,13 +134,36 @@ class TracedEmbeddingModelTest {
             assertThat(delegate.invoked.get()).isEqualTo("embedForResponse");
             assertThat(model.dimensions()).isEqualTo(3);
             assertThat(delegate.invoked.get()).isEqualTo("dimensions");
-            assertThat(model.getEmbeddingContent(document)).isEqualTo("doc-text");
-            assertThat(delegate.invoked.get()).isEqualTo("getEmbeddingContent");
             assertThat(model.unwrap()).isSameAs(delegate);
 
-            // dimensions() and getEmbeddingContent() open no model-operation span
+            // dimensions() opens no model-operation span; all five floor-API embedding calls do.
             assertThat(support.finished()).hasSize(5);
             assertThat(support.finished()).allSatisfy(span -> assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.OK));
+        }
+    }
+
+    @Test
+    @EnabledIf(value = "embeddingContentAccessorAvailable", disabledReason = "Requires Spring AI 1.1.8+ EmbeddingModel.getEmbeddingContent")
+    void embeddingContentAccessorDelegatesWithoutSpan() {
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            RecordingModel delegate = new RecordingModel();
+            Document document = new Document("doc-text");
+
+            assertThat(traced(support, delegate).getEmbeddingContent(document)).isEqualTo("doc-text");
+            assertThat(delegate.invoked.get()).isEqualTo("getEmbeddingContent");
+            assertThat(delegate.seenContentDocument).isSameAs(document);
+            assertThat(support.finished()).isEmpty();
+        }
+    }
+
+    // Inspect the loaded runtime API, not the version used to compile this test. Only the
+    // newer accessor is conditional; every floor-API overload above must run on every runtime.
+    static boolean embeddingContentAccessorAvailable() {
+        try {
+            EmbeddingModel.class.getMethod("getEmbeddingContent", Document.class);
+            return true;
+        } catch (NoSuchMethodException absentOnOlderSpringAI) {
+            return false;
         }
     }
 
