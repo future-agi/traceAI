@@ -8,3 +8,4 @@ export { GoogleADKInstrumentation, GoogleADKInstrumentationConfig } from "./inst
 export { isPatched } from "./instrumentation";
 export { VERSION } from "./version";
 export { configure, GoogleADKSpanExporter, GoogleADKNativeOptions, GoogleADKConfigureOptions } from "./native";
+export { recordGoogleADKModelError } from "./native-errors";

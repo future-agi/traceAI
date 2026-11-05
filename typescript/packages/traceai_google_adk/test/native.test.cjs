@@ -147,3 +147,200 @@ test('configuration validates inputs and refuses to replace an existing provider
   await existing.shutdown();
   trace.disable();
 });
+
+
+for (const captureContent of [false, true]) {
+  test(`audio input counts use only valid reported details (captureContent=${captureContent})`, async () => {
+    const c = collect({captureContent});
+    const audio = tokenCount => ({modality: 'AUDIO', tokenCount});
+    const cases = [
+      ['single audio count', [audio(80)], 80],
+      ['aggregate audio only', [{modality: 'TEXT', tokenCount: 20}, audio(30), {modality: 'IMAGE', tokenCount: 10}, audio(50)], 80],
+      ['reported zero', [audio(0)], 0],
+      ['missing details', undefined, undefined],
+      ['empty details', [], undefined],
+      ['null details', null, undefined],
+      ['non-array details', audio(80), undefined],
+      ['string details', '[{"modality":"AUDIO","tokenCount":80}]', undefined],
+      ['text only', [{modality: 'TEXT', tokenCount: 100}], undefined],
+      ['unknown modality', [{modality: 'audio', tokenCount: 80}, {tokenCount: 80}], undefined],
+      ['invalid counts', [audio(-1), audio('80'), audio(null), audio(true), audio(1.5), audio(Number.MAX_VALUE), audio(undefined)], undefined],
+      ['invalid entries alongside valid audio', [null, 80, 'AUDIO', [], {}, audio(-1), audio('90'), audio(30), audio(50)], 80],
+      ['unsafe sum', [audio(Number.MAX_SAFE_INTEGER), audio(1)], undefined],
+    ];
+    try {
+      for (const [, promptTokensDetails] of cases) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': JSON.stringify({content: {parts: [{text: 'PRIVATE_OUTPUT'}]}, usageMetadata: {
+            promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 10, thoughtsTokenCount: 4,
+            totalTokenCount: 114, promptTokensDetails,
+          }}),
+        }}).end();
+      }
+      // JSON permits numeric literals that parse to Infinity; never export them.
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gcp.vertex.agent.llm_response': '{"usageMetadata":{"promptTokensDetails":[{"modality":"AUDIO","tokenCount":1e400}]}}',
+      }}).end();
+      // Audio detail alone must not fabricate aggregate or cache totals.
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {promptTokensDetails: [audio(80)]}}),
+      }}).end();
+      await c.provider.forceFlush();
+      for (let i = 0; i < cases.length; i++) {
+        const a = c.spans[i].attributes;
+        assert.equal(a['gen_ai.usage.input_tokens.audio'], cases[i][2], cases[i][0]);
+        assert.equal(a['gen_ai.usage.input_tokens'], 100);
+        assert.equal(a['gen_ai.usage.cache_read_tokens'], 40);
+        assert.equal(a['gen_ai.usage.output_tokens'], 14);
+        assert.equal(a['gen_ai.usage.total_tokens'], 114);
+        assert.equal(a['gcp.vertex.agent.llm_response'], undefined);
+        assert.equal(a['output.value'] !== undefined, captureContent);
+        if (!captureContent) assert(!JSON.stringify(a).includes('PRIVATE_OUTPUT'));
+      }
+      assert.equal(c.spans.at(-2).attributes['gen_ai.usage.input_tokens.audio'], undefined);
+      const detailOnly = c.spans.at(-1).attributes;
+      assert.equal(detailOnly['gen_ai.usage.input_tokens.audio'], 80);
+      for (const key of ['input_tokens', 'cache_read_tokens', 'output_tokens', 'total_tokens']) {
+        assert.equal(detailOnly[`gen_ai.usage.${key}`], undefined);
+      }
+    } finally { await c.provider.shutdown(); }
+  });
+}
+
+for (const captureContent of [false, true]) {
+  for (const modality of ['AUDIO', 'IMAGE']) {
+    test(`${modality} output counts use only valid reported details (captureContent=${captureContent})`, async () => {
+      const c = collect({captureContent});
+      const detail = tokenCount => ({modality, tokenCount});
+      const other = modality === 'AUDIO' ? 'IMAGE' : 'AUDIO';
+      const key = `gen_ai.usage.output_tokens.${modality.toLowerCase()}`;
+      const cases = [
+        ['single count', [detail(14)], 14],
+        ['aggregate only this modality', [{modality: 'TEXT', tokenCount: 2}, detail(6), {modality: other, tokenCount: 3}, detail(8)], 14],
+        ['reported zero', [detail(0)], 0],
+        ['missing details', undefined, undefined],
+        ['empty details', [], undefined],
+        ['null details', null, undefined],
+        ['non-array details', detail(14), undefined],
+        ['string details', JSON.stringify([detail(14)]), undefined],
+        ['other modality only', [{modality: other, tokenCount: 14}], undefined],
+        ['unknown modality', [{modality: modality.toLowerCase(), tokenCount: 14}, {tokenCount: 14}], undefined],
+        ['invalid counts', [detail(-1), detail('14'), detail(null), detail(true), detail(1.5), detail(Number.MAX_VALUE), detail(undefined)], undefined],
+        ['invalid entries alongside valid counts', [null, 14, modality, [], {}, detail(-1), detail('14'), detail(6), detail(8)], 14],
+        ['maximum safe count', [detail(Number.MAX_SAFE_INTEGER), detail(0)], Number.MAX_SAFE_INTEGER],
+        ['unsafe sum', [detail(Number.MAX_SAFE_INTEGER), detail(1), detail(0)], undefined],
+      ];
+      try {
+        for (const [, candidatesTokensDetails] of cases) {
+          c.tracer.startSpan('call_llm', {attributes: {
+            'gcp.vertex.agent.llm_response': JSON.stringify({content: {parts: [{text: 'PRIVATE_OUTPUT'}]}, usageMetadata: {
+              promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 14, thoughtsTokenCount: 4,
+              totalTokenCount: 118, promptTokensDetails: [{modality: 'AUDIO', tokenCount: 80}], candidatesTokensDetails,
+            }}),
+          }}).end();
+        }
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': `{"usageMetadata":{"candidatesTokensDetails":[{"modality":"${modality}","tokenCount":1e400}]}}`,
+        }}).end();
+        // Overflow in one modality must not suppress a valid different modality.
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {candidatesTokensDetails: [
+            {modality: other, tokenCount: Number.MAX_SAFE_INTEGER}, {modality: other, tokenCount: 1}, detail(14),
+          ]}}),
+        }}).end();
+        await c.provider.forceFlush();
+        for (let i = 0; i < cases.length; i++) {
+          const a = c.spans[i].attributes;
+          assert.equal(a[key], cases[i][2], cases[i][0]);
+          assert.equal(a['gen_ai.usage.input_tokens.audio'], 80);
+          assert.equal(a['gen_ai.usage.input_tokens'], 100);
+          assert.equal(a['gen_ai.usage.cache_read_tokens'], 40);
+          assert.equal(a['gen_ai.usage.output_tokens'], 18);
+          assert.equal(a['gen_ai.usage.output_tokens.reasoning'], 4);
+          assert.equal(a['gen_ai.usage.total_tokens'], 118);
+          assert.equal(a['gcp.vertex.agent.llm_response'], undefined);
+          assert.equal(a['output.value'] !== undefined, captureContent);
+          if (!captureContent) assert(!JSON.stringify(a).includes('PRIVATE_OUTPUT'));
+        }
+        assert.equal(c.spans.at(-2).attributes[key], undefined);
+        const detailOnly = c.spans.at(-1).attributes;
+        assert.equal(detailOnly[key], 14);
+        assert.equal(detailOnly[`gen_ai.usage.output_tokens.${other.toLowerCase()}`], undefined);
+        for (const missing of ['input_tokens', 'input_tokens.audio', 'cache_read_tokens', 'output_tokens', 'output_tokens.reasoning', 'total_tokens']) {
+          assert.equal(detailOnly[`gen_ai.usage.${missing}`], undefined, 'details alone must not fabricate totals');
+        }
+      } finally { await c.provider.shutdown(); }
+    });
+  }
+}
+
+for (const captureContent of [false, true]) {
+  test(`provider-side tool prompts contribute once to input tokens (captureContent=${captureContent})`, async () => {
+    const c = collect({captureContent});
+    const cases = [
+      ['reported tool prompts', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, 100, 400],
+      ['already-combined native summary', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, 400, 400],
+      ['no native summary', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, undefined, 400],
+      ['explicit zero tool prompts', {promptTokenCount: 100, toolUsePromptTokenCount: 0}, 100, 100],
+      ['explicit zero prompt', {promptTokenCount: 0, toolUsePromptTokenCount: 300}, 0, 300],
+      ['both zero', {promptTokenCount: 0, toolUsePromptTokenCount: 0}, 0, 0],
+      ['missing tool count', {promptTokenCount: 100}, 100, 100],
+      ['missing prompt count', {toolUsePromptTokenCount: 300}, undefined, undefined],
+      ['missing prompt with native summary', {toolUsePromptTokenCount: 300}, 100, undefined],
+      ['missing both counts', {}, undefined, undefined],
+      ['native-only summary remains available', {}, 100, 100],
+      ['maximum safe sum', {promptTokenCount: Number.MAX_SAFE_INTEGER - 1, toolUsePromptTokenCount: 1}, undefined, Number.MAX_SAFE_INTEGER],
+      ['overflowing sum', {promptTokenCount: Number.MAX_SAFE_INTEGER, toolUsePromptTokenCount: 1}, 100, undefined],
+      ...[-1, '300', null, true, 1.5, Number.MAX_VALUE].flatMap(value => [
+        [`invalid tool count ${value}`, {promptTokenCount: 100, toolUsePromptTokenCount: value}, 100, undefined],
+        [`invalid prompt count ${value}`, {promptTokenCount: value, toolUsePromptTokenCount: 300}, 100, undefined],
+      ]),
+    ];
+    try {
+      for (const [, counts, nativeInput] of cases) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gen_ai.request.model': 'unknown-price-model',
+          ...(nativeInput === undefined ? {} : {'gen_ai.usage.input_tokens': nativeInput}),
+          'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {
+            ...counts, cachedContentTokenCount: 40,
+            promptTokensDetails: [{modality: 'TEXT', tokenCount: 100}],
+            toolUsePromptTokensDetails: [{modality: 'TEXT', tokenCount: 300}],
+          }}),
+        }}).end();
+      }
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gen_ai.usage.input_tokens': 100,
+        'gcp.vertex.agent.llm_response': '{"usageMetadata":{"promptTokenCount":100,"toolUsePromptTokenCount":1e400}}',
+      }}).end();
+      await c.provider.forceFlush();
+      for (let i = 0; i < cases.length; i++) {
+        const a = c.spans[i].attributes;
+        assert.equal(a['gen_ai.usage.input_tokens'], cases[i][3], cases[i][0]);
+        assert.equal(a['gen_ai.usage.cache_read_tokens'], 40, 'cache is a subset, never added or subtracted');
+        assert.equal(a['gen_ai.usage.total_tokens'], undefined, 'no inferred overall total');
+        assert.equal(a['gen_ai.usage.output_tokens'], undefined);
+        assert(!Object.keys(a).some(key => /cost|price/.test(key)), 'unknown prices remain unknown');
+        assert.equal(a['gcp.vertex.agent.llm_response'], undefined);
+        assert.equal(a['output.value'] !== undefined, captureContent);
+      }
+      assert.equal(c.spans.at(-1).attributes['gen_ai.usage.input_tokens'], undefined, 'nonfinite input is rejected');
+    } finally { await c.provider.shutdown(); }
+  });
+}
+
+test('reported cache reads are independent of content capture and never subtracted from prompt totals', async () => {
+  for (const captureContent of [false, true]) {
+    const c = collect({captureContent});
+    try {
+      for (const cachedContentTokenCount of [60, 0, -1, '60', null]) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {promptTokenCount: 100, cachedContentTokenCount}}),
+        }}).end();
+      }
+      await c.provider.forceFlush();
+      assert.deepEqual(c.spans.map(s => s.attributes['gen_ai.usage.cache_read_tokens']), [60, 0, undefined, undefined, undefined]);
+      assert(c.spans.every(s => s.attributes['gen_ai.usage.input_tokens'] === 100));
+      assert(c.spans.every(s => s.attributes['gen_ai.usage.total_tokens'] === undefined));
+    } finally { await c.provider.shutdown(); }
+  }
+});
