@@ -224,6 +224,7 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     const choices = new Map<number, any>();
     const responseItems = new Map<number, any>();
     let responseFinished = false;
+    let terminalResponse: any;
     let remaining = 65536;
     const append = (previous: string = '', part: unknown = ''): string => {
       if (!output || typeof part !== 'string') return previous;
@@ -240,10 +241,14 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       if (chunk.error != null || chunk.type === 'response.failed' || chunk.type === 'error') {
         span.setStatus({ code: SpanStatusCode.ERROR });
       }
-      if (chunk.type === 'response.completed' || chunk.type === 'response.failed') {
-        responseFinished = true;
-        // Terminal Responses events contain the canonical output including tools.
-        if (output) instrumentation.response(span, chunk.response, operation, true, hideErrorDetails);
+      if (chunk.type === 'response.completed' || chunk.type === 'response.failed' || chunk.type === 'response.incomplete') {
+        // Failed/incomplete terminal events may omit output despite earlier deltas.
+        // Only nonempty canonical output supersedes what the caller observed.
+        responseFinished = Array.isArray(chunk.response?.output) && chunk.response.output.length > 0;
+        if (output) {
+          terminalResponse = chunk.response;
+          instrumentation.response(span, terminalResponse, operation, true, hideErrorDetails);
+        }
       }
       if (output && operation === 'responses' && Number.isInteger(chunk.output_index) && chunk.output_index >= 0 && chunk.output_index < 128) {
         const index = chunk.output_index;
@@ -284,7 +289,9 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       if (ended) return;
       ended = true;
       if (choices.size) instrumentation.response(span, { choices: [...choices.values()].sort((a, b) => a.index - b.index) }, operation, output, hideErrorDetails);
-      if (responseItems.size && !responseFinished) instrumentation.response(span, { output: [...responseItems.entries()].sort(([a], [b]) => a - b).map(([, item]) => item) }, operation, output, hideErrorDetails);
+      // Preserve terminal status/error/usage alongside partial output; the same
+      // response mapper applies error-detail masking without changing SDK events.
+      if (responseItems.size && !responseFinished) instrumentation.response(span, { ...terminalResponse, output: [...responseItems.entries()].sort(([a], [b]) => a - b).map(([, item]) => item) }, operation, output, hideErrorDetails);
       span.end();
     };
     return new Proxy(stream, {
