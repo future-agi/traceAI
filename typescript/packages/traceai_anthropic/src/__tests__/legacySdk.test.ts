@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "@jest/globals";
 import Anthropic from "@anthropic-ai/sdk";
+import { Stream } from "@anthropic-ai/sdk/streaming";
 import { SpanStatusCode } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -25,10 +26,10 @@ const message = {
   content: [{ type: "text", text: "PRIVATE_OUTPUT_CANARY" }],
   stop_reason: "end_turn",
   stop_sequence: null,
-  usage: { input_tokens: 7, output_tokens: 3 },
+  usage: { input_tokens: 7, output_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5 },
 };
 const events = [
-  { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 7, output_tokens: 0 } } },
+  { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { ...message.usage, output_tokens: 0 } } },
   { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
   { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "PART1_" } },
   { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "PART2" } },
@@ -60,6 +61,11 @@ const syntheticFetch = async (_url: unknown, init: any) => {
   const stream = new ReadableStream({
     async start(controller) {
       for (let i = 0; i < events.length; i++) {
+        if (body.model === "synthetic-stream-error" && i === 1) {
+          controller.enqueue(encoder.encode('event: error\ndata: {"type":"error","error":{"type":"api_error","message":"synthetic SSE failure"}}\n\n'));
+          controller.close();
+          return;
+        }
         // "synthetic-truncated": the server closes the body cleanly before message_stop.
         if (body.model === "synthetic-truncated" && i === 3) break;
         if (mode === "stall" && i === 2) {
@@ -151,6 +157,83 @@ describe("legacy SDK 0.27.3 (declared peer)", () => {
     expect(span.status.code).toBe(SpanStatusCode.OK);
   });
 
+  it("does not acquire an iterator or consume events until the application reads", async () => {
+    const spy = jest.spyOn(Stream.prototype, Symbol.asyncIterator);
+    try {
+      const stream = await client.messages.create({ ...params, stream: true });
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(spy).not.toHaveBeenCalled();
+      expect(memory.getFinishedSpans()).toHaveLength(0);
+      stream.controller.abort();
+      expect((await finishedSpans())[0].status.code).toBe(SpanStatusCode.UNSET);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("settles an abort that fires while a next result is being delivered", async () => {
+    const original = Stream.prototype[Symbol.asyncIterator];
+    const spy = jest.spyOn(Stream.prototype, Symbol.asyncIterator).mockImplementation(function (this: Stream<unknown>) {
+      const iterator = original.call(this);
+      const next = iterator.next.bind(iterator);
+      iterator.next = async (...args) => {
+        const result = await next(...args);
+        this.controller.abort();
+        return result;
+      };
+      return iterator;
+    });
+    try {
+      const stream = await client.messages.create({ ...params, stream: true });
+      const first = await stream[Symbol.asyncIterator]().next();
+      expect(first.value.type).toBe("message_start");
+      const spans = await finishedSpans();
+      expect(spans).toHaveLength(1);
+      expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("forwards early-break cancellation instead of continuing a background tee", async () => {
+    mode = "stall";
+    const stream = await client.messages.create({ ...params, stream: true });
+    for await (const event of stream) {
+      expect(event.type).toBe("message_start");
+      break;
+    }
+    expect(stream.controller.signal.aborted).toBe(true);
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
+  });
+
+  it("forwards throw to the SDK iterator and ends cancellation once", async () => {
+    mode = "stall";
+    const stream = await client.messages.create({ ...params, stream: true });
+    const iterator = stream[Symbol.asyncIterator]();
+    await iterator.next();
+    const error = new Error("caller stopped");
+    await expect(iterator.throw!(error)).rejects.toBe(error);
+    expect(stream.controller.signal.aborted).toBe(true);
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
+  });
+
+  it.each([false, true])("includes cache usage independently of raw output (stream=%s)", async streaming => {
+    const result = await client.messages.create({ ...params, stream: streaming });
+    if (streaming) for await (const _event of result as Stream<Anthropic.MessageStreamEvent>) { /* drain */ }
+    const [span] = await finishedSpans();
+    expect(span.attributes).toMatchObject({
+      "gen_ai.usage.input_tokens": 16,
+      "gen_ai.usage.output_tokens": 3,
+      "gen_ai.usage.total_tokens": 19,
+      "gen_ai.usage.cache_write_tokens": 4,
+      "gen_ai.usage.cache_read_tokens": 5,
+    });
+  });
+
   it("does not mark a stream aborted through its controller as OK", async () => {
     mode = "stall";
     const stream = await client.messages.create({ ...params, stream: true });
@@ -210,6 +293,17 @@ describe("legacy SDK 0.27.3 (declared peer)", () => {
     const spans = await finishedSpans();
     expect(spans).toHaveLength(1);
     expect(spans[0].status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it("records SSE errors as errors even when the SDK aborts during cleanup", async () => {
+    const stream = await client.messages.create({ ...params, model: "synthetic-stream-error", stream: true });
+    await expect((async () => {
+      for await (const _event of stream) { /* consume */ }
+    })()).rejects.toThrow("synthetic SSE failure");
+    expect(stream.controller.signal.aborted).toBe(true);
+    const spans = await finishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(SpanStatusCode.ERROR);
   });
 
   it("records API errors and keeps the SDK error type", async () => {

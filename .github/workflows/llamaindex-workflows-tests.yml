@@ -64,11 +64,19 @@ jobs:
               'llama-index-core==0.14.25'
               'llama-index-workflows==2.15.1'
               'llama-index-llms-openai==0.8.3'
+          # Current framework with the compatible Anthropic SDK, not all-latest
+          # provider coverage. Adapter 0.12.3 + anthropic 2.4.0/2.5.0 fails before
+          # HTTP even without traceAI: https://github.com/run-llama/llama_index/issues/23701
+          # See python/frameworks/llama_index/README.md#known-limitations.
+          # Keep the passing 0.75.0 control and every assertion; this cell is not
+          # known-broken and must not tolerate failures.
           - name: current
             packages: >-
               'llama-index-core==0.14.25'
               'llama-index-workflows==2.26.1'
               'llama-index-llms-openai==0.8.3'
+              'llama-index-llms-anthropic==0.12.3'
+              'anthropic==0.75.0'
           # The lowest fi-instrumentation-otel the package declares, from PyPI
           # instead of this repo's core, with the latest LlamaIndex.
           - name: core-floor
@@ -97,6 +105,7 @@ jobs:
           echo "core: $core"
           python -m pip install $core -e python/frameworks/llama_index \
             ${{ matrix.packages }} \
+            llama-index-llms-azure-openai llama-index-llms-openai-like \
             'pytest==8.4.2' 'pytest-asyncio==0.24.0' 'pytest-socket==0.8.1'
           python -m pip show fi-instrumentation-otel
       - name: Check the embedded Workflow class is under test

@@ -120,7 +120,10 @@ export class PortkeyInstrumentation extends InstrumentationBase {
   }
 
   private traceCall(original: Function, instance: any, args: any[], operation: Operation): any {
-    const params = args[0] ?? {};
+    // All supported resources (including delegated OpenAI Responses) build
+    // { body: args[0], ...args[2] }. A body override replaces, not merges, the
+    // original prompt. args[1] config and args[2] headers are never content.
+    const params = effectiveRequestBody(args) ?? {};
     const config = generateTraceConfig(this.traceConfig);
     // Partial content-hiding must not be bypassed by duplicate raw/JSON attributes
     // (including tool arguments, which are not just message.content).
@@ -146,9 +149,9 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     const exec = suppressTracing(trace.setSpan(context.active(), span));
     const finish = (result: any) => {
       if (result && typeof result[Symbol.asyncIterator] === 'function') {
-        return this.wrapStream(result, span, exec, operation, output);
+        return this.wrapStream(result, span, exec, operation, output, config.hideErrorDetails);
       }
-      this.response(span, result, operation, output);
+      this.response(span, result, operation, output, config.hideErrorDetails);
       if (result?.status === 'failed') span.setStatus({ code: SpanStatusCode.ERROR });
       else span.setStatus({ code: SpanStatusCode.OK });
       span.end();
@@ -161,25 +164,33 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     };
     try {
       const promise = context.with(exec, () => original.apply(instance, args));
-      // Keep APIPromise identity/prototype and SDK-specific methods. OpenAI's
+      // Native Portkey requests settle eagerly, so telemetry must not wait for
+      // an application's await. Only delegated OpenAI Responses stays lazy:
       // asResponse() must not eagerly parse/consume its response body.
-      return observePromise(promise, finish, fail);
+      return observePromise(promise, finish, fail, operation !== 'responses');
     } catch (error) {
       return fail(error);
     }
   }
 
-  private response(span: Span, result: any, operation: Operation, output: boolean): void {
+  private response(span: Span, result: any, operation: Operation, output: boolean, hideErrorDetails: boolean): void {
     if (!result) return;
     if (result.model) span.setAttributes({ [S.LLM_MODEL_NAME]: result.model, [S.GEN_AI_RESPONSE_MODEL]: result.model });
     if (result.id) span.setAttribute(S.GEN_AI_RESPONSE_ID, result.id);
     const usage = result.usage;
     if (usage) {
+      const inputDetails = usage.prompt_tokens_details ?? usage.input_tokens_details;
+      const outputDetails = usage.completion_tokens_details ?? usage.output_tokens_details;
       for (const [key, value] of [
         [S.LLM_TOKEN_COUNT_PROMPT, usage.prompt_tokens ?? usage.input_tokens],
         [S.LLM_TOKEN_COUNT_COMPLETION, usage.completion_tokens ?? usage.output_tokens],
         [S.LLM_TOKEN_COUNT_TOTAL, usage.total_tokens],
-      ] as const) if (typeof value === 'number') span.setAttribute(key, value);
+        [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, inputDetails?.cached_tokens ?? usage.cache_read_input_tokens],
+        [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE, inputDetails?.cache_write_tokens ?? usage.cache_creation_input_tokens],
+        [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO, inputDetails?.audio_tokens],
+        [S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO, outputDetails?.audio_tokens],
+        [S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, outputDetails?.reasoning_tokens],
+      ] as const) if (typeof value === 'number' && Number.isFinite(value)) span.setAttribute(key, value);
     }
     if (operation === 'embeddings') {
       if (Array.isArray(result.data)) span.setAttribute('embedding.vector_count', result.data.length);
@@ -197,15 +208,23 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       span.setAttribute(S.LLM_OUTPUT_MESSAGES, json(messages));
       span.setAttribute(S.OUTPUT_VALUE, typeof messages[0]?.content === 'string' ? messages[0].content : json(messages));
     }
-    span.setAttribute(S.RAW_OUTPUT, json(result));
+    // Failed Responses are successful HTTP payloads, not thrown exceptions.
+    // FISpan's exception masking cannot see inside this serialized raw value.
+    // Keep the status, machine-readable code and legitimate output, but never
+    // copy free-form error fields into telemetry or mutate the SDK's result.
+    const captured = hideErrorDetails && result.error != null
+      ? { ...result, error: typeof result.error.code === 'string' ? { code: result.error.code } : {} }
+      : result;
+    span.setAttribute(S.RAW_OUTPUT, json(captured));
   }
 
-  private wrapStream(stream: any, span: Span, exec: Context, operation: Operation, output: boolean): any {
+  private wrapStream(stream: any, span: Span, exec: Context, operation: Operation, output: boolean, hideErrorDetails: boolean): any {
     const instrumentation = this;
     let ended = false;
     const choices = new Map<number, any>();
     const responseItems = new Map<number, any>();
-    let responseCompleted = false;
+    let responseFinished = false;
+    let terminalResponse: any;
     let remaining = 65536;
     const append = (previous: string = '', part: unknown = ''): string => {
       if (!output || typeof part !== 'string') return previous;
@@ -215,12 +234,21 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       return previous + piece;
     };
     const observe = (chunk: any) => {
-      instrumentation.response(span, chunk.response ?? { id: chunk.id, model: chunk.model, usage: chunk.usage }, operation, false);
-      if (chunk.type === 'response.failed' || chunk.type === 'error') span.setStatus({ code: SpanStatusCode.ERROR });
-      if (chunk.type === 'response.completed') {
-        responseCompleted = true;
-        // Completed Responses events contain the canonical output including tools.
-        if (output) instrumentation.response(span, chunk.response, operation, true);
+      instrumentation.response(span, chunk.response ?? { id: chunk.id, model: chunk.model, usage: chunk.usage }, operation, false, hideErrorDetails);
+      // Native chat/completion streams yield data-only { error: ... } frames
+      // without throwing. Record status, not free-form error details, and leave
+      // the caller's chunks and iterator behavior unchanged.
+      if (chunk.error != null || chunk.type === 'response.failed' || chunk.type === 'error') {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+      }
+      if (chunk.type === 'response.completed' || chunk.type === 'response.failed' || chunk.type === 'response.incomplete') {
+        // Failed/incomplete terminal events may omit output despite earlier deltas.
+        // Only nonempty canonical output supersedes what the caller observed.
+        responseFinished = Array.isArray(chunk.response?.output) && chunk.response.output.length > 0;
+        if (output) {
+          terminalResponse = chunk.response;
+          instrumentation.response(span, terminalResponse, operation, true, hideErrorDetails);
+        }
       }
       if (output && operation === 'responses' && Number.isInteger(chunk.output_index) && chunk.output_index >= 0 && chunk.output_index < 128) {
         const index = chunk.output_index;
@@ -260,8 +288,10 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     const end = () => {
       if (ended) return;
       ended = true;
-      if (choices.size) instrumentation.response(span, { choices: [...choices.values()].sort((a, b) => a.index - b.index) }, operation, output);
-      if (responseItems.size && !responseCompleted) instrumentation.response(span, { output: [...responseItems.entries()].sort(([a], [b]) => a - b).map(([, item]) => item) }, operation, output);
+      if (choices.size) instrumentation.response(span, { choices: [...choices.values()].sort((a, b) => a.index - b.index) }, operation, output, hideErrorDetails);
+      // Preserve terminal status/error/usage alongside partial output; the same
+      // response mapper applies error-detail masking without changing SDK events.
+      if (responseItems.size && !responseFinished) instrumentation.response(span, { ...terminalResponse, output: [...responseItems.entries()].sort(([a], [b]) => a - b).map(([, item]) => item) }, operation, output, hideErrorDetails);
       span.end();
     };
     return new Proxy(stream, {
@@ -300,6 +330,16 @@ export class PortkeyInstrumentation extends InstrumentationBase {
   }
 }
 
+function effectiveRequestBody(args: any[]): any {
+  // Object spread copies only own enumerable properties. In particular an
+  // explicitly undefined/null body still replaces args[0]; an inherited body
+  // does not. Never spread the rest of the options into telemetry.
+  const options = args[2];
+  return options != null && Object.prototype.propertyIsEnumerable.call(options, 'body')
+    ? options.body
+    : args[0];
+}
+
 function responseMessages(items: any[]): Record<string, unknown>[] {
   if (!Array.isArray(items)) return [];
   return items.flatMap<Record<string, unknown>>(item => {
@@ -321,7 +361,7 @@ function recordError(span: Span, error: unknown): void {
 }
 
 /** Preserve then/catch/finally, withResponse(), and asResponse() without a second request. */
-function observePromise(promise: any, finish: (result: any) => any, fail: (error: unknown) => never): any {
+function observePromise(promise: any, finish: (result: any) => any, fail: (error: unknown) => never, eager: boolean): any {
   let parsed: Promise<any> | undefined;
   let mode: 'parsed' | 'raw' | undefined;
   const getParsed = () => {
@@ -332,6 +372,10 @@ function observePromise(promise: any, finish: (result: any) => any, fail: (error
     }
     return parsed;
   };
+  // Observe once independently of the caller. Handle our internal rejection
+  // without replacing `parsed`: a later await/catch must still get the original
+  // SDK error, while an ignored request must not create an orphan rejection.
+  if (eager) void getParsed().catch(() => {});
   return new Proxy(promise, {
     get(target, key) {
       if (key === 'then' || key === 'catch' || key === 'finally') return (...args: any[]) => (getParsed()[key] as Function)(...args);

@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        guardrails: ['0.5.0', '0.11.0']
+        guardrails: ['0.5.0', '0.6.0', '0.7.0', '0.10.0', '0.11.0']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +33,17 @@ jobs:
           "$RUNNER_TEMP/guardrails-venv/bin/pip" install -e python/frameworks/guardrails \
             "guardrails-ai==${{ matrix.guardrails }}" \
             pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+          # Guardrails 0.6 imports pkg_resources without declaring setuptools.
+          if [ "${{ matrix.guardrails }}" = "0.6.0" ]; then
+            "$RUNNER_TEMP/guardrails-venv/bin/pip" install setuptools==80.9.0
+          fi
+      - name: Report known upstream limitation
+        if: matrix.guardrails == '0.7.0' || matrix.guardrails == '0.11.0'
+        run: |
+          echo "::warning::guardrails-ai==${{ matrix.guardrails }}: early-closed AsyncGuard streams can leave the wrong parent context, also without traceAI. The suite below does not cover continued-task parentage after native early close. See https://github.com/future-agi/traceAI/blob/${{ github.sha }}/python/frameworks/guardrails/README.md#known-limitations"
+          # Do not mark the whole package known-broken: its existing tests pass.
+          # python-tests-known-broken.txt applies to failing suites and rejects
+          # unexpected passes; listing this package would also mask other failures.
       - name: Test with external networking disabled
         run: |
           mkdir -p "$RUNNER_TEMP/guardrails-home"

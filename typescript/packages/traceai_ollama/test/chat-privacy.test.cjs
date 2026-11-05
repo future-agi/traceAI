@@ -92,10 +92,15 @@ for (const stream of [false, true]) {
         } else {
           for (const secret of secrets) assert.ok(!wire.includes(secret), `${name}: OTLP wire leaked ${secret}`);
         }
-        assert.deepEqual(JSON.parse(attrs[S.LLM_INVOCATION_PARAMETERS]), {
-          model: 'offline-model', stream, keep_alive: '5m',
-          options: { temperature: 0.2, num_predict: 12, use_mmap: true },
-        }, 'invocation parameters contain only typed, content-free tuning values, even when input is visible');
+        if (name.startsWith('visible')) {
+          assert.deepEqual(JSON.parse(attrs[S.LLM_INVOCATION_PARAMETERS]), {
+            model: 'offline-model', stream, keep_alive: '5m',
+            options: { temperature: 0.2, num_predict: 12, use_mmap: true },
+          }, 'invocation parameters contain only typed, content-free tuning values, even when input is visible');
+        } else {
+          // Shared core hides opaque request parameters: arbitrary fields can copy private inputs.
+          assert.equal(attrs[S.LLM_INVOCATION_PARAMETERS], '__REDACTED__', 'input hiding redacts opaque invocation parameters');
+        }
       } finally {
         instrumentation.disable();
         await provider.shutdown();
