@@ -1,0 +1,3 @@
+traceAI-azure-openai
+openai
+fi-instrumentation-otel
