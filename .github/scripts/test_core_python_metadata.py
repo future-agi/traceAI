@@ -2,8 +2,9 @@
 
 The Python CI Plan job runs these standard-library-only checks before installing
 packages. EvalTag uses PEP 604 unions at runtime, so Python 3.9 cannot import core.
-The ceiling must admit the newest AWS Lambda Python runtimes (python3.14 and
-python3.15); a lower cap makes pip refuse to install LambdaTracer there.
+The distribution's ceiling covers core tracing, including Python 3.15.
+Optional evaluation dependencies have their own compatibility matrix and must
+neither lower that ceiling nor silently disappear on newer Python runtimes.
 """
 
 import re
@@ -33,8 +34,16 @@ class CorePythonMetadataTests(unittest.TestCase):
             "Programming Language :: Python :: 3.10", self.poetry["classifiers"]
         )
 
-    def test_python_ceiling_admits_current_lambda_runtimes(self):
+    def test_python_ceiling_matches_core_qualification(self):
         self.assertRegex(self.poetry["dependencies"]["python"], r",<3\.16$")
+
+    def test_evaluation_stays_optional_without_runtime_omission(self):
+        for name in ("futureagi", "ai-evaluation"):
+            dependency = self.poetry["dependencies"][name]
+            self.assertTrue(dependency["optional"])
+            self.assertNotIn("python", dependency)
+            self.assertNotIn("markers", dependency)
+            self.assertIn(name, self.poetry["extras"]["evaluation"])
 
     def test_classifiers_match_the_declared_range(self):
         minors = sorted(
