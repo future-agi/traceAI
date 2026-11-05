@@ -1322,6 +1322,9 @@ importers:
       '@langchain/openai':
         specifier: 0.3.16
         version: 0.3.16(@langchain/core@0.3.56(openai@4.98.0(ws@8.22.0)(zod@3.24.4)))(ws@8.22.0)
+      '@opentelemetry/context-async-hooks':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: ^0.50.0
         version: 0.50.0(@opentelemetry/api@1.9.0)
