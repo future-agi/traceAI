@@ -1,0 +1,42 @@
+{
+  "example.com/SDK/v2": {
+    "latest_go_mod": "module example.com/SDK/v2\n\ngo 1.23\nretract (\n v2.1.0 // broken\n [v2.2.0, v2.2.2]\n)\n",
+    "versions": [
+      {
+        "Version": "v2.0.0",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.1.0",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.2.0",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.2.1",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.2.2",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.3.0-rc.1",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      },
+      {
+        "Version": "v2.3.0",
+        "Time": "2026-10-01T00:00:00Z",
+        "go_mod": "module example.com/SDK/v2\ngo 1.23\n"
+      }
+    ]
+  }
+}
