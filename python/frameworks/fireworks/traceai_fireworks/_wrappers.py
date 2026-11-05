@@ -128,8 +128,19 @@ def _get_input_attributes(
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
 
+    # Resolve SDK types only at the request boundary; package import must stay
+    # usable without OpenAI. Never infer omission from names, equality or hooks.
+    from openai import _types as sdk_types
+
+    omission_types = tuple(
+        kind for name in ("NotGiven", "Omit")
+        if (kind := getattr(sdk_types, name, None)) is not None
+    )
+    kwargs = {k: v for k, v in kwargs.items()
+              if not any(type(v) is kind for kind in omission_types)}
     if ChatInput is not None and any((config.hide_inputs, config.hide_input_messages,
-                                      config.hide_input_text, config.hide_input_images)):
+                                      config.hide_input_text, config.hide_input_images,
+                                      config.pii_redaction)):
         # Pass the ORIGINAL typed input, not a previously sanitized string.
         # Core applies policy independently for this copy and at the span setter.
         raw_input = {"model": model}
@@ -139,6 +150,7 @@ def _get_input_attributes(
         structured = ChatInput(raw_input)
         attributes[SpanAttributes.INPUT_VALUE] = structured
         telemetry = ChatInput.masked(structured, config)
+        invocation_params = None
         if telemetry is not None:
             for i, message in enumerate(telemetry.get("messages", [])):
                 prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
@@ -147,8 +159,10 @@ def _get_input_attributes(
                     content = message["content"]
                     attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
             invocation_params = {k: v for k, v in telemetry.items() if k not in ("model", "messages")}
-            if invocation_params:
-                attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
+        elif config.hide_input_messages:
+            invocation_params = ChatInput.masked_invocation_parameters(structured, config)
+        if invocation_params:
+            attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
         return attributes
 
     # Add invocation parameters

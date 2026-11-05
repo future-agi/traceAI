@@ -10,6 +10,8 @@ import json
 import math
 from typing import TYPE_CHECKING, Any, Optional
 
+from .pii_redaction import redact_pii_in_string
+
 if TYPE_CHECKING:
     from .config import TraceConfig
 
@@ -75,12 +77,15 @@ def _content(value: Any, config: "TraceConfig") -> Any:
                 url, detail = image.get("url"), image.get("detail")
             else:
                 raise ValueError("invalid image content")
-            if type(url) is not str or not url.startswith(("https://", "http://", "data:image/")):
+            if type(url) is not str:
+                raise ValueError("invalid image reference")
+            prefix = url[:11].lower()
+            if not prefix.startswith(("https://", "http://", "data:image/")):
                 raise ValueError("invalid image reference")
             if detail is not None and (type(detail) is not str or detail not in ("auto", "low", "high")):
                 raise ValueError("invalid image detail")
             hidden = config.hide_input_images or (
-                url.startswith("data:image/") and "base64" in url
+                prefix == "data:image/" and "base64" in url
                 and len(url) > config.base64_image_max_length
             )
             if hidden:
@@ -96,6 +101,55 @@ def _content(value: Any, config: "TraceConfig") -> Any:
             # Never trust a caller-supplied modality label we do not understand.
             result.append(_REDACTED)
     return result
+
+
+def _parameters(payload: dict, config: "TraceConfig", budget: list) -> dict:
+    result = {}
+    if config.hide_inputs or config.hide_llm_invocation_parameters:
+        return result
+    for key in (_NUMBERS | _BOOLEANS | _TEXT | _OPAQUE) & payload.keys():
+        value = payload[key]
+        if value is None:
+            continue
+        if key in _NUMBERS:
+            if type(value) not in (int, float) or (type(value) is float and not math.isfinite(value)):
+                raise ValueError("invalid numeric parameter")
+            result[key] = value
+        elif key in _BOOLEANS:
+            if type(value) is not bool:
+                raise ValueError("invalid boolean parameter")
+            result[key] = value
+        elif key in _TEXT:
+            if config.hide_input_text:
+                result[key] = _REDACTED
+            elif type(value) is str:
+                result[key] = value
+            elif type(value) is list:
+                # Check the shared allowance before ANY scan, iteration or copy.
+                # The container and every string leaf each consume one node.
+                if len(value) + 1 > budget[0]:
+                    raise ValueError("chat input exceeds copy limits")
+                copied = _passive(value, budget)
+                if not all(type(item) is str for item in copied):
+                    raise ValueError("invalid text parameter")
+                result[key] = copied
+            else:
+                raise ValueError("invalid text parameter")
+        else:
+            result[key] = (_REDACTED if config.hide_input_messages or config.hide_input_text or config.hide_input_images
+                           else _passive(value, budget))
+    return result
+
+
+def _redact_validated_leaves(value: Any) -> Any:
+    """Scan only the validated, detached built-ins, before JSON/str escaping."""
+    if type(value) is str:
+        return redact_pii_in_string(value)
+    if type(value) is list:
+        return [_redact_validated_leaves(item) for item in value]
+    if type(value) is dict:
+        return {key: _redact_validated_leaves(item) for key, item in value.items()}
+    return value
 
 
 class ChatInput:
@@ -149,32 +203,26 @@ class ChatInput:
                             copy[key] = (_REDACTED if config.hide_input_text or config.hide_input_images
                                          else _passive(message[key], budget))
                     result["messages"].append(copy)
-            if not config.hide_llm_invocation_parameters:
-                for key in (_NUMBERS | _BOOLEANS | _TEXT | _OPAQUE) & payload.keys():
-                    value = payload[key]
-                    if value is None:
-                        continue
-                    if key in _NUMBERS:
-                        if type(value) not in (int, float) or (type(value) is float and not math.isfinite(value)):
-                            return None
-                        result[key] = value
-                    elif key in _BOOLEANS:
-                        if type(value) is not bool:
-                            return None
-                        result[key] = value
-                    elif key in _TEXT:
-                        if config.hide_input_text:
-                            result[key] = _REDACTED
-                        elif type(value) is str:
-                            result[key] = value
-                        elif type(value) is list and all(type(item) is str for item in value):
-                            result[key] = list(value)
-                        else:
-                            return None
-                    else:
-                        result[key] = (_REDACTED if config.hide_input_text or config.hide_input_images
-                                       else _passive(value, budget))
-            return result
+            result.update(_parameters(payload, config, budget))
+            return _redact_validated_leaves(result) if config.pii_redaction else result
+        except (AttributeError, ValueError, RecursionError):
+            return None
+
+    def masked_invocation_parameters(self, config: "TraceConfig") -> Optional[dict]:
+        """Independently allowed parameters, without inspecting hidden messages.
+
+        Uses the same strict validator and actual policy as the input projection.
+        Message hiding does not hide typed invocation metadata, but opaque fields
+        that could duplicate message/tool content are still redacted.
+        """
+        if config.hide_inputs or config.hide_llm_invocation_parameters:
+            return None
+        try:
+            payload = object.__getattribute__(self, "_payload")
+            if not _object(payload):
+                return None
+            result = _parameters(payload, config, [10000])
+            return _redact_validated_leaves(result) if config.pii_redaction else result
         except (AttributeError, ValueError, RecursionError):
             return None
 
