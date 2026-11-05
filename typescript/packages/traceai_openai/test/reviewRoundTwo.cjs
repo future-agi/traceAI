@@ -58,11 +58,17 @@ function noMarker(marker) {
     'synthetic private content must be absent from every attribute');
 }
 function checkInput(marker, flag) {
-  if (flag) noMarker(marker);
-  else assert.ok(span().attributes['raw.input'].includes(marker), 'capture-enabled control');
-  const parameters = JSON.parse(span().attributes['gen_ai.request.parameters']);
-  assert.ok(!JSON.stringify(parameters).includes(marker), 'input content is not invocation metadata');
-  assert.ok(parameters.model, 'ordinary request metadata remains available');
+  const attrs = span().attributes;
+  assert.ok(attrs['gen_ai.request.model'], 'separately recorded model metadata remains available');
+  if (flag) {
+    noMarker(marker);
+    assert.equal(attrs['gen_ai.request.parameters'], '__REDACTED__', 'opaque invocation parameters are input content');
+  } else {
+    assert.ok(attrs['raw.input'].includes(marker), 'capture-enabled control');
+    const parameters = JSON.parse(attrs['gen_ai.request.parameters']);
+    assert.ok(!JSON.stringify(parameters).includes(marker), 'input content is not invocation metadata');
+    assert.equal(parameters.model, attrs['gen_ai.request.model']);
+  }
 }
 for (const route of ['chat', 'completions', ...(OpenAI.Responses ? ['responses'] : [])]) {
   test(`${route}: nonstream response preserves requested alias`, async () => {
