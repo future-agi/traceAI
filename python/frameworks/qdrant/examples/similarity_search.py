@@ -4,17 +4,15 @@ Similarity Search Example with Qdrant
 This example demonstrates vector similarity search using Qdrant with tracing.
 
 Prerequisites:
-    pip install traceai-qdrant qdrant-client
+    pip install traceai-qdrant "qdrant-client>=1.10.1"
 
 Environment variables:
-    QDRANT_URL: Your Qdrant server URL (default: http://localhost:6333)
-    FI_API_KEY: Your Future AGI API key (optional)
-    FI_SECRET_KEY: Your Future AGI secret key (optional)
+    FI_API_KEY: Your Future AGI API key
+    FI_SECRET_KEY: Your Future AGI secret key
 """
 
-import os
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, RecommendInput, RecommendQuery
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_qdrant import QdrantInstrumentor
@@ -93,9 +91,9 @@ def search(query: str, limit: int = 5, score_threshold: float = 0.0) -> list[dic
     query_vector = generate_fake_embedding(query)
 
     # Search (traced)
-    results = client.search(
+    results = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
+        query=query_vector,
         limit=limit,
         score_threshold=score_threshold,
         with_payload=True,
@@ -108,7 +106,7 @@ def search(query: str, limit: int = 5, score_threshold: float = 0.0) -> list[dic
             "text": r.payload.get("text", ""),
             "category": r.payload.get("category", ""),
         }
-        for r in results
+        for r in results.points
     ]
 
 
@@ -119,9 +117,9 @@ def search_with_filter(query: str, category: str, limit: int = 5) -> list[dict]:
     query_vector = generate_fake_embedding(query)
 
     # Search with filter (traced)
-    results = client.search(
+    results = client.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
+        query=query_vector,
         limit=limit,
         query_filter=Filter(
             must=[
@@ -138,17 +136,18 @@ def search_with_filter(query: str, category: str, limit: int = 5) -> list[dict]:
             "text": r.payload.get("text", ""),
             "category": r.payload.get("category", ""),
         }
-        for r in results
+        for r in results.points
     ]
 
 
 def recommend(positive_ids: list[int], negative_ids: list[int] = None, limit: int = 5) -> list[dict]:
     """Get recommendations based on positive and negative examples."""
     # Recommend (traced)
-    results = client.recommend(
+    results = client.query_points(
         collection_name=COLLECTION_NAME,
-        positive=positive_ids,
-        negative=negative_ids or [],
+        query=RecommendQuery(recommend=RecommendInput(
+            positive=positive_ids, negative=negative_ids or [],
+        )),
         limit=limit,
         with_payload=True,
     )
@@ -159,7 +158,7 @@ def recommend(positive_ids: list[int], negative_ids: list[int] = None, limit: in
             "score": r.score,
             "text": r.payload.get("text", ""),
         }
-        for r in results
+        for r in results.points
     ]
 
 
