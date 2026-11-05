@@ -116,6 +116,7 @@ def _shared_instrumentor_enabled() -> bool:
 _SDK_PLAIN_NODES = 10000  # same allowance as core's ChatInput copy budget
 _type_mro = type.__dict__["__mro__"].__get__
 _type_dict = type.__dict__["__dict__"].__get__
+_type_name = type.__dict__["__name__"].__get__
 
 
 class _OverBudget(Exception):
@@ -137,7 +138,9 @@ def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
         if not found_base:
             return False
         namespace = _type_dict(kind)
-        module_name, class_name = namespace.get("__module__"), namespace.get("__name__")
+        module_name = namespace.get("__module__")
+        # __name__ is stored in type's native slot, not the class namespace.
+        class_name = _type_name(kind)
         if (type(module_name) is not str or not module_name.startswith("openai.")
                 or type(class_name) is not str):
             return False
