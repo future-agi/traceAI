@@ -15,6 +15,7 @@ const { OTLPTraceExporter } = pr('@opentelemetry/exporter-trace-otlp-http');
 const { trace } = pr('@opentelemetry/api');
 const { GoogleADKSpanExporter, recordGoogleADKModelError } = pr(packagePath);
 const toolError = mode.startsWith('tool-error');
+const toolUsage = mode.startsWith('tool-usage');
 const providerError = mode.startsWith('provider-error');
 const streaming = mode.includes('stream');
 const outputModality = mode.startsWith('audio-output') ? 'AUDIO' : mode.startsWith('image-output') ? 'IMAGE' : undefined;
@@ -23,7 +24,12 @@ const captureContent = toolError || mode.endsWith('-capture');
 const audioData = Buffer.from('SYNTHETIC_AUDIO').toString('base64');
 const outputData = Buffer.from('SYNTHETIC_OUTPUT_MEDIA').toString('base64');
 const modelName = outputModality === 'AUDIO' ? 'gemini-2.5-flash-preview-tts' : outputModality === 'IMAGE' ? 'gemini-2.5-flash-image' : 'gemini-2.5-flash';
-const usage = outputModality
+const usage = toolUsage
+  ? { promptTokenCount: 100, cachedContentTokenCount: 40, toolUsePromptTokenCount: 300,
+      candidatesTokenCount: 20, thoughtsTokenCount: 10, totalTokenCount: 430,
+      promptTokensDetails: [{ modality: 'TEXT', tokenCount: 100 }],
+      toolUsePromptTokensDetails: [{ modality: 'TEXT', tokenCount: 300 }] }
+  : outputModality
   ? { promptTokenCount: 100, cachedContentTokenCount: 40, candidatesTokenCount: 14, thoughtsTokenCount: 4, totalTokenCount: 118,
       candidatesTokensDetails: [{ modality: outputModality, tokenCount: 6 }, { modality: outputModality, tokenCount: 8 }] }
   : audio
@@ -76,7 +82,7 @@ async function main() {
   if (mode === 'tool-error-hide') process.env.FI_HIDE_ERROR_DETAILS = 'true';
   else delete process.env.FI_HIDE_ERROR_DETAILS;
   if (privacyFlag) {
-    assert(['FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT', 'FI_PII_REDACTION'].includes(privacyFlag));
+    assert(['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT', 'FI_HIDE_OUTPUTS', 'FI_HIDE_OUTPUT_MESSAGES', 'FI_HIDE_OUTPUT_TEXT', 'FI_PII_REDACTION'].includes(privacyFlag));
     process.env[privacyFlag] = 'true';
   }
   const raw = new InMemorySpanExporter();
@@ -96,7 +102,7 @@ async function main() {
     }
     const originalRun = adk.BaseAgent.prototype.runAsync;
     const tool = new adk.FunctionTool({ name: 'echo', description: 'Synthetic tool', execute: async () => { throw new Error('PRIVATE_TOOL_ERROR'); } });
-    const agent = new adk.LlmAgent({ name: 'http_agent', model: modelName, tools: toolError ? [tool] : [],
+    const agent = new adk.LlmAgent({ name: 'http_agent', model: modelName, tools: toolError ? [tool] : toolUsage ? [adk.GOOGLE_SEARCH] : [],
       ...(outputModality ? { generateContentConfig: { responseModalities: outputModality === 'AUDIO' ? ['AUDIO'] : ['TEXT', 'IMAGE'] } } : {}) });
     // Redirect only the transport, not model.generateContentAsync or Runner.
     const model = agent.canonicalModel;
@@ -133,6 +139,26 @@ async function main() {
       assert(!exported.includes(audioData), 'audio payload stays private');
       assert(!exported.includes(outputData), 'output media stays private');
       assert(llms.every(s => attrs(s)['input.value'] === undefined && attrs(s)['output.value'] === undefined));
+    }
+    if (toolUsage) {
+      assert.equal(calls, 1);
+      assert(requests[0].body.tools.some(tool => tool.googleSearch), 'real GenAI client enabled built-in search');
+      assert.equal(requests[0].path.includes('streamGenerateContent'), streaming);
+      const native = raw.getFinishedSpans().find(s => s.name === 'call_llm');
+      assert.deepEqual(JSON.parse(native.attributes['gcp.vertex.agent.llm_response']).usageMetadata, usage);
+      assert(events.some(e => e.usageMetadata?.toolUsePromptTokenCount === 300));
+      if (captureContent) {
+        for (const direction of ['input', 'output']) {
+          const hidden = privacyFlag === `FI_HIDE_${direction.toUpperCase()}S`
+            || privacyFlag === `FI_HIDE_${direction.toUpperCase()}_MESSAGES`;
+          const hiddenText = privacyFlag === `FI_HIDE_${direction.toUpperCase()}_TEXT`;
+          const value = attrs(llms[0])[`${direction}.value`];
+          if (hidden) assert.equal(value, '__REDACTED__');
+          else if (hiddenText) assert(!value.includes('PRIVATE_'));
+          else assert(value.includes('PRIVATE_'), 'content capture remains active');
+        }
+      }
+      assert(llms.every(s => !Object.keys(attrs(s)).some(key => /cost|price/.test(key))), 'counts do not invent pricing');
     }
     if (audio) {
       assert(requests.some(r => r.body.contents.some(c => c.parts.some(p => p.inlineData?.data === audioData))), 'real GenAI client sent audio');
@@ -173,7 +199,12 @@ async function main() {
     } else {
       assert.equal(llms.length, toolError ? 2 : 1);
       for (const span of llms) {
-        assert.equal(attrs(span)['gen_ai.usage.input_tokens'], 100);
+        assert.equal(attrs(span)['gen_ai.usage.input_tokens'], toolUsage ? 400 : 100,
+          'input includes tool prompts once, not cache/modality subsets or repeated SSE summaries');
+        if (toolUsage) {
+          const wire = span.attributes.find(a => a.key === 'gen_ai.usage.input_tokens').value;
+          assert(wire.intValue !== undefined || wire.doubleValue !== undefined, 'input usage is numeric on the wire');
+        }
         assert.equal(attrs(span)['gen_ai.usage.cache_read_tokens'], usage.cachedContentTokenCount);
         assert.equal(attrs(span)['gen_ai.usage.output_tokens'], usage.candidatesTokenCount + usage.thoughtsTokenCount);
         assert.equal(attrs(span)['gen_ai.usage.total_tokens'], usage.totalTokenCount);

@@ -274,6 +274,60 @@ for (const captureContent of [false, true]) {
   }
 }
 
+for (const captureContent of [false, true]) {
+  test(`provider-side tool prompts contribute once to input tokens (captureContent=${captureContent})`, async () => {
+    const c = collect({captureContent});
+    const cases = [
+      ['reported tool prompts', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, 100, 400],
+      ['already-combined native summary', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, 400, 400],
+      ['no native summary', {promptTokenCount: 100, toolUsePromptTokenCount: 300}, undefined, 400],
+      ['explicit zero tool prompts', {promptTokenCount: 100, toolUsePromptTokenCount: 0}, 100, 100],
+      ['explicit zero prompt', {promptTokenCount: 0, toolUsePromptTokenCount: 300}, 0, 300],
+      ['both zero', {promptTokenCount: 0, toolUsePromptTokenCount: 0}, 0, 0],
+      ['missing tool count', {promptTokenCount: 100}, 100, 100],
+      ['missing prompt count', {toolUsePromptTokenCount: 300}, undefined, undefined],
+      ['missing prompt with native summary', {toolUsePromptTokenCount: 300}, 100, undefined],
+      ['missing both counts', {}, undefined, undefined],
+      ['native-only summary remains available', {}, 100, 100],
+      ['maximum safe sum', {promptTokenCount: Number.MAX_SAFE_INTEGER - 1, toolUsePromptTokenCount: 1}, undefined, Number.MAX_SAFE_INTEGER],
+      ['overflowing sum', {promptTokenCount: Number.MAX_SAFE_INTEGER, toolUsePromptTokenCount: 1}, 100, undefined],
+      ...[-1, '300', null, true, 1.5, Number.MAX_VALUE].flatMap(value => [
+        [`invalid tool count ${value}`, {promptTokenCount: 100, toolUsePromptTokenCount: value}, 100, undefined],
+        [`invalid prompt count ${value}`, {promptTokenCount: value, toolUsePromptTokenCount: 300}, 100, undefined],
+      ]),
+    ];
+    try {
+      for (const [, counts, nativeInput] of cases) {
+        c.tracer.startSpan('call_llm', {attributes: {
+          'gen_ai.request.model': 'unknown-price-model',
+          ...(nativeInput === undefined ? {} : {'gen_ai.usage.input_tokens': nativeInput}),
+          'gcp.vertex.agent.llm_response': JSON.stringify({usageMetadata: {
+            ...counts, cachedContentTokenCount: 40,
+            promptTokensDetails: [{modality: 'TEXT', tokenCount: 100}],
+            toolUsePromptTokensDetails: [{modality: 'TEXT', tokenCount: 300}],
+          }}),
+        }}).end();
+      }
+      c.tracer.startSpan('call_llm', {attributes: {
+        'gen_ai.usage.input_tokens': 100,
+        'gcp.vertex.agent.llm_response': '{"usageMetadata":{"promptTokenCount":100,"toolUsePromptTokenCount":1e400}}',
+      }}).end();
+      await c.provider.forceFlush();
+      for (let i = 0; i < cases.length; i++) {
+        const a = c.spans[i].attributes;
+        assert.equal(a['gen_ai.usage.input_tokens'], cases[i][3], cases[i][0]);
+        assert.equal(a['gen_ai.usage.cache_read_tokens'], 40, 'cache is a subset, never added or subtracted');
+        assert.equal(a['gen_ai.usage.total_tokens'], undefined, 'no inferred overall total');
+        assert.equal(a['gen_ai.usage.output_tokens'], undefined);
+        assert(!Object.keys(a).some(key => /cost|price/.test(key)), 'unknown prices remain unknown');
+        assert.equal(a['gcp.vertex.agent.llm_response'], undefined);
+        assert.equal(a['output.value'] !== undefined, captureContent);
+      }
+      assert.equal(c.spans.at(-1).attributes['gen_ai.usage.input_tokens'], undefined, 'nonfinite input is rejected');
+    } finally { await c.provider.shutdown(); }
+  });
+}
+
 test('reported cache reads are independent of content capture and never subtracted from prompt totals', async () => {
   for (const captureContent of [false, true]) {
     const c = collect({captureContent});

@@ -86,7 +86,6 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     const usage = response?.usageMetadata as Record<string, unknown> | undefined;
     const candidates = count(usage?.candidatesTokenCount);
     const thoughts = count(usage?.thoughtsTokenCount);
-    const prompt = count(usage?.promptTokenCount);
     const total = count(usage?.totalTokenCount);
     const cached = count(usage?.cachedContentTokenCount);
     // Media has distinct pricing. Extract only reported modality counts before
@@ -99,7 +98,20 @@ function translate(span: ReadableSpan, options: GoogleADKNativeOptions, config: 
     if (outputImage !== undefined) attributes["gen_ai.usage.output_tokens.image"] = outputImage;
     // Cached input is a subset of promptTokenCount, not additional input.
     if (cached !== undefined) attributes["gen_ai.usage.cache_read_tokens"] = cached;
-    if (prompt !== undefined) attributes["gen_ai.usage.input_tokens"] = prompt;
+    // Provider-side tool prompts are additional input; cache/modality details
+    // and the native input attribute are summaries, not additional counts.
+    if (usage?.promptTokenCount !== undefined || usage?.toolUsePromptTokenCount !== undefined) {
+      const prompt = count(usage?.promptTokenCount);
+      const toolPrompt = usage?.toolUsePromptTokenCount === undefined ? 0 : count(usage.toolUsePromptTokenCount);
+      // Do not retain a prompt-only native summary as a complete input count
+      // when a reported component is invalid, missing or overflows the sum.
+      delete attributes["gen_ai.usage.input_tokens"];
+      if (prompt !== undefined && toolPrompt !== undefined &&
+          Number.isSafeInteger(prompt) && Number.isSafeInteger(toolPrompt) &&
+          Number.isSafeInteger(prompt + toolPrompt)) {
+        attributes["gen_ai.usage.input_tokens"] = prompt + toolPrompt;
+      }
+    }
     if (candidates !== undefined) attributes["gen_ai.usage.output_tokens"] = candidates + (thoughts ?? 0);
     if (thoughts !== undefined) attributes["gen_ai.usage.output_tokens.reasoning"] = thoughts;
     // Never invent a total when upstream omitted it (e.g. content disabled).
