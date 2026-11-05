@@ -110,18 +110,34 @@ switches, with the same names and defaults as Python, turn it off:
 
 | Variable | Effect |
 |---|---|
-| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; input messages (system instruction, prompts, function calls and function responses in the history) are dropped |
-| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; output messages (answer text, function-call arguments) are dropped |
-| `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | drop `gen_ai.input.messages.*` / `gen_ai.output.messages.*` only |
-| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | redact text in messages and aggregate `input.value` / `output.value`; keep roles and tool data |
+| `FI_HIDE_INPUTS` | `input.value` becomes `__REDACTED__`; drop input messages (including system instruction and tool history), declaration descriptions/schemas, tool selection and grounding evidence |
+| `FI_HIDE_OUTPUTS` | `output.value` becomes `__REDACTED__`; drop output messages (including function-call arguments) and grounding evidence |
+| `FI_HIDE_INPUT_MESSAGES` | drop `gen_ai.input.messages.*`, declaration descriptions/schemas, tool selection and grounding evidence; keep aggregate `input.value` |
+| `FI_HIDE_OUTPUT_MESSAGES` | drop `gen_ai.output.messages.*` and grounding evidence; keep aggregate `output.value` |
+| `FI_HIDE_INPUT_TEXT` | redact text in input messages and aggregate `input.value`; drop declaration descriptions/schemas, tool selection and grounding evidence; keep roles and conversation tool-call data |
+| `FI_HIDE_OUTPUT_TEXT` | redact text in output messages and aggregate `output.value`; drop grounding evidence; keep roles and conversation tool-call data |
 | `FI_HIDE_INPUT_IMAGES` | drop images from input messages and aggregate `input.value` |
-| `FI_HIDE_LLM_INVOCATION_PARAMETERS` | drop `gen_ai.request.parameters` |
+| `FI_HIDE_LLM_INVOCATION_PARAMETERS` | drop `gen_ai.request.parameters`, declaration descriptions/schemas and tool selection; separately exported sampling attributes remain |
 | `FI_HIDE_ERROR_DETAILS` | drop API error messages from attributes and status descriptions; keep ERROR status and error classification |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | redact `data:` images longer than this (default 32000) |
 
 A hide switch is enabled by `true` (any case). `WithTraceConfig(traceaigenai.TraceConfig{...})`
 sets them in code instead. `TraceConfig.SetAttributes` applies the same rules to spans your own
 code starts.
+
+Under input, input-message, input-text or invocation hiding, `gen_ai.tool.definitions.*`
+retains only the declared function name; descriptions and the entire parameter schema are
+omitted. Removing only descriptions is insufficient because property names, enum values,
+defaults and nested schema metadata can also contain customer data. Function names remain
+identifiers, so do not put sensitive content in them. Default capture and explicit `false`
+preserve the declaration's name, description and parameter schema. Tool-selection attributes
+(`gen_ai.request.tool_choice` and `gen_ai.request.builtin_tools`) are omitted under these four
+switches. Privacy filtering changes exported telemetry, never the declarations or requests
+sent to Gemini. Model/provider identity and token usage remain available in every privacy mode.
+
+Grounding evidence (`gen_ai.response.grounding`, including URL retrieval outcomes) is omitted
+under any input/output, message or text hiding switch because it can quote either the prompt
+or answer. Image-only, invocation-only and error-only hiding do not suppress grounding.
 
 When `FI_HIDE_ERROR_DETAILS` is unset or invalid, error details are hidden if any input/output,
 message or text hide switch is enabled. Explicit `true` or `false` overrides that default.
@@ -159,6 +175,21 @@ generated (inline) images are never copied; the transport adds no resource attri
   content and status under the default OpenTelemetry 128-attribute limit, even with many
   turns, parts, calls or candidates. Aggregate `input.value` / `output.value` retain the full
   conversation subject to privacy settings.
+- Tool selection: `gen_ai.request.tool_choice` contains the allow-listed calling mode and at
+  most 32 distinct allowed function names; each name is capped at 512 UTF-8-safe bytes. A
+  `truncated` flag signals omitted names or shortened strings. `gen_ai.request.builtin_tools`
+  lists recognized built-in identities (for example `googleSearch`, `urlContext`, `retrieval`),
+  never their private configuration, search filters, locations or retrieval-store details.
+- Grounding: `gen_ai.response.grounding` is one JSON attribute with candidate indices, web and
+  retrieved-context source URLs/titles, search queries, citations (URI, offsets and license),
+  and URL Context `url_retrievals` (retrieved URL and an allow-listed retrieval status).
+  It retains at most 4 candidates and, per candidate, 16 sources, 8 queries, 16 citations and
+  16 URL/status pairs; each string is capped at 512 UTF-8-safe bytes. Candidate/top-level
+  `truncated` flags identify incomplete evidence. Streaming accumulates distinct evidence
+  across chunks without duplicating cumulative metadata or erasing earlier retrieval outcomes.
+  A URL retrieval failure is evidence about that fetch, not a generation failure: it does not
+  mark an otherwise successful generation span ERROR. Search HTML/blobs, retrieved document
+  text, opaque metadata and grounding-support indices are not captured.
 - `POST .../models/{model}:embedContent` and `:batchEmbedContents`: one `EMBEDDING` span
   with operation `embeddings`, request model, `embedding.model_name`, text inputs using the
   same input attributes as generation, and allow-listed task type/output dimensionality in
