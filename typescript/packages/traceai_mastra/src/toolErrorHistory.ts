@@ -13,6 +13,12 @@ type Failures = { messages: Set<string>; saturated: boolean };
 export class ToolErrorHistory {
   private readonly traces = new Map<string, Failures>();
   private overflow = false;
+  // A continuation has a new trace, but retains the tool-call IDs in native
+  // response.messages. Learn ID + message pairs from the original trace's
+  // request history, where even the oldest SDK includes the call ID. Do not
+  // retain plaintext, or treat the same text from an unrelated call as failure.
+  private readonly continuedCalls = new Set<string>();
+  private continuedOverflow = false;
 
   remember(traceId: string, message: string): void {
     let failures = this.traces.get(traceId);
@@ -27,11 +33,21 @@ export class ToolErrorHistory {
     else failures.messages.add(fingerprint(message));
   }
 
-  matches(traceId: string, message: string): boolean {
+  matches(traceId: string, message: string, toolCallId?: string): boolean {
     const failures = this.traces.get(traceId);
-    return failures
+    const failed = failures
       ? failures.saturated || failures.messages.has(fingerprint(message))
       : this.overflow;
+    if (toolCallId === undefined) return failed;
+    const call = fingerprint(JSON.stringify([toolCallId, message]));
+    if (failed) {
+      if (this.continuedCalls.size < 16384) this.continuedCalls.add(call);
+      else if (!this.continuedCalls.has(call)) this.continuedOverflow = true;
+    }
+    // Never evict a known error while the exporter can still accept a replay.
+    // Saturation conservatively hides ambiguous legacy string tool results;
+    // structured successful results and unrelated user content are unaffected.
+    return failed || this.continuedOverflow || this.continuedCalls.has(call);
   }
 
   forget(traceId: string): void { this.traces.delete(traceId); }
@@ -39,5 +55,7 @@ export class ToolErrorHistory {
   clear(): void {
     this.traces.clear();
     this.overflow = false;
+    this.continuedCalls.clear();
+    this.continuedOverflow = false;
   }
 }

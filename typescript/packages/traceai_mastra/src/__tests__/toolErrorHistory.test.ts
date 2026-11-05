@@ -112,3 +112,63 @@ describe("legacy failed tool provenance", () => {
     expect(history.matches("trace-1024", "safe")).toBe(false);
   });
 });
+
+
+describe("continued native tool history", () => {
+  it("retains only matching call/message pairs across root completion and flush", () => {
+    const history = new ToolErrorHistory();
+    history.remember("first", secret);
+    expect(history.matches("first", secret, "failed-call")).toBe(true);
+    history.forget("first");
+    expect(history.matches("later", secret, "failed-call")).toBe(true);
+    expect(history.matches("later", secret, "successful-call")).toBe(false);
+    expect(history.matches("later", "safe result", "failed-call")).toBe(false);
+    expect(history.matches("later", secret)).toBe(false);
+    history.clear();
+    expect(history.matches("later", secret, "failed-call")).toBe(false);
+  });
+
+  it("masks untyped legacy native results without losing tool identity or successful output", () => {
+    const history = new ToolErrorHistory();
+    history.remember("first", secret);
+    history.matches("first", secret, "failed-call");
+    history.forget("first");
+    const result = (id: string, value: string) => ({ type: "tool-result", toolCallId: id,
+      toolName: "lookup", output: { type: "text", value } });
+    const prompt = [user, { role: "tool", content: [result("failed-call", secret),
+      result("successful-call", secret), normal] }];
+    const source = span({ prompt });
+    const before = JSON.stringify(source);
+    const masked = sanitizeSpan(source, generateTraceConfig({ hideErrorDetails: true }),
+      (message, id) => history.matches("later", message, id));
+    for (const key of aliases) {
+      expect(JSON.parse(masked.attributes[key] as string).prompt[1].content).toEqual([
+        result("failed-call", REDACTED_VALUE), result("successful-call", secret), normal]);
+    }
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  it("does not retain raw exception text or raw call IDs", () => {
+    const history = new ToolErrorHistory();
+    history.remember("first", secret);
+    history.matches("first", secret, "private-call-id");
+    const state = JSON.stringify(history, (_, value) => value instanceof Set || value instanceof Map ? [...value] : value);
+    expect(state).not.toContain(secret);
+    expect(state).not.toContain("private-call-id");
+  });
+
+  it("bounds continuation history without evicting privacy provenance", () => {
+    const history = new ToolErrorHistory();
+    for (let i = 0; i <= 16384; i++) {
+      history.remember("first", secret);
+      expect(history.matches("first", secret, `call-${i}`)).toBe(true);
+      history.forget("first");
+    }
+    expect(history.matches("later", secret, "call-0")).toBe(true);
+    expect(history.matches("later", secret, "call-16384")).toBe(true);
+    expect(history.matches("later", "ambiguous legacy string", "unknown-call")).toBe(true);
+    expect(history.matches("later", "unrelated text")).toBe(false);
+    history.clear();
+    expect(history.matches("later", secret, "call-16384")).toBe(false);
+  });
+});

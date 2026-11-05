@@ -292,7 +292,7 @@ export class FIMastraSpanExporter extends BaseExporter {
         ...(generationWrapper ? { name: span.name, kind: SpanKind.INTERNAL } : {}),
         ...(modelCall ? { kind: SpanKind.CLIENT } : {}),
         instrumentationScope: { ...otelSpan.instrumentationScope, version: VERSION },
-      }, this.traceConfig, message => this.toolErrors.matches(span.traceId, message)));
+      }, this.traceConfig, (message, toolCallId) => this.toolErrors.matches(span.traceId, message, toolCallId)));
     } catch {
       // Conversion failures can quote sensitive input; do not send it to logs.
       this.logger.error("[@traceai/mastra] Failed to convert or enqueue span");

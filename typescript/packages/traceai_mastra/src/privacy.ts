@@ -143,7 +143,7 @@ function maskProcessorErrorInput(value: AttributeValue): AttributeValue {
 
 // Inspect only framework message envelopes, never arbitrary nested user objects
 // with fields called `error`. Keep tool identity/classification and normal results.
-function maskToolErrorHistory(value: AttributeValue, failedToolMessage: (message: string) => boolean): AttributeValue {
+function maskToolErrorHistory(value: AttributeValue, failedToolMessage: (message: string, toolCallId?: string) => boolean): AttributeValue {
   if (typeof value !== "string") return value;
   try {
     const payload = JSON.parse(value);
@@ -153,13 +153,19 @@ function maskToolErrorHistory(value: AttributeValue, failedToolMessage: (message
       for (const message of items) {
         if (message?.role !== "tool") continue;
         if (typeof message.content === "string" && typeof message.tool_call_id === "string"
-          && failedToolMessage(message.content)) {
+          && failedToolMessage(message.content, message.tool_call_id)) {
           message.content = REDACTED_VALUE;
           changed = true;
         } else if (Array.isArray(message.content)) {
           for (const part of message.content) {
             if (part?.type !== "tool-result") continue;
             if (part.output?.type === "error-text" || part.output?.type === "error-json") {
+              part.output = { ...part.output, value: REDACTED_VALUE };
+              changed = true;
+            } else if (part.output?.type === "text" && typeof part.output.value === "string"
+              && typeof part.toolCallId === "string" && failedToolMessage(part.output.value, part.toolCallId)) {
+              // The supported core floor returns thrown tools as successful-looking
+              // text. Consult provenance, not text heuristics or arbitrary error keys.
               part.output = { ...part.output, value: REDACTED_VALUE };
               changed = true;
             } else if (part.isError === true) {
@@ -182,7 +188,7 @@ function maskToolErrorHistory(value: AttributeValue, failedToolMessage: (message
 }
 
 function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: AttributeValue | undefined,
-  failedToolMessage: (message: string) => boolean): Attributes {
+  failedToolMessage: (message: string, toolCallId?: string) => boolean): Attributes {
   const embedding = spanType === "rag_embedding";
   const masked: Attributes = {};
   for (const [key, value] of Object.entries(attributes)) {
@@ -218,7 +224,7 @@ function maskAttributes(attributes: Attributes, config: TraceConfig, spanType: A
 
 /** Return a sanitized view; never mutate the native span seen by other exporters. */
 export function sanitizeSpan(span: ReadableSpan, config: TraceConfig,
-  failedToolMessage: (message: string) => boolean = () => false): ReadableSpan {
+  failedToolMessage: (message: string, toolCallId?: string) => boolean = () => false): ReadableSpan {
   const spanType = span.attributes["mastra.span.type"];
   const message = span.status.message;
   const status = message == null || config.hideErrorDetails
