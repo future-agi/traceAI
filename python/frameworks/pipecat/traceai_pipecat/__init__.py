@@ -9,6 +9,7 @@ from .exporters import (
     BaseMappedSpanExporter,
     MappedGRPCSpanExporter,
     MappedHTTPSpanExporter,
+    MappedSpanExporter,
 )
 from .integration import (
     create_mapped_grpc_exporter,
@@ -27,6 +28,7 @@ __all__ = [
     "create_mapped_http_exporter",
     "create_mapped_grpc_exporter",
     # Exporters
+    "MappedSpanExporter",
     "MappedHTTPSpanExporter",
     "MappedGRPCSpanExporter",
     "BaseMappedSpanExporter",
