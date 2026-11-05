@@ -90,14 +90,6 @@
         "traceai_bedrock/version.py"
       ]
     },
-    "python/frameworks/beeai": {
-      "release-type": "python",
-      "component": "traceai-beeai",
-      "package-name": "traceai-beeai",
-      "extra-files": [
-        "traceai_beeai/__init__.py"
-      ]
-    },
     "python/frameworks/cerebras": {
       "release-type": "python",
       "component": "traceai-cerebras",

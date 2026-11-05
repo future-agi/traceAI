@@ -44,7 +44,6 @@ SDK_CHOICES = [
     "google_adk",
     "agno",
     "strands",
-    "beeai",
     "claude_agent_sdk",
     # Vector DBs
     "chromadb",
