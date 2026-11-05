@@ -7,10 +7,15 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_guardrails._wrap_guard_call import (
+    _AsyncParseCallableWrapper,
     _AsyncPromptCallableWrapper,
     _ParseCallableWrapper,
     _PostValidationWrapper,
     _PromptCallableWrapper,
+)
+from traceai_guardrails._wrap_stream import (
+    _AsyncStreamParseCallableWrapper,
+    _StreamParseCallableWrapper,
 )
 from traceai_guardrails.version import __version__
 from wrapt import ObjectProxy, wrap_function_wrapper
@@ -41,6 +46,9 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
         "_original_guardrails_llm_providers_call",
         "_original_guardrails_async_llm_providers_call",
         "_original_guardrails_runner_step",
+        "_original_guardrails_async_runner_step",
+        "_original_guardrails_stream_runner_step",
+        "_original_guardrails_async_stream_runner_step",
         "_original_guardrails_validation_after_run",
     )
 
@@ -72,6 +80,29 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                 module=_RUNNER_MODULE,
                 name="Runner.step",
                 wrapper=runner_wrapper,
+            )
+            self._original_guardrails_async_runner_step = (
+                runner_module.AsyncRunner.async_step
+            )
+            wrap_function_wrapper(
+                module=_RUNNER_MODULE,
+                name="AsyncRunner.async_step",
+                wrapper=_AsyncParseCallableWrapper(tracer=self._tracer),
+            )
+
+            self._original_guardrails_stream_runner_step = runner_module.StreamRunner.step
+            wrap_function_wrapper(
+                module=_RUNNER_MODULE,
+                name="StreamRunner.step",
+                wrapper=_StreamParseCallableWrapper(tracer=self._tracer),
+            )
+            self._original_guardrails_async_stream_runner_step = (
+                runner_module.AsyncStreamRunner.async_step
+            )
+            wrap_function_wrapper(
+                module=_RUNNER_MODULE,
+                name="AsyncStreamRunner.async_step",
+                wrapper=_AsyncStreamParseCallableWrapper(tracer=self._tracer),
             )
 
             llm_providers_module = import_module(_LLM_PROVIDERS_MODULE)
@@ -139,6 +170,25 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                 runner_module = import_module(_RUNNER_MODULE)
                 runner_module.Runner.step = self._original_guardrails_runner_step
                 self._original_guardrails_runner_step = None
+
+            if getattr(self, "_original_guardrails_async_runner_step", None) is not None:
+                runner_module = import_module(_RUNNER_MODULE)
+                runner_module.AsyncRunner.async_step = (
+                    self._original_guardrails_async_runner_step
+                )
+                self._original_guardrails_async_runner_step = None
+
+            if getattr(self, "_original_guardrails_stream_runner_step", None) is not None:
+                runner_module = import_module(_RUNNER_MODULE)
+                runner_module.StreamRunner.step = self._original_guardrails_stream_runner_step
+                self._original_guardrails_stream_runner_step = None
+
+            if getattr(self, "_original_guardrails_async_stream_runner_step", None) is not None:
+                runner_module = import_module(_RUNNER_MODULE)
+                runner_module.AsyncStreamRunner.async_step = (
+                    self._original_guardrails_async_stream_runner_step
+                )
+                self._original_guardrails_async_stream_runner_step = None
 
             if (
                 hasattr(self, "_original_guardrails_validation_after_run")
