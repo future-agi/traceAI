@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 import requests
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider as SDKTracerProvider
+OTelTracerProvider = SDKTracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
@@ -184,6 +185,27 @@ class TestExporterTuning:
         if traces_timeout is not None:
             monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", traces_timeout)
         assert_http_export_timeout(SimpleSpanProcessor(), 19 if traces_timeout else 17)
+
+    @pytest.mark.parametrize("processor_type", [BatchSpanProcessor, SimpleSpanProcessor])
+    @pytest.mark.parametrize("timeout", [7, 42, None])
+    def test_timeout_reaches_http_request(self, processor_type, timeout, clean_exporter_env):
+        """Observe transport behavior, not private exporter/client storage layout."""
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        # Patch the actual transport so this test cannot contact a collector.
+        with patch.object(requests.Session, "send", return_value=response) as send:
+            provider = OTelTracerProvider()
+            provider.add_span_processor(processor_type(timeout=timeout))
+            try:
+                provider.get_tracer("timeout-contract").start_span("synthetic").end()
+                assert provider.force_flush()
+            finally:
+                provider.shutdown()
+        send.assert_called_once()
+        expected = timeout if timeout is not None else 10
+        # OTel subtracts encoding/elapsed time from the deadline before sending.
+        assert send.call_args.kwargs["timeout"] == pytest.approx(expected, abs=1)
 
     def test_prebuilt_span_exporter_is_used_as_is(self):
         """A caller-supplied exporter is used verbatim; timeout ignored."""

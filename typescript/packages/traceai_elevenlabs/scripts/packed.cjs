@@ -1,8 +1,8 @@
-// Stage 1 installs published dependencies; stage 2 runs with loopback-only networking.
+// Stage 1 installs packed artifacts plus published external dependencies; stage 2 is loopback-only.
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const [stage, directory, tarball] = process.argv.slice(2);
+const [stage, directory, tarball, coreTarball] = process.argv.slice(2);
 const root = path.resolve(__dirname, "..");
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -27,7 +27,7 @@ if (stage === "prepare") {
   const dependencies = {
     ...pkg.devDependencies,
     "@traceai/elevenlabs": path.resolve(tarball),
-    "@traceai/fi-core": "^1.1.0",
+    "@traceai/fi-core": coreTarball ? path.resolve(coreTarball) : "^1.1.0",
     "@traceai/fi-semantic-conventions": "^1.0.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",
@@ -109,5 +109,5 @@ if (stage === "prepare") {
   });
 } else
   throw new Error(
-    "Use prepare <empty-directory> <tarball>, then test <directory>",
+    "Use prepare <empty-directory> <tarball> [core-tarball], then test <directory>",
   );

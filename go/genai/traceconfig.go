@@ -1,6 +1,7 @@
 package traceaigenai
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -36,7 +37,9 @@ const (
 // TraceConfig decides which content attributes leave the process. The zero
 // value captures everything, like DEFAULT_HIDE_* = False in Python traceAI.
 type TraceConfig struct {
-	// HideLLMInvocationParameters drops gen_ai.request.parameters.
+	// HideLLMInvocationParameters drops gen_ai.request.parameters, tool_choice
+	// and builtin_tools, and reduces tool declarations to function names only.
+	// The same tool policy applies under HideInputs, HideInputMessages and HideInputText.
 	HideLLMInvocationParameters bool
 	// HideInputs redacts input.value and drops input messages, system
 	// instructions and tool-call arguments.
@@ -44,15 +47,19 @@ type TraceConfig struct {
 	// HideOutputs redacts output.value and drops output messages and tool-call
 	// results.
 	HideOutputs bool
-	// HideInputMessages drops gen_ai.input.messages.* only.
+	// HideInputMessages drops gen_ai.input.messages.*, tool selection and
+	// grounding metadata, but preserves input.value.
 	HideInputMessages bool
-	// HideOutputMessages drops gen_ai.output.messages.* only.
+	// HideOutputMessages drops gen_ai.output.messages.* and grounding metadata,
+	// but preserves output.value.
 	HideOutputMessages bool
-	// HideInputImages drops images from input messages.
+	// HideInputImages drops images from input messages and input.value.
 	HideInputImages bool
-	// HideInputText redacts the text of input messages.
+	// HideInputText redacts text in input messages and input.value, and omits
+	// tool selection and grounding metadata.
 	HideInputText bool
-	// HideOutputText redacts the text of output messages.
+	// HideOutputText redacts text in output messages and output.value, and
+	// omits grounding metadata.
 	HideOutputText bool
 	// HideErrorDetails drops API error messages from attributes and status
 	// descriptions. Nil derives the setting from HideInputs, HideOutputs,
@@ -113,8 +120,13 @@ func (c TraceConfig) imageMax() int {
 // false when the attribute must be dropped. The rules and their order follow
 // fi_instrumentation.TraceConfig.mask in Python traceAI. System instructions
 // and tool-call arguments go with the inputs, tool-call results with the
-// outputs, and the
-// API's error message follows HideErrorDetails because an API error can
+// outputs. Tool declarations follow input and invocation hiding, retaining only
+// function names (the Go integration's tool identity contract), not descriptions
+// or schemas. Grounding URLs, titles, queries and citations can quote either the
+// prompt or answer, so the entire grounding attribute is omitted under any
+// input/output content, message or text hiding switch. This is intentionally
+// more conservative than message-only filtering of input.value / output.value.
+// The API's error message follows HideErrorDetails because an API error can
 // quote the request or response.
 func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	key := string(kv.Key)
@@ -122,6 +134,15 @@ func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 	out := strings.Contains(key, GenAIOutputMessages)
 	redacted := attribute.String(key, RedactedValue)
 	switch {
+	case (c.HideLLMInvocationParameters || c.HideInputs || c.HideInputMessages || c.HideInputText) &&
+		(key == GenAIToolDefinitions || strings.HasPrefix(key, GenAIToolDefinitions+".")):
+		return toolDefinitionIdentity(kv)
+	case (c.HideLLMInvocationParameters || c.HideInputs || c.HideInputMessages || c.HideInputText) &&
+		(key == GenAIRequestToolChoice || key == GenAIRequestBuiltinTools):
+		return kv, false
+	case key == GenAIResponseGrounding &&
+		(c.HideInputs || c.HideInputMessages || c.HideInputText || c.HideOutputs || c.HideOutputMessages || c.HideOutputText):
+		return kv, false
 	case c.HideLLMInvocationParameters && key == GenAIRequestParameters:
 		return kv, false
 	case c.HideInputs && key == InputValue:
@@ -157,6 +178,27 @@ func (c TraceConfig) Mask(kv attribute.KeyValue) (attribute.KeyValue, bool) {
 		return redacted, true
 	}
 	return kv, true
+}
+
+// toolDefinitionIdentity retains the declared function name, as for tool-call
+// identity elsewhere, but no customer-authored description or schema. Schema
+// keys, enum values, defaults and nested metadata can all contain private text;
+// removing only description fields is insufficient. Invalid values fail closed.
+func toolDefinitionIdentity(kv attribute.KeyValue) (attribute.KeyValue, bool) {
+	if kv.Value.Type() != attribute.STRING || !strings.HasSuffix(string(kv.Key), "."+ToolJSONSchema) {
+		return kv, false
+	}
+	var identity struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(kv.Value.AsString()), &identity); err != nil || identity.Name == "" {
+		return kv, false
+	}
+	b, err := json.Marshal(identity)
+	if err != nil {
+		return kv, false
+	}
+	return attribute.String(string(kv.Key), string(b)), true
 }
 
 // Filter applies [TraceConfig.Mask] to every attribute and returns the ones to

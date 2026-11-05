@@ -81,12 +81,19 @@ for (const stream of [false, true]) {
         const spans = bodies.flatMap(b => b.resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
         assert.equal(spans.length, 1, 'exactly one span exported');
         const attrs = Object.fromEntries(spans[0].attributes.map(a => [a.key, Object.values(a.value)[0]]));
-        const parameters = JSON.parse(attrs[S.LLM_INVOCATION_PARAMETERS]);
-        assert.equal(parameters.options.temperature, 0.2);
-        assert.equal(parameters.options.num_predict, 12);
-        assert.equal(parameters.stream, stream);
-        assert.equal(parameters.raw, true);
-        assert.equal(parameters.keep_alive, '5m');
+        const invocationParameters = attrs[S.LLM_INVOCATION_PARAMETERS];
+        if (name === 'visible') {
+          const parameters = JSON.parse(invocationParameters);
+          assert.equal(parameters.options.temperature, 0.2);
+          assert.equal(parameters.options.num_predict, 12);
+          assert.equal(parameters.stream, stream);
+          assert.equal(parameters.raw, true);
+          assert.equal(parameters.keep_alive, '5m');
+          assert.equal(parameters.context, undefined, 'prior conversation tokens are content, not tuning parameters');
+        } else {
+          // Shared core hides opaque request parameters: arbitrary fields can copy private inputs.
+          assert.equal(invocationParameters, '__REDACTED__', 'input hiding redacts opaque invocation parameters');
+        }
         const serialized = JSON.stringify(spans);
         if (name === 'visible') {
           for (const secret of [...text, image]) assert.ok(serialized.includes(secret), 'input remains visible by default');
@@ -98,9 +105,8 @@ for (const stream of [false, true]) {
         }
         // No prompt-derived content is allowed in invocation parameters, even without hiding.
         for (const secret of [...text, image, 'synthetic-schema-content', 'synthetic-stop-content', 'synthetic-unknown-content']) {
-          assert.ok(!JSON.stringify(parameters).includes(secret), `${name}: invocation parameters contain ${secret}`);
+          assert.ok(!invocationParameters.includes(secret), `${name}: invocation parameters contain ${secret}`);
         }
-        assert.equal(parameters.context, undefined, 'prior conversation tokens are content, not tuning parameters');
       } finally {
         instrumentation.disable();
         await provider.shutdown();

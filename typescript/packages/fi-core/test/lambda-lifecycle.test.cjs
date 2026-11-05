@@ -248,10 +248,13 @@ test('undefined/invalid/noop telemetry and context-manager faults do not reexecu
     assert.equal(await traceLambdaHandler(() => { calls++; return result; }, { provider })({}, invocation()), result);
     assert.equal(calls, 1);
   }
-  context.setGlobalContextManager({ active: () => ROOT_CONTEXT, with(ctx, fn) { fn(); throw new Error('PRIVATE_CONTEXT'); }, bind: (_, fn) => fn, enable() { return this; }, disable() { return this; } });
+  let activations = 0;
+  context.setGlobalContextManager({ active: () => ROOT_CONTEXT, with(ctx, fn) { activations++; fn(); throw new Error('PRIVATE_CONTEXT'); }, bind: (_, fn) => fn, enable() { return this; }, disable() { return this; } });
   let calls = 0;
-  assert.equal(await traceLambdaHandler(() => { calls++; return result; }, {})({}, invocation()), result);
+  const provider = { getTracer: () => trace.getTracer('context-fault'), forceFlush: async () => {} };
+  assert.equal(await traceLambdaHandler(() => { calls++; return result; }, { provider })({}, invocation()), result);
   assert.equal(calls, 1);
+  assert.equal(activations, 1);
 });
 
 test('span hook failures are isolated and application this is preserved', async () => {
@@ -273,9 +276,14 @@ test('telemetry diagnostics contain no exception/configuration data and a broken
   const messages = [];
   const logger = Object.fromEntries(['debug', 'info', 'warn', 'error', 'verbose'].map(method => [method, (...args) => messages.push(args)]));
   diag.setLogger(logger, DiagLogLevel.DEBUG);
-  const provider = { getTracer() { throw new Error('PRIVATE_SETUP'); }, forceFlush() { throw new Error('PRIVATE_FLUSH'); } };
+  let disabledFlushes = 0;
+  const provider = { getTracer() { throw new Error('PRIVATE_SETUP'); }, forceFlush() { disabledFlushes++; throw new Error('PRIVATE_FLUSH'); } };
   assert.equal(await traceLambdaHandler(async () => 42, { provider })({}, invocation()), 42);
+  assert.equal(disabledFlushes, 0, 'failed initialization must not flush');
   assert.match(JSON.stringify(messages), /provider initialization failed/);
+  const enabled = memory().provider;
+  enabled.forceFlush = () => { throw new Error('PRIVATE_FLUSH'); };
+  assert.equal(await traceLambdaHandler(async () => 42, { provider: enabled })({}, invocation()), 42);
   assert.match(JSON.stringify(messages), /provider flush failed/);
   assert.equal(JSON.stringify(messages).includes('PRIVATE_'), false);
   logger.debug = () => { throw new Error('PRIVATE_LOGGER'); };
