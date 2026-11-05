@@ -9,6 +9,13 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 from urllib.parse import urlsplit
 
 from fi_instrumentation import REDACTED_VALUE, TraceConfig, safe_json_dumps
+
+try:
+    from fi_instrumentation import ChatInput
+except ImportError:
+    # The declared published 1.2.2 floor predates the structured-input API and
+    # the opaque-input guard. Retain its existing path, not a validation fallback.
+    ChatInput = None
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
@@ -57,8 +64,18 @@ class _WithTracer(ABC):
         attributes: Dict[str, AttributeValue],
     ) -> Iterator[Span]:
         """Start a span with the given name and attributes."""
+        # Structured input belongs on the supported FI span setter. A sampler
+        # is allowed to return/replace opaque attributes, which core must mask
+        # fail-closed again. Never turn its returned JSON into a trusted string.
+        structured = attributes.get(SpanAttributes.INPUT_VALUE)
+        if ChatInput is not None and type(structured) is ChatInput:
+            attributes = {k: v for k, v in attributes.items() if k != SpanAttributes.INPUT_VALUE}
+        else:
+            structured = None
         try:
             span = self._tracer.start_span(name=span_name, attributes=attributes)
+            if structured is not None:
+                span.set_attribute(SpanAttributes.INPUT_VALUE, structured)
         except Exception:
             span = INVALID_SPAN
 
@@ -110,6 +127,29 @@ def _get_input_attributes(
         SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
+
+    if ChatInput is not None and any((config.hide_inputs, config.hide_input_messages,
+                                      config.hide_input_text, config.hide_input_images)):
+        # Pass the ORIGINAL typed input, not a previously sanitized string.
+        # Core applies policy independently for this copy and at the span setter.
+        raw_input = {"model": model}
+        if type(messages) in (list, tuple):
+            raw_input["messages"] = messages
+        raw_input.update({k: v for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
+        structured = ChatInput(raw_input)
+        attributes[SpanAttributes.INPUT_VALUE] = structured
+        telemetry = ChatInput.masked(structured, config)
+        if telemetry is not None:
+            for i, message in enumerate(telemetry.get("messages", [])):
+                prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
+                if "content" in message:
+                    content = message["content"]
+                    attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
+            invocation_params = {k: v for k, v in telemetry.items() if k not in ("model", "messages")}
+            if invocation_params:
+                attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
+        return attributes
 
     # Add invocation parameters
     invocation_params = {}

@@ -12,6 +12,7 @@ from ._attributes import (
     get_output_attributes,
     get_tool_attributes,
 )
+from ._chat_input import ChatInput
 from ._errors import (
     ERROR_TYPE,
     ERROR_TYPE_OTHER,
@@ -265,7 +266,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
     def set_attribute(
         self,
         key: str,
-        value: Union[AttributeValue, Callable[[], AttributeValue]],
+        value: Union[AttributeValue, Callable[[], AttributeValue], ChatInput],
     ) -> None:
         masked_value = self._self_config.mask(key, value)
         if masked_value is not None:

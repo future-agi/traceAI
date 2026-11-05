@@ -19,6 +19,7 @@ from opentelemetry.context import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from ._chat_input import ChatInput, mask_chat_input
 from ._errors import is_error_detail_key
 from .logging import logger
 from .pii_redaction import redact_pii_in_value
@@ -359,7 +360,7 @@ class TraceConfig:
     def mask(
         self,
         key: str,
-        value: Union[AttributeValue, Callable[[], AttributeValue]],
+        value: Union[AttributeValue, Callable[[], AttributeValue], ChatInput],
     ) -> Optional[AttributeValue]:
         # Opaque payloads can duplicate structured messages. Treat their whole
         # value as private before evaluating a lazy serializer; no safe modality
@@ -373,6 +374,12 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
+        elif type(value) is ChatInput:
+            # Exact type and exact input keys only. Core validates and masks the
+            # passive structure itself; a caller cannot mark an opaque string safe.
+            value = (mask_chat_input(value, self)
+                     if key in (SpanAttributes.INPUT_VALUE, SpanAttributes.RAW_INPUT)
+                     else REDACTED_VALUE)
         elif (private_input or self.hide_input_images) and _has_content_prefix(
             key, (SpanAttributes.INPUT_VALUE, *tuple(_HIDDEN_WITH_INPUTS))
         ):
