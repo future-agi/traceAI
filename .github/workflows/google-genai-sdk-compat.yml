@@ -7,6 +7,7 @@ on:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - '.github/workflows/google-genai-sdk-compat.yml'
+      - '.github/scripts/loopback-network-diagnostics.cjs'
   workflow_dispatch:
 
 permissions:
@@ -57,4 +58,4 @@ jobs:
         run: |
           set -euo pipefail
           tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          sandbox-exec -f "$tests/network.sb" node --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
