@@ -1,0 +1,147 @@
+import { syncBuiltinESMExports } from 'node:module';
+import { dirname, join } from 'node:path';
+import { diag, ProxyTracerProvider, SpanStatusCode, trace } from '@opentelemetry/api';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace';
+import { DeadlineOTLPExporter } from './transport';
+import { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { GraphQLInstrumentation } from '@opentelemetry/instrumentation-graphql';
+import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
+import { FiSanitizingExporter, type PrivacyOptions } from './privacy';
+
+export { FiSanitizingExporter, sanitizeSpan, type PrivacyOptions } from './privacy';
+
+export interface ApolloTracingOptions extends PrivacyOptions {
+  projectName?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  secretKey?: string;
+  /** Maximum resolver path depth (list indexes count). Defaults to top-level fields only. */
+  depth?: number;
+}
+export interface ApolloTracing {
+  /** Export finished spans. False means export failed; no payload is logged. */
+  forceFlush(): Promise<boolean>;
+  /** Call after server.stop(). Idempotent; false means export failed. */
+  shutdown(): Promise<boolean>;
+}
+let configured = false;
+
+/** Call once, before importing Apollo or graphql. Owns this process's tracing SDK. */
+export function configure(options: ApolloTracingOptions = {}): ApolloTracing {
+  if (configured) throw new Error('Apollo tracing is already configured');
+  // Read metadata only: loading GraphQL itself here would defeat instrumentation.
+  // Peer constraints can be bypassed by installers; do not silently lose spans.
+  // GraphQL 17 does not export the package.json subpath.
+  const graphqlVersion: string = require(join(dirname(require.resolve('graphql')), 'package.json')).version;
+  const supportedVersion = /^16\.(\d+)\.\d+$/.exec(graphqlVersion);
+  if (!supportedVersion || Number(supportedVersion[1]) < 11) {
+    throw new Error('Apollo tracing requires GraphQL >=16.11.0 <17 (stable); install graphql@16');
+  }
+  if (Object.keys(require.cache).some(path => /[/\\]graphql[/\\](?:index|graphql|execution[/\\]execute|language[/\\]parser|validation[/\\]validate)\.js$/.test(path))) {
+    throw new Error('Initialize Apollo tracing before importing graphql or Apollo; use node --import');
+  }
+  const provider = trace.getTracerProvider();
+  if (!(provider instanceof ProxyTracerProvider) ||
+      provider.getDelegate() !== new ProxyTracerProvider().getDelegate()) {
+    throw new Error('An OpenTelemetry tracer provider is already registered; do not create a second SDK');
+  }
+  if (process.env.OTEL_SDK_DISABLED?.toLowerCase() === 'true') {
+    throw new Error('Apollo tracing cannot start while OTEL_SDK_DISABLED=true');
+  }
+  const projectName = options.projectName ?? process.env.FI_PROJECT_NAME ?? 'apollo-graphql';
+  const apiKey = options.apiKey ?? process.env.FI_API_KEY;
+  const secretKey = options.secretKey ?? process.env.FI_SECRET_KEY;
+  if (!projectName.trim() || !apiKey?.trim() || !secretKey?.trim()) {
+    throw new Error('Set FI_PROJECT_NAME, FI_API_KEY and FI_SECRET_KEY, or pass their configure options');
+  }
+  const baseUrl = new URL(options.baseUrl ?? process.env.FI_BASE_URL ?? 'https://api.futureagi.com');
+  if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password ||
+      baseUrl.search || baseUrl.hash) {
+    throw new Error('baseUrl must be an HTTP(S) URL without credentials, query or fragment');
+  }
+  const depth = options.depth ?? 1;
+  if (!Number.isInteger(depth) || depth < 1) throw new Error('depth must be a positive integer');
+  // OTel's OTLP HTTP exporter merges ambient headers with supplied headers.
+  // Refuse rather than forward a different collector's credentials to this endpoint.
+  if (process.env.OTEL_EXPORTER_OTLP_HEADERS || process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS) {
+    throw new Error('Unset OTEL_EXPORTER_OTLP_HEADERS and OTEL_EXPORTER_OTLP_TRACES_HEADERS before Apollo tracing');
+  }
+  const exporter = new FiSanitizingExporter(new DeadlineOTLPExporter({
+    url: `${baseUrl.href.replace(/\/+$/, '')}/tracer/v1/traces`,
+    headers: { 'X-Api-Key': apiKey, 'X-Secret-Key': secretKey },
+    compression: CompressionAlgorithm.NONE,
+  }, 3000), {
+    ...options,
+    captureContent: options.captureContent ?? process.env.FI_APOLLO_CAPTURE_CONTENT === 'true',
+  });
+  const processor = new BatchSpanProcessor({ exporter, exportTimeoutMillis: 4000 });
+  const instrumentations = [
+    new HttpInstrumentation(),
+    new GraphQLInstrumentation({
+      depth,
+      allowValues: false,
+      responseHook: (span, result) => {
+        if (result?.errors?.length) span.setStatus({ code: SpanStatusCode.ERROR });
+      },
+    }),
+  ];
+  const sdk = new NodeSDK({
+    autoDetectResources: false,
+    resourceDetectors: [],
+    resource: resourceFromAttributes({
+      project_name: projectName, project_type: 'observe', 'service.name': projectName,
+    }),
+    spanProcessors: [processor],
+    metricReaders: [],
+    instrumentations,
+  });
+  // NodeSDK otherwise installs an OTLP logger provider by default, even with no
+  // log processors requested. Keep startup traces-only without changing the
+  // application's eventual logging configuration.
+  const logsExporter = process.env.OTEL_LOGS_EXPORTER;
+  try {
+    process.env.OTEL_LOGS_EXPORTER = 'none';
+    sdk.start();
+  } finally {
+    if (logsExporter === undefined) delete process.env.OTEL_LOGS_EXPORTER;
+    else process.env.OTEL_LOGS_EXPORTER = logsExporter;
+  }
+  // Apollo 5 standalone uses the ESM named createServer binding. OTel patches the
+  // CommonJS HTTP module; refresh its ESM exports, rather than inventing a root span.
+  require('node:http');
+  require('node:https');
+  syncBuiltinESMExports();
+  configured = true;
+  let shutdown: Promise<boolean> | undefined;
+  const safely = async (operation: () => Promise<void>): Promise<boolean> => {
+    try {
+      await operation();
+      return true;
+    } catch {
+      // Error text can contain application data; diagnostics must remain metadata-only.
+      diag.warn('Apollo telemetry export failed');
+      return false;
+    }
+  };
+  return {
+    forceFlush: () => shutdown ?? safely(async () => {
+      await processor.forceFlush();
+      await exporter.forceFlush();
+    }),
+    shutdown: () => {
+      if (!shutdown) {
+        instrumentations.forEach(instrumentation => instrumentation.disable());
+        syncBuiltinESMExports();
+        shutdown = safely(async () => {
+          // BatchSpanProcessor skips exporter.shutdown() if its flush rejects.
+          // Our exporter shutdown is idempotent and must run on that path too.
+          try { await sdk.shutdown(); }
+          finally { await exporter.shutdown(); }
+        });
+      }
+      return shutdown;
+    },
+  };
+}
