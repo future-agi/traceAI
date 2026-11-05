@@ -45,6 +45,8 @@ interface GenerateContentRequest {
     role?: string;
     parts: Array<{
       text?: string;
+      functionCall?: { name: string; args: Record<string, unknown> };
+      functionResponse?: { name: string; response: Record<string, unknown> };
       inlineData?: {
         mimeType: string;
         data: string;
@@ -69,6 +71,8 @@ interface GenerateContentRequest {
       parameters?: Record<string, unknown>;
     }>;
   }>;
+  toolConfig?: Record<string, unknown>;
+  cachedContent?: string;
   systemInstruction?: string | { text: string } | {
     parts: Array<{ text: string }>;
   };
@@ -78,6 +82,10 @@ interface GenerationModelMetadata {
   model?: string;
   generationConfig?: GenerateContentRequest["generationConfig"];
   systemInstruction?: GenerateContentRequest["systemInstruction"];
+  safetySettings?: GenerateContentRequest["safetySettings"];
+  tools?: GenerateContentRequest["tools"];
+  toolConfig?: GenerateContentRequest["toolConfig"];
+  cachedContent?: { name?: string };
 }
 
 interface GenerateContentResponse {
@@ -203,6 +211,11 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
     if (patchOwners.has(prototype)) return module;
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
     const instrumentation = this;
+    // Tool-aware SDKs expose their supported conversation roles. The 0.1.0
+    // SDK predates this capability and always normalizes Part arrays as user.
+    // Inspect the actual module so manual instrumentation and SDK copies agree.
+    const functionResponseRole = Array.isArray(module.POSSIBLE_ROLES) &&
+      module.POSSIBLE_ROLES.includes("function");
     const wrappers = new Map<string, unknown>();
     for (const method of methods) {
       if (typeof prototype[method] !== "function") continue;
@@ -225,8 +238,14 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
                 // Copy only capture fields, never credentials or request options.
                 const normalized = {
                   generationConfig: this.generationConfig,
+                  safetySettings: this.safetySettings,
+                  tools: this.tools,
+                  toolConfig: this.toolConfig,
                   systemInstruction: this.systemInstruction,
-                  ...normalizeGeneration(request),
+                  // The native request sends only the cache resource name, never
+                  // the cache object (which can contain full prompt history).
+                  cachedContent: this.cachedContent?.name,
+                  ...normalizeGeneration(request, functionResponseRole),
                 };
                 return {
                   [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(normalized) ?? "",
@@ -260,7 +279,10 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
               if (method === "generateContent") {
                 const response = result as GenerateContentResponse;
                 const responseModel = response.response?.modelVersion;
-                const metadata: Attributes = { ...getUsageAttributes(response) };
+                const metadata: Attributes = {
+                  ...getUsageAttributes(response),
+                  ...getFinishReasonAttributes(response),
+                };
                 // The request alias is already recorded separately. A provider that
                 // omits modelVersion has not identified a response model.
                 if (typeof responseModel === "string" && responseModel.trim()) {
@@ -366,11 +388,14 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
 /**
  * Converts the request to LLM input messages (JSON blob)
  */
-function normalizeGeneration(request: unknown): GenerateContentRequest {
+function normalizeGeneration(request: unknown, functionResponseRole = false): GenerateContentRequest {
   if (typeof request === "string" || Array.isArray(request)) {
     const parts = (Array.isArray(request) ? request : [request])
       .map(part => typeof part === "string" ? { text: part } : part);
-    return { contents: [{ role: "user", parts }] };
+    const role = functionResponseRole && parts.length > 0 &&
+      parts.every(part => part != null && typeof part === "object" && "functionResponse" in part)
+      ? "function" : "user";
+    return { contents: [{ role, parts }] };
   }
   return request as GenerateContentRequest;
 }
@@ -390,7 +415,23 @@ function getLLMInputMessagesAttributes(request: GenerateContentRequest): Attribu
   request.contents.forEach((content) => {
     const textParts = content.parts.filter(p => p.text).map(p => p.text).join('');
     const msg: Record<string, unknown> = { role: content.role || 'user' };
-    if (textParts) {
+    if (content.parts.some(part => part.functionCall || part.functionResponse)) {
+      // Match the structured-part representation used by the modern adapter.
+      // Keep tool names, arguments and results in their original turn/order;
+      // do not invent call IDs or tool execution spans. Input privacy is checked
+      // before this converter (including history supplied on a later request).
+      const parts: Array<Record<string, unknown>> = [];
+      for (const part of content.parts) {
+        if (part.text !== undefined) parts.push({ type: "text", text: part.text });
+        if (part.functionCall) parts.push({
+          type: "functionCall", name: part.functionCall.name, args: part.functionCall.args,
+        });
+        if (part.functionResponse) parts.push({
+          type: "functionResponse", name: part.functionResponse.name, response: part.functionResponse.response,
+        });
+      }
+      msg.content = parts;
+    } else if (textParts) {
       msg.content = textParts;
     }
     messages.push(msg);
@@ -466,10 +507,17 @@ function getLLMOutputMessagesAttributes(result: GenerateContentResponse): Attrib
 
   return {
     [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(
-      result.response.candidates?.map(c => c.finishReason).filter(Boolean)
-    ) ?? "[]",
   };
+}
+
+// Finish reasons are metadata, even for blocked candidates without content.
+// Do not traverse text, tool arguments or lazy output serializers here.
+function getFinishReasonAttributes(result: GenerateContentResponse): Attributes {
+  const reasons = result.response?.candidates?.map(candidate => candidate.finishReason)
+    .filter((reason): reason is string => typeof reason === "string" && reason.length > 0);
+  return reasons?.length ? {
+    [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(reasons) ?? "[]",
+  } : {};
 }
 
 /**

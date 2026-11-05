@@ -63,7 +63,14 @@ async function fixture(traceConfig, callback) {
   instrumentation.setTracerProvider(provider);
   const model = new google.GoogleGenerativeAI('SYNTHETIC_GOOGLE_KEY').getGenerativeModel({ model: 'gemini-test' });
   try { await callback(instrumentation, model); }
-  finally { instrumentation.disable(); }
+  finally {
+    instrumentation.disable();
+    if (process.env.OTLP_EVIDENCE) {
+      await provider.forceFlush();
+      require('node:fs').appendFileSync(process.env.OTLP_EVIDENCE,
+        JSON.stringify({ wire: bodies, payloads: exportedPayloads }) + '\n');
+    }
+  }
 }
 const telemetry = () => JSON.stringify(memory.getFinishedSpans().map(s => ({ attributes: s.attributes, status: s.status, events: s.events })));
 
@@ -435,4 +442,224 @@ for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideI
       }
     });
   }
+}
+
+const modelTool = [{ functionDeclarations: [{ name: 'lookup', description: 'MODEL_TOOL_SENTINEL',
+  parameters: { type: 'OBJECT', properties: { q: { type: 'STRING', description: 'MODEL_SCHEMA_SENTINEL' } } } }] }];
+function toolModel() {
+  return new google.GoogleGenerativeAI('SYNTHETIC_GOOGLE_KEY').getGenerativeModel({
+    model: 'gemini-request-alias', generationConfig: { temperature: 0.73 },
+    safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' }],
+    tools: modelTool, toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    cachedContent: { name: 'cachedContents/MODEL_CACHE_SENTINEL',
+      get contents() { throw new Error('cache contents must never be read'); },
+      toJSON() { throw new Error('cache object must never be serialized'); } },
+  });
+}
+const effectiveKeys = ['generationConfig', 'safetySettings', 'tools', 'toolConfig', 'cachedContent'];
+function assertEffectiveInput(attributes, wire) {
+  for (const key of ['raw.input', 'input.value']) {
+    const captured = JSON.parse(attributes[key]);
+    for (const field of effectiveKeys) assert.deepEqual(captured[field], wire[field], `${key}.${field}`);
+  }
+  const declarations = wire.tools?.flatMap(tool => tool.functionDeclarations || []);
+  assert.deepEqual(attributes['gen_ai.tool.definitions'] && JSON.parse(attributes['gen_ai.tool.definitions']),
+    declarations?.length ? declarations : undefined);
+}
+
+for (const [name, input] of [['string', 'INPUT_SENTINEL'], ['strings', ['INPUT_SENTINEL']],
+  ['parts', [{ text: 'INPUT_SENTINEL' }]], ['contents', { contents: [{ role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] }] }]]) {
+  test(`GG-14 supported model tools, safety and cache name match native HTTP: ${name}`, async () => {
+    await fixture({}, async instrumentation => {
+      const model = toolModel();
+      const before = [model.tools, model.toolConfig, model.cachedContent, model.safetySettings];
+      const baseline = await model.generateContent(structuredClone(input));
+      instrumentation.manuallyInstrument(google);
+      const result = await model.generateContent(structuredClone(input));
+      assert.deepEqual(bodies[1], bodies[0]);
+      assert.deepEqual(result.response.candidates, baseline.response.candidates);
+      [model.tools, model.toolConfig, model.cachedContent, model.safetySettings].forEach((value, i) => assert.equal(value, before[i]));
+      const attributes = await exportedAttributes();
+      assertEffectiveInput(attributes, bodies[1]);
+      assert.deepEqual(bodies[1].safetySettings, model.safetySettings);
+      if (sdkVersion === '0.1.0') {
+        assert.equal(bodies[1].tools, undefined);
+        assert.doesNotMatch(JSON.stringify(exportedPayloads), /MODEL_TOOL_SENTINEL|MODEL_CACHE_SENTINEL/);
+      } else {
+        assert.deepEqual(bodies[1].tools, modelTool);
+        assert.equal(bodies[1].cachedContent, 'cachedContents/MODEL_CACHE_SENTINEL');
+      }
+    });
+  });
+}
+
+for (const [key, overrides] of [
+  ['tools', [[{ functionDeclarations: [{ name: 'override' }] }], [], undefined, null]],
+  ['toolConfig', [{ functionCallingConfig: { mode: 'NONE' } }, {}, undefined, null]],
+  ['safetySettings', [[{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }], [], undefined, null]],
+  ['cachedContent', ['cachedContents/override', '', undefined, null]],
+]) {
+  test(`GG-14 per-call ${key} shallowly replaces model defaults`, async () => {
+    for (const override of overrides) await fixture({}, async instrumentation => {
+      const model = toolModel();
+      const input = { contents: [{ role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] }], [key]: override };
+      const snapshot = structuredClone(input);
+      const before = model[key];
+      await model.generateContent(structuredClone(input));
+      instrumentation.manuallyInstrument(google);
+      await model.generateContent(input);
+      assert.deepEqual(input, snapshot);
+      assert.equal(model[key], before);
+      assert.deepEqual(bodies[1], bodies[0]);
+      assertEffectiveInput(await exportedAttributes(), bodies[1]);
+    });
+  });
+}
+
+const toolHistory = { contents: [
+  { role: 'user', parts: [{ text: 'INPUT_SENTINEL' }] },
+  { role: 'model', parts: [{ text: 'TOOL_PLAN_SENTINEL' },
+    { functionCall: { name: 'lookup', args: { q: 'ARG_SENTINEL', nested: { count: 0, ok: false } } } },
+    { functionCall: { name: 'second', args: { list: [1, null, 'ARG_SECOND_SENTINEL'] } } }] },
+  { role: 'function', parts: [
+    { functionResponse: { name: 'lookup', response: { value: 'RESULT_SENTINEL', nested: [false, null, 0] } } },
+    { functionResponse: { name: 'second', response: { value: 'RESULT_SECOND_SENTINEL' } } }] },
+] };
+const expectedHistory = [
+  { role: 'user', content: 'INPUT_SENTINEL' },
+  { role: 'model', content: [
+    { type: 'text', text: 'TOOL_PLAN_SENTINEL' },
+    ...toolHistory.contents[1].parts.slice(1).map(p => ({ type: 'functionCall', ...p.functionCall })),
+  ] },
+  { role: 'function', content: toolHistory.contents[2].parts.map(p => ({ type: 'functionResponse', ...p.functionResponse })) },
+];
+
+test('GG-15 function response Part arrays use the actual SDK conversation role', async () => {
+  await fixture({}, async instrumentation => {
+    const model = toolModel();
+    const input = toolHistory.contents[2].parts;
+    const nativeInput = structuredClone(input);
+    const baseline = await model.generateContent(nativeInput);
+    instrumentation.manuallyInstrument(google);
+    const result = await model.generateContent(input);
+    assert.deepEqual(input, nativeInput);
+    assert.deepEqual(bodies[1], bodies[0]);
+    assert.deepEqual(result.response.candidates, baseline.response.candidates);
+    const attributes = await exportedAttributes();
+    for (const key of ['input.value', 'raw.input']) assert.deepEqual(JSON.parse(attributes[key]).contents, bodies[1].contents);
+    const role = sdkVersion === '0.1.0' ? 'user' : 'function';
+    assert.equal(bodies[1].contents[0].role, role);
+    assert.deepEqual(JSON.parse(attributes['gen_ai.input.messages']), [{ ...expectedHistory[2], role }]);
+  });
+});
+
+test('GG-16 canonical input retains ordered tool calls, arguments and results', async () => {
+  await fixture({}, async (instrumentation, model) => {
+    const nativeInput = structuredClone(toolHistory);
+    const baseline = await model.generateContent(nativeInput);
+    instrumentation.manuallyInstrument(google);
+    const result = await model.generateContent(toolHistory);
+    assert.deepEqual(toolHistory, nativeInput);
+    assert.deepEqual(bodies[1], bodies[0]);
+    assert.deepEqual(result.response.candidates, baseline.response.candidates);
+    const attributes = await exportedAttributes();
+    assert.deepEqual(JSON.parse(attributes['gen_ai.input.messages']), expectedHistory);
+    assert.deepEqual(JSON.parse(attributes['raw.input']).contents, bodies[1].contents);
+  });
+});
+
+for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideInputImages',
+  'hideOutputs', 'hideOutputText', 'hideOutputMessages']) for (const environment of [false, true]) {
+  test(`GG-14/16/17 tool history and finish metadata honor directional ${option} (${environment ? 'environment' : 'config'})`, async () => {
+    const key = 'FI_' + option.replace(/[A-Z]/g, c => '_' + c).toUpperCase();
+    const previous = process.env[key];
+    if (environment) process.env[key] = 'true';
+    try {
+      await fixture(environment ? {} : { [option]: true }, async instrumentation => {
+        const model = toolModel();
+        response = { ...answer, candidates: [
+          { content: { role: 'model', parts: [{ text: 'OUTPUT_SENTINEL' },
+            { functionCall: { name: 'outputTool', args: { q: 'OUTPUT_ARGS_SENTINEL' } } }] }, finishReason: 'MAX_TOKENS' },
+          { finishReason: 'SAFETY' },
+        ] };
+        const input = structuredClone(toolHistory);
+        const baseline = await model.generateContent(structuredClone(input));
+        instrumentation.manuallyInstrument(google);
+        const result = await model.generateContent(input);
+        assert.deepEqual(bodies[1], bodies[0]);
+        assert.deepEqual(result.response.candidates, baseline.response.candidates);
+        assert.deepEqual(input, toolHistory);
+        const attributes = await exportedAttributes();
+        assert.equal(attributes['gen_ai.response.model'], 'gemini-resolved');
+        assert.deepEqual(JSON.parse(attributes['gen_ai.response.finish_reasons']), ['MAX_TOKENS', 'SAFETY']);
+        const payload = JSON.stringify(exportedPayloads);
+        if (option.startsWith('hideInput')) {
+          assert.doesNotMatch(payload, /INPUT_SENTINEL|TOOL_PLAN_SENTINEL|ARG_SENTINEL|ARG_SECOND_SENTINEL|RESULT_SENTINEL|RESULT_SECOND_SENTINEL|MODEL_TOOL_SENTINEL|MODEL_SCHEMA_SENTINEL|MODEL_CACHE_SENTINEL/);
+          assert.match(payload, /OUTPUT_SENTINEL/);
+        } else {
+          assert.doesNotMatch(payload, /OUTPUT_SENTINEL|OUTPUT_ARGS_SENTINEL/);
+          assert.equal(attributes['raw.output'], undefined);
+          assert.equal(attributes['gen_ai.output.messages'], undefined);
+          assert.deepEqual(JSON.parse(attributes['gen_ai.input.messages']), expectedHistory);
+          assertEffectiveInput(attributes, bodies[1]);
+        }
+      });
+    } finally {
+      if (previous === undefined) delete process.env[key]; else process.env[key] = previous;
+    }
+  });
+}
+
+test('GG-17 blocked candidates without content still export finish metadata', async () => {
+  await fixture({}, async (instrumentation, model) => {
+    response = { ...answer, candidates: [{ finishReason: 'SAFETY' }] };
+    const baseline = await model.generateContent('INPUT_SENTINEL');
+    instrumentation.manuallyInstrument(google);
+    const result = await model.generateContent('INPUT_SENTINEL');
+    assert.deepEqual(result.response.candidates, baseline.response.candidates);
+    assert.deepEqual(JSON.parse((await exportedAttributes())['gen_ai.response.finish_reasons']), ['SAFETY']);
+  });
+});
+
+for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideInputImages']) {
+  test(`GG-14/16 ${option} never traverses lazy model defaults or tool history`, async () => {
+    await fixture({ [option]: true }, async instrumentation => {
+      let reads = 0;
+      const inaccessible = () => { reads++; throw new Error('hidden input getter visited'); };
+      const input = { get contents() { return inaccessible(); } };
+      const result = { response: answer };
+      class Model {
+        generateContent(value) { assert.equal(value, input); return Promise.resolve(result); }
+      }
+      for (const key of effectiveKeys) Object.defineProperty(Model.prototype, key, { get: inaccessible });
+      instrumentation.manuallyInstrument({ GenerativeModel: Model });
+      assert.equal(await new Model().generateContent(input), result);
+      const attributes = await exportedAttributes();
+      assert.equal(reads, 0);
+      assert.equal(attributes['gen_ai.input.messages'], undefined);
+      assert.equal(attributes['raw.input'], undefined);
+      assert.equal(attributes['input.value'], undefined);
+      assert.equal(attributes['gen_ai.tool.definitions'], undefined);
+    });
+  });
+}
+
+for (const option of ['hideOutputs', 'hideOutputText', 'hideOutputMessages']) {
+  test(`GG-17 ${option} captures finish reasons without touching lazy output`, async () => {
+    await fixture({ [option]: true }, async instrumentation => {
+      let reads = 0;
+      const inaccessible = () => { reads++; throw new Error('hidden output getter visited'); };
+      const result = { response: { ...answer, candidates: [{ finishReason: 'STOP', get content() { return inaccessible(); } }],
+        text: inaccessible, toJSON: inaccessible } };
+      class Model { generateContent() { return Promise.resolve(result); } }
+      instrumentation.manuallyInstrument({ GenerativeModel: Model });
+      assert.equal(await new Model().generateContent('INPUT_SENTINEL'), result);
+      const attributes = await exportedAttributes();
+      assert.equal(reads, 0);
+      assert.deepEqual(JSON.parse(attributes['gen_ai.response.finish_reasons']), ['STOP']);
+      assert.equal(attributes['raw.output'], undefined);
+      assert.equal(attributes['gen_ai.output.messages'], undefined);
+      assert.equal(attributes['output.value'], undefined);
+    });
+  });
 }
