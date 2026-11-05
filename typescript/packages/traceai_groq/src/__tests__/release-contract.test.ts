@@ -105,7 +105,8 @@ describe.each(inputPolicies)("document privacy with %s", (_name, config, env) =>
       const a = spans[0].attributes;
       expect(a[S.LLM_MODEL_NAME]).toBe(params.model);
       expect(a[S.LLM_TOKEN_COUNT_TOTAL]).toBe(13);
-      expect(JSON.parse(a[S.LLM_INVOCATION_PARAMETERS] as string)).toMatchObject({ model: params.model, max_tokens: 20, temperature: 0.5 });
+      // Invocation parameters are an opaque input copy that can duplicate hidden content.
+      expect(a[S.LLM_INVOCATION_PARAMETERS]).toBe("__REDACTED__");
     } finally { if (env) delete process.env[env]; }
   });
 });
@@ -115,6 +116,7 @@ it("keeps document content in privacy-controlled input attributes only", async (
   expect(a[S.INPUT_VALUE]).toContain("secret-document-content");
   expect(a[S.RAW_INPUT]).toContain("secret-document-content");
   expect(a[S.LLM_INVOCATION_PARAMETERS]).not.toContain("secret-document-content");
+  expect(JSON.parse(a[S.LLM_INVOCATION_PARAMETERS] as string)).toMatchObject({ model: params.model, max_tokens: 20, temperature: 0.5 });
 });
 
 it("stops manual instrumentation on disable and restores exactly one span on re-enable", async () => {
