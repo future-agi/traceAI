@@ -1,0 +1,62 @@
+name: Pydantic AI native tracing
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/pydantic-ai/**'
+      - '.github/workflows/pydantic-ai-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/pydantic-ai/**'
+      - '.github/workflows/pydantic-ai-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Pydantic AI ${{ matrix.framework }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            framework: '1.0.0'
+            otel: '1.37.0'
+            instrumentation: '0.58b0'
+            griffe: 'griffe<2'
+          - python: '3.12'
+            framework: '2.64.0'
+            otel: '1.45.2'
+            instrumentation: '0.66b2'
+            griffe: 'griffe'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install framework and released privacy core
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+          OTEL: ${{ matrix.otel }}
+          INSTRUMENTATION: ${{ matrix.instrumentation }}
+          GRIFFE: ${{ matrix.griffe }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e 'python/frameworks/pydantic-ai[dev]' \
+            "pydantic-ai-slim==$FRAMEWORK" 'fi-instrumentation-otel==1.2.2' \
+            "opentelemetry-sdk==$OTEL" "opentelemetry-exporter-otlp-proto-http==$OTEL" \
+            "opentelemetry-instrumentation==$INSTRUMENTATION" "$GRIFFE"
+          .venv/bin/pip check
+      - name: Test with only loopback networking
+        run: |
+          sudo unshare --net /bin/bash -c 'ip link set lo up; exec "$@"' bash \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -I -m pytest \
+            --confcutdir=python/frameworks/pydantic-ai \
+            python/frameworks/pydantic-ai/tests -q -p no:cacheprovider
