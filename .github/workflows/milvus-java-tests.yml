@@ -1,0 +1,59 @@
+name: Milvus Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/traceai-java-milvus/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/milvus-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/traceai-java-milvus/**'
+      - 'java/traceai-java-core/**'
+      - 'java/pom.xml'
+      - '.github/workflows/milvus-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Milvus SDK ${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['2.6.12', '3.0.12']
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Cache dependencies without running tests
+        run: |
+          mvn -B -ntp -pl traceai-java-milvus -am -Dmilvus.version=${{ matrix.sdk }} -DskipTests install dependency:go-offline
+          mvn -B -ntp dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+          mvn -B -ntp dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.10.1
+      - name: Test with only loopback networking
+        run: |
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
+            env "JAVA_HOME=$JAVA_HOME" "PATH=$PATH" \
+            mvn -o -B -ntp -Dmaven.repo.local="$HOME/.m2/repository" \
+            -pl traceai-java-milvus -am -Dmilvus.version=${{ matrix.sdk }} \
+            -Dtest=TracedMilvusClientTest,MilvusOtlpTest -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: milvus-java-${{ matrix.sdk }}
+          path: java/traceai-java-milvus/target/surefire-reports/
