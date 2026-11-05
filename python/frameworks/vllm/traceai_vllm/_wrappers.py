@@ -3,17 +3,29 @@
 import logging
 import sys
 from abc import ABC
+from collections.abc import Iterable
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
+from fi_instrumentation import TraceConfig, safe_json_dumps
+from fi_instrumentation.fi_types import (
+    FiSpanKindValues,
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
+    SpanAttributes,
+)
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
+from wrapt import ObjectProxy
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# SDK transport options: request headers and query strings can carry
+# credentials, and timeouts are client settings rather than request content.
+_TRANSPORT_OPTIONS = frozenset({"extra_headers", "extra_query", "timeout"})
 
 
 def _shared_instrumentor_enabled() -> bool:
@@ -36,11 +48,13 @@ class _WithTracer(ABC):
         tracer: trace_api.Tracer,
         vllm_base_urls: List[str],
         *args: Any,
+        config: Optional[TraceConfig] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         self._vllm_base_urls = vllm_base_urls
+        self._config = config if config is not None else TraceConfig()
 
     def _is_vllm_client(self, instance: Any) -> bool:
         """Check if the client instance is configured for vLLM."""
@@ -80,6 +94,8 @@ class _WithTracer(ABC):
 def _get_input_attributes(
     model: str,
     messages: list,
+    *,
+    hide_invocation_parameters: bool = False,
     **kwargs: Any,
 ) -> Dict[str, AttributeValue]:
     """Extract input attributes from request parameters."""
@@ -110,26 +126,56 @@ def _get_input_attributes(
         invocation_params["use_beam_search"] = kwargs["use_beam_search"]
 
     if invocation_params:
-        attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
+        attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(
+            invocation_params
+        )
 
-    # Add input messages
+    # Preserve typed message parts: stringifying a multimodal list would put
+    # image URLs in message.content, bypassing the image-specific hide policy.
     for i, message in enumerate(messages):
         prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-        if isinstance(message, dict):
-            if "role" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-            if "content" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message["content"]) if message["content"] else ""
-        else:
-            # Handle message objects
-            if hasattr(message, "role"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
-            if hasattr(message, "content"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
+        role = (
+            message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "role", None)
+        )
+        content = (
+            message.get("content")
+            if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        if role is not None:
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = role
+        if isinstance(content, str):
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = content
+        elif isinstance(content, (list, tuple)):
+            for j, part in enumerate(content):
+                if not isinstance(part, dict):
+                    continue
+                part_prefix = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}.{j}"
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    attributes[
+                        f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}"
+                    ] = part["text"]
+                elif part.get("type") == "image_url":
+                    image = part.get("image_url")
+                    if isinstance(image, dict) and isinstance(image.get("url"), str):
+                        attributes[
+                            f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"
+                        ] = image["url"]
 
-    # Add raw input
+    # Keep messages visible, but do not duplicate private invocation settings
+    # (including provider-specific extra_body fields) into the raw input.
     raw_input = {"model": model, "messages": messages}
-    raw_input.update({k: v for k, v in kwargs.items() if v is not None})
+    raw_input.update(
+        {
+            k: v
+            for k, v in kwargs.items()
+            if v is not None
+            and k not in _TRANSPORT_OPTIONS
+            and not hide_invocation_parameters
+        }
+    )
     attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(raw_input)
 
     return attributes
@@ -153,7 +199,9 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
             if hasattr(message, "role"):
                 attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
             if hasattr(message, "content") and message.content:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = message.content
+                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = (
+                    message.content
+                )
                 attributes[SpanAttributes.OUTPUT_VALUE] = message.content
 
     # Get usage metrics
@@ -162,16 +210,19 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
         if hasattr(usage, "prompt_tokens"):
             attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
         if hasattr(usage, "completion_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
+            attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = (
+                usage.completion_tokens
+            )
         if hasattr(usage, "total_tokens"):
             attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
 
-    # Add raw output
+    # Add raw output. Only serialize response models: other objects, such as
+    # with_raw_response wrappers, hold the client and its request headers.
     try:
         if hasattr(response, "model_dump"):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.model_dump())
-        elif hasattr(response, "__dict__"):
-            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(response.__dict__)
+            attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(
+                response.model_dump()
+            )
     except Exception:
         pass
 
@@ -198,21 +249,207 @@ def _get_stream_output_attributes(
         if hasattr(last_chunk, "usage") and last_chunk.usage:
             usage = last_chunk.usage
             if hasattr(usage, "prompt_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
+                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = (
+                    usage.prompt_tokens
+                )
             if hasattr(usage, "completion_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
+                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = (
+                    usage.completion_tokens
+                )
             if hasattr(usage, "total_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = (
+                    usage.total_tokens
+                )
 
     # Add raw output
     try:
-        attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps([
-            c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks
-        ])
+        attributes[SpanAttributes.OUTPUT_VALUE] = safe_json_dumps(
+            [c.model_dump() if hasattr(c, "model_dump") else str(c) for c in chunks]
+        )
     except Exception:
         pass
 
     return attributes
+
+
+def _error_status(error: BaseException) -> Status:
+    return Status(StatusCode.ERROR, f"{type(error).__name__}: {error}")
+
+
+def _end_with_error(span: Span, error: BaseException) -> None:
+    span.record_exception(error)
+    span.set_status(_error_status(error))
+    span.end()
+
+
+class _StreamSpan:
+    """Accumulate chunks and end the span exactly once."""
+
+    __slots__ = ("span", "chunks", "content", "finished")
+
+    def __init__(self, span: Span) -> None:
+        self.span = span
+        self.chunks: List[Any] = []
+        self.content = ""
+        self.finished = False
+
+    def __del__(self) -> None:
+        # Preserve the old generators' finally cleanup when a caller abandons
+        # iteration. Only end tracing: SDK transport cleanup may require an
+        # event loop and remains the caller's responsibility via close/context exit.
+        try:
+            self.finish()
+        except Exception:
+            # Destruction must not surface tracing failures or assume that
+            # logging is still available during interpreter shutdown.
+            pass
+
+    def process(self, chunk: Any) -> None:
+        try:
+            self.chunks.append(chunk)
+            if hasattr(chunk, "choices") and chunk.choices:
+                choice = chunk.choices[0]
+                if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
+                    if choice.delta.content:
+                        self.content += choice.delta.content
+        except Exception:
+            logger.exception("Failed to accumulate vLLM stream chunk")
+
+    def finish(self, error: Optional[BaseException] = None) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        try:
+            self.span.set_attributes(
+                _get_stream_output_attributes(self.chunks, self.content)
+            )
+        except Exception:
+            logger.exception("Failed to set vLLM stream attributes")
+        if error is None:
+            self.span.set_status(Status(StatusCode.OK))
+            self.span.end()
+        else:
+            _end_with_error(self.span, error)
+
+
+class _Stream(ObjectProxy):  # type: ignore[misc]
+    """Proxy the SDK Stream so its API stays intact while chunks are traced."""
+
+    __slots__ = ("_self_tracking",)
+
+    def __init__(self, stream: Any, span: Span) -> None:
+        super().__init__(stream)
+        self._self_tracking = _StreamSpan(span)
+
+    def __iter__(self) -> "_Stream":
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            chunk = self.__wrapped__.__next__()
+        except StopIteration:
+            self._self_tracking.finish()
+            raise
+        except BaseException as error:
+            self._self_tracking.finish(error)
+            raise
+        self._self_tracking.process(chunk)
+        return chunk
+
+    def __enter__(self) -> "_Stream":
+        # ObjectProxy would return the SDK stream and bypass this iterator.
+        self.__wrapped__.__enter__()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return self.__wrapped__.__exit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            self._self_tracking.finish(exc)
+
+    def close(self) -> None:
+        try:
+            close = getattr(self.__wrapped__, "close", None)
+            if close is not None:
+                close()
+            else:
+                # OpenAI 1.0 streams expose the response but not close().
+                self.__wrapped__.response.close()
+        except BaseException as error:
+            self._self_tracking.finish(error)
+            raise
+        self._self_tracking.finish()
+
+
+class _AsyncStream(ObjectProxy):  # type: ignore[misc]
+    """Proxy the SDK AsyncStream so its API stays intact while chunks are traced."""
+
+    __slots__ = ("_self_tracking",)
+
+    def __init__(self, stream: Any, span: Span) -> None:
+        super().__init__(stream)
+        self._self_tracking = _StreamSpan(span)
+
+    def __aiter__(self) -> "_AsyncStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            chunk = await self.__wrapped__.__anext__()
+        except StopAsyncIteration:
+            self._self_tracking.finish()
+            raise
+        except BaseException as error:
+            self._self_tracking.finish(error)
+            raise
+        self._self_tracking.process(chunk)
+        return chunk
+
+    async def __aenter__(self) -> "_AsyncStream":
+        await self.__wrapped__.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        try:
+            return await self.__wrapped__.__aexit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            exc = close_error
+            raise
+        finally:
+            self._self_tracking.finish(exc)
+
+    async def close(self) -> None:
+        try:
+            close = getattr(self.__wrapped__, "close", None)
+            if close is not None:
+                await close()
+            else:
+                await self.__wrapped__.response.aclose()
+        except BaseException as error:
+            self._self_tracking.finish(error)
+            raise
+        self._self_tracking.finish()
+
+    async def aclose(self) -> None:
+        # ObjectProxy otherwise delegates the bound SDK alias past our close().
+        await self.close()
+
+
+def _finish_response(span: Span, response: Any) -> None:
+    """End the span for a non-stream result.
+
+    A with_raw_response stream also lands here: it is returned unchanged so the
+    SDK raw-response API keeps working, and its chunks are not recorded.
+    """
+    try:
+        span.set_attributes(_get_output_attributes(response))
+    except Exception:
+        logger.exception("Failed to set vLLM response attributes")
+    span.set_status(Status(StatusCode.OK))
+    span.end()
 
 
 class _CompletionsWrapper(_WithTracer):
@@ -232,58 +469,41 @@ class _CompletionsWrapper(_WithTracer):
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")
         messages = kwargs.get("messages", args[1] if len(args) > 1 else [])
+        if isinstance(messages, Iterable) and not isinstance(
+            messages, (list, tuple, str, bytes)
+        ):
+            # Trace and send the same materialized input, never exhaust the
+            # caller's single-use iterable solely for instrumentation.
+            messages = list(messages)
+            if "messages" in kwargs:
+                kwargs = {**kwargs, "messages": messages}
+            else:
+                args = (args[0], messages, *args[2:])
         stream = kwargs.get("stream", False)
 
         # Get input attributes - exclude model, messages, stream from kwargs
-        extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        extra_kwargs = {
+            k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")
+        }
+        input_attrs = _get_input_attributes(
+            model,
+            messages,
+            hide_invocation_parameters=self._config.hide_llm_invocation_parameters,
+            **extra_kwargs,
+        )
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
             try:
                 response = wrapped(*args, **kwargs)
-
-                if stream:
-                    return self._wrap_stream(response, span)
-
-                # Non-streaming response
-                output_attrs = _get_output_attributes(response)
-                span.set_attributes(output_attrs)
-                span.set_status(Status(StatusCode.OK))
-                span.end()
-                return response
-
-            except Exception as e:
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.end()
+            except BaseException as e:
+                # Includes KeyboardInterrupt and other non-Exception interrupts.
+                _end_with_error(span, e)
                 raise
 
-    def _wrap_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap a streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+            if stream and hasattr(response, "__next__"):
+                return _Stream(response, span)
+            _finish_response(span, response)
+            return response
 
 
 class _AsyncCompletionsWrapper(_WithTracer):
@@ -303,55 +523,38 @@ class _AsyncCompletionsWrapper(_WithTracer):
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")
         messages = kwargs.get("messages", args[1] if len(args) > 1 else [])
+        if isinstance(messages, Iterable) and not isinstance(
+            messages, (list, tuple, str, bytes)
+        ):
+            # Trace and send the same materialized input, never exhaust the
+            # caller's single-use iterable solely for instrumentation.
+            messages = list(messages)
+            if "messages" in kwargs:
+                kwargs = {**kwargs, "messages": messages}
+            else:
+                args = (args[0], messages, *args[2:])
         stream = kwargs.get("stream", False)
 
         # Get input attributes - exclude model, messages, stream from kwargs
-        extra_kwargs = {k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")}
-        input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
+        extra_kwargs = {
+            k: v for k, v in kwargs.items() if k not in ("model", "messages", "stream")
+        }
+        input_attrs = _get_input_attributes(
+            model,
+            messages,
+            hide_invocation_parameters=self._config.hide_llm_invocation_parameters,
+            **extra_kwargs,
+        )
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-
-                if stream:
-                    return self._wrap_async_stream(response, span)
-
-                # Non-streaming response
-                output_attrs = _get_output_attributes(response)
-                span.set_attributes(output_attrs)
-                span.set_status(Status(StatusCode.OK))
-                span.end()
-                return response
-
-            except Exception as e:
-                span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.end()
+            except BaseException as e:
+                # Includes asyncio.CancelledError from timeouts and task cancellation.
+                _end_with_error(span, e)
                 raise
 
-    async def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap an async streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            async for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
+            if stream and hasattr(response, "__anext__"):
+                return _AsyncStream(response, span)
+            _finish_response(span, response)
+            return response

@@ -542,7 +542,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     request_parameters=request_parameters,
                     instance=instance,
                 )
-            except Exception as e:
+            except BaseException as e:
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
                     description=f"{type(e).__name__}: {e}",

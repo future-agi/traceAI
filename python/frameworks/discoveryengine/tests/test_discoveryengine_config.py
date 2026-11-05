@@ -210,8 +210,8 @@ def test_hide_outputs_changes_nothing_because_no_output_text_is_recorded(fake):
 @pytest.mark.parametrize("source", ["config", "env"])
 @pytest.mark.parametrize("flag", OTHER_CONTENT_HIDE_FLAGS)
 def test_other_content_hide_flags_follow_core_error_policy(fake, monkeypatch, flag, source):
-    # These flags do not hide a retrieval query, but native core derives error
-    # privacy from all content-hide flags, not only hide_inputs. No opt-out.
+    # Granular input policies also hide the opaque input.value copy. Output
+    # policies leave it visible; all content-hide flags derive error privacy.
     plain = _denied(fake, {})
     options = {}
     if source == "config":
@@ -219,7 +219,8 @@ def test_other_content_hide_flags_follow_core_error_policy(fake, monkeypatch, fl
     else:
         monkeypatch.setenv("FI_" + flag.upper(), "true")
     span = _denied(fake, options)
-    assert attrs(span)["input.value"] == DENIED_QUERY
+    expected_query = REDACTED_VALUE if flag in ("hide_input_messages", "hide_input_text") else DENIED_QUERY
+    assert attrs(span)["input.value"] == expected_query
     assert attrs(span)["discoveryengine.error.code"] == 403
     assert attrs(span)["discoveryengine.error.status"] == "PERMISSION_DENIED"
     assert span.status.status_code is StatusCode.ERROR

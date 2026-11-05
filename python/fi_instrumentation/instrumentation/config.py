@@ -368,6 +368,24 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
+        # Opaque aggregate copies cannot be filtered by message-part type. Hide
+        # the whole copy when any contained input/output category is private;
+        # typed message attributes below still preserve the other categories.
+        elif (
+            self.hide_input_messages or self.hide_input_text or self.hide_input_images
+        ) and _has_content_prefix(
+            key,
+            (
+                SpanAttributes.INPUT_VALUE,
+                SpanAttributes.RAW_INPUT,
+                SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+            ),
+        ):
+            value = REDACTED_VALUE
+        elif (
+            self.hide_output_messages or self.hide_output_text
+        ) and _has_content_prefix(key, (SpanAttributes.OUTPUT_VALUE, SpanAttributes.RAW_OUTPUT)):
+            value = REDACTED_VALUE
         elif self.hide_inputs and _has_content_prefix(key, (SpanAttributes.INPUT_VALUE,)):
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
@@ -432,7 +450,9 @@ class TraceConfig:
         ) and _is_embedding_text_key(key):
             # Embedding input text is input content for all three flags.
             value = REDACTED_VALUE
-        elif self.hide_input_images and _has_content_prefix(key, (SpanAttributes.INPUT_IMAGES,)):
+        elif (self.hide_input_images or self.hide_input_messages) and _has_content_prefix(
+            key, (SpanAttributes.INPUT_IMAGES,)
+        ):
             return None
         elif (
             self.hide_input_images

@@ -176,7 +176,7 @@ jobs:
 
       - name: Install the package and its dev dependencies (poetry)
         id: install_poetry
-        if: matrix.package.backend == 'poetry'
+        if: matrix.package.backend == 'poetry' && matrix.package.name != 'openai' && matrix.package.name != 'vllm'
         working-directory: ${{ matrix.package.dir }}
         run: |
           pip install "poetry==$POETRY_VERSION"
@@ -192,6 +192,17 @@ jobs:
               poetry run pip install "$pin"
             fi
           done
+
+      - name: Install privacy-dependent OpenAI packages with the local core
+        id: install_local_core
+        if: matrix.package.name == 'openai' || matrix.package.name == 'vllm'
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          # These packages require the core release prepared in the same PR.
+          # Resolve built wheels together, never an older core from PyPI/poetry.lock.
+          python -m venv .venv
+          .venv/bin/pip install "$GITHUB_WORKSPACE/python" . pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0 httpx==0.27.2
+          .venv/bin/pip check
 
       - name: Install the package and its dev dependencies (hatch)
         id: install_hatch

@@ -58,7 +58,9 @@ class TestOpenAIFramework:
     @pytest.fixture
     def mock_openai_requests(self):
         """Mock OpenAI HTTP requests to avoid real API calls."""
-        with patch('httpx.Client.send') as mock_request:
+        # OpenAI 3.x defaults to httpx2; patch the transport the SDK uses.
+        transport = "httpx2" if int(openai.__version__.split(".")[0]) >= 3 else "httpx"
+        with patch(f"{transport}.Client.send") as mock_request:
             # Set up mock response for chat completions
             mock_response = MagicMock()
             mock_response.status_code = 200

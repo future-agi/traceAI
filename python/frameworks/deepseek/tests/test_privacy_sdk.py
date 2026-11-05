@@ -122,8 +122,7 @@ async def test_reasoning_and_tool_output_privacy(
         tool_key = "deepseek.tool_calls.0.function.arguments"
         content_key = "gen_ai.output.messages.0.message.content"
         if hide_content:
-            if policy == "hide_outputs":
-                assert attributes["output.value"] == REDACTED_VALUE
+            assert attributes["output.value"] == REDACTED_VALUE
             if policy == "hide_output_text":
                 for key in (*reasoning_keys, tool_key, content_key):
                     assert attributes[key] == REDACTED_VALUE
@@ -131,19 +130,16 @@ async def test_reasoning_and_tool_output_privacy(
                 assert not any(key.startswith("gen_ai.output.messages") for key in attributes)
                 for key in (*reasoning_keys, tool_key):
                     assert key not in attributes
-            # Text/message policies intentionally do not hide the separate raw
-            # output.value field. Everything else must be free of private output.
-            masked_attributes = dict(attributes)
-            if policy != "hide_outputs":
-                masked_attributes.pop("output.value")
+            # Granular policies must also hide opaque raw copies: excluding
+            # output.value here would let the same private answer leak again.
             for private in (answer, reasoning, arguments, "PRIVATE_TOOL_ARGUMENTS_6823"):
-                assert private not in json.dumps(masked_attributes)
+                assert private not in json.dumps(attributes)
         else:
             for key in reasoning_keys:
                 assert attributes[key] == reasoning
             assert attributes[tool_key] == arguments
             assert attributes[content_key] == answer
-        if not hide_content or policy != "hide_outputs":
+        if not hide_content:
             payload = json.loads(attributes["output.value"])
             output = payload if streaming else payload["choices"][0]["message"]
             assert output["content"] == answer
