@@ -1,4 +1,9 @@
+## [Unreleased]
 
+### Fixed
+- Preserve distinct parts in streaming responses so parallel function calls,
+  repeated calls to the same tool, and multimedia parts are not overwritten or
+  merged into text parts in exported traces.
 
 ## [0.1.3] - 2026-10-29
 
