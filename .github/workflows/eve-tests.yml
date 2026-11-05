@@ -1,0 +1,69 @@
+name: Eve destination tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_vercel/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/tsconfig*'
+      - '.github/workflows/eve-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_vercel/**'
+      - '.github/workflows/eve-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-destination:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        eve: ['0.80.0', '1.0.0-rc.1']
+        otel: ['1', '2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.11.0'
+      - name: Install isolated pinned test dependencies
+        env:
+          EVE_VERSION: ${{ matrix.eve }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/eve" --ignore-scripts --no-audit --no-fund \
+            typescript@5.9.3 ts-jest@29.4.5 jest@29.7.0 @types/jest@29.5.14 @types/node@22.15.29 \
+            tsc-alias@1.8.16 @traceai/fi-semantic-conventions@0.1.1 \
+            @opentelemetry/api@1.9.0 @opentelemetry/core@1.30.1 \
+            @opentelemetry/sdk-trace-base@1.30.1 @opentelemetry/resources@1.30.1 \
+            @opentelemetry/exporter-trace-otlp-http@0.57.2 \
+            otel2@npm:@opentelemetry/sdk-trace-base@2.6.1 \
+            resources2@npm:@opentelemetry/resources@2.6.1 \
+            otlp2@npm:@opentelemetry/exporter-trace-otlp-http@0.216.0 "eve@$EVE_VERSION"
+          ln -s "$RUNNER_TEMP/eve/node_modules" typescript/node_modules
+      - name: Build public CommonJS and ESM exports
+        run: |
+          BIN="$RUNNER_TEMP/eve/node_modules/.bin"
+          PKG="$GITHUB_WORKSPACE/typescript/packages/traceai_vercel"
+          "$BIN/tsc" "$PKG/src/index.ts" --outDir "$PKG/dist/src" --target ES2020 --module commonjs --strict --skipLibCheck --declaration
+          "$BIN/tsc" -p "$PKG/tsconfig.esm.json"
+          "$BIN/tsc-alias" -p "$PKG/tsconfig.esm.json"
+          "$BIN/tsc" "$PKG/test/eve-types.mts" --noEmit --target ES2022 --module nodenext --strict --skipLibCheck
+          echo '{"type":"module"}' > "$PKG/dist/esm/package.json"
+          node --input-type=module -e "import {createEveDestination} from './typescript/packages/traceai_vercel/dist/esm/index.js'; if(typeof createEveDestination !== 'function') process.exit(1)"
+      - name: Test with networking restricted to loopback
+        env:
+          OTEL_MAJOR: ${{ matrix.otel }}
+        run: |
+          sudo unshare --net -- bash -euc '
+            ip link set lo up
+            "$4" "$1/node_modules/jest/bin/jest.js" --config "$2/jest.config.js" --runInBand
+            "$4" "$2/test/eve-native.mjs" "$1/node_modules/eve" "$2/dist/src/eve.js" "$3"
+          ' bash "$RUNNER_TEMP/eve" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel" "$OTEL_MAJOR" "$(command -v node)"
