@@ -23,7 +23,9 @@ defaults:
 jobs:
   compatibility:
     name: PyMongo ${{ matrix.pymongo }} / Python ${{ matrix.python }}
-    runs-on: ubuntu-latest
+    # ubuntu-latest now resolves to 26.04, which has no Python 3.9 build;
+    # 24.04 keeps the declared 3.9 floor testable.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
