@@ -295,7 +295,7 @@ def _response_attributes(
             name = getattr(item, "name", None)
             count = getattr(item, "count", None)
             if isinstance(name, str) and isinstance(count, int) and not isinstance(count, bool):
-                names.append(_cap(name, MAX_NAME_BYTES))
+                names.append(_clean(name, keys, MAX_NAME_BYTES, options.pii_redaction))
                 counts.append(count)
         if names:
             attributes[USAGE_NAMES] = names
@@ -309,7 +309,7 @@ def _response_attributes(
             event: Dict[str, Any] = {}
             kind = getattr(warning, "type", None)
             if isinstance(kind, str):
-                event[WARNING_TYPE] = _cap(kind, MAX_NAME_BYTES)
+                event[WARNING_TYPE] = _clean(kind, keys, MAX_NAME_BYTES, options.pii_redaction)
             message = getattr(warning, "message", None)
             if isinstance(message, str) and not options.hide_outputs:
                 event[WARNING_MESSAGE] = _clean(
