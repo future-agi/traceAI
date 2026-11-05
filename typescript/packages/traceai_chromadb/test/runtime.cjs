@@ -360,26 +360,57 @@ test(`Chroma ${version} ${format} ${mode}: factories, spans, lifecycle and OTLP`
     failCount = false;
   }
 
-  await t.test('input hiding removes filters from exported spans, not SDK requests', async () => {
-    const previous = process.env.FI_HIDE_INPUTS;
-    try {
-      process.env.FI_HIDE_INPUTS = 'true';
-      inst.disable(); inst.enable();
-      const where = { private_note: 'SYNTHETIC_PRIVATE_FILTER' };
-      await once('query', () => early
-        ? collection.query([[0.1, 0.2]], 2, where)
-        : collection.query({ queryEmbeddings: [[0.1, 0.2]], nResults: 2, where }), {
-        'db.vector.query.filter': undefined,
-      });
-      if (!early) assert.deepEqual(requests.at(-1).body.where, where);
-      await provider.forceFlush();
-      assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_FILTER'), false);
-    } finally {
-      if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
-      else process.env.FI_HIDE_INPUTS = previous;
-      inst.disable(); inst.enable();
-    }
-  });
+  for (const config of ['environment', 'explicit-true', 'explicit-false']) {
+    await t.test(`${config}: input hiding applies to collection names and filters on the wire`, async () => {
+      const previous = process.env.FI_HIDE_INPUTS;
+      let privacyInst;
+      const hideInputs = config !== 'explicit-false';
+      try {
+        // Explicit options take precedence over the opposite environment value.
+        process.env.FI_HIDE_INPUTS = String(config !== 'explicit-true');
+        inst.disable();
+        privacyInst = config === 'environment' ? inst : new ChromaDBInstrumentation({
+          traceConfig: { hideInputs, hideErrorDetails: true },
+        });
+        privacyInst.setTracerProvider(provider);
+        privacyInst.enable();
+        privacyInst.manuallyInstrument(sdk);
+        // v3 factories can return an unexported class; rediscover this real instance.
+        privacyInst.manuallyInstrument({ Collection: collection.constructor });
+        const where = { private_note: 'SYNTHETIC_PRIVATE_FILTER' };
+        const name = collection.name;
+        assert.ok(name, 'exercise a named collection, not an anonymous handle');
+        await provider.forceFlush();
+        const wireStart = wire.length;
+        await once('query', () => early
+          ? collection.query([[0.1, 0.2]], 2, where)
+          : collection.query({ queryEmbeddings: [[0.1, 0.2]], nResults: 2, where }), {
+          'db.vector.query.filter': hideInputs ? undefined : JSON.stringify(where),
+          'db.namespace': hideInputs ? undefined : name,
+          'db.vector.collection.name': hideInputs ? undefined : name,
+          'db.vector.query.top_k': 2,
+          'db.vector.results.count': early ? 1 : 2,
+        });
+        if (!early) assert.deepEqual(requests.at(-1).body.where, where);
+        assert.equal(collection.name, name, 'privacy must not change the collection');
+        await provider.forceFlush();
+        const exported = wire.slice(wireStart).flatMap(p => p.resourceSpans)
+          .flatMap(r => r.scopeSpans).flatMap(s => s.spans);
+        assert.equal(exported.length, 1);
+        const attrs = attributes(exported[0]);
+        assert.equal(attrs['db.namespace'], hideInputs ? undefined : name);
+        assert.equal(attrs['db.vector.collection.name'], hideInputs ? undefined : name);
+        assert.equal(attrs['db.system'], 'chromadb');
+        assert.equal(attrs['db.operation.name'], 'query');
+        assert.equal(JSON.stringify(exported).includes('SYNTHETIC_PRIVATE_FILTER'), !hideInputs);
+      } finally {
+        privacyInst?.disable();
+        if (previous === undefined) delete process.env.FI_HIDE_INPUTS;
+        else process.env.FI_HIDE_INPUTS = previous;
+        inst.enable();
+      }
+    });
+  }
   // Existing objects, not just future factory results, follow enable/disable.
   inst.disable();
   assert.equal(isPatched(), false);

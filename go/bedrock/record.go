@@ -40,14 +40,27 @@ func (p TraceConfig) output() bool {
 	return !p.HideOutputs && !p.HideOutputMessages && !p.HideOutputText
 }
 func bounded(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	s = s[:n]
-	for !utf8.ValidString(s) && len(s) > 0 {
-		s = s[:len(s)-1]
-	}
+	s, _ = boundedUTF8(s, n)
 	return s
+}
+
+func boundedUTF8(s string, n int) (string, bool) {
+	truncated := len(s) > n
+	// Bound the work before normalizing: malformed bytes must not poison an
+	// entire OTLP batch, even when the original string fits the capture budget.
+	if len(s) > n {
+		s = s[:n]
+	}
+	s = strings.ToValidUTF8(s, "�")
+	if len(s) > n {
+		// Replacement characters can expand the string. Keep a valid boundary.
+		truncated = true
+		for !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n]
+	}
+	return s, truncated
 }
 
 // block is an allowlist projection, not an SDK object serialization.
@@ -69,13 +82,17 @@ type record struct {
 	privacy           TraceConfig
 	started           time.Time
 	first             bool
+	streamComplete    bool
 	blocks            map[int32]*block
 	used              int
 	contentAttributes int
 	truncated         bool
 	usage             tokenUsage
 }
-type tokenUsage struct{ Input, Output, Total, CacheRead, CacheWrite *int64 }
+type tokenUsage struct {
+	Input, Output, Total, CacheRead, CacheWrite *int64
+	CacheWrite5m, CacheWrite1h                  *int64
+}
 
 func int64ptr(v *int32) *int64 {
 	if v == nil {
@@ -89,10 +106,8 @@ func (r *record) take(s string) string {
 	if n < 0 {
 		n = 0
 	}
-	if len(s) > n {
-		r.truncated = true
-	}
-	s = bounded(s, n)
+	s, truncated := boundedUTF8(s, n)
+	r.truncated = r.truncated || truncated
 	r.used += len(s)
 	return s
 }
@@ -164,10 +179,20 @@ func (r *record) finish(err error, closed bool) {
 	r.blocks = nil
 }
 func (r *record) tokens() {
+	// TTL counters partition cache_write_tokens for pricing; they are not extra
+	// writes and must never be added to the service's aggregate or total tokens.
 	for _, x := range []struct {
 		k string
 		v *int64
-	}{{"input_tokens", r.usage.Input}, {"output_tokens", r.usage.Output}, {"total_tokens", r.usage.Total}, {"cache_read_tokens", r.usage.CacheRead}, {"cache_write_tokens", r.usage.CacheWrite}} {
+	}{
+		{"input_tokens", r.usage.Input},
+		{"output_tokens", r.usage.Output},
+		{"total_tokens", r.usage.Total},
+		{"cache_read_tokens", r.usage.CacheRead},
+		{"cache_write_tokens", r.usage.CacheWrite},
+		{"cache_write_5m_tokens", r.usage.CacheWrite5m},
+		{"cache_write_1h_tokens", r.usage.CacheWrite1h},
+	} {
 		if x.v != nil && *x.v >= 0 {
 			r.span.SetAttributes(attribute.Int64("gen_ai.usage."+x.k, *x.v))
 		}
@@ -178,6 +203,27 @@ func (r *record) setUsage(u *types.TokenUsage) {
 		return
 	}
 	r.usage = tokenUsage{Input: int64ptr(u.InputTokens), Output: int64ptr(u.OutputTokens), Total: int64ptr(u.TotalTokens), CacheRead: int64ptr(u.CacheReadInputTokens), CacheWrite: int64ptr(u.CacheWriteInputTokens)}
+	// Combine entries only within this snapshot. Resetting usage above prevents
+	// repeated metadata events from double counting writes. Unknown TTLs stay
+	// solely in the service's aggregate; do not guess their price category.
+	for _, detail := range u.CacheDetails {
+		n := int64ptr(detail.InputTokens)
+		if n == nil || *n < 0 {
+			continue
+		}
+		switch detail.Ttl {
+		case types.CacheTTLFiveMinutes:
+			if r.usage.CacheWrite5m != nil {
+				*n += *r.usage.CacheWrite5m
+			}
+			r.usage.CacheWrite5m = n
+		case types.CacheTTLOneHour:
+			if r.usage.CacheWrite1h != nil {
+				*n += *r.usage.CacheWrite1h
+			}
+			r.usage.CacheWrite1h = n
+		}
+	}
 }
 func (r *record) stop(s string) {
 	// Stop reasons are machine values, never a second channel for response text.
@@ -202,8 +248,10 @@ func (r *record) contentAttrs(values ...attribute.KeyValue) {
 func (r *record) messages(direction string, ms []message) {
 	// Keep both Future AGI indexed messages and a bounded summary, derived from
 	// the same sanitized projection. The SDK remains the source of application data.
-	for i, m := range ms {
-		prefix := "gen_ai." + direction + ".messages." + strconv.Itoa(i) + ".message."
+	index := 0
+	emit := func(m message) {
+		prefix := "gen_ai." + direction + ".messages." + strconv.Itoa(index) + ".message."
+		index++
 		r.contentAttrs(attribute.String(prefix+"role", m.Role))
 		var text strings.Builder
 		tool := 0
@@ -222,6 +270,24 @@ func (r *record) messages(direction string, ms []message) {
 		}
 		if text.Len() > 0 {
 			r.contentAttrs(attribute.String(prefix+"content", text.String()))
+		}
+	}
+	for _, m := range ms {
+		// The indexed convention has one tool_call_id per message. Split each
+		// result into its own tool message, preserving surrounding text order.
+		start := 0
+		for j, b := range m.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if j > start {
+				emit(message{Role: m.Role, Content: m.Content[start:j]})
+			}
+			emit(message{Role: "tool", Content: m.Content[j : j+1]})
+			start = j + 1
+		}
+		if start < len(m.Content) || len(m.Content) == 0 {
+			emit(message{Role: m.Role, Content: m.Content[start:]})
 		}
 	}
 	data, _ := json.Marshal(ms)
@@ -297,11 +363,16 @@ func (r *record) converseInput(ms []types.Message, sys []types.SystemContentBloc
 		}
 		// Stop sequences are content, so granular input switches cover them too.
 		if r.privacy.input() {
+			var stops []string
 			for i, s := range config.StopSequences {
 				if i >= 16 {
+					r.truncated = true
 					break
 				}
-				r.span.SetAttributes(attribute.String("gen_ai.request.stop_sequences."+strconv.Itoa(i), r.take(s)))
+				stops = append(stops, r.take(s))
+			}
+			if len(stops) > 0 {
+				r.span.SetAttributes(attribute.StringSlice("gen_ai.request.stop_sequences", stops))
 			}
 		}
 	}
@@ -391,6 +462,7 @@ func (r *record) converseEvent(ev types.ConverseStreamOutput) {
 			r.delta(*v.Value.ContentBlockIndex, "tool_use", str(d.Value.Input))
 		}
 	case *types.ConverseStreamOutputMemberMessageStop:
+		r.streamComplete = true
 		r.stop(string(v.Value.StopReason))
 	case *types.ConverseStreamOutputMemberMetadata:
 		r.setUsage(v.Value.Usage)

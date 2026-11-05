@@ -1,15 +1,16 @@
+import inspect
 import logging
 from abc import ABC
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Tuple
 
 import opentelemetry.context as context_api
-from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation import TraceConfig, get_attributes_from_context
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 
+from traceai_deepseek._raw_response import _RawResponse
 from traceai_deepseek._request_attributes_extractor import (
     _ChatCompletionRequestAttributesExtractor,
 )
@@ -63,6 +64,62 @@ class _WithTracer(ABC):
                 extra_attributes=dict(attributes),
             )
 
+    def _finalize_response(
+        self, span: _WithSpan, response: Any, parameters: Dict[str, Any],
+        asynchronous: bool,
+    ) -> Any:
+        if span.is_finished:
+            return response
+        try:
+            # Detect raw containers before inspecting/serializing/wrapping them.
+            # Their parse API may be sync even on AsyncOpenAI (including 1.0).
+            if callable(getattr(response, "parse", None)):
+                raw = _RawResponse(
+                    response,
+                    lambda parsed: self._finalize_response(span, parsed, parameters, asynchronous),
+                    span,
+                    asynchronous,
+                )
+                # with_raw_response buffers ordinary completions. Finish even
+                # for header-only callers, but never read a lazy response body
+                # or consume a stream on the application's behalf.
+                if (
+                    not parameters.get("stream", False)
+                    and not inspect.iscoroutinefunction(response.parse)
+                    and getattr(getattr(response, "http_response", None), "is_stream_consumed", False)
+                ):
+                    try:
+                        raw.parse()
+                    except Exception:
+                        # The proxy records the error; preserve the SDK contract
+                        # that a parse failure is raised only when callers parse.
+                        pass
+                return raw
+            if parameters.get("stream", False):
+                stream_type = _AsyncStream if asynchronous else _Stream
+                return stream_type(response, _StreamState(
+                    span, _StreamingChatCompletionResponseExtractor(config=self._config), parameters,
+                ))
+        except BaseException as error:
+            span.record_exception(error)
+            span.finish_tracing(status=trace_api.Status(
+                trace_api.StatusCode.ERROR, f"{type(error).__name__}: {error}"
+            ))
+            raise
+
+        try:
+            response_dict = _to_dict(response)
+            _finish_tracing(
+                status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                with_span=span,
+                attributes=self._response_extractor.get_attributes(response_dict),
+                extra_attributes=self._response_extractor.get_extra_attributes(response_dict, parameters),
+            )
+        except Exception:
+            logger.exception("Failed to finalize response")
+            span.finish_tracing()
+        return response
+
 
 class _ChatCompletionWrapper(_WithTracer):
     """Wrapper for DeepSeek chat completions (via OpenAI client)."""
@@ -95,7 +152,6 @@ class _ChatCompletionWrapper(_WithTracer):
             return wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
-        is_streaming = request_parameters.get("stream", False)
 
         span_name = "deepseek.chat.completions"
 
@@ -116,31 +172,7 @@ class _ChatCompletionWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
-            if is_streaming:
-                return self._handle_streaming_response(span, response, request_parameters)
-
-            try:
-                response_dict = _to_dict(response)
-                _finish_tracing(
-                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                    with_span=span,
-                    attributes=self._response_extractor.get_attributes(response_dict),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response_dict, request_parameters
-                    ),
-                )
-            except Exception:
-                logger.exception("Failed to finalize response")
-                span.finish_tracing()
-            return response
-
-    def _handle_streaming_response(
-        self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        return _Stream(response, _StreamState(
-            span, _StreamingChatCompletionResponseExtractor(config=self._config),
-            request_parameters,
-        ))
+            return self._finalize_response(span, response, request_parameters, asynchronous=False)
 
 
 class _AsyncChatCompletionWrapper(_WithTracer):
@@ -172,7 +204,6 @@ class _AsyncChatCompletionWrapper(_WithTracer):
             return await wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
-        is_streaming = request_parameters.get("stream", False)
 
         span_name = "deepseek.chat.completions"
 
@@ -194,28 +225,4 @@ class _AsyncChatCompletionWrapper(_WithTracer):
                 span.finish_tracing(status=status)
                 raise
 
-            if is_streaming:
-                return self._handle_async_streaming_response(span, response, request_parameters)
-
-            try:
-                response_dict = _to_dict(response)
-                _finish_tracing(
-                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                    with_span=span,
-                    attributes=self._response_extractor.get_attributes(response_dict),
-                    extra_attributes=self._response_extractor.get_extra_attributes(
-                        response_dict, request_parameters
-                    ),
-                )
-            except Exception:
-                logger.exception("Failed to finalize response")
-                span.finish_tracing()
-            return response
-
-    def _handle_async_streaming_response(
-        self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        return _AsyncStream(response, _StreamState(
-            span, _StreamingChatCompletionResponseExtractor(config=self._config),
-            request_parameters,
-        ))
+            return self._finalize_response(span, response, request_parameters, asynchronous=True)

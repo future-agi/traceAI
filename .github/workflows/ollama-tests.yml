@@ -62,6 +62,6 @@ jobs:
             "$NODE" "$JEST" --config packages/traceai_ollama/jest.config.js --runInBand
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             env OLLAMA_SDK_PATH="$RUNNER_TEMP/ollama-sdk/node_modules/ollama" \
-            "$NODE" --test --test-timeout=15000 packages/traceai_ollama/test/streams.test.cjs
+            "$NODE" --test --test-timeout=30000 packages/traceai_ollama/test/*.test.cjs
       - name: Confirm no generated version or lockfile changes
         run: git diff --exit-code

@@ -89,6 +89,16 @@ def test_error_details_hidden_by_default_or_config(options):
     run("--error", *options)
 
 
+@pytest.mark.parametrize("http_error", [False, True], ids=["mock", "openai-400"])
+@pytest.mark.parametrize("async_stream", [False, True], ids=["sync", "async"])
+def test_model_error_completes_native_tree(http_error, async_stream):
+    run(
+        "--error",
+        *(["--http-error"] if http_error else []),
+        *(["--async-stream"] if async_stream else []),
+    )
+
+
 def test_environment_privacy():
     run("--capture", "--error", environment={"FI_HIDE_ERROR_DETAILS": "true"})
 

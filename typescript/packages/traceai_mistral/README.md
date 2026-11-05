@@ -106,6 +106,7 @@ When present in your SDK version:
 - `fim.complete` and `fim.stream`
 - `agents.complete` and `agents.stream`
 - `embeddings.create`
+- `classifiers.moderate`, `moderateChat`, `classify`, and `classifyChat`
 - `beta.conversations.start`, `append`, and `restart`, plus their streaming variants
 
 Tool definitions, tool-call arguments, and tool results are captured as part of the model request or response. This package does not execute tools or create spans for your application's tool functions. Administrative APIs and the SDK's separate Responses, audio, and realtime clients are not instrumented.

@@ -53,6 +53,7 @@ const telemetry = require('./telemetry.cjs');
         assert.equal(span.name, `transformers.${task}`); assert.equal(span.kind, 0);
         assert.equal(span.attributes['fi.span.kind'], task === 'feature-extraction' ? 'EMBEDDING' : task === 'question-answering' ? 'CHAIN' : 'LLM');
         assert.equal(span.attributes['transformers.task'], task);
+        assert.equal(span.attributes['gen_ai.provider.name'], 'huggingface');
         assert.ok(Object.keys(span.attributes).some(k => k.endsWith('model') || k.endsWith('model_name')), 'actual model identity');
         if (task === 'feature-extraction') {
           assert.ok(actual instanceof sdk.Tensor);
@@ -102,6 +103,38 @@ const telemetry = require('./telemetry.cjs');
         const stoppedRaw = await raw('Hello', { ...generation, stopping_criteria: [stopping] });
         const stoppedTraced = await wrapped('Hello', { ...generation, stopping_criteria: [stopping] }); invocationCount++;
         assert.deepEqual(stoppedTraced, stoppedRaw);
+        // piiRedaction alone must mask messages AND stacks without hiding all error details.
+        for (const source of ['option', 'environment']) {
+          const previous = process.env.FI_PII_REDACTION;
+          let privatePipeline;
+          try {
+            if (source === 'environment') process.env.FI_PII_REDACTION = 'true';
+            privatePipeline = new adapter.TransformersInstrumentation(source === 'option' ? { traceConfig: { piiRedaction: true } } : {}).wrapPipeline(raw);
+          } finally {
+            if (previous === undefined) delete process.env.FI_PII_REDACTION;
+            else process.env.FI_PII_REDACTION = previous;
+          }
+          const marker = 'error.person@example.com';
+          const error = new Error(`Callback failed for ${marker}`);
+          const originalStack = error.stack;
+          await t.flush(); const wireBefore = t.wire().length;
+          await assert.rejects(privatePipeline('Hello', { ...generation, streamer: new sdk.TextStreamer(raw.tokenizer, {
+            skip_prompt: true, callback_function: () => { throw error; },
+          }) }), thrown => thrown === error); invocationCount++;
+          assert.equal(error.message, `Callback failed for ${marker}`);
+          assert.equal(error.stack, originalStack);
+          await t.flush();
+          const spans = t.wire().slice(wireBefore);
+          assert.equal(spans.length, 1);
+          assert.equal(spans[0].status.code, 2);
+          const [event] = spans[0].events;
+          assert.equal(event.name, 'exception');
+          const attrs = telemetry.attributes(event);
+          assert.equal(attrs['exception.type'], 'Error');
+          assert.equal(attrs['exception.message'], 'Callback failed for <EMAIL_ADDRESS>');
+          assert.ok(attrs['exception.stacktrace'].includes('Callback failed for <EMAIL_ADDRESS>'));
+          assert.ok(!JSON.stringify(spans).includes(marker), `${source}: PII must not reach OTLP`);
+        }
         const callbackError = new Error('PRIVATE_CALLBACK_ERROR');
         const privateError = new adapter.TransformersInstrumentation({ traceConfig: { hideErrorDetails: true } }).wrapPipeline(raw);
         await t.flush(); const errorBefore = t.wire().length;
@@ -134,7 +167,12 @@ const telemetry = require('./telemetry.cjs');
     for (const p of loaded.splice(0)) await p.dispose();
     assert.equal(t.memory.getFinishedSpans().length, beforeDispose);
     await t.flush();
-    assert.equal(t.wire().filter(s => s.name.startsWith('transformers.')).length, invocationCount);
+    const invocations = t.wire().filter(s => s.name.startsWith('transformers.'));
+    assert.equal(invocations.length, invocationCount);
+    for (const span of invocations) {
+      assert.equal(telemetry.attributes(span)['gen_ai.provider.name'], 'huggingface', span.name);
+      assert.equal(span.kind, 1, 'local execution remains OTLP INTERNAL');
+    }
     console.log(JSON.stringify({ mode, node: process.version, invocations: invocationCount, otlpSpans: t.wire().length, status: 'PASS' }));
   } finally {
     for (const p of loaded) await p.dispose();

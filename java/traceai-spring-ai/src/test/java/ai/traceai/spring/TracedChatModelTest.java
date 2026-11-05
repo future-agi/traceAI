@@ -5,6 +5,9 @@ import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import reactor.core.publisher.Flux;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
@@ -71,14 +74,48 @@ class TracedChatModelTest {
     }
 
     @Test
-    void responseModelBackfillsRequestModelOnlyWhenOptionsDoNotName() {
+    void responseModelDoesNotInventUnknownRequestModel() {
         try (SpanTestSupport support = new SpanTestSupport()) {
             ChatModel delegate = SpanTestSupport.syncModel(p -> SpanTestSupport.response("x", null, "from-response"));
             new TracedChatModel(delegate, support.tracer, "synthetic").call(new Prompt("no options"));
 
             SpanData span = support.single();
-            assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_REQUEST_MODEL))).isEqualTo("from-response");
+            assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_REQUEST_MODEL))).isNull();
             assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_MODEL))).isEqualTo("from-response");
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void requestMetadataUsesDefaultsAndNonNullOverridesWithoutMutatingPrompt(boolean streaming, boolean override) {
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            ChatOptions defaults = ChatOptions.builder().model("configured-alias").temperature(0.4).topP(0.8).maxTokens(64).build();
+            Prompt prompt = override
+                ? new Prompt("input", ChatOptions.builder().model("request-alias").temperature(0.0).maxTokens(32).build())
+                : new Prompt("input");
+            ChatResponse response = SpanTestSupport.response("answer", null, "response-snapshot");
+            AtomicReference<Prompt> seen = new AtomicReference<>();
+            ChatModel delegate = new ChatModel() {
+                @Override public ChatOptions getDefaultOptions() { return defaults; }
+                @Override public ChatResponse call(Prompt p) { seen.set(p); return response; }
+                @Override public Flux<ChatResponse> stream(Prompt p) {
+                    seen.set(p);
+                    return Flux.just(response);
+                }
+            };
+            var model = new TracedChatModel(delegate, support.tracer, "synthetic");
+            assertThat(streaming ? model.stream(prompt).blockLast() : model.call(prompt)).isSameAs(response);
+            assertThat(seen.get()).isSameAs(prompt);
+            var span = support.single();
+            assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_REQUEST_MODEL)))
+                .isEqualTo(override ? "request-alias" : "configured-alias");
+            assertThat(span.getAttributes().get(AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_MODEL))).isEqualTo("response-snapshot");
+            assertThat(span.getAttributes().get(AttributeKey.doubleKey(SemanticConventions.LLM_REQUEST_TEMPERATURE))).isEqualTo(override ? 0.0 : 0.4);
+            assertThat(span.getAttributes().get(AttributeKey.doubleKey(SemanticConventions.LLM_REQUEST_TOP_P))).isEqualTo(0.8);
+            assertThat(span.getAttributes().get(AttributeKey.longKey(SemanticConventions.LLM_REQUEST_MAX_TOKENS))).isEqualTo(override ? 32L : 64L);
+            assertThat(defaults.getModel()).isEqualTo("configured-alias");
+            assertThat(defaults.getTemperature()).isEqualTo(0.4);
+            assertThat(defaults.getMaxTokens()).isEqualTo(64);
         }
     }
 
@@ -211,9 +248,15 @@ class TracedChatModelTest {
                 public ChatOptions getDefaultOptions() {
                     return defaults;
                 }
+
+                // Also implements the 2.x interface when these precompiled tests run on that runtime.
+                public ChatOptions getOptions() {
+                    return defaults;
+                }
             };
             TracedChatModel model = new TracedChatModel(delegate, support.tracer, "synthetic");
             assertThat(model.getDefaultOptions()).isSameAs(defaults);
+            assertThat(model.getOptions()).isSameAs(defaults);
             assertThat(model.unwrap()).isSameAs(delegate);
             assertThat(support.spansStarted.get()).isZero();
         }

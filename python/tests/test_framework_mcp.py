@@ -72,8 +72,9 @@ class TestMCPInstrumentor:
         metadata_deps = [Requirement(dep) for dep in requires("traceAI-mcp") if Requirement(dep).name == "mcp"]
         assert len(mcp_deps) == len(metadata_deps) == 1
         assert mcp_deps[0].specifier == metadata_deps[0].specifier
-        assert "1.8.0" not in mcp_deps[0].specifier
-        assert "1.8.1" in mcp_deps[0].specifier
+        assert "1.8.1" not in mcp_deps[0].specifier
+        assert "1.29.0" not in mcp_deps[0].specifier
+        assert "1.30.0" in mcp_deps[0].specifier
 
     def test_instrument_registers_post_import_hooks(self):
         """Test that instrumentation registers all necessary post-import hooks."""
@@ -246,7 +247,7 @@ class TestInstrumentedStreamReader:
 
         async def test_context():
             async with reader as stream:
-                assert stream == mock_stream
+                assert stream is reader
 
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()
@@ -349,7 +350,7 @@ class TestContextAttachingStreamReader:
 
         async def test_context():
             async with reader as stream:
-                assert stream == mock_stream
+                assert stream is reader
 
             mock_stream.__aenter__.assert_called_once()
             mock_stream.__aexit__.assert_called_once()

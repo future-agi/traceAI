@@ -59,7 +59,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // Interceptor is an a2aclient.CallInterceptor that traces A2A client calls.
 // Attach it with a2aclient.WithCallInterceptors when you create the client:
 //
-//	client, err := a2aclient.NewFromCard(ctx, card,
+//	client, err := traceaia2a.NewClientFromCard(ctx, card,
 //		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 //
 // SendMessage, SendStreamingMessage, GetTask, CancelTask and SubscribeToTask
@@ -67,10 +67,11 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
-// Use [WrapClient] around the created client for clean-EOF and early-abandonment
-// completion and to keep recording after auth-required. Without it, auth-required
-// ends the client span as in earlier releases; the SDK's interceptor hooks alone
-// do not observe iterator close.
+// Use [NewClientFromCard] or [NewClientFromEndpoints] to record results and stream
+// events after all response policies, even when a policy error skips this After.
+// It also handles clean EOF, early abandonment and recording after auth-required.
+// Without it, auth-required ends the client span as in earlier releases; the SDK's
+// interceptor hooks alone do not observe iterator close or every policy rejection.
 type Interceptor struct {
 	tracer trace.Tracer
 	tc     TraceConfig
@@ -186,9 +187,10 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 	}
 
 	// Keep the interceptor-only client's historical auth-required completion.
-	// Only a call claimed by WrapClient can wait for actual iterator completion;
+	// Only an owned completion slot can wait for actual iterator completion;
 	// an inherited wrapper slot may belong to a different (outer) call.
-	st.authRequiredEndsStream = !attachCompletion(ctx, clientCompletionKey, st)
+	attached := attachClientCompletion(ctx, req, st)
+	st.authRequiredEndsStream = !attached
 	if st.streaming {
 		// A stream ends without a callback when the caller stops reading
 		// early; the span then ends when the caller's context is done.
@@ -203,13 +205,15 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 }
 
 // After records the result, a streamed event or the error, and ends the span
-// when the call is over. It never changes the response and never fails it.
+// when the call is over. Bound clients defer this to the outer Client so later
+// response policies cannot reject data we have already recorded or end an OK
+// span before the SDK returns an error. It never changes or fails a response.
 func (i *Interceptor) After(ctx context.Context, resp *a2aclient.Response) error {
 	if ctx == nil || resp == nil {
 		return nil
 	}
 	st, _ := ctx.Value(stateKey{}).(*callState)
-	if st == nil || resp.Method != st.method {
+	if st == nil || resp.Method != st.method || st.deferredResponse {
 		return nil
 	}
 	st.recordResponse(resp.Payload, resp.Err)
@@ -248,6 +252,10 @@ type callState struct {
 	ended     bool
 	stopWatch func() bool
 
+	// Bound clients record results/events returned by the SDK, after all response
+	// policies have run. Immutable once Before publishes the state.
+	deferredResponse bool
+
 	// Legacy client-only fallback; servers and wrapped clients leave this false.
 	authRequiredEndsStream bool
 
@@ -257,8 +265,8 @@ type callState struct {
 	state      a2a.TaskState
 	events     int
 
-	artifacts strings.Builder // artifact text, in order
-	final     string          // reply message or final status message text
+	artifacts artifactState // current artifact text, in first-seen order
+	final     string        // reply message or final status message text
 }
 
 // requestAttributes records only protocol facts and applies the same content
@@ -358,7 +366,7 @@ func (s *callState) applyTask(t *a2a.Task) {
 	// earlier artifact events added.
 	s.artifacts.Reset()
 	for _, a := range t.Artifacts {
-		s.addArtifact(a)
+		s.addArtifact(a, false)
 	}
 	// Keep the latest snapshot's status text, including an auth prompt at EOF.
 	// A later status replaces it so an active stream never retains a stale prompt.
@@ -376,19 +384,14 @@ func (s *callState) applyMessage(m *a2a.Message) {
 	s.final = partsText(m.Parts)
 }
 
-func (s *callState) addArtifact(a *a2a.Artifact) {
+func (s *callState) addArtifact(a *a2a.Artifact, appendParts bool) {
 	if a == nil {
 		return
 	}
 	if t := partsKind(a.Parts); t != "" {
 		s.span.SetAttributes(attribute.String(A2AArtifactType, t))
 	}
-	if text := partsText(a.Parts); text != "" && s.artifacts.Len() < maxContentLen {
-		if s.artifacts.Len() > 0 {
-			s.artifacts.WriteByte('\n')
-		}
-		s.artifacts.WriteString(text)
-	}
+	s.artifacts.update(a, appendParts)
 }
 
 // applyEvent handles one streamed event and reports whether the stream is
@@ -429,7 +432,7 @@ func (s *callState) applyEvent(payload any) bool {
 		ev = append(ev, attribute.String(A2AEventType, "artifact-update"))
 		if v != nil {
 			s.setTaskInfo(string(v.TaskID), v.ContextID)
-			s.addArtifact(v.Artifact)
+			s.addArtifact(v.Artifact, v.Append)
 			if v.Artifact != nil {
 				if t := partsKind(v.Artifact.Parts); t != "" {
 					ev = append(ev, attribute.String(A2AArtifactType, t))

@@ -63,8 +63,6 @@ beforeEach(() => setup());
 async function teardown() {
   if (!instrumentation) return;
   for (const transport of transports) transport.close();
-  // Manually patched modules are not tracked by the automatic loader; undo the test patch.
-  instrumentation.unpatch(patched);
   instrumentation.disable();
   await provider.shutdown();
   instrumentation = undefined;
@@ -250,7 +248,7 @@ for (const method of ['chat', 'generate']) {
     await wireSpan(0);
   });
   test(`${method}: hideOutputs excludes partial tools/thinking/errors from OTLP`, async () => {
-    instrumentation.unpatch(patched);
+    instrumentation.disable();
     await provider.shutdown();
     setup({ hideOutputs: true });
     await assert.rejects(async () => {
@@ -262,7 +260,7 @@ for (const method of ['chat', 'generate']) {
     assert.equal(JSON.stringify(bodies).includes('consider '), false);
   });
   test(`${method}: patching class and its default instance emits only one span`, async () => {
-    instrumentation.unpatch(patched);
+    instrumentation.disable();
     await provider.shutdown();
     setup({}, true);
     for await (const chunk of await stream(method)) { /* consume */ }

@@ -1,5 +1,6 @@
 """Haystack's public tracing protocol, adapted to Future AGI semantics."""
 
+import asyncio
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -12,7 +13,7 @@ from haystack.tracing import Span, Tracer
 from opentelemetry import trace as trace_api
 
 from traceai_haystack import _semantics as sem
-from traceai_haystack._bindings import pipeline_context
+from traceai_haystack._bindings import pipeline_context, pipeline_is_async
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class HaystackSpan(Span):
         self.operation = operation
         self.config = config
         self.component = component
+        self.is_async = pipeline_is_async.get()
         self.arguments: Mapping[str, Any] = {}
         self.pipeline_output: Any = None
         self.deferred: list[tuple["HaystackSpan", int]] = []
@@ -236,6 +238,7 @@ class HaystackSpan(Span):
             self._attributes(sem._get_llm_token_count_attributes(response))
             self._attributes(sem._get_llm_output_message_attributes(response))
         elif self.component_type is sem.ComponentType.EMBEDDER:
+            self._attributes(sem._get_embedding_token_count_attributes(response))
             self._attributes(sem._get_embedding_attributes(self.arguments, response))
         elif self.component_type is sem.ComponentType.RANKER:
             self._attributes(sem._get_reranker_response_attributes(response))
@@ -246,6 +249,9 @@ class HaystackSpan(Span):
         if self.finished:
             return
         self.finished = True
+        # Newer Haystack components initialize SDK clients lazily. Inspect the
+        # actual client after execution, including when the provider call failed.
+        self._attributes(sem._get_provider_attributes(self.component, self.is_async))
         if self.pipeline_output is not None:
             self._output(self.pipeline_output)
         for child, child_end_time in self.deferred:
@@ -304,6 +310,12 @@ class HaystackTracer(Tracer):
         try:
             with trace_api.use_span(raw, end_on_exit=False):
                 yield span
+        except asyncio.CancelledError:
+            # OTel's use_span handles Exception, not this BaseException. Never
+            # export the cancellation message: Task.cancel(msg) can carry input.
+            raw.set_attribute("error.type", "asyncio.CancelledError")
+            raw.set_status(trace_api.StatusCode.ERROR)
+            raise
         finally:
             _active_span.reset(token)
             # 2.10's AsyncPipeline sends outputs *after* its component context
