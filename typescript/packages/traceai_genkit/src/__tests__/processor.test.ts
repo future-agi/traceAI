@@ -26,6 +26,7 @@ const HIDE_ENV = [
   "FI_HIDE_OUTPUT_MESSAGES",
   "FI_HIDE_INPUT_TEXT",
   "FI_HIDE_OUTPUT_TEXT",
+  "FI_HIDE_ERROR_DETAILS",
 ];
 const savedEnv: Record<string, string | undefined> = {};
 beforeEach(() => {
@@ -223,7 +224,7 @@ describe("FIGenkitSpanProcessor: error text, stack traces and local identity", (
     expect(span.events[1].attributes?.["exception.stacktrace"]).toBe(stacktrace);
   });
 
-  it("hidden (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS): replaces the message with the error type and __REDACTED__", async () => {
+  it("hidden (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS): drops messages but keeps the error type", async () => {
     for (const traceConfig of [{ hideInputs: true }, { hideOutputs: true }]) {
       const { exporter, provider } = fiLikeProvider();
       const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig });
@@ -233,17 +234,17 @@ describe("FIGenkitSpanProcessor: error text, stack traces and local identity", (
       const blob = JSON.stringify({ status: exported.status, events: exported.events, attributes: exported.attributes });
       expect(blob).not.toContain(DATA_MARKER);
       for (const value of forbidden) expect(blob).not.toContain(value);
-      expect(exported.status).toEqual({ code: 2, message: "GenkitError: __REDACTED__" });
-      expect(exported.events[1].attributes).toEqual({ "exception.type": "GenkitError", "exception.message": "__REDACTED__" });
+      expect(exported.status).toEqual({ code: 2 });
+      expect(exported.events[1].attributes).toEqual({ "exception.type": "GenkitError" });
     }
   });
 
-  it("hidden: a status with no exception event becomes __REDACTED__", async () => {
+  it("hidden: a status with no exception event keeps only its code", async () => {
     const { exporter, provider } = fiLikeProvider();
     const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig: { hideInputs: true, hideOutputs: true } });
     processor.onEnd(v1Span({ name: "lookup", attributes: toolAttributes(), spanId: "9999999999999993", status: { code: 2, message: `bad ${DATA_MARKER}` } }));
     await processor.forceFlush();
-    expect(exporter.getFinishedSpans()[0].status).toEqual({ code: 2, message: "__REDACTED__" });
+    expect(exporter.getFinishedSpans()[0].status).toEqual({ code: 2 });
   });
 
   it("leaves a plain error message unchanged by default and an OK status untouched", async () => {
