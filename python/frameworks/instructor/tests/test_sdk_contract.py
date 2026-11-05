@@ -1,8 +1,10 @@
 """Execute the real Instructor/OpenAI boundary with an in-process HTTP transport."""
 
 import json
+from importlib import import_module
+from importlib.metadata import version
 
-import httpx
+httpx = import_module("httpx2" if int(version("openai").split(".")[0]) >= 3 else "httpx")
 import instructor
 try:
     from instructor import AsyncInstructor

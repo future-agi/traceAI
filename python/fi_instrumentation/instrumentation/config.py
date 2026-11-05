@@ -189,6 +189,7 @@ _CONTENT_HIDE_FLAGS = (
     "hide_input_messages",
     "hide_output_messages",
     "hide_input_text",
+    "hide_input_images",
     "hide_output_text",
 )
 

@@ -35,6 +35,7 @@ CONTENT_FLAGS = [
     ("hide_input_messages", "FI_HIDE_INPUT_MESSAGES"),
     ("hide_output_messages", "FI_HIDE_OUTPUT_MESSAGES"),
     ("hide_input_text", "FI_HIDE_INPUT_TEXT"),
+    ("hide_input_images", "FI_HIDE_INPUT_IMAGES"),
     ("hide_output_text", "FI_HIDE_OUTPUT_TEXT"),
 ]
 
@@ -158,7 +159,7 @@ class TestHideErrorDetailsDerivation:
 
     @pytest.mark.parametrize(
         "flag",
-        ["hide_input_images", "hide_embedding_vectors", "hide_llm_invocation_parameters"],
+        ["hide_embedding_vectors", "hide_llm_invocation_parameters"],
     )
     def test_non_content_flags_do_not_imply_it(self, clean_env, flag):
         assert TraceConfig(**{flag: True}).hide_error_details is False

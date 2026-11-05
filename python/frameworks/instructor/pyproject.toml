@@ -29,8 +29,9 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
-fi-instrumentation-otel = ">=0.1.11"
-instructor = ">=1.0.0"
+# Content privacy must also redact exception events and status descriptions.
+fi-instrumentation-otel = ">=1.2.2"
+instructor = ">=1.10.0"
 
 
 [tool.poetry.urls]
