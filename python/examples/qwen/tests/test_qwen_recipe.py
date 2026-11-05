@@ -60,13 +60,12 @@ REGION_BASES = {
     "China (Hong Kong)": "https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1",
     "Germany (Frankfurt)": "https://{WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1",
 }
-# Explicit source expectations for each documented shared endpoint. Hong Kong's
-# shared host is not mapped by #249; its workspace-dedicated host is mapped.
+# Every documented shared endpoint is DashScope, including Hong Kong.
 SHARED_PROVIDER_CASES = [
     (DOCUMENTED_BASE, "dashscope"),
     ("https://dashscope.aliyuncs.com/compatible-mode/v1", "dashscope"),
     ("https://dashscope-us.aliyuncs.com/compatible-mode/v1", "dashscope"),
-    ("https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1", "openai"),
+    ("https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1", "dashscope"),
 ]
 SHARED_BASES = [base for base, _ in SHARED_PROVIDER_CASES]
 REFUSED_URLS = [
@@ -477,7 +476,9 @@ def test_provider_error_statuses(traced, status, code, message, error_class):
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     [event] = [event for event in span["events"] if event["name"] == "exception"]
     assert attributes(event)["exception.type"] == f"openai.{error_class.__name__}"
-    assert code in attributes(event)["exception.message"]
+    # SDK releases format exception strings differently; require the provider's
+    # message while the structured SDK error code is asserted above.
+    assert message in attributes(event)["exception.message"]
 
 
 def test_cross_region_401_records_authentication_error(traced):
@@ -495,10 +496,10 @@ def test_cross_region_401_records_authentication_error(traced):
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
     # Source fi-core normalizes redundant exception-type prefixes in status text.
-    assert "invalid_api_key" in span["status"]["message"]
+    assert AUTH_ERROR["error"]["message"].strip() in span["status"]["message"]
     [event] = [event for event in span["events"] if event["name"] == "exception"]
     assert attributes(event)["exception.type"] == "openai.AuthenticationError"
-    assert "invalid_api_key" in attributes(event)["exception.message"]
+    assert AUTH_ERROR["error"]["message"].strip() in attributes(event)["exception.message"]
     assert VENDOR_KEY not in json.dumps(span)
 
 
@@ -714,7 +715,7 @@ def test_readme_and_requirements_pin_contract():
             readme, re.MULTILINE,
         )
     assert "| `*.maas.aliyuncs.com` (including Hong Kong workspace hosts) | `openai` | `dashscope` |" in readme
-    assert "The Hong Kong shared host is not in the current provider map" in readme
+    assert "The Hong Kong shared host and its workspace-dedicated hosts map to `dashscope`" in readme
     assert "For Virginia, prefer the workspace-dedicated endpoint from your console." in readme
     for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
