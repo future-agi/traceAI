@@ -164,7 +164,9 @@ class NativeTracingTest {
         assertFalse(exports.toString().contains(INPUT));
         assertFalse(exports.toString().contains(OUTPUT));
         assertFalse(exports.toString().contains("synthetic-anthropic-key"));
-        assertTrue(traceparents.get(0).matches("00-[a-f0-9]{32}-[a-f0-9]{16}-01"));
+        assertSampledTraceparent(traceparents.get(0),
+            java.util.HexFormat.of().formatHex(span.getTraceId().toByteArray()),
+            java.util.HexFormat.of().formatHex(span.getSpanId().toByteArray()));
         assertEquals(gzip ? "gzip" : "null", encodings.get(0));
         String capture = System.getProperty("wire.capture");
         if (capture != null && !gzip) {
@@ -178,6 +180,44 @@ class NativeTracingTest {
                 new com.google.gson.Gson().toJson(attributes));
             java.nio.file.Files.write(java.nio.file.Path.of(capture + ".pb"), exports.get(0).toByteArray());
         }
+    }
+
+    static void assertSampledTraceparent(String header, String traceId, String spanId) {
+        assertTrue(header.matches("00-[a-f0-9]{32}-[a-f0-9]{16}-[a-f0-9]{2}"),
+            "Expected a W3C traceparent header: " + header);
+        String[] fields = header.split("-");
+        assertEquals(traceId, fields[1], "Propagate the active request trace ID");
+        assertEquals(spanId, fields[2], "Propagate the active request span ID");
+        // Other flags (for example the random-ID bit in OTel 1.67) may also be set.
+        assertEquals(1, Integer.parseInt(fields[3], 16) & 1, "The sampled bit must be set");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"01", "03"})
+    void sampledTraceparentAllowsAdditionalFlags(String flags) {
+        String traceId = "0123456789abcdef0123456789abcdef";
+        String spanId = "0123456789abcdef";
+        assertSampledTraceparent("00-" + traceId + "-" + spanId + "-" + flags, traceId, spanId);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"00", "02", "0g", "1", "001"})
+    void traceparentRejectsUnsampledOrMalformedFlags(String flags) {
+        String traceId = "0123456789abcdef0123456789abcdef";
+        String spanId = "0123456789abcdef";
+        assertThrows(AssertionError.class, () ->
+            assertSampledTraceparent("00-" + traceId + "-" + spanId + "-" + flags, traceId, spanId));
+    }
+
+    @Test
+    void traceparentRejectsUnrelatedTraceOrSpan() {
+        String traceId = "0123456789abcdef0123456789abcdef";
+        String spanId = "0123456789abcdef";
+        String header = "00-" + traceId + "-" + spanId + "-03";
+        assertThrows(AssertionError.class, () ->
+            assertSampledTraceparent(header, "fedcba9876543210fedcba9876543210", spanId));
+        assertThrows(AssertionError.class, () ->
+            assertSampledTraceparent(header, traceId, "fedcba9876543210"));
     }
 
     @Test

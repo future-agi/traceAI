@@ -43,7 +43,7 @@ jobs:
         run: >-
           mvn -B -ntp -pl traceai-java-semantic-kernel -am test
           -Dsemantic-kernel.version=${{ matrix.semantic-kernel }}
-          -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest
+          -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest,KernelArgumentsTest,KernelOutputTest
           -Dsurefire.failIfNoSpecifiedTests=false
           -Djava.net.preferIPv4Stack=true
       - name: Repeat offline with network namespace limited to loopback
@@ -52,7 +52,7 @@ jobs:
             ip link set lo up
             exec mvn -o -B -ntp -Dmaven.repo.local="$1" -pl traceai-java-semantic-kernel -am test \
               -Dsemantic-kernel.version="$2" \
-              -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest \
+              -Dtest=ReactiveLifecycleTest,NativeTelemetryTest,NativeRetryTest,OtlpWireTest,KernelArgumentsTest,KernelOutputTest \
               -Dsurefire.failIfNoSpecifiedTests=false -Djava.net.preferIPv4Stack=true
           ' sh "$HOME/.m2/repository" '${{ matrix.semantic-kernel }}'
       - uses: actions/upload-artifact@v4

@@ -963,6 +963,10 @@
       "extra-files": [
         {
           "type": "generic",
+          "path": "README.md"
+        },
+        {
+          "type": "generic",
           "path": "compatibility/spring-ai/pom.xml"
         },
         {
@@ -1099,6 +1103,14 @@
       "package-name": "@traceai/huggingface-transformers",
       "extra-files": [
         "src/version.ts"
+      ]
+    },
+    "python/frameworks/transformers": {
+      "release-type": "python",
+      "component": "traceai-transformers",
+      "package-name": "traceAI-transformers",
+      "extra-files": [
+        "traceai_transformers/version.py"
       ]
     }
   }

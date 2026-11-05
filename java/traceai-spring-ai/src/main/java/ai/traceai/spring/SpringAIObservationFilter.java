@@ -12,7 +12,10 @@ import org.springframework.ai.tool.observation.ToolCallingObservationContext;
  * Enriches Spring AI's native Micrometer observations for Future AGI. It never starts a
  * span, installs a tracing handler, or creates an OpenTelemetry provider/exporter.
  * Register this filter with the same ObservationRegistry used by Spring AI and the
- * application's Micrometer OpenTelemetry bridge. Do not also wrap those models in
+ * application's Micrometer OpenTelemetry bridge. Pair it with
+ * {@link SpringAITracingObservationHandler} in place of the generic tracing handler to preserve
+ * error privacy and completion-aware status; a filter runs too late to protect exception details.
+ * Do not also wrap those models in
  * {@link TracedChatModel} or {@link TracedEmbeddingModel}.
  *
  * <p>Content is off by default. The two opt-in flags control only content added by this
@@ -47,19 +50,23 @@ public final class SpringAIObservationFilter implements ObservationFilter {
             tag(context, SemanticConventions.LLM_PROVIDER, chat.getOperationMetadata().provider());
             if (captureInputs) {
                 StringBuilder text = new StringBuilder();
+                SpringAIMessageCapture messages = new SpringAIMessageCapture();
                 for (var message : chat.getRequest().getInstructions()) {
                     append(text, message.getText());
-                    if (text.length() >= MAX_CONTENT_LENGTH) break;
+                    if (!messages.add(message)) break;
                 }
                 tag(context, SemanticConventions.INPUT_VALUE, text.toString());
+                tag(context, SemanticConventions.LLM_INPUT_MESSAGES, messages.json());
             }
             if (captureOutputs && chat.getResponse() != null) {
                 StringBuilder text = new StringBuilder();
+                SpringAIMessageCapture messages = new SpringAIMessageCapture();
                 for (var generation : chat.getResponse().getResults()) {
                     append(text, generation.getOutput().getText());
-                    if (text.length() >= MAX_CONTENT_LENGTH) break;
+                    if (!messages.add(generation.getOutput())) break;
                 }
                 tag(context, SemanticConventions.OUTPUT_VALUE, text.toString());
+                tag(context, SemanticConventions.LLM_OUTPUT_MESSAGES, messages.json());
             }
         } else if (context instanceof EmbeddingModelObservationContext embedding) {
             tag(context, SemanticConventions.FI_SPAN_KIND, "EMBEDDING");
