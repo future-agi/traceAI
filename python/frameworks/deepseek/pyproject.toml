@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-deepseek"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for DeepSeek - chat completions and reasoning models"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
