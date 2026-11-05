@@ -118,8 +118,9 @@ export function extractInvocationParameters(
   ) {
     return requestBody.textGenerationConfig as Record<string, unknown>;
   } else {
+    // Prompt/tool fields belong to the privacy-controlled input attributes, not parameters.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { system, messages, tools, prompt, ...invocationParams } =
+    const { system, messages, tools, prompt, inputText, toolConfig, ...invocationParams } =
       requestBody;
     return invocationParams;
   }

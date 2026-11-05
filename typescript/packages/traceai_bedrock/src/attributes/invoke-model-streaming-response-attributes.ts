@@ -6,12 +6,11 @@
  * - Tool call extraction from streams
  * - Token usage accumulation
  * - Real-time span attribute setting
- * - Safe stream splitting with original stream preservation
+ * - Consumption-time capture without duplicating SDK streams
  */
 
-import { Span, diag } from "@opentelemetry/api";
+import { Span } from "@opentelemetry/api";
 import {
-  withSafety,
   isObjectWithStringKeys,
   safelyJSONStringify,
 } from "@traceai/fi-core";
@@ -22,7 +21,7 @@ import {
 import { setSpanAttribute } from "./attribute-helpers";
 import { normalizeUsageAttributes } from "./invoke-model-helpers";
 import { UsageAttributes } from "../types/bedrock-types";
-import { PassThrough } from "stream";
+import { StreamAccumulator } from "../stream";
 
 /**
  * Interface for raw stream chunks from AWS SDK (network level)
@@ -433,12 +432,13 @@ function setStreamingOutputAttributes({
       usage.output_tokens,
     );
   }
-  if (usage.total_tokens !== undefined) {
-    setSpanAttribute(
-      span,
-      SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
-      usage.total_tokens,
-    );
+  const totalTokens = usage.total_tokens ?? (
+    usage.input_tokens !== undefined && usage.output_tokens !== undefined
+      ? usage.input_tokens + usage.output_tokens
+      : undefined
+  );
+  if (totalTokens !== undefined) {
+    setSpanAttribute(span, SemanticConventions.LLM_TOKEN_COUNT_TOTAL, totalTokens);
   }
   if (usage.cache_read_input_tokens !== undefined) {
     setSpanAttribute(
@@ -456,154 +456,41 @@ function setStreamingOutputAttributes({
   }
 }
 
-/**
- * Safely splits an async iterable stream into two streams for parallel consumption
- * Uses Node.js built-in PassThrough streams for reliable stream duplication
- * Creates separate streams for instrumentation and user consumption
- *
- * @param originalStream The original stream to split
- * @returns Object with instrumentation and user streams, or just user stream on fallback
- */
-export function safelySplitStream({
-  originalStream,
-}: {
-  originalStream: AsyncIterable<unknown>;
-}): {
-  instrumentationStream?: AsyncIterable<unknown>;
-  userStream: AsyncIterable<unknown>;
-} {
-  try {
-    // Create two PassThrough streams in object mode
-    const instrumentationStream = new PassThrough({ objectMode: true });
-    const userStream = new PassThrough({ objectMode: true });
-
-    // Function to consume the original stream and write to both outputs
-    const consumeAndDuplicate = async () => {
-      try {
-        for await (const chunk of originalStream) {
-          // Write the same chunk to both streams
-          instrumentationStream.write(chunk);
-          userStream.write(chunk);
+/** Accumulate events as the application consumes them, including partial output on close. */
+export function createInvokeModelStreamAccumulator(
+  span: Span,
+  modelType: LLMSystem,
+): StreamAccumulator {
+  const state: StreamProcessingState = {
+    outputText: "",
+    contentBlocks: [],
+    rawUsageData: {},
+  };
+  return {
+    add(chunk) {
+      if (!isValidStreamChunk(chunk)) return;
+      const text = new TextDecoder().decode(chunk.chunk.bytes);
+      for (const line of text.split("\n").filter((line) => line.trim())) {
+        let data: unknown;
+        try { data = JSON.parse(line); } catch { continue; }
+        if (!isValidStreamEventData(data)) continue;
+        if (modelType === LLMSystem.ANTHROPIC) {
+          processAnthropicStreamChunk(data, state);
+        } else if (modelType === LLMSystem.AMAZON) {
+          if (isTitanStreamChunk(data)) processTitanStreamChunk(data, state);
+          else if (isNovaStreamChunk(data)) processNovaStreamChunk(data, state);
+        } else if (modelType === LLMSystem.META) {
+          processMetaStreamChunk(data, state);
         }
-        // End both streams when original is complete
-        instrumentationStream.end();
-        userStream.end();
-      } catch (error) {
-        // Propagate errors to both streams
-        instrumentationStream.destroy(error as Error);
-        userStream.destroy(error as Error);
       }
-    };
-
-    // Start consuming in the background (non-blocking)
-    consumeAndDuplicate();
-
-    return {
-      instrumentationStream,
-      userStream,
-    };
-  } catch (error) {
-    // Fallback: preserve original stream for user, skip instrumentation
-    diag.warn(
-      "Failed to split stream using PassThrough, falling back to user-only stream:",
-      error,
-    );
-    return {
-      userStream: originalStream,
-    };
-  }
+    },
+    finish() {
+      setStreamingOutputAttributes({
+        span,
+        outputText: state.outputText,
+        contentBlocks: state.contentBlocks,
+        usage: normalizeStreamUsageData(state.rawUsageData, modelType),
+      });
+    },
+  };
 }
-
-/**
- * Consumes AWS Bedrock streaming response chunks and extracts attributes for OpenTelemetry span.
- * Supports multiple providers: Anthropic, Amazon Titan, Meta Llama, and Amazon Nova.
- *
- * This function processes different Bedrock streaming formats and accumulates response content,
- * setting appropriate semantic convention attributes on the provided span. It runs in the
- * background without blocking the user's stream consumption.
- *
- * @param stream - The Bedrock response stream (AsyncIterable), typically from splitStream()
- * @param span - The OpenTelemetry span to set attributes on
- * @param modelType - The LLM system type to determine parsing strategy
- * @throws {Error} If critical stream processing errors occur
- *
- * @example
- * ```typescript
- * // Background processing after stream splitting
- * const [instrumentationStream, userStream] = await splitStream(response.body);
- * consumeBedrockStreamChunks({ stream: instrumentationStream, span, modelType })
- *   .then(() => span.end())
- *   .catch(error => { span.recordException(error); span.end(); });
- * ```
- */
-export const consumeBedrockStreamChunks = withSafety({
-  fn: async ({
-    stream,
-    span,
-    modelType,
-  }: {
-    stream: AsyncIterable<unknown>;
-    span: Span;
-    modelType: LLMSystem;
-  }): Promise<void> => {
-    // Initialize processing state
-    const state: StreamProcessingState = {
-      outputText: "",
-      contentBlocks: [],
-      rawUsageData: {},
-    };
-
-    for await (const chunk of stream) {
-      // Type guard for chunk structure
-      if (isValidStreamChunk(chunk)) {
-        const text = new TextDecoder().decode(chunk.chunk.bytes);
-        const lines = text.split("\n").filter((line) => line.trim());
-
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const rawData = JSON.parse(line);
-              if (!isValidStreamEventData(rawData)) {
-                continue; // Skip invalid event data
-              }
-              const data: StreamEventData = rawData;
-
-              // Process based on provider format using dedicated helpers
-              if (modelType === LLMSystem.ANTHROPIC) {
-                processAnthropicStreamChunk(data, state);
-              } else if (modelType === LLMSystem.AMAZON) {
-                if (isTitanStreamChunk(data)) {
-                  processTitanStreamChunk(data, state);
-                } else if (isNovaStreamChunk(data)) {
-                  processNovaStreamChunk(data, state);
-                }
-              } else if (modelType === LLMSystem.META) {
-                processMetaStreamChunk(data, state);
-              }
-            } catch (parseError) {
-              // Skip malformed JSON lines silently
-              continue;
-            }
-          }
-        }
-      }
-    }
-
-    // Normalize usage data once at the end
-    const normalizedUsage = normalizeStreamUsageData(
-      state.rawUsageData,
-      modelType,
-    );
-
-    setStreamingOutputAttributes({
-      span,
-      outputText: state.outputText,
-      contentBlocks: state.contentBlocks,
-      usage: normalizedUsage,
-    });
-  },
-  onError: (error) => {
-    diag.warn("Error consuming Bedrock stream chunks:", error);
-    throw error;
-  },
-});
