@@ -10,6 +10,18 @@ Use Python 3.10–3.13. Install the instrumentor and the LlamaIndex components u
 pip install "traceAI-llamaindex>=0.1.10" llama-index-core llama-index-llms-openai
 ```
 
+## Known limitations
+
+`llama-index-llms-anthropic==0.12.3` with `anthropic==2.4.0` or `anthropic==2.5.0` raises `TypeError: Cannot instantiate typing.Union` during sync and async chat, before any HTTP request. The LlamaIndex adapter constructs `MessageParam`, which is a union type in those SDK versions. This also occurs without traceAI; see [LlamaIndex issue #23701](https://github.com/run-llama/llama_index/issues/23701).
+
+For this adapter version, use `anthropic==0.75.0`, which supports these chat calls with `llama-index-core==0.14.25`, until an upstream fix is available. Pin it alongside the adapter in your application's dependency file:
+
+```bash
+pip install "llama-index-core==0.14.25" "llama-index-llms-anthropic==0.12.3" "anthropic==0.75.0"
+```
+
+traceAI does not patch the upstream adapter. This limitation does not affect the OpenAI example below.
+
 ## Configure credentials
 
 Set your Future AGI credentials and your own OpenAI API key in the environment before running Python:
