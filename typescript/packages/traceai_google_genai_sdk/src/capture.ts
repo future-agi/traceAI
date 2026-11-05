@@ -190,10 +190,25 @@ export class Capture {
     this.hops++;
     this.tools(record(params.config).tools);
     const previous = new Map<string, number>();
+    let promptInput: number | undefined;
+    let toolInput: number | undefined;
     return (value) => {
-      for (const [key, count] of this.usage(
-        record(record(value).usageMetadata),
-      )) {
+      const usage = record(record(value).usageMetadata);
+      const counts = this.usage(usage);
+      const prompt = counts.get(S.LLM_TOKEN_COUNT_PROMPT);
+      if (prompt !== undefined) promptInput = prompt;
+      const tool = usage.toolUsePromptTokenCount;
+      if (typeof tool === "number" && Number.isFinite(tool) && tool >= 0)
+        toolInput = tool;
+      // Built-in tool results are additional input, not generated output. Keep
+      // each counter's latest snapshot even when a later chunk omits one, then
+      // let the existing hop accounting deduplicate the combined input count.
+      if (toolInput !== undefined) {
+        const input = (promptInput ?? 0) + toolInput;
+        if ((promptInput ?? 0) >= 0 && Number.isFinite(input))
+          counts.set(S.LLM_TOKEN_COUNT_PROMPT, input);
+      }
+      for (const [key, count] of counts) {
         const total =
           (this.usageTotals.get(key) ?? 0) + count - (previous.get(key) ?? 0);
         if (!previous.has(key))

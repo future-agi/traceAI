@@ -817,6 +817,167 @@ test("untraced nested calls never contribute usage to an active automatic-tool c
 
 // Exercise the real SDK response classes, including cumulative SSE snapshots,
 // at both supported checkpoints. Content hiding must not erase cost metadata.
+// Google reports built-in tool results as additional input, not as generated
+// output. Use the provider's counters; never estimate tokens from tool content.
+for (const streaming of [false, true]) {
+  for (const hidden of [false, true]) {
+    const label = `streaming=${streaming} hidden=${hidden}`;
+    const invoke = async (ai, params) => {
+      const result = await ai.models[streaming ? "generateContentStream" : "generateContent"](params);
+      const delivered = [];
+      if (streaming) {
+        for await (const chunk of result) delivered.push(JSON.parse(JSON.stringify(chunk)));
+      } else delivered.push(JSON.parse(JSON.stringify(result)));
+      return delivered;
+    };
+    const traceConfig = { hideInputs: hidden, hideOutputs: hidden };
+    const params = {
+      model: "gemini-test", contents: "PRIVATE_INPUT",
+      config: { tools: [{ codeExecution: {} }] },
+    };
+    test(`built-in tool input billing preserves native behavior and cumulative snapshots ${label}`, async () => {
+      reset();
+      const ai = client();
+      const usage = {
+        promptTokenCount: 31, toolUsePromptTokenCount: 73,
+        candidatesTokenCount: 73, thoughtsTokenCount: 77, totalTokenCount: 254,
+        cachedContentTokenCount: 2,
+        promptTokensDetails: [{ modality: "TEXT", tokenCount: 31 }],
+        privateField: "PRIVATE_USAGE",
+      };
+      handler = (_, res) => streaming ? sse(res, [
+        { usageMetadata: { promptTokenCount: 2, toolUsePromptTokenCount: 3 } },
+        answer("PRIVATE_OUTPUT", usage), { usageMetadata: usage },
+      ]) : json(res, answer("PRIVATE_OUTPUT", usage));
+      const native = await invoke(ai, params);
+      assert.equal(spans().length, 0);
+      const nativeRequests = structuredClone(requests);
+      requests = [];
+      const h = instrumentGoogleGenAI(ai, { traceConfig });
+      try {
+        const delivered = await invoke(ai, params);
+        assert.deepEqual(delivered, native);
+        assert.deepEqual(requests, nativeRequests);
+        assert.equal(requests.length, 1);
+        assert.equal(delivered.at(-1).usageMetadata.toolUsePromptTokenCount, 73);
+        const wireAttrs = await exported();
+        for (const a of [attrs(), wireAttrs]) {
+          assert.equal(Number(a["gen_ai.usage.input_tokens"]), 104);
+          assert.equal(Number(a["gen_ai.usage.output_tokens"]), 73);
+          assert.equal(Number(a["gen_ai.usage.output_tokens.reasoning"]), 77);
+          assert.equal(Number(a["gen_ai.usage.total_tokens"]), 254);
+          assert.equal(Number(a["gen_ai.usage.cache_read_tokens"]), 2);
+          // Do not attribute tool results to a guessed modality or add them to output.
+          assert.equal(Number(a["gen_ai.usage.input_tokens.text"]), 31);
+          assert.doesNotMatch(JSON.stringify(a), /PRIVATE_USAGE|synthetic-google-key/);
+          if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+          else assert.match(JSON.stringify(a), /PRIVATE_OUTPUT/);
+        }
+      } finally { h.dispose(); await provider.forceFlush(); }
+    });
+    if (streaming) test(`built-in tool input billing retains omitted fields in sparse cumulative snapshots ${label}`, async () => {
+      for (const last of [{ promptTokenCount: 31 }, { toolUsePromptTokenCount: 73 }]) {
+        reset();
+        const ai = client();
+        const h = instrumentGoogleGenAI(ai, { traceConfig });
+        handler = (_, res) => sse(res, [
+          answer("PRIVATE_OUTPUT", { promptTokenCount: 31, toolUsePromptTokenCount: 73, candidatesTokenCount: 5, totalTokenCount: 109 }),
+          { usageMetadata: last }, { usageMetadata: last },
+        ]);
+        try {
+          await invoke(ai, params);
+          assert.equal(requests.length, 1);
+          const wireAttrs = await exported();
+          for (const a of [attrs(), wireAttrs]) {
+            assert.equal(Number(a["gen_ai.usage.input_tokens"]), 104);
+            assert.equal(Number(a["gen_ai.usage.output_tokens"]), 5);
+            assert.equal(Number(a["gen_ai.usage.total_tokens"]), 109);
+          }
+        } finally { h.dispose(); await provider.forceFlush(); }
+      }
+    });
+    test(`built-in tool input billing accepts only reported finite nonnegative counts ${label}`, async () => {
+      const cases = [
+        { usage: { promptTokenCount: 31 }, input: 31 },
+        { usage: { promptTokenCount: 31, toolUsePromptTokenCount: 0 }, input: 31 },
+        { usage: { promptTokenCount: 0, toolUsePromptTokenCount: 73 }, input: 73 },
+        { usage: { toolUsePromptTokenCount: 73 }, input: 73 },
+        { usage: { toolUsePromptTokenCount: 0 }, input: 0 },
+        { usage: {} },
+        ...[-1, "73", null].map(value => ({
+          usage: { promptTokenCount: 31, toolUsePromptTokenCount: value }, input: 31,
+        })),
+        // JSON numeric overflow reaches the real SDK as Infinity (not a mock).
+        { usage: { promptTokenCount: 31, toolUsePromptTokenCount: "NONFINITE" }, input: 31 },
+      ];
+      for (const c of cases) {
+        reset();
+        const ai = client();
+        const h = instrumentGoogleGenAI(ai, { traceConfig });
+        handler = (_, res) => {
+          const body = answer("PRIVATE_OUTPUT", { candidatesTokenCount: 5, ...c.usage });
+          const raw = JSON.stringify(body).replace('"NONFINITE"', '1e400');
+          res.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json" });
+          res.end(streaming ? `data: ${raw}\n\ndata: ${raw}\n\n` : raw);
+        };
+        try {
+          await invoke(ai, params);
+          assert.equal(requests.length, 1);
+          const wireAttrs = await exported();
+          for (const a of [attrs(), wireAttrs]) {
+            assert.equal(a["gen_ai.usage.input_tokens"] === undefined ? undefined : Number(a["gen_ai.usage.input_tokens"]), c.input);
+            assert.equal(Number(a["gen_ai.usage.output_tokens"]), 5);
+            assert.equal(a["gen_ai.usage.total_tokens"], undefined, "never invent a provider total");
+            if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+          }
+        } finally { h.dispose(); await provider.forceFlush(); }
+      }
+    });
+    test(`built-in tool input billing sums independent automatic-tool hops exactly once ${label}`, async () => {
+      async function run(tracing) {
+        reset();
+        const ai = client();
+        const h = tracing && instrumentGoogleGenAI(ai, { traceConfig });
+        let executions = 0, resolutions = 0;
+        const tool = {
+          async tool() { resolutions++; return { functionDeclarations: [{ name: "weather" }] }; },
+          async callTool() { executions++; return toolResult; },
+        };
+        handler = (_, res) => {
+          const first = requests.length === 1;
+          const body = first ? answer("unused", {
+            promptTokenCount: 60, toolUsePromptTokenCount: 7,
+            candidatesTokenCount: 40, totalTokenCount: 107,
+          }) : answer("PRIVATE_OUTPUT", {
+            promptTokenCount: 4, toolUsePromptTokenCount: 5,
+            candidatesTokenCount: 2, totalTokenCount: 11,
+          });
+          if (first) body.candidates[0].content.parts = [{ functionCall: { name: "weather", args: {} } }];
+          if (streaming) sse(res, [{ usageMetadata: body.usageMetadata }, body]);
+          else json(res, body);
+        };
+        try {
+          const delivered = await invoke(ai, { ...params, config: {
+            tools: [tool, { codeExecution: {} }], automaticFunctionCalling: { maximumRemoteCalls: 2 },
+          } });
+          return { delivered, requests: structuredClone(requests), executions, resolutions };
+        } finally { if (h) h.dispose(); await provider.forceFlush(); }
+      }
+      const native = await run(false);
+      const observed = await run(true);
+      assert.deepEqual(observed, native);
+      assert.equal(observed.requests.length, 2);
+      assert.equal(observed.executions, 1);
+      const wireAttrs = await exported();
+      for (const a of [attrs(), wireAttrs]) {
+        assert.equal(Number(a["gen_ai.usage.input_tokens"]), 76); // (60 + 7) + (4 + 5)
+        assert.equal(Number(a["gen_ai.usage.output_tokens"]), 42);
+        assert.equal(Number(a["gen_ai.usage.total_tokens"]), 118);
+        if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+      }
+    });
+  }
+}
 const modalityUsage = {
   promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 23,
   thoughtsTokenCount: 5, cachedContentTokenCount: 2,
