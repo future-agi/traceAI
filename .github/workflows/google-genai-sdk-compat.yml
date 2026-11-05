@@ -58,4 +58,11 @@ jobs:
         run: |
           set -euo pipefail
           tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          # Concurrent test-file processes intermittently receive connect EPERM
+          # for allowed loopback sockets under the macOS sandbox. Keep every
+          # test (including in-test concurrency cases), but isolate file runners.
+          # Repetitions fail immediately; they are a stability check, not retries.
+          for repetition in 1 2 3 4 5; do
+            echo "Loopback stability repetition $repetition/5"
+            sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test --test-concurrency=1 "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          done
