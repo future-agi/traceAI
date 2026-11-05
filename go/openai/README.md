@@ -4,11 +4,17 @@ OpenTelemetry tracing for the official OpenAI Go SDK,
 [`github.com/openai/openai-go/v3`](https://github.com/openai/openai-go), sending spans to
 [Future AGI](https://futureagi.com).
 
-It is an `option.Middleware`: the SDK keeps its own HTTP client and transport policy, and every
-Chat Completions call (streaming or not) becomes one client span named `chat <model>` with the
-same attribute names `traceai-openai` writes in Python (`gen_ai.span.kind=LLM`,
-`gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.input.messages.*`, `gen_ai.output.messages.*`,
-`input.value`, `output.value`, `session.id`, `user.id`).
+Add `option.Middleware` to trace Chat Completions, Responses creation and Embeddings with the
+SDK's own HTTP client and transport policy. Each HTTP attempt produces one client span:
+
+| SDK call | Span name | `gen_ai.span.kind` |
+|---|---|---|
+| `Chat.Completions.New` / `NewStreaming` | `chat <model>` | `LLM` |
+| `Responses.New` / `NewStreaming` | `generate_content <model>` | `LLM` |
+| `Embeddings.New` | `embeddings <model>` | `EMBEDDING` |
+
+Spans use traceAI attributes for model attribution, token usage, supported content, session and
+user IDs. The middleware does not record embedding vectors.
 
 | | |
 |---|---|
@@ -102,18 +108,28 @@ middleware adds no resource attributes.
   parameters, tool definitions, messages, response id and model, finish reasons, tool calls
   (id, name, arguments), and token usage when the API returns it. A stream carries usage only
   when the request sets `stream_options.include_usage`; usage is never written as zero.
+- Responses creation (`POST .../responses`), streaming and not: instructions, text/image input,
+  function calls and results, response text/refusals, function-call arguments, response ID/model,
+  and input/output/total/cached/reasoning tokens when returned. Streaming stays lazy; terminal
+  response snapshots replace accumulated deltas instead of duplicating them. File/audio bytes,
+  encrypted reasoning, annotations and hosted-tool payloads/configuration are omitted.
+- Embeddings (`POST .../embeddings`): input text or token IDs, request/response model and returned
+  input/total token counts. Vectors are never captured. `FI_HIDE_INPUTS` redacts embedding input.
 - HTTP 4xx/5xx: status ERROR, `http.response.status_code`, `error.type`, and the API error
-  message unless content is hidden. A streamed `error` event ends the span with ERROR.
+  message unless content is hidden. Stream error events and Responses `failed`/`incomplete`
+  results also mark the span ERROR, even when HTTP succeeded.
 - Cancellation: a context cancelled before the response completes ends the span with ERROR and
   `error.type=canceled`. A stream closed early by the caller ends without an error.
-- Other endpoints (Responses, Embeddings, Images, Audio, ...) pass through without a span.
+- Other endpoints (Images, Audio, legacy Completions, response retrieval/deletion/compaction,
+  etc.) pass through without a span. Responses background creation captures only the returned
+  creation result; it does not poll for the later completed response.
 
 ## Limitations
 
 - openai-go runs middleware once per HTTP attempt, so a retried call is one span per attempt
   (retries carry `http.request.resend_count`). Start a span around your call, as the example
   does, so the attempts share one trace, or set `option.WithMaxRetries(0)`.
-- The Responses API, Realtime and the Assistants API are not traced.
+- Realtime and the Assistants API are not traced. Responses over WebSocket are not traced.
 - Cost is not computed here; Future AGI prices the model from the token counts.
 
 ## Test

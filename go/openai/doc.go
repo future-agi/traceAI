@@ -2,11 +2,12 @@
 // (github.com/openai/openai-go/v3) for Future AGI.
 //
 // [Middleware] is an option.Middleware, so the SDK client keeps its own HTTP
-// client and transport policy. Every Chat Completions call, streaming or not,
-// becomes one OpenTelemetry client span named "chat <model>" with
-// gen_ai.span.kind=LLM, the GenAI semantic-convention attributes, token usage
-// when the API returns it, and the messages, the same attribute names
-// traceai-openai writes in Python.
+// client and transport policy. Chat Completions and Responses creation calls
+// (streaming or not) produce LLM client spans; Embeddings calls produce
+// EMBEDDING client spans. Names are "chat <model>", "generate_content <model>"
+// and "embeddings <model>". Each HTTP attempt records model attribution, usage
+// when returned by the API, and supported content using traceAI attributes.
+// Embedding vectors and opaque file/audio/hosted-tool payloads are not captured.
 //
 // Content is captured by default, as in every traceAI instrumentor. The
 // traceAI switches turn it off: FI_HIDE_INPUTS, FI_HIDE_OUTPUTS,
