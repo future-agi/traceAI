@@ -17,6 +17,25 @@ class _RawResponse(ObjectProxy):
         self._self_span = span
         self._self_on_result = on_result
         self._self_results = []
+        # with_raw_response has already read non-streaming bodies. Keeping its
+        # span open until parse()/GC loses headers-only requests at shutdown.
+        # SSE and with_streaming_response still belong to the consumer.
+        if (
+            response.http_response.is_stream_consumed
+            and not getattr(response, "_is_sse_stream", False)
+            and not getattr(response, "_stream", False)
+        ):
+            try:
+                # The SDK's body-only parser neither invokes options.post_parser
+                # nor populates the caller's parse cache. It is synchronous even
+                # for AsyncAPIResponse, and never reads an unread HTTP body.
+                parsed = response._parse()
+            except Exception as error:
+                # Preserve the raw API: returning headers must not raise a parse
+                # error. A later caller parse still raises the SDK's own error.
+                _finish_request_error(span, error)
+            else:
+                on_result(parsed)
 
     def __getattr__(self, name: str) -> Any:
         value = super().__getattr__(name)
@@ -52,6 +71,8 @@ class _RawResponse(ObjectProxy):
         for original, observed in self._self_results:
             if original is result:
                 return observed
+        if self._self_span.is_finished:
+            return result
         observed = self._self_on_result(result)
         self._self_results.append((result, observed))
         return observed

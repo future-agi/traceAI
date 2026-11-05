@@ -455,3 +455,181 @@ def test_raw_context_close_finalizes_partial_parsed_stream(harness, async_):
     assert len(spans) == 1
     assert spans[0].status.status_code == StatusCode.UNSET
     assert spans[0].attributes["gen_ai.usage.input_tokens"] == 12
+
+
+@pytest.mark.parametrize("async_", [False, True])
+@pytest.mark.parametrize("hidden", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+def test_retained_raw_headers_finish_before_parse(harness, monkeypatch, async_, hidden, native):
+    provider, exporter, instrumentor, kwargs = harness
+    if "open_telemetry" in kwargs and not native:
+        kwargs["open_telemetry"] = False
+    monkeypatch.setenv("FI_HIDE_INPUTS", str(hidden).lower())
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", str(hidden).lower())
+    instrumentor.instrument(tracer_provider=provider)
+    retained = []
+
+    def retain(raw):
+        retained.append(raw)
+        assert raw.headers["request-id"] == "synthetic-request"
+        assert raw.http_response.is_stream_consumed
+        assert raw.http_response.is_closed
+        assert provider.force_flush()
+        # No parse, close or garbage collection is needed for the completed call.
+        assert_usage(exporter, hidden)
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["gen_ai.request.model"] == "synthetic"
+        assert span.attributes["gen_ai.provider.name"] == "anthropic"
+        for canary in ("INPUT_CANARY", "OUTPUT_CANARY"):
+            assert (canary in span.to_json()) == (not hidden)
+        assert "SYNTHETIC" not in span.to_json()
+        assert not raw.__wrapped__._parsed_by_type
+
+    async def request():
+        async with anthropic.AsyncAnthropic(**kwargs) as client:
+            retain(await client.messages.with_raw_response.create(**PARAMS))
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with anthropic.Anthropic(**kwargs) as client:
+            retain(client.messages.with_raw_response.create(**PARAMS))
+    raw = retained[0]
+    assert provider.force_flush()
+    before = exporter.get_finished_spans()
+    assert len(before) == 1
+
+    async def parse_async():
+        # Legacy async raw responses parse synchronously; newer ones await.
+        async def parse(**options):
+            value = raw.parse(**options)
+            return await value if inspect.isawaitable(value) else value
+
+        parsed = await parse()
+        assert parsed.id == MESSAGE["id"]
+        assert await parse() is parsed
+        assert await parse(to=dict[str, object]) == MESSAGE
+        assert json.loads(await parse(to=str)) == MESSAGE
+        if hasattr(raw.__wrapped__, "close"):
+            result = raw.close()
+            if inspect.isawaitable(result):
+                await result
+
+    if async_:
+        asyncio.run(parse_async())
+    else:
+        parsed = raw.parse()
+        assert parsed.id == MESSAGE["id"]
+        assert raw.parse() is parsed
+        assert raw.parse(to=dict[str, object]) == MESSAGE
+        assert json.loads(raw.parse(to=str)) == MESSAGE
+        if hasattr(raw.__wrapped__, "close"):
+            raw.close()
+    assert exporter.get_finished_spans() == before
+    provider.shutdown()
+    assert exporter.get_finished_spans() == before
+
+
+@pytest.mark.parametrize("async_", [False, True])
+@pytest.mark.parametrize("raises", [False, True])
+def test_consumed_raw_never_runs_caller_post_parser(harness, async_, raises):
+    provider, exporter, instrumentor, kwargs = harness
+    instrumentor.instrument(tracer_provider=provider)
+    calls = []
+    replacement = object()
+    error = ValueError("caller post-parser")
+
+    def post_parser(message):
+        calls.append(message)
+        if raises:
+            raise error
+        return replacement
+
+    # Use the real SDK request-options extension point, not mocked tracing.
+    class Client(anthropic.Anthropic):
+        def _prepare_options(self, options):
+            options = super()._prepare_options(options)
+            options.post_parser = post_parser
+            return options
+
+    class AsyncClient(anthropic.AsyncAnthropic):
+        async def _prepare_options(self, options):
+            options = await super()._prepare_options(options)
+            options.post_parser = post_parser
+            return options
+
+    async def request():
+        async with AsyncClient(**kwargs) as client:
+            raw = await client.messages.with_raw_response.create(**PARAMS)
+            assert calls == []
+            assert_usage(exporter)
+
+            async def parse():
+                value = raw.parse()
+                return await value if inspect.isawaitable(value) else value
+
+            if raises:
+                with pytest.raises(ValueError) as caught:
+                    await parse()
+                assert caught.value is error
+            else:
+                assert await parse() is replacement
+                assert await parse() is replacement
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with Client(**kwargs) as client:
+            raw = client.messages.with_raw_response.create(**PARAMS)
+            assert calls == []
+            assert_usage(exporter)
+            if raises:
+                with pytest.raises(ValueError) as caught:
+                    raw.parse()
+                assert caught.value is error
+            else:
+                assert raw.parse() is replacement
+                assert raw.parse() is replacement
+    assert len(calls) == 1
+    assert calls[0].id == MESSAGE["id"]
+    # Application post-processing cannot rewrite the completed provider request.
+    assert_usage(exporter)
+
+
+@pytest.mark.parametrize("async_", [False, True])
+@pytest.mark.parametrize("hidden", [False, True])
+def test_consumed_raw_parse_error_is_observable_without_raising_early(harness, monkeypatch, async_, hidden):
+    provider, exporter, instrumentor, kwargs = harness
+    monkeypatch.setenv("FI_HIDE_ERROR_DETAILS", str(hidden).lower())
+    instrumentor.instrument(tracer_provider=provider)
+    params = {**PARAMS, "model": "invalid-json"}
+
+    def check(raw):
+        assert raw.headers["request-id"] == "synthetic-request"
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status.status_code == StatusCode.ERROR
+        assert len([event for event in span.events if event.name == "exception"]) == 1
+        assert ("Expecting property name" in span.to_json()) == (not hidden)
+        return span
+
+    async def request():
+        async with anthropic.AsyncAnthropic(**kwargs) as client:
+            raw = await client.messages.with_raw_response.create(**params)
+            before = check(raw)
+            with pytest.raises(json.JSONDecodeError):
+                value = raw.parse()
+                if inspect.isawaitable(value):
+                    await value
+            assert exporter.get_finished_spans() == (before,)
+
+    if async_:
+        asyncio.run(request())
+    else:
+        with anthropic.Anthropic(**kwargs) as client:
+            raw = client.messages.with_raw_response.create(**params)
+            before = check(raw)
+            with pytest.raises(json.JSONDecodeError):
+                raw.parse()
+            assert exporter.get_finished_spans() == (before,)
