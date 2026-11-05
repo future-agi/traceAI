@@ -17,12 +17,33 @@ def no_network(monkeypatch):
 
 
 @pytest.fixture
+def telemetry():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from traceai_huggingface import HuggingFaceInstrumentor
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    yield provider, exporter
+    instrumentor = HuggingFaceInstrumentor()
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()
+    provider.shutdown()
+
+
+@pytest.fixture
 def export_attributes():
     """Exercise the real FITracer privacy boundary, not a mocked constants table."""
     from fi_instrumentation import FITracer, TraceConfig
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
