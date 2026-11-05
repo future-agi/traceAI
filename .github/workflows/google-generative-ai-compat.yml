@@ -57,4 +57,5 @@ jobs:
         run: |
           export GENAI_TEST_CONSUMER="$RUNNER_TEMP/consumer"
           sandbox-exec -f typescript/packages/traceai_google_genai/test/network.sb \
-            node --test typescript/packages/traceai_google_genai/test/compat.test.cjs
+            node --test typescript/packages/traceai_google_genai/test/compat.test.cjs \
+              typescript/packages/traceai_google_genai/test/release-regressions.test.cjs
