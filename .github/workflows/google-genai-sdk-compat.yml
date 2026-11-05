@@ -10,53 +10,12 @@ on:
       - '.github/scripts/loopback-network-diagnostics.cjs'
       - '.github/scripts/check-loopback-network.cjs'
   workflow_dispatch:
-    inputs:
-      pf-prototype:
-        description: 'Run only the bounded synthetic PF admission experiment; never qualifies SDK jobs'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
-  pf-prototype:
-    if: github.event_name == 'workflow_dispatch' && inputs.pf-prototype
-    runs-on: macos-14
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [20, 24]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Read hosted PF support and run fail-closed UID prototype
-        shell: bash
-        run: |
-          set -euo pipefail
-          node_bin=$(command -v node)
-          python_bin=$(command -v python3)
-          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-            "$python_bin" -I "$GITHUB_WORKSPACE/.github/scripts/diagnose-pf-isolation.py" \
-            --node "$node_bin" --source "$GITHUB_WORKSPACE/.github/scripts" \
-            --evidence "$RUNNER_TEMP/pf-evidence" \
-            --nonce "${{ github.run_id }}-node${{ matrix.node }}" --runner-uid "$(id -u)"
-      - name: Retain synthetic evidence including blocked admission
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pf-admission-node${{ matrix.node }}
-          path: ${{ runner.temp }}/pf-evidence
-          retention-days: 7
-          if-no-files-found: error
   packed-consumer:
-    if: github.event_name != 'workflow_dispatch' || !inputs.pf-prototype
     runs-on: macos-14
     timeout-minutes: 15
     strategy:
