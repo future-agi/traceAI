@@ -35,8 +35,10 @@ def test_ac01_ac02_patch_list(instrument):
     instrument()
     assert set(PATCHED) == {("AsyncLive", "connect"), ("AsyncSession", "send_client_content"),
                             ("AsyncSession", "send_realtime_input"), ("AsyncSession", "send_tool_response"),
-                            ("AsyncSession", "receive")}
+                            ("AsyncSession", "receive"), ("AsyncSession", "send_context_update")}
     for cls, name in PATCHED:
+        if name == "send_context_update" and not hasattr(live.AsyncSession, name):
+            continue
         assert isinstance(getattr(live, cls).__dict__[name], wrapt.FunctionWrapper)
     # Deprecated upstream: not wrapped.
     assert not isinstance(live.AsyncSession.__dict__["send"], wrapt.FunctionWrapper)
@@ -48,7 +50,7 @@ def test_ac01_ac02_patch_list(instrument):
 
 
 def test_uninstrument_restores_originals(instrument):
-    originals = {(c, n): getattr(live, c).__dict__[n] for c, n in PATCHED}
+    originals = {(c, n): getattr(live, c).__dict__[n] for c, n in PATCHED if hasattr(getattr(live, c), n)}
     inst = instrument()
     inst.uninstrument()
     for (c, n), fn in originals.items():
