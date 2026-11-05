@@ -74,10 +74,10 @@ const maskingRules: MaskingRule[] = [
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
-    // Prompt substitution values are opaque input payloads, including images.
+    // Prompt templates and substitution values are opaque input payloads, including images.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES,
+      (key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES || key === SemanticConventions.PROMPT_TEMPLATE_TEMPLATE),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -88,7 +88,8 @@ const maskingRules: MaskingRule[] = [
   {
     condition: ({ config, key }) =>
       (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
-      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT),
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT ||
+        key === SemanticConventions.LLM_FUNCTION_CALL),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
