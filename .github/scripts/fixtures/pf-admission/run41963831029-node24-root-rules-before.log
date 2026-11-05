@@ -1,0 +1,4 @@
+scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+No ALTQ support in kernel
+ALTQ related functions disabled
