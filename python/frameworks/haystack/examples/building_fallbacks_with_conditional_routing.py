@@ -87,7 +87,7 @@ llm = OpenAIGenerator(model="gpt-3.5-turbo")
 
 prompt_for_websearch = """
 Answer the following query given the documents retrieved from the web.
-Your answer shoud indicate that your answer was generated from websearch.
+Your answer should indicate that your answer was generated from websearch.
 
 Query: {{query}}
 Documents:
