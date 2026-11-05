@@ -1,0 +1,57 @@
+name: pgvector TypeScript tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_pgvector/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/pgvector-typescript-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_pgvector/**'
+      - '.github/workflows/pgvector-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: pgvector pg 8 floor and current
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: typescript
+        run: pnpm --filter @traceai/pgvector... install --frozen-lockfile --ignore-scripts
+      - name: Build dependencies and package
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/pgvector run build
+      - name: Test with outbound network unavailable (localhost OTLP only)
+        working-directory: typescript
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            "$(command -v node)" node_modules/jest/bin/jest.js \
+            --config packages/traceai_pgvector/jest.config.js --runInBand
+      - name: Check package tarball
+        working-directory: typescript/packages/traceai_pgvector
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP"
+          git diff --exit-code -- ../../pnpm-lock.yaml
