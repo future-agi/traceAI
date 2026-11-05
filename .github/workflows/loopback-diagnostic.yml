@@ -1,0 +1,73 @@
+name: Bounded macOS loopback diagnosis
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/loopback-diagnostic.yml'
+      - '.github/scripts/diagnose-loopback.cjs'
+
+permissions:
+  contents: read
+
+jobs:
+  paired-controls:
+    runs-on: macos-14
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
+        order: [sandbox-first, unsandboxed-first]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Paired built-in-only transport controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/empty-home"
+          { sw_vers; uname -a; node --version; sysctl net.inet.ip.portrange; git rev-parse HEAD HEAD^{tree}; } > "$RUNNER_TEMP/evidence/platform.txt"
+          cp typescript/packages/traceai_google_genai_sdk/test/network.sb "$RUNNER_TEMP/evidence/network.sb"
+          probe="$GITHUB_WORKSPACE/.github/scripts/diagnose-loopback.cjs"
+          policy="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test/network.sb"
+          order='${{ matrix.order }}'
+          modes='sandboxed unsandboxed'
+          if [[ "$order" == unsandboxed-first ]]; then modes='unsandboxed sandboxed'; fi
+          failed=0
+          for mode in $modes; do
+            # These controls load only built-ins and connect only to numeric
+            # 127.0.0.1. Neither control receives runner credentials or Node hooks.
+            status=0
+            if [[ "$mode" == sandboxed ]]; then
+              env -i PATH="$PATH" HOME="$RUNNER_TEMP/empty-home" TMPDIR="$RUNNER_TEMP" sandbox-exec -f "$policy" node "$probe" "$mode" > "$RUNNER_TEMP/evidence/$mode.log" 2>&1 || status=$?
+            else
+              env -i PATH="$PATH" HOME="$RUNNER_TEMP/empty-home" TMPDIR="$RUNNER_TEMP" node "$probe" "$mode" > "$RUNNER_TEMP/evidence/$mode.log" 2>&1 || status=$?
+            fi
+            cat "$RUNNER_TEMP/evidence/$mode.log"
+            echo "$mode exit=$status" | tee -a "$RUNNER_TEMP/evidence/status.txt"
+            if [[ "$status" != 0 ]]; then failed=1; fi
+          done
+          # Outbound denial is checked ONLY inside the sandbox. This does not
+          # load the SDK or weaken the original SDK workflow's policy/assertions.
+          status=0
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/empty-home" TMPDIR="$RUNNER_TEMP" sandbox-exec -f "$policy" node "$GITHUB_WORKSPACE/.github/scripts/check-loopback-network.cjs" --check-denial > "$RUNNER_TEMP/evidence/original-preflight.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/evidence/original-preflight.log"
+          echo "original-preflight exit=$status" | tee -a "$RUNNER_TEMP/evidence/status.txt"
+          if [[ "$status" != 0 ]]; then failed=1; fi
+          exit "$failed"
+      - name: Kernel denial evidence
+        if: always()
+        shell: bash
+        run: |
+          sudo /usr/bin/log show --last 10m --info --debug --style compact --predicate 'eventMessage CONTAINS "Sandbox" AND eventMessage CONTAINS "node"' > "$RUNNER_TEMP/evidence/kernel.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: loopback-node${{ matrix.node }}-${{ matrix.order }}
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
