@@ -61,17 +61,25 @@ import {
 
 const MODULE_NAME = "openai";
 
-/**
- * Flag to check if the openai module has been patched
- * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
- */
-let _isFIPatched = false;
+// Both public package entry points (and duplicate package installations) must
+// agree on the owner. A module-local WeakMap lets one build overwrite another's
+// wrappers. Key by SDK class, without writing to immutable module namespaces.
+const patchRegistryKey = Symbol.for("@traceai/openai/patch-registry/v1");
+interface PatchRegistry {
+  owners: WeakMap<object, OpenAIInstrumentation>;
+  count: number;
+}
+const registryHost = globalThis as typeof globalThis & {
+  [patchRegistryKey]?: PatchRegistry;
+};
+const patchRegistry = (registryHost[patchRegistryKey] ??= {
+  owners: new WeakMap<object, OpenAIInstrumentation>(),
+  count: 0,
+});
 
-/**
- * function to check if instrumentation is enabled / disabled
- */
+/** Whether any SDK class is currently patched across the package entry points. */
 export function isPatched() {
-  return _isFIPatched;
+  return patchRegistry.count > 0;
 }
 
 /**
@@ -98,10 +106,9 @@ function getExecContext(span: Span) {
 export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private manuallyPatchedModule?: typeof openai;
-  // Only the instance that applied a patch may remove it. Another instrumentor
-  // sharing the module returns early from patch() but is still asked to unpatch.
-  private readonly patchedModules = new WeakSet<object>();
+  // Lazily initialized: InstrumentationBase can patch during super().
+  // A Set is needed so disable() also undoes every manually patched ESM SDK.
+  private patchedModules?: Set<typeof openai>;
 
   constructor({
     instrumentationConfig,
@@ -148,17 +155,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * @param {openai} module
    */
   manuallyInstrument(module: typeof openai) {
-    if (_isFIPatched) return;
     this.patch(module);
-    if (_isFIPatched) this.manuallyPatchedModule = module;
   }
 
   public override disable(): void {
     super.disable();
-    // The base class tracks require-hook patches, not manually loaded ESM clients.
-    if (this.manuallyPatchedModule) {
-      this.unpatch(this.manuallyPatchedModule);
-      this.manuallyPatchedModule = undefined;
+    for (const module of this.patchedModules ?? []) {
+      this.unpatch(module);
     }
   }
 
@@ -166,11 +169,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * Patches the OpenAI module
    */
   private patch(
-    module: typeof openai & { fiPatched?: boolean },
+    module: typeof openai,
     moduleVersion?: string,
   ) {
     // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
-    if (module?.fiPatched || _isFIPatched) {
+    const sdk = module?.OpenAI;
+    if (sdk && patchRegistry.owners.has(sdk)) {
       return module;
     }
     const resources = [
@@ -193,7 +197,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     // Here, we ensure it uses the (potentially updated) Tracer.
     // Accessing FITracer's internal tracer `tracer` for comparison.
     // This assumes FITracer has an internal property named `tracer`.
-    if (!(instrumentation.fiTracer as any).tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
+    if (!(instrumentation.fiTracer as any)?.tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
         // diag.debug(
         //     `OpenAIInstrumentation.patch: fiTracer's internal tracer (${(instrumentation.fiTracer as any).tracer?.constructor?.name}) ` +
         //     `differs from current base tracer (${instrumentation.tracer?.constructor?.name}) or is not set. Re-initializing fiTracer.`
@@ -597,42 +601,34 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
-    _isFIPatched = true;
-    this.patchedModules.add(module);
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      module.fiPatched = true;
-    } catch (e) {
-      // diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
-    }
+    // Keep the legacy diagnostic property, but never use it as the guard.
+    // Immutable class exports still work via the identity map.
+    try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = true; } catch { /* immutable SDK */ }
+    patchRegistry.owners.set(sdk, this);
+    (this.patchedModules ??= new Set()).add(module);
+    patchRegistry.count++;
 
     return module;
   }
   /**
    * Un-patches the OpenAI module's chat completions API
    */
-  private unpatch(
-    moduleExports: typeof openai & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    // diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
-    if (!moduleExports || !this.patchedModules.delete(moduleExports)) return;
-    this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
-    this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
-    this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
-    if (moduleExports.OpenAI.Responses) {
-      this._unwrap(moduleExports.OpenAI.Responses.prototype, "create");
+  private unpatch(moduleExports: typeof openai, moduleVersion?: string) {
+    const sdk = moduleExports?.OpenAI;
+    if (!sdk || patchRegistry.owners.get(sdk) !== this) return;
+    this._unwrap(sdk.Chat.Completions.prototype, "create");
+    this._unwrap(sdk.Completions.prototype, "create");
+    this._unwrap(sdk.Embeddings.prototype, "create");
+    if (sdk.Responses) this._unwrap(sdk.Responses.prototype, "create");
+    try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = false; } catch { /* immutable SDK */ }
+    patchRegistry.owners.delete(sdk);
+    // An automatic require hook may use a different namespace for this class.
+    for (const module of this.patchedModules ?? []) {
+      if (module.OpenAI === sdk) this.patchedModules!.delete(module);
     }
-
-    _isFIPatched = false;
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
-    }
+    patchRegistry.count--;
   }
+
 }
 
 /** Observe the caller's iterator, including errors and early return, without a

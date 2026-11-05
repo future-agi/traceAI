@@ -3,14 +3,22 @@
 import logging
 import sys
 from abc import ABC
+from collections.abc import Mapping
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
+from fi_instrumentation.fi_types import (
+    FiSpanKindValues,
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
+    SpanAttributes,
+)
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
+from wrapt import ObjectProxy
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -77,6 +85,25 @@ class _WithTracer(ABC):
             yield span
 
 
+def _get_field(value: Any, name: str) -> Any:
+    """Read both SDK models and unmodeled extensions (dicts on older SDKs)."""
+    return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
+
+
+def _get_usage_attributes(usage: Any) -> Dict[str, AttributeValue]:
+    attributes: Dict[str, AttributeValue] = {}
+    for field, key in (
+        ("prompt_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+        ("completion_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+        ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+    ):
+        count = _get_field(usage, field)
+        # Token counts are non-negative integers, not booleans or numeric strings.
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            attributes[key] = count
+    return attributes
+
+
 def _get_input_attributes(
     model: str,
     messages: list,
@@ -115,21 +142,37 @@ def _get_input_attributes(
     # Add input messages
     for i, message in enumerate(messages):
         prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
-        if isinstance(message, dict):
-            if "role" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
-            if "content" in message:
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message["content"]) if message["content"] else ""
-        else:
-            # Handle message objects
-            if hasattr(message, "role"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message.role
-            if hasattr(message, "content"):
-                attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(message.content) if message.content else ""
+        role = _get_field(message, "role")
+        if isinstance(role, str):
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = role
+        content = _get_field(message, "content")
+        if isinstance(content, str) or content is None:
+            attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = content or ""
+        elif isinstance(content, (list, tuple)):
+            # Never stringify multimodal parts into a text attribute: that hides
+            # image URLs from FITracer's image-specific privacy boundary. Keep
+            # typed copies only; the SDK receives the original message unchanged.
+            for j, part in enumerate(content):
+                part_prefix = f"{prefix}.{MessageAttributes.MESSAGE_CONTENTS}.{j}"
+                part_type = _get_field(part, "type")
+                if part_type == "text":
+                    text = _get_field(part, "text")
+                    if isinstance(text, str):
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"] = "text"
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}"] = text
+                elif part_type == "image_url":
+                    url = _get_field(_get_field(part, "image_url"), "url")
+                    if isinstance(url, str):
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}"] = "image"
+                        attributes[f"{part_prefix}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}"] = url
 
-    # Add raw input
-    raw_input = {"model": model, "messages": messages}
-    raw_input.update({k: v for k, v in kwargs.items() if v is not None})
+    # Project semantic fields only. Transport options (headers, query, body,
+    # timeout and future SDK kwargs) must never enter telemetry. The original
+    # kwargs are still passed unchanged to the SDK.
+    raw_input = {"model": model, "messages": messages, **invocation_params}
+    for key in ("tools", "tool_choice", "response_format", "max_completion_tokens", "n", "seed"):
+        if key in kwargs and kwargs[key] is not None:
+            raw_input[key] = kwargs[key]
     attributes[SpanAttributes.INPUT_VALUE] = safe_json_dumps(raw_input)
 
     return attributes
@@ -157,14 +200,7 @@ def _get_output_attributes(response: Any) -> Dict[str, AttributeValue]:
                 attributes[SpanAttributes.OUTPUT_VALUE] = message.content
 
     # Get usage metrics
-    if hasattr(response, "usage") and response.usage:
-        usage = response.usage
-        if hasattr(usage, "prompt_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-        if hasattr(usage, "completion_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-        if hasattr(usage, "total_tokens"):
-            attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+    attributes.update(_get_usage_attributes(_get_field(response, "usage")))
 
     # Add raw output
     try:
@@ -195,14 +231,7 @@ def _get_stream_output_attributes(
         if hasattr(last_chunk, "model"):
             attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] = last_chunk.model
 
-        if hasattr(last_chunk, "usage") and last_chunk.usage:
-            usage = last_chunk.usage
-            if hasattr(usage, "prompt_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = usage.prompt_tokens
-            if hasattr(usage, "completion_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = usage.completion_tokens
-            if hasattr(usage, "total_tokens"):
-                attributes[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = usage.total_tokens
+        attributes.update(_get_usage_attributes(_get_field(last_chunk, "usage")))
 
     # Add raw output
     try:
@@ -243,7 +272,7 @@ class _CompletionsWrapper(_WithTracer):
                 response = wrapped(*args, **kwargs)
 
                 if stream:
-                    return self._wrap_stream(response, span)
+                    return _Stream(response, span)
 
                 # Non-streaming response
                 output_attrs = _get_output_attributes(response)
@@ -252,38 +281,11 @@ class _CompletionsWrapper(_WithTracer):
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
-
-    def _wrap_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap a streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
-
-        try:
-            for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
-        finally:
-            span.end()
 
 
 class _AsyncCompletionsWrapper(_WithTracer):
@@ -314,7 +316,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 response = await wrapped(*args, **kwargs)
 
                 if stream:
-                    return self._wrap_async_stream(response, span)
+                    return _AsyncStream(response, span)
 
                 # Non-streaming response
                 output_attrs = _get_output_attributes(response)
@@ -323,35 +325,156 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 span.end()
                 return response
 
-            except Exception as e:
+            except BaseException as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 span.end()
                 raise
 
-    async def _wrap_async_stream(self, stream: Any, span: Span) -> Any:
-        """Wrap an async streaming response to capture all chunks."""
-        chunks = []
-        full_content = ""
 
+class _StreamState(ObjectProxy):
+    """Observe the caller's stream without replacing its SDK interfaces."""
+
+    def __init__(self, stream: Any, span: Span) -> None:
+        super().__init__(stream)
+        self._self_span = span
+        self._self_finished = False
+        self._self_chunks = []
+        self._self_content = []
+        self._self_iterator = None
+
+    def _observe(self, chunk: Any) -> Any:
+        if not self._self_finished:
+            self._self_chunks.append(chunk)
+            if getattr(chunk, "choices", None):
+                content = getattr(getattr(chunk.choices[0], "delta", None), "content", None)
+                if content:
+                    self._self_content.append(content)
+        return chunk
+
+    def _finish(self, error: Optional[BaseException] = None) -> None:
+        if self._self_finished:
+            return
+        self._self_finished = True
+        span = self._self_span
         try:
-            async for chunk in stream:
-                chunks.append(chunk)
-                if hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    if hasattr(choice, "delta") and hasattr(choice.delta, "content"):
-                        if choice.delta.content:
-                            full_content += choice.delta.content
-                yield chunk
-
-            output_attrs = _get_stream_output_attributes(chunks, full_content)
-            span.set_attributes(output_attrs)
-            span.set_status(Status(StatusCode.OK))
-
-        except Exception as e:
-            span.record_exception(e)
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            raise
-
+            span.set_attributes(_get_stream_output_attributes(
+                self._self_chunks, "".join(self._self_content)
+            ))
+            if error is not None:
+                # FITracer applies error-detail privacy to both surfaces.
+                span.record_exception(error)
+                span.set_status(Status(StatusCode.ERROR, str(error)))
+            else:
+                span.set_status(Status(StatusCode.OK))
+        except Exception:
+            logger.warning("Failed to collect vLLM stream telemetry")
         finally:
+            self._self_chunks.clear()
+            self._self_content.clear()
             span.end()
+
+
+class _Stream(_StreamState):
+    def __iter__(self) -> Any:
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            if self._self_iterator is None:
+                self._self_iterator = iter(self.__wrapped__)
+            with trace_api.use_span(self._self_span, end_on_exit=False,
+                                    record_exception=False, set_status_on_exception=False):
+                chunk = next(self._self_iterator)
+        except StopIteration:
+            self._finish()
+            raise
+        except BaseException as error:
+            self._finish(error)
+            raise
+        return self._observe(chunk)
+
+    def __enter__(self) -> Any:
+        try:
+            enter = getattr(self.__wrapped__, "__enter__", None)
+            if enter is not None:
+                enter()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Any:
+        try:
+            exit_stream = getattr(self.__wrapped__, "__exit__", None)
+            if exit_stream is not None:
+                return exit_stream(exc_type, exc_value, traceback)
+            return self.__wrapped__.response.close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish(exc_value)
+
+    def close(self) -> Any:
+        try:
+            # OpenAI 1.0 exposes only response.close(), not Stream.close().
+            close = getattr(self.__wrapped__, "close", None) or self.__wrapped__.response.close
+            return close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish()
+
+
+class _AsyncStream(_StreamState):
+    def __aiter__(self) -> Any:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            if self._self_iterator is None:
+                self._self_iterator = self.__wrapped__.__aiter__()
+            with trace_api.use_span(self._self_span, end_on_exit=False,
+                                    record_exception=False, set_status_on_exception=False):
+                chunk = await self._self_iterator.__anext__()
+        except StopAsyncIteration:
+            self._finish()
+            raise
+        except BaseException as error:
+            self._finish(error)
+            raise
+        return self._observe(chunk)
+
+    async def __aenter__(self) -> Any:
+        try:
+            enter = getattr(self.__wrapped__, "__aenter__", None)
+            if enter is not None:
+                await enter()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Any:
+        try:
+            exit_stream = getattr(self.__wrapped__, "__aexit__", None)
+            if exit_stream is not None:
+                return await exit_stream(exc_type, exc_value, traceback)
+            return await self.__wrapped__.response.aclose()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish(exc_value)
+
+    async def close(self) -> Any:
+        try:
+            close = getattr(self.__wrapped__, "close", None) or self.__wrapped__.response.aclose
+            return await close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            self._finish()
