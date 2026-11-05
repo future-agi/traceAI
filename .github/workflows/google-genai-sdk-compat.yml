@@ -59,14 +59,12 @@ jobs:
         run: |
           set -euo pipefail
           tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          # Fixtures bind IPv4 loopback explicitly; avoid hostname-based rules.
-          # This narrows the existing rule without permitting external traffic.
-          sed 's/localhost/127.0.0.1/g' "$tests/network.sb" > "$RUNNER_TEMP/loopback.sb"
-          sandbox-exec -f "$RUNNER_TEMP/loopback.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" "$GITHUB_WORKSPACE/.github/scripts/check-loopback-network.cjs" --check-denial
+          # Verify the unchanged OS-level network boundary before the SDK suite.
+          sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" "$GITHUB_WORKSPACE/.github/scripts/check-loopback-network.cjs" --check-denial
           # Repetitions fail immediately; they are a stability check, not retries.
           for repetition in 1 2 3 4 5; do
             echo "Loopback stability repetition $repetition/5"
-            sandbox-exec -f "$RUNNER_TEMP/loopback.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+            sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
           done
       - name: Sandbox denial diagnostics
         if: failure()
