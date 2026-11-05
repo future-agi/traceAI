@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from fi_instrumentation import REDACTED_VALUE, TraceConfig, safe_json_dumps
 
 try:
-    from fi_instrumentation import ChatInput
+    from fi_instrumentation.instrumentation.config import ChatInput
 except ImportError:
     # The declared published 1.2.2 floor predates the structured-input API and
     # the opaque-input guard. Retain its existing path, not a validation fallback.

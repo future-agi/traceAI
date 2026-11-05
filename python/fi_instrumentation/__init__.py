@@ -1,4 +1,3 @@
-from fi_instrumentation.instrumentation._chat_input import ChatInput
 from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.instrumentation.config import (
     REDACTED_VALUE,
@@ -49,7 +48,6 @@ __all__ = [
     "safe_json_dumps",
     "suppress_tracing",
     "TraceConfig",
-    "ChatInput",
     "FITracer",
     "REDACTED_VALUE",
     # OpenTelemetry components

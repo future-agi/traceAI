@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from fi_instrumentation import ChatInput, FITracer, REDACTED_VALUE, TraceConfig
+from fi_instrumentation import FITracer, REDACTED_VALUE, TraceConfig
+from fi_instrumentation.instrumentation.config import ChatInput
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk.trace import TracerProvider

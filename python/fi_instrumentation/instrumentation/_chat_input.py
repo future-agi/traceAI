@@ -101,6 +101,7 @@ def _content(value: Any, config: "TraceConfig") -> Any:
 class ChatInput:
     """Unserialized chat request for FiSpan.set_attribute's input keys only.
 
+    Import ChatInput from fi_instrumentation.instrumentation.config.
     Use ``span.set_attribute("input.value", ChatInput(request))`` (or
     ``raw.input``). Creation-time sampler results remain opaque and fail closed;
     this type does not let a sampler mark returned strings as trusted.

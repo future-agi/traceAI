@@ -57,3 +57,23 @@ def test_core_not_instrumentor_applies_image_mask():
     hidden = TraceConfig(hide_input_text=True).mask("input.value", attrs["input.value"])
     assert IMAGE in hidden and PROMPT not in hidden
     assert original == MESSAGES
+
+
+def test_repository_package_collection_with_installed_core():
+    # pytest also imports the repository's python package while collecting recipe
+    # and framework tests. It must not demand a new API from an older installed
+    # canonical fi_instrumentation package (the supported published-floor job).
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    assert (root / "python" / "__init__.py").is_file()
+    result = subprocess.run([
+        sys.executable, "-I", "-c",
+        "import sys, fi_instrumentation; before = fi_instrumentation.__file__; "
+        "sys.path.insert(0, sys.argv[1]); import python; "
+        "assert fi_instrumentation.__file__ == before",
+        str(root),
+    ], text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
