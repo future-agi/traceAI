@@ -1,61 +1,59 @@
 package ai.traceai.langchain4j;
 
-import ai.traceai.*;
-import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.data.message.*;
+import ai.traceai.FISpanKind;
+import ai.traceai.FITracer;
+import ai.traceai.SemanticConventions;
+import ai.traceai.TraceAI;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.output.Response;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
- * Traced wrapper for LangChain4j ChatLanguageModel.
- * Implements the ChatLanguageModel interface to provide automatic tracing.
+ * Compatibility wrapper for the LangChain4j 0.35 ChatLanguageModel API.
  *
- * <p>Usage:</p>
- * <pre>
- * ChatLanguageModel model = OpenAiChatModel.builder()
- *     .apiKey("...")
- *     .modelName("gpt-4")
- *     .build();
- *
- * ChatLanguageModel tracedModel = new TracedChatLanguageModel(model, "openai");
- *
- * Response&lt;AiMessage&gt; response = tracedModel.generate(
- *     List.of(UserMessage.from("Hello!"))
- * );
- * </pre>
+ * @deprecated Attach {@link LangChain4jListener} to the model builder instead. The
+ * listener also works with current ChatModel/StreamingChatModel implementations;
+ * this legacy class requires the old ChatLanguageModel interface at runtime.
  */
+@Deprecated
 public class TracedChatLanguageModel implements ChatLanguageModel {
-
+    private static final AtomicBoolean WARNED = new AtomicBoolean();
     private final ChatLanguageModel delegate;
     private final FITracer tracer;
     private final String provider;
 
     /**
-     * Creates a new traced chat language model.
-     *
-     * @param delegate the underlying model to wrap
-     * @param tracer   the FITracer for instrumentation
-     * @param provider the provider name (e.g., "openai", "anthropic")
+     * Creates a compatibility wrapper.
+     * @param delegate underlying model
+     * @param tracer instrumentation tracer
+     * @param provider model provider name
      */
     public TracedChatLanguageModel(ChatLanguageModel delegate, FITracer tracer, String provider) {
         this.delegate = delegate;
         this.tracer = tracer;
         this.provider = provider;
+        if (WARNED.compareAndSet(false, true)) {
+            System.getLogger(TracedChatLanguageModel.class.getName()).log(System.Logger.Level.WARNING,
+                    "TracedChatLanguageModel is deprecated; attach LangChain4jListener through model builder.listeners(...) instead. "
+                            + "The compatibility wrapper remains available for LangChain4j 0.35.");
+        }
     }
 
     /**
-     * Creates a new traced chat language model using the global TraceAI tracer.
-     *
-     * @param delegate the underlying model to wrap
-     * @param provider the provider name
+     * Creates a compatibility wrapper using the global TraceAI tracer.
+     * @param delegate underlying model
+     * @param provider model provider name
      */
     public TracedChatLanguageModel(ChatLanguageModel delegate, String provider) {
         this(delegate, TraceAI.getTracer(), provider);
@@ -63,65 +61,33 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
 
     @Override
     public Response<AiMessage> generate(List<ChatMessage> messages) {
+        return trace(messages, () -> delegate.generate(messages));
+    }
+
+    @Override
+    public Response<AiMessage> generate(List<ChatMessage> messages, List<ToolSpecification> tools) {
+        return trace(messages, () -> delegate.generate(messages, tools));
+    }
+
+    @Override
+    public Response<AiMessage> generate(List<ChatMessage> messages, ToolSpecification tool) {
+        return trace(messages, () -> delegate.generate(messages, tool));
+    }
+
+    private Response<AiMessage> trace(List<ChatMessage> messages, Supplier<Response<AiMessage>> call) {
+        // An inner legacy wrapper or model listener must not trace the same call again.
+        if (Boolean.TRUE.equals(Context.current().get(LangChain4jListener.LEGACY_SPAN))) return call.get();
         Span span = tracer.startSpan("LangChain4j Chat", FISpanKind.LLM);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "langchain4j");
+        try (Scope scope = Context.current().with(span).with(LangChain4jListener.LEGACY_SPAN, true).makeCurrent()) {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
-
-            // Capture input messages
-            List<Map<String, String>> inputMessages = new ArrayList<>();
-            for (ChatMessage msg : messages) {
-                String role = getRole(msg);
-                String content = getText(msg);
-                inputMessages.add(FITracer.message(role, content));
+            ChatSpanAttributes.input(tracer, span, messages);
+            Response<AiMessage> response = call.get();
+            if (response != null) {
+                ChatSpanAttributes.output(tracer, span, response.content());
+                ChatSpanAttributes.usage(span, response.tokenUsage(), response.finishReason());
             }
-            tracer.setInputMessages(span, inputMessages);
-
-            // Execute generation
-            Response<AiMessage> response = delegate.generate(messages);
-
-            // Capture output
-            if (response.content() != null) {
-                String outputText = response.content().text();
-                tracer.setOutputValue(span, outputText);
-                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", outputText)));
-
-                // Capture tool execution requests if present
-                if (response.content().hasToolExecutionRequests()) {
-                    List<ToolExecutionRequest> toolRequests = response.content().toolExecutionRequests();
-                    for (int i = 0; i < toolRequests.size(); i++) {
-                        ToolExecutionRequest request = toolRequests.get(i);
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_ID, request.id());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_FUNCTION_NAME, request.name());
-                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                            + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS, request.arguments());
-                    }
-                }
-            }
-
-            // Token usage
-            if (response.tokenUsage() != null) {
-                tracer.setTokenCounts(
-                    span,
-                    response.tokenUsage().inputTokenCount(),
-                    response.tokenUsage().outputTokenCount(),
-                    response.tokenUsage().totalTokenCount()
-                );
-            }
-
-            // Finish reason
-            if (response.finishReason() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                    response.finishReason().toString());
-            }
-
             span.setStatus(StatusCode.OK);
             return response;
-
         } catch (Exception e) {
             tracer.setError(span, e);
             throw e;
@@ -132,52 +98,13 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
 
     @Override
     public String generate(String text) {
-        // Delegate to the list-based method for tracing
         Response<AiMessage> response = generate(List.of(UserMessage.from(text)));
         return response.content() != null ? response.content().text() : null;
     }
 
     /**
-     * Gets the underlying model.
-     *
-     * @return the wrapped ChatLanguageModel
+     * Returns the original model.
+     * @return the original model
      */
-    public ChatLanguageModel unwrap() {
-        return delegate;
-    }
-
-    private String getRole(ChatMessage message) {
-        if (message instanceof UserMessage) return "user";
-        if (message instanceof AiMessage) return "assistant";
-        if (message instanceof SystemMessage) return "system";
-        if (message instanceof ToolExecutionResultMessage) return "tool";
-        return "unknown";
-    }
-
-    private String getText(ChatMessage message) {
-        if (message instanceof UserMessage) {
-            UserMessage um = (UserMessage) message;
-            // Handle both text and multimodal content
-            if (um.hasSingleText()) {
-                return um.singleText();
-            }
-            StringBuilder sb = new StringBuilder();
-            um.contents().forEach(content -> {
-                if (content instanceof TextContent) {
-                    sb.append(((TextContent) content).text());
-                }
-            });
-            return sb.toString();
-        }
-        if (message instanceof AiMessage) {
-            return ((AiMessage) message).text();
-        }
-        if (message instanceof SystemMessage) {
-            return ((SystemMessage) message).text();
-        }
-        if (message instanceof ToolExecutionResultMessage) {
-            return ((ToolExecutionResultMessage) message).text();
-        }
-        return message.toString();
-    }
+    public ChatLanguageModel unwrap() { return delegate; }
 }
