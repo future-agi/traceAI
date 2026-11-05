@@ -1,15 +1,23 @@
 import logging
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
+    EmbeddingAttributes,
     FiMimeTypeValues,
     FiSpanKindValues,
+    ImageAttributes,
     MessageAttributes,
+    MessageContentAttributes,
     RerankerAttributes,
     SpanAttributes,
+    ToolAttributes,
 )
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from opentelemetry.util.types import AttributeValue
+
+from traceai_cohere._content import MAX_DOCUMENTS, _document_attributes, _hide_input_content
+from traceai_cohere._utils import _message_attributes, _to_dict
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -18,12 +26,41 @@ logger.addHandler(logging.NullHandler())
 class _ChatRequestAttributesExtractor:
     """Extract span attributes from Cohere chat request."""
 
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
+    def _mask_message_images(self, message: Any, index: int) -> Dict[str, Any]:
+        # Both input.value and message.content serialize entire content blocks.
+        # Apply the core's image mask before either copy loses its semantic keys.
+        # Copy only telemetry data: never redact the request sent to Cohere.
+        message = dict(_to_dict(message))
+        content = message.get("content")
+        if not isinstance(content, (list, tuple)):
+            return message
+        masked_content = []
+        for block_index, item in enumerate(content):
+            block = _to_dict(item)
+            if block.get("type") == "image_url":
+                image = _to_dict(block.get("image_url"))
+                key = (
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}."
+                    f"{MessageAttributes.MESSAGE_CONTENTS}.{block_index}."
+                    f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}."
+                    f"{ImageAttributes.IMAGE_URL}"
+                )
+                url = self._config.mask(key, image.get("url"))
+                if url is None:
+                    continue
+                block = {**block, "image_url": {**image, "url": url}}
+            masked_content.append(block)
+        message["content"] = masked_content
+        return message
+
     def get_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "command-r-plus")
@@ -35,7 +72,10 @@ class _ChatRequestAttributesExtractor:
         # Invocation parameters
         invocation_params = self._extract_invocation_parameters(request_parameters)
         if invocation_params:
-            yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
+            yield (
+                SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+                safe_json_dumps(invocation_params),
+            )
 
     def get_extra_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
@@ -45,26 +85,51 @@ class _ChatRequestAttributesExtractor:
         # indices. Canonical input-message keys also honor FI_HIDE_INPUTS.
         messages = []
         if "preamble" in request_parameters:
-            messages.append({"role": "system", "message": request_parameters["preamble"]})
-        messages.extend(request_parameters.get("chat_history", []))
+            messages.append(
+                {"role": "system", "message": request_parameters["preamble"]}
+            )
+        messages.extend((request_parameters.get("chat_history") or []))
         if "message" in request_parameters:
             message = request_parameters.get("message", "")
             messages.append({"role": "user", "message": message})
-            yield SpanAttributes.INPUT_VALUE, message
+            if not (self._config.hide_input_messages or self._config.hide_input_text):
+                yield SpanAttributes.INPUT_VALUE, message
 
+        if "messages" in request_parameters:
+            messages = [
+                self._mask_message_images(message, i)
+                for i, message in enumerate(request_parameters.get("messages") or [])
+            ]
+            # Raw JSON is a second copy of message content. Omit it under
+            # selective content privacy; canonical fields retain safe metadata.
+            if not (self._config.hide_input_messages or self._config.hide_input_text):
+                yield SpanAttributes.INPUT_VALUE, safe_json_dumps(messages)
         for i, msg in enumerate(messages):
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role", "")
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", msg.get("message", "")
+            yield from _message_attributes(
+                msg, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+            )
 
         # Documents for RAG
         if "documents" in request_parameters:
-            docs = request_parameters.get("documents", [])
+            docs = request_parameters.get("documents") or []
             yield "cohere.documents_count", len(docs)
 
         # Tools
         if "tools" in request_parameters:
-            tools = request_parameters.get("tools", [])
-            yield "cohere.tools_count", len(tools)
+            tools = request_parameters.get("tools") or []
+            if isinstance(tools, (list, tuple)):
+                yield "cohere.tools_count", len(tools)
+                # Schemas are input/invocation content, even on core 1.2.2.
+                if not (
+                    _hide_input_content(self._config)
+                    or self._config.hide_llm_invocation_parameters
+                ):
+                    for i, tool in enumerate(tools):
+                        yield (
+                            f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}."
+                            f"{ToolAttributes.TOOL_JSON_SCHEMA}",
+                            safe_json_dumps(_to_dict(tool)),
+                        )
 
     def _extract_invocation_parameters(
         self, request_parameters: Mapping[str, Any]
@@ -72,8 +137,14 @@ class _ChatRequestAttributesExtractor:
         """Extract model invocation parameters."""
         params = {}
         param_keys = [
-            "temperature", "max_tokens", "k", "p", "stop_sequences",
-            "frequency_penalty", "presence_penalty", "seed"
+            "temperature",
+            "max_tokens",
+            "k",
+            "p",
+            "stop_sequences",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
         ]
         for key in param_keys:
             if key in request_parameters:
@@ -84,12 +155,14 @@ class _ChatRequestAttributesExtractor:
 class _EmbedRequestAttributesExtractor:
     """Extract span attributes from Cohere embed request."""
 
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
     def get_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.EMBEDDING.value
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "embed-english-v3.0")
@@ -104,18 +177,63 @@ class _EmbedRequestAttributesExtractor:
 
         # Embedding types
         if "embedding_types" in request_parameters:
-            yield "cohere.embedding_types", safe_json_dumps(request_parameters.get("embedding_types"))
+            yield (
+                "cohere.embedding_types",
+                safe_json_dumps(request_parameters.get("embedding_types")),
+            )
 
     def get_extra_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
-        texts = request_parameters.get("texts", [])
-        if isinstance(texts, list):
+        texts = request_parameters.get("texts")
+        images = request_parameters.get("images")
+        inputs = request_parameters.get("inputs")
+
+        # Cohere v2 accepts image-only requests and, in newer SDKs, inputs
+        # containing both text and image components. Never serialize input
+        # objects here: they may contain private image data URIs.
+        plain_text_count = len(texts) if isinstance(texts, (list, tuple)) else 0
+        plain_image_count = len(images) if isinstance(images, (list, tuple)) else 0
+        mixed_count = len(inputs) if isinstance(inputs, (list, tuple)) else 0
+        text_count = plain_text_count
+        image_count = plain_image_count
+        for item in inputs if isinstance(inputs, (list, tuple)) else ():
+            content = _to_dict(item).get("content")
+            for block in content if isinstance(content, (list, tuple)) else ():
+                modality = _to_dict(block).get("type")
+                if modality == "text":
+                    text_count += 1
+                elif modality == "image_url":
+                    image_count += 1
+
+        if texts is not None or text_count:
+            yield "cohere.texts_count", text_count
+        if images is not None or image_count:
+            yield "cohere.images_count", image_count
+        if images is not None or inputs is not None:
+            # Mixed items each produce one embedding even with two components.
+            input_count = plain_text_count + plain_image_count + mixed_count
+            yield "cohere.inputs_count", input_count
+            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(
+                {"texts_count": text_count, "images_count": image_count,
+                 "inputs_count": input_count}
+            )
+        elif _hide_input_content(self._config):
+            # Guard both raw and canonical copies before export: core 1.2.2
+            # does not mask embedding.text under the selective input flags.
+            yield SpanAttributes.INPUT_VALUE, REDACTED_VALUE
+        elif isinstance(texts, (list, tuple)):
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(texts[:5])  # Limit
-            yield "cohere.texts_count", len(texts)
-        else:
-            yield SpanAttributes.INPUT_VALUE, str(texts)
+            for i, text in enumerate(texts[:5]):
+                if isinstance(text, str):
+                    yield (
+                        f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{i}."
+                        f"{EmbeddingAttributes.EMBEDDING_TEXT}",
+                        text,
+                    )
+        elif isinstance(texts, str):
+            yield SpanAttributes.INPUT_VALUE, texts
 
 
 class _RerankRequestAttributesExtractor:
@@ -129,7 +247,6 @@ class _RerankRequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract primary attributes from request."""
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.RERANKER.value
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "rerank-english-v3.0")
@@ -147,11 +264,23 @@ class _RerankRequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
         query = request_parameters.get("query", "")
-        # This semantic alias is not covered by older core mask tables.
+        # These aliases are not covered by older core mask tables.
+        if _hide_input_content(self._config):
+            query = REDACTED_VALUE
         masked_query = self._config.mask(SpanAttributes.INPUT_VALUE, query)
         if masked_query is not None:
             yield RerankerAttributes.RERANKER_QUERY, masked_query
         yield SpanAttributes.INPUT_VALUE, query
 
-        documents = request_parameters.get("documents", [])
+        documents = request_parameters.get("documents")
+        # Never drain a one-shot iterable before the SDK receives it.
+        if not isinstance(documents, (list, tuple)):
+            return
         yield "cohere.documents_count", len(documents)
+        if _hide_input_content(self._config):
+            return
+        yield "cohere.rerank.input_documents_truncated", len(documents) > MAX_DOCUMENTS
+        for i, document in enumerate(documents[:MAX_DOCUMENTS]):
+            yield from _document_attributes(
+                document, f"{RerankerAttributes.RERANKER_INPUT_DOCUMENTS}.{i}"
+            )
