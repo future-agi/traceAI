@@ -60,7 +60,8 @@ jobs:
           FI_BASE_URL: http://127.0.0.1:9
           FI_GRPC_URL: http://127.0.0.1:9
         run: |
-          sudo -E unshare --net bash -euo pipefail -c '
+          # ubuntu-26.04 sudo ignores -E; pass exactly the variables the tests need.
+          sudo --preserve-env=RUNNER_TEMP,SHARED,FI_BASE_URL,FI_GRPC_URL unshare --net bash -euo pipefail -c '
             ip link set lo up
             PYTHON="$RUNNER_TEMP/deepseek-venv/bin/python"
             "$PYTHON" -I -m pytest -q --import-mode=importlib python/frameworks/openai/tests/test_deepseek_route.py

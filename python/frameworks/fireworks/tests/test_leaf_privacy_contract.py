@@ -156,3 +156,69 @@ def test_unprojectable_messages_keep_independent_parameters(flag, invalid):
     assert params["temperature"] == 0.7 and params["max_tokens"] == 100
     if flag != "pii_redaction":
         assert config.mask("input.value", attrs["input.value"]) == "__REDACTED__"
+
+
+class _Hostile:
+    evaluated = []
+
+    def __getattr__(self, name):
+        type(self).evaluated.append(name)
+        raise AssertionError(f"__getattr__({name}) evaluated")
+
+    @property
+    def __class__(self):
+        type(self).evaluated.append("__class__")
+        raise AssertionError("__class__ evaluated")
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_input_messages", "hide_input_text",
+                                  "hide_input_images", "pii_redaction"])
+@pytest.mark.parametrize("where", ["temperature", "message", "tools-item"])
+def test_sdk_conversion_never_evaluates_caller_hooks(flag, where):
+    _Hostile.evaluated = []
+    messages = [{"role": "user", "content": TEXT}]
+    kwargs = {"temperature": 0.7}
+    if where == "temperature":
+        kwargs["temperature"] = _Hostile()
+    elif where == "message":
+        messages.append(_Hostile())
+    else:
+        kwargs["tools"] = [_Hostile()]
+    config = TraceConfig(**{flag: True})
+    attrs = _get_input_attributes("model", messages, config=config, **kwargs)
+    config.mask("input.value", attrs["input.value"])
+    assert _Hostile.evaluated == []
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_input_messages", "hide_input_text"])
+def test_sdk_conversion_writes_no_hidden_values_to_warnings(flag, recwarn):
+    from openai.types.chat import ChatCompletionMessage
+    sdk_message = ChatCompletionMessage.construct(
+        role="assistant", content=None,
+        tool_calls=[{"id": "c", "type": "function",
+                     "function": {"name": "f", "arguments": {"q": "HIDDEN-ARGUMENT-TEXT"}}}],
+    )
+    config = TraceConfig(**{flag: True})
+    _get_input_attributes("model", [{"role": "user", "content": TEXT}, sdk_message], config=config)
+    assert not any("HIDDEN-ARGUMENT-TEXT" in str(w.message) for w in recwarn.list)
+
+
+def test_sdk_conversion_is_bounded_and_fails_closed():
+    import time
+    config = TraceConfig(hide_input_images=True)
+    start = time.perf_counter()
+    attrs = _get_input_attributes("model", [{"role": "user", "content": TEXT}], config=config,
+                                  stop=["x"] * 1_000_001)
+    assert time.perf_counter() - start < 2.0
+    assert config.mask("input.value", attrs["input.value"]) == "__REDACTED__"
+
+
+def test_int_keyed_logit_bias_keeps_pii_only_telemetry():
+    config = TraceConfig(pii_redaction=True)
+    attrs = _get_input_attributes("model", [{"role": "user", "content": TEXT}], config=config,
+                                  temperature=0.7, max_tokens=100, logit_bias={50256: -100})
+    parsed = json.loads(config.mask("input.value", attrs["input.value"]))
+    assert parsed["logit_bias"] == {"50256": -100}
+    assert attrs["gen_ai.input.messages.0.message.content"] == TEXT
+    params = json.loads(attrs["gen_ai.request.parameters"])
+    assert params["temperature"] == 0.7 and params["max_tokens"] == 100

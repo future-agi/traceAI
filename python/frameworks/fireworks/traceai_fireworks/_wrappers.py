@@ -113,32 +113,65 @@ def _shared_instrumentor_enabled() -> bool:
     return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
-def _sdk_plain(value: Any, depth: int = 0) -> Any:
+_SDK_PLAIN_NODES = 10000  # same allowance as core's ChatInput copy budget
+_type_mro = type.__dict__["__mro__"].__get__
+_type_attribute = type.__getattribute__
+
+
+class _OverBudget(Exception):
+    pass
+
+
+def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
+    """Classify by the type alone: no isinstance, metaclass or instance hooks."""
+    try:
+        return (sdk_model in _type_mro(kind)
+                and str(_type_attribute(kind, "__module__")).startswith("openai.")
+                and "model_dump" not in _type_attribute(kind, "__dict__"))
+    except Exception:
+        return False
+
+
+def _sdk_plain(value: Any) -> Any:
     """Copy built-in containers, converting only genuine OpenAI SDK models to plain JSON.
 
-    Anything else, including user subclasses of SDK types, is returned
-    unchanged so core's strict validator still rejects it without evaluating
-    it. Caller objects are never modified.
+    Mirrors what the SDK sends on the wire: SDK models become JSON and exact-int
+    dict keys (e.g. logit_bias token ids) become strings. Everything else,
+    including user subclasses of SDK types, is returned unchanged so core's
+    strict validator rejects it without evaluating it. Bounded by the same node
+    budget as core; past it the original value is returned (and fails closed).
+    Caller objects are never modified.
     """
-    if depth > 32:
-        return value
     try:
-        from openai._models import BaseModel as _SDKModel
+        from openai._models import BaseModel as sdk_model
     except ImportError:  # pragma: no cover - openai is a hard dependency
         return value
-    kind = type(value)
-    if (isinstance(value, _SDKModel) and kind.__module__.startswith("openai.")
-            and kind.__dict__.get("model_dump") is None):
-        try:
-            # Call pydantic's implementation, never an instance/class override.
-            return _sdk_plain(_SDKModel.model_dump(value, mode="json", exclude_unset=True), depth + 1)
-        except Exception:
-            return value
-    if type(value) is dict:
-        return {key: _sdk_plain(item, depth + 1) for key, item in value.items()}
-    if type(value) in (list, tuple):
-        return [_sdk_plain(item, depth + 1) for item in value]
-    return value
+    budget = [_SDK_PLAIN_NODES]
+
+    def walk(item: Any, depth: int) -> Any:
+        budget[0] -= 1
+        if budget[0] < 0 or depth > 32:
+            raise _OverBudget
+        kind = type(item)
+        if kind is dict:
+            return {str(key) if type(key) is int else key: walk(child, depth + 1)
+                    for key, child in item.items()}
+        if kind in (list, tuple):
+            return [walk(child, depth + 1) for child in item]
+        if _genuine_sdk_model(kind, sdk_model):
+            try:
+                # pydantic's own implementation, never an override; warnings off
+                # so mismatched values are not written to the warning stream.
+                dumped = sdk_model.model_dump(item, mode="json", exclude_unset=True, warnings=False)
+            except Exception:
+                return item
+            return walk(dumped, depth + 1)
+        return item
+
+    try:
+        return walk(value, 0)
+    except (_OverBudget, RecursionError):
+        return value
 
 
 def _get_input_attributes(
@@ -173,10 +206,12 @@ def _get_input_attributes(
         # Core applies policy independently for this copy and at the span setter.
         # SDK models (e.g. a ChatCompletionMessage appended in a tool loop) are
         # converted to the plain JSON the SDK itself sends; core still validates.
+        # Hidden inputs are never projected, so skip conversion entirely there.
+        convert = (lambda value: value) if config.hide_inputs else _sdk_plain
         raw_input = {"model": model}
         if type(messages) in (list, tuple):
-            raw_input["messages"] = _sdk_plain(messages)
-        raw_input.update({k: _sdk_plain(v) for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
+            raw_input["messages"] = messages if config.hide_input_messages else convert(messages)
+        raw_input.update({k: convert(v) for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
         structured = ChatInput(raw_input)
         attributes[SpanAttributes.INPUT_VALUE] = structured
         telemetry = ChatInput.masked(structured, config)
