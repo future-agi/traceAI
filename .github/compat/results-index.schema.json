@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compatibility evidence index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "inventory_revision", "fixture", "observations", "health", "inventory"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "inventory_revision": {"type": "string"},
+    "fixture": {"type": "boolean"},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "known_bad": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "integration_id", "language", "tuple", "status", "signature", "summary", "issue_number", "last_failure", "age_days", "scopes"],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha"}, "integration_id": {"type": "string"}, "language": {"type": "string"},
+        "tuple": {"type": "array", "minItems": 1, "items": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string"}}},
+        "status": {"enum": ["open", "release_pending"]}, "signature": {"$ref": "#/$defs/sha"}, "summary": {"type": "string"},
+        "issue_number": {"type": ["integer", "null"], "minimum": 1}, "last_failure": {"type": "string", "format": "date-time"},
+        "age_days": {"type": "number", "minimum": 0}, "scopes": {"type": "array", "minItems": 1, "items": {
+          "type": "object", "additionalProperties": false, "required": ["suite_sha256", "evidence"],
+          "properties": {"suite_sha256": {"$ref": "#/$defs/sha"}, "evidence": {"type": "object"}}
+        }}
+      }
+    }},
+    "health": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "summary"],
+      "properties": {"id": {"type": "string"}, "summary": {"type": "string"}}
+    }},
+    "inventory": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "language", "distribution", "role", "qualification", "owner", "declared", "canary_enabled"],
+      "properties": {
+        "id": {"type": "string"}, "language": {"type": "string"}, "distribution": {"type": "string"},
+        "role": {"type": "string"}, "qualification": {"type": "object"}, "owner": {"type": "string"},
+        "declared": {"type": "array"}, "canary_enabled": {"type": "boolean"}
+      }
+    }}
+  },
+  "$defs": {
+    "status": {"enum": ["passed", "failed", "flaky", "quarantined", "blocked", "unsupported", "awaiting_eligibility", "not_tested", "stale"]},
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "integration_id", "language", "mode", "qualification", "status", "observed_status", "runtime", "packages", "requested", "discovery", "source_sha", "checked_at", "run_url", "run_id", "self_test", "selector", "suite_sha256", "scenarios", "dependency_lock", "failure", "install_command"],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha"}, "integration_id": {"type": "string"}, "language": {"type": "string"},
+        "mode": {"enum": ["source", "published"]},
+        "qualification": {"enum": ["pilot_pending", "qualified", "known_broken", "unqualified", "deprecated", "retired"]},
+        "evidence_qualification": {"enum": ["pilot_pending", "qualified", "known_broken", "unqualified", "deprecated", "retired"]},
+        "status": {"$ref": "#/$defs/status"}, "observed_status": {"$ref": "#/$defs/status"},
+        "runtime": {"type": "object"}, "packages": {"type": "array"}, "requested": {"type": "array"},
+        "discovery": {"type": "array"}, "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "checked_at": {"type": "string", "format": "date-time"}, "run_url": {"type": "string", "format": "uri"},
+        "run_id": {"type": "string"}, "self_test": {"type": "boolean"}, "selector": {"type": "string"},
+        "suite_sha256": {"$ref": "#/$defs/sha"}, "scenarios": {"type": "array", "items": {"type": "string"}},
+        "dependency_lock": {"type": ["object", "null"]}, "failure": {"type": ["object", "null"]},
+        "install_command": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
