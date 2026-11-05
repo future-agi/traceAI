@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterator as OneShotIterator
 from enum import Enum
 from typing import Any, Iterable, Iterator, Mapping, Tuple, TypeVar
 
@@ -12,6 +13,7 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
+
 from traceai_groq._utils import (
     _as_input_attributes,
     _extract_eval_input,
@@ -24,6 +26,19 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _without_transport_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    # Headers and query parameters can carry arbitrary credentials, including
+    # custom names. Omit the entire transport fields regardless of content flags
+    # and never mutate the arguments passed to the SDK. A one-shot messages
+    # iterator must also remain untouched until the SDK serializes it.
+    return {
+        key: value
+        for key, value in parameters.items()
+        if key not in ("extra_headers", "extra_query")
+        and not (key in ("messages", "tools") and isinstance(value, OneShotIterator))
+    }
+
+
 class _RequestAttributesExtractor:
     __slots__ = ()
 
@@ -31,6 +46,7 @@ class _RequestAttributesExtractor:
         self,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        request_parameters = _without_transport_parameters(request_parameters)
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         if model := request_parameters.get("model"):
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
@@ -40,13 +56,17 @@ class _RequestAttributesExtractor:
             messages = request_parameters.get("messages")
             input_data = messages if messages is not None else request_parameters
 
-            if messages and isinstance(messages, Iterable):
+            if (
+                messages
+                and isinstance(messages, Iterable)
+                and not isinstance(messages, OneShotIterator)
+            ):
                 yield from _extract_eval_input(messages)
 
             yield from _as_input_attributes(
                 _io_value_and_type(input_data),
             )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Failed to get input attributes from request parameters of "
                 f"type {type(request_parameters)}"
@@ -59,22 +79,28 @@ class _RequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if not isinstance(request_parameters, Mapping):
             return
-        invocation_params = dict(request_parameters)
+        invocation_params = _without_transport_parameters(request_parameters)
         invocation_params.pop("messages", None)  # Remove LLM input messages
         invocation_params.pop("functions", None)
 
-        if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
+        if isinstance(
+            (tools := invocation_params.pop("tools", None)), Iterable
+        ) and not isinstance(tools, OneShotIterator):
             for i, tool in enumerate(tools):
-                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(
-                    tool
+                yield (
+                    f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}",
+                    safe_json_dumps(tool),
                 )
 
-        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
-            invocation_params
+        yield (
+            SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+            safe_json_dumps(invocation_params),
         )
 
-        if (input_messages := request_parameters.get("messages")) and isinstance(
-            input_messages, Iterable
+        if (
+            (input_messages := request_parameters.get("messages"))
+            and isinstance(input_messages, Iterable)
+            and not isinstance(input_messages, OneShotIterator)
         ):
             for index, input_message in list(enumerate(input_messages)):
                 for key, value in self._get_attributes_from_message_param(
@@ -97,10 +123,15 @@ class _RequestAttributesExtractor:
                     MessageAttributes.MESSAGE_CONTENT,
                     content,
                 )
-            elif isinstance(content, Iterable):
+            elif isinstance(content, Iterable) and not isinstance(
+                content, OneShotIterator
+            ):
                 for index, c in list(enumerate(content)):
                     for key, value in self._get_attributes_from_message_content(c):
-                        yield f"{MessageAttributes.MESSAGE_CONTENTS}.{index}.{key}", value
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{index}.{key}",
+                            value,
+                        )
 
         if name := get_attribute(message, "name"):
             yield MessageAttributes.MESSAGE_NAME, name
@@ -118,8 +149,10 @@ class _RequestAttributesExtractor:
                     function_arguments,
                 )
 
-        if (tool_calls := get_attribute(message, "tool_calls")) and isinstance(
-            tool_calls, Iterable
+        if (
+            (tool_calls := get_attribute(message, "tool_calls"))
+            and isinstance(tool_calls, Iterable)
+            and not isinstance(tool_calls, OneShotIterator)
         ):
             for index, tool_call in enumerate(tool_calls):
                 if (tool_call_id := get_attribute(tool_call, "id")) is not None:
@@ -146,7 +179,6 @@ class _RequestAttributesExtractor:
         self,
         content: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-
         content = dict(content)
         type_ = content.pop("type", None)
         if type_ is None:
@@ -159,8 +191,9 @@ class _RequestAttributesExtractor:
         elif type_ == "image_url":
             if image := content.pop("image_url"):
                 yield f"{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
-                yield f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image.get(
-                    "url", ""
+                yield (
+                    f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
+                    image.get("url", ""),
                 )
 
 
