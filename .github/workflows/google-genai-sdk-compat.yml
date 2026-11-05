@@ -10,12 +10,52 @@ on:
       - '.github/scripts/loopback-network-diagnostics.cjs'
       - '.github/scripts/check-loopback-network.cjs'
   workflow_dispatch:
+    inputs:
+      readonly_pf_capture:
+        description: 'Temporary read-only hosted observation; never SDK qualification'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  readonly-pf-capture:
+    if: github.event_name == 'workflow_dispatch' && inputs.readonly_pf_capture
+    runs-on: macos-14
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/scripts/collect-pf-readonly.py
+            /.github/workflows/google-genai-sdk-compat.yml
+      - name: Capture bounded read-only OS and PF observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/sudo -n /usr/bin/env -i \
+            PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C LC_ALL=C \
+            /usr/bin/python3 -I "$GITHUB_WORKSPACE/.github/scripts/collect-pf-readonly.py" \
+            --output "$RUNNER_TEMP/pf-readonly-capture" \
+            --image-os "${ImageOS-}" --image-version "${ImageVersion-}" \
+            --runner-os "${RUNNER_OS-}" --runner-arch "${RUNNER_ARCH-}" \
+            --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Preserve raw observations and exact executed source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-hosted-readonly-pf-capture
+          path: ${{ runner.temp }}/pf-readonly-capture
+          if-no-files-found: error
+          retention-days: 7
   packed-consumer:
+    if: github.event_name != 'workflow_dispatch' || !inputs.readonly_pf_capture
     runs-on: macos-14
     timeout-minutes: 15
     strategy:
