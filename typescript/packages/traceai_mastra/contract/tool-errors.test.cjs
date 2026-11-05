@@ -161,7 +161,7 @@ test('root completion cannot discard provenance before a slow child conversion o
     assert.doesNotMatch(JSON.stringify(spans), new RegExp(marker));
     assert.match(JSON.stringify(spans), /SAFE_TOOL_RESULT|failed-call/);
     assert.equal(input.body.messages[0].content, marker, 'native request is not mutated');
-    assert.equal(exporter.toolErrors.matches(root.traceId, marker), false, 'shutdown clears provenance');
+    assert.equal(exporter.toolErrors.matches({ traceId: root.traceId, id: root.id }, marker), false, 'shutdown clears provenance');
   } finally {
     await obs.shutdown();
     for (const [flag, value] of Object.entries(originalEnv)) {

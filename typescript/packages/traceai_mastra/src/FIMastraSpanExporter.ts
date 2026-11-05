@@ -11,7 +11,7 @@ import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { SpanKind, SpanStatusCode, TraceFlags } from "@opentelemetry/api";
 import { generateTraceConfig } from "@traceai/fi-core";
 import { sanitizeSpan } from "./privacy.js";
-import { ToolErrorHistory } from "./toolErrorHistory.js";
+import { NativeToolErrorHistory } from "./toolErrorHistory.js";
 import { VERSION } from "./version.js";
 
 function runtimeEmitsInference(): boolean {
@@ -217,7 +217,7 @@ export class FIMastraSpanExporter extends BaseExporter {
   private readonly processor: BatchSpanProcessor;
   private readonly traceConfig = generateTraceConfig();
   private readonly pending = new Set<Promise<void>>();
-  private readonly toolErrors = new ToolErrorHistory();
+  private readonly toolErrors = new NativeToolErrorHistory();
   private shutdownPromise?: Promise<void>;
 
   constructor(config: FISpanExporterConfig) {
@@ -250,10 +250,8 @@ export class FIMastraSpanExporter extends BaseExporter {
     // Capture before asynchronous native formatting/conversion, so a following
     // model request cannot overtake the failed tool's privacy provenance.
     const span = event.exportedSpan;
-    if (this.traceConfig.hideErrorDetails && event.type === "span_ended"
-      && /^(?:tool_call|mcp_tool_call|client_tool_call|provider_tool_call)$/.test(span.type)
-      && typeof span.errorInfo?.message === "string") {
-      this.toolErrors.remember(span.traceId, span.errorInfo.message);
+    if (this.traceConfig.hideErrorDetails) {
+      this.toolErrors.capture(span, event.type === "span_ended");
     }
     // Track from public entry: BaseExporter awaits its formatter before calling
     // _exportTracingEvent, so tracking only conversion misses immediate shutdown.
@@ -292,7 +290,7 @@ export class FIMastraSpanExporter extends BaseExporter {
         ...(generationWrapper ? { name: span.name, kind: SpanKind.INTERNAL } : {}),
         ...(modelCall ? { kind: SpanKind.CLIENT } : {}),
         instrumentationScope: { ...otelSpan.instrumentationScope, version: VERSION },
-      }, this.traceConfig, (message, toolCallId) => this.toolErrors.matches(span.traceId, message, toolCallId)));
+      }, this.traceConfig, (message, toolCallId) => this.toolErrors.matches(span, message, toolCallId)));
     } catch {
       // Conversion failures can quote sensitive input; do not send it to logs.
       this.logger.error("[@traceai/mastra] Failed to convert or enqueue span");
