@@ -13,6 +13,7 @@ import { kiroAdapter } from "@traceai/kiro-plugin";
 import { kiroIdeAdapter, IDE_HOLD as KIRO_IDE_HOLD } from "@traceai/kiro-plugin/ide";
 import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from "@traceai/augment-plugin";
 import { cascadeAdapter } from "@traceai/devin-cascade";
+import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
 
 export interface AdapterRelease {
   id: string;
@@ -110,8 +111,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     packageName: "@traceai/opencode-plugin",
     version: "0.1.0",
     mechanism: "opencode plugin add",
-    qualified: false,
-    reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
+    hostRange: OPENCODE_HOST,
+    qualified: OPENCODE_QUALIFIED,
+    reason: OPENCODE_QUALIFIED ? "PINNED_HOST_QUALIFIED" : "OPENCODE_V2_QUALIFICATION_REQUIRED",
   },
   {
     id: "opencode-v1",
@@ -180,6 +182,7 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
+  if (id === "opencode") return opencodeAdapter;
   if (id === "codex") return codexAdapter;
   if (id === "opencode-v1") return opencodeV1Adapter;
   if (id === "antigravity") return antigravityAdapter;
