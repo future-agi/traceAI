@@ -5,6 +5,7 @@ import { opencodeV1Adapter } from "./opencode-v1.js";
 import { antigravityAdapter } from "@traceai/antigravity-plugin";
 import { copilotAdapter, HOST_VERSION as COPILOT_HOST_VERSION } from "@traceai/copilot";
 import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
+import { openclawAdapter } from "@traceai/openclaw";
 
 export interface AdapterRelease {
   id: string;
@@ -45,6 +46,12 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     mechanism: "native-gui-hooks",
     qualified: false,
     reason: "ANTIGRAVITY_GUI_QUALIFICATION_REQUIRED",
+  },
+  {
+    id: "openclaw", packageName: "@traceai/openclaw", version: "0.1.0",
+    mechanism: "official diagnostics-otel with in-process normalization; explicit local launcher",
+    hostRange: ">=2026.10.5 <2027.0.0", qualified: true,
+    reason: "LOCAL_AGENT_QUALIFIED_GATEWAY_NOT_SUPPORTED",
   },
   {
     id: "pi",
@@ -108,7 +115,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "kiro-cli": "kiro-plugin",
     "kiro-ide": "kiro-plugin",
     augment: "augment-plugin",
-    openclaw: "openclaw",
     goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
@@ -133,5 +139,6 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "copilot") return copilotAdapter;
   if (id === "copilot-vscode") return vscodeAdapter;
   if (id === "hermes") return hermesAdapter;
+  if (id === "openclaw") return openclawAdapter;
   return undefined;
 }
