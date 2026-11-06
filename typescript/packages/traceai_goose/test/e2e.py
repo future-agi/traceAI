@@ -532,8 +532,9 @@ try:
     (root / "cross-directory-resume.json").write_text(json.dumps(exports, indent=2))
     # Privacy-only setup must not replace a local destination with the user default.
     command("setup", "goose", "--scope", "project", "--no-capture-content", "--json", cwd=project)
-    privacy = json.loads(command("status", "goose", "--json", cwd=project).stdout)
+    privacy = json.loads(command("status", "goose", "--json", cwd=project, ok=False).stdout)
     assert privacy["projectName"] == "other-project" and privacy["privacy"] == "structure-only", privacy
+    assert privacy["issues"] == ["ACTIVATION_NOT_OBSERVED"], privacy
     command("setup", "goose", "--scope", "project", "--capture-content", "--json", cwd=project)
     settings = project / ".futureagi/agents.json"
     original = settings.read_text()
