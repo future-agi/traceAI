@@ -20,7 +20,7 @@ import {
 } from "@traceai/agent-core";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
-const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
+const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --agent-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
 interface Parsed {
   command: string;
   agent?: string;
@@ -38,6 +38,7 @@ function parse(args: string[]): Parsed {
     "--project",
     "--scope",
     "--project-dir",
+    "--agent-dir",
     "--base-url",
   ]);
   const booleans = new Set([
@@ -170,10 +171,17 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    projectDir: p.values["--project-dir"] ?? (p.agent === "kiro-ide" ? process.cwd() : undefined),
+    agentDir: p.values["--agent-dir"],
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
+  const release = adapterRelease(p.agent)!;
+  if (release.setupHold && ["setup", "enable", "update", "run"].includes(p.command)) {
+    output({ code: release.setupHold, agent: p.agent, configured: false, registered: false,
+      detail: "This surface requires an independently verified GUI session. No credentials, host registration or network changes were made." }, json);
+    return 2;
+  }
   if (p.command === "disable") {
     await disable(options);
     output({ code: "DISABLED", agent: p.agent }, json);
@@ -185,7 +193,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       adapter,
       check: p.command === "doctor" || p.flags.has("--check"),
     });
-    output(status, json);
+    output({ ...status,
+      ...(p.agent === "augment-ide" && status.activation === "OBSERVED" ? { activation: "HOOK_OBSERVED_EDITOR_UNVERIFIED" } : {}),
+      qualification: release.qualified ? "QUALIFIED" : release.reason,
+    }, json);
     return status.exitCode;
   }
   if (p.command === "setup") {
@@ -263,7 +274,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       stderr.write(
         `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
       );
-    return result.registered || (opts.configureOnly && result.configured)
+    return (result.registered && result.code !== "TRUST_REQUIRED") || (opts.configureOnly && result.configured)
       ? 0
       : 2;
   }
@@ -279,7 +290,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const config = await resolveConfig(options),
     context = {
       config,
-      scope: "user" as const,
+      scope: (p.values["--scope"] ?? "user") as "user" | "project",
       projectDir: options.projectDir,
     };
   if (p.command === "uninstall") {
@@ -291,7 +302,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   if (p.command === "update") {
     const result = await adapter.install(context);
     output(result, json);
-    return result.registered ? 0 : 2;
+    return result.registered && result.trust !== "required" ? 0 : 2;
   }
   if (p.command === "run")
     return adapter.run ? adapter.run(context, p.rest) : 2;
