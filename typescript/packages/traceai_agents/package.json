@@ -10,7 +10,7 @@
   "files": ["dist", "LICENSE"],
   "engines": { "node": ">=22.16.0 <23 || >=24.0.0 <25" },
   "dependencies": { "@traceai/agent-core": "workspace:^" },
-  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" },
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29", "@traceai/cursor-plugin": "workspace:^" },
   "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_agents" },
   "license": "Apache-2.0",
   "author": "Future AGI",
