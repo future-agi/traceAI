@@ -212,7 +212,7 @@ test("host overrides are honored; unknown host directories require discovery", a
   assert.equal(p.user, path.join(f.home, "custom-claude", "futureagi.json"));
   assert.equal(p.configDir, path.join(f.home, "custom-fi"));
   await assert.rejects(
-    c.configPaths({ ...f.options, agent: "hermes" }),
+    c.configPaths({ ...f.options, agent: "unknown-host" }),
     /DISCOVERY_REQUIRED/,
   );
 });

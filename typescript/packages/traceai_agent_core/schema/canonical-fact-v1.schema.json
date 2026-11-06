@@ -118,6 +118,7 @@
     "unit": {
       "enum": [
         "turn",
+        "run",
         "request",
         "attempt",
         "tool",

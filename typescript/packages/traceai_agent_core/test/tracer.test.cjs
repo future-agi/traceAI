@@ -51,6 +51,63 @@ function attrs(span) {
     (span.attributes || []).map((a) => [a.key, Object.values(a.value)[0]]),
   );
 }
+for (const mode of ["revoked", "unreadable"])
+  test(`delivery policy ${mode} after spans are queued fails closed`, async (t) => {
+    const f = await fixture(t);
+    let checks = 0;
+    const tracer = c.createTurnTracer({
+      config: f.config,
+      beforeExport: async () => {
+        checks++;
+        const latest = await c.resolveConfig(f.options);
+        return latest.captureContent;
+      },
+    });
+    t.after(() => tracer.discard());
+    tracer.startTurn({ sessionId: "privacy", turnId: mode, input: "PRIVATE" }).end();
+    await c.writeProtected(
+      f.config.paths.user,
+      mode === "unreadable"
+        ? "invalid-json"
+        : JSON.stringify({ schemaVersion: 1, captureContent: false }),
+    );
+    await tracer.flush();
+    await tracer.shutdown();
+    assert.equal(checks, 1);
+    assert.equal(spans(f).length, 0);
+    assert.equal(tracer.state.pending, 0);
+    assert.equal(tracer.state.dropped, 1);
+    assert.equal(tracer.state.lastError, "EXPORT_POLICY_REVOKED");
+  });
+test("delivery policy is rechecked before each 413 split and revocation is sticky", async (t) => {
+  let allowed = true;
+  const f = await fixture(t, (_body, res) => {
+    allowed = false;
+    res.statusCode = 413;
+    res.end("{}");
+  });
+  let checks = 0;
+  const tracer = c.createTurnTracer({
+    config: f.config,
+    beforeExport: async () => {
+      checks++;
+      return allowed;
+    },
+  });
+  t.after(() => tracer.discard());
+  const turn = tracer.startTurn({ sessionId: "privacy", turnId: "split" });
+  turn.child({ id: "tool", kind: "tool", input: "PRIVATE" }).end();
+  turn.end();
+  await tracer.flush();
+  allowed = true;
+  tracer.startTurn({ sessionId: "privacy", turnId: "after-revoke" }).end();
+  await tracer.shutdown();
+  assert.ok(checks >= 2);
+  assert.equal(f.requests.filter((r) => r.body.resourceSpans.length).length, 1);
+  assert.equal(tracer.state.pending, 0);
+  assert.equal(tracer.state.exported, 0);
+  assert.ok(tracer.state.dropped >= 2);
+});
 const usage = {
   input: 100,
   output: 20,
@@ -60,6 +117,92 @@ const usage = {
   reasoningInOutput: true,
   costUsd: 0.01,
 };
+test("all adapters receive structured credential redaction at the shared OTLP boundary", async (t) => {
+  const f = await fixture(t);
+  const tracer = c.createTurnTracer({
+    config: {
+      ...f.config,
+      credentials: f.config.credentials,
+      identityKey: f.config.identityKey,
+      captureContent: true,
+    },
+  });
+  const content = JSON.stringify({
+    visible: "public",
+    nested: [{ aws_secret_access_key: "SYNTHETIC_SHARED_CREDENTIAL" }],
+    encoded: JSON.stringify({
+      clientSecretKey: "SYNTHETIC_ENCODED_CREDENTIAL",
+    }),
+  });
+  const turn = tracer.startTurn({
+    sessionId: "privacy",
+    turnId: "structured",
+    input: content,
+  });
+  turn
+    .child({ id: "model", kind: "generation", input: content })
+    .end({ output: content });
+  turn.end({ output: content });
+  await tracer.shutdown();
+  const all = spans(f);
+  assert.equal(all.length, 2);
+  for (const span of all)
+    for (const field of ["input.value", "output.value"]) {
+      assert.match(attrs(span)[field], /public/);
+      assert.match(attrs(span)[field], /\[REDACTED\]/);
+    }
+  assert.ok(!JSON.stringify(all).includes("SYNTHETIC_SHARED_CREDENTIAL"));
+  assert.ok(!JSON.stringify(all).includes("SYNTHETIC_ENCODED_CREDENTIAL"));
+});
+for (const usagePlan of ["request", "turn"])
+  for (const size of [1000, 21000, 1048576, 1048577])
+    test(`structured input and output are sanitized before display truncation: ${usagePlan}, ${size} bytes`, async (t) => {
+      const f = await fixture(t);
+      const tracer = c.createTurnTracer({ config: f.config });
+      const marker = "SYNTHETIC_LARGE_CONTENT_CREDENTIAL";
+      const payload = {
+        clientSecretKey: marker,
+        visible: "PUBLIC_CONTENT",
+        padding: "",
+      };
+      payload.padding = "x".repeat(size - JSON.stringify(payload).length);
+      const content = JSON.stringify(payload);
+      assert.equal(Buffer.byteLength(content), size);
+      const turn = tracer.startTurn({
+        sessionId: "large-content",
+        turnId: `${usagePlan}-${size}`,
+        usagePlan,
+        input: content,
+      });
+      turn
+        .child({
+          id: "generation",
+          kind: "generation",
+          fidelity: "reconstructed-message",
+          input: content,
+        })
+        .end({ output: content });
+      turn.end({ output: content });
+      await tracer.shutdown();
+      const all = spans(f);
+      assert.equal(all.length, 2);
+      assert.equal(
+        all.filter((s) => attrs(s)["fi.span.kind"] === "LLM").length,
+        1,
+      );
+      assert.ok(!JSON.stringify(all).includes(marker));
+      for (const span of all)
+        for (const field of ["input.value", "output.value"]) {
+          const text = attrs(span)[field];
+          if (size > 1048576) assert.equal(text, "[REDACTED_SIZE_LIMIT]");
+          else {
+            assert.match(text, /PUBLIC_CONTENT/);
+            assert.match(text, /\[REDACTED\]/);
+            assert.ok(text.length <= 20000);
+            if (size > 20000) assert.equal(text.length, 20000);
+          }
+        }
+    });
 test("two prompt roots, same session; requests/tools/subagent parentage; additive usage once; isolated provider", async (t) => {
   const f = await fixture(t),
     globalBefore = otel.trace.getTracerProvider(),
@@ -255,7 +398,7 @@ test("bounded queue drops excess and transport failure never throws into agent",
   assert.ok(tracer.state.pending <= 256);
   assert.ok(tracer.state.dropped >= 44);
   await tracer.shutdown();
-  assert.equal(tracer.state.lastError, "SHUTDOWN_BUDGET");
+  assert.equal(tracer.state.lastError, "RATE_LIMITED");
   assert.equal(tracer.state.pending, 0);
 });
 test("queued spans retain their original destination when caller changes configuration", async (t) => {
@@ -292,4 +435,223 @@ test("error-detail privacy suppresses error outputs even with content capture en
   await tracer.shutdown();
   assert.equal(spans(f).length, 2);
   assert.ok(!JSON.stringify(f.requests).includes("PRIVATE ERROR BODY"));
+});
+
+test("source-message generations render as LLM with explicitly reconstructed timing and one additive usage owner", async (t) => {
+  const f = await fixture(t),
+    tracer = c.createTurnTracer({ config: f.config });
+  const turn = tracer.startTurn({
+    sessionId: "cursor-session",
+    turnId: "cursor-turn",
+    usagePlan: "request",
+  });
+  turn
+    .child({
+      id: "first-message",
+      kind: "generation",
+      fidelity: "reconstructed-message",
+      timing: "reconstructed",
+      model: "grok-4.7",
+    })
+    .end({ output: "first" });
+  turn
+    .child({
+      id: "last-message",
+      kind: "generation",
+      fidelity: "reconstructed-message",
+      timing: "reconstructed",
+      model: "grok-4.7",
+    })
+    .end({ output: "last", usage });
+  turn
+    .child({
+      id: "not-a-message",
+      kind: "llm",
+      fidelity: "reconstructed-message",
+    })
+    .end();
+  turn.end();
+  await tracer.shutdown();
+  const all = spans(f),
+    model = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
+  assert.equal(model.length, 2);
+  assert.ok(
+    model.every((s) => attrs(s)["fi.agent.timing"] === "reconstructed"),
+  );
+  assert.equal(
+    all.filter((s) => attrs(s)["gen_ai.usage.input_tokens"] !== undefined)
+      .length,
+    1,
+  );
+  assert.equal(Number(attrs(model[1])["gen_ai.usage.input_tokens"]), 100);
+  assert.equal(
+    attrs(all.find((s) => !s.parentSpanId))["gen_ai.usage.input_tokens"],
+    undefined,
+  );
+});
+
+test("turn usage belongs to the last source generation, or the root if no generation exists", async (t) => {
+  const f = await fixture(t),
+    tracer = c.createTurnTracer({ config: f.config });
+  for (const withModels of [true, false]) {
+    const turn = tracer.startTurn({
+      sessionId: "round2",
+      turnId: String(withModels),
+      usagePlan: "turn",
+    });
+    if (withModels) {
+      const first = turn.child({
+        id: "first",
+        name: "first",
+        kind: "generation",
+        fidelity: "reconstructed-message",
+      });
+      const last = turn.child({
+        id: "last",
+        name: "last",
+        kind: "generation",
+        fidelity: "reconstructed-message",
+      });
+      last.end({ output: "final response" });
+      first.end();
+    } else turn.child({ id: "tool", kind: "tool" }).end();
+    turn.end({ usage, gap: withModels ? undefined : "TRANSCRIPT_UNAVAILABLE" });
+    turn.end({ usage });
+  }
+  await tracer.shutdown();
+  const all = spans(f),
+    bearers = all.filter(
+      (s) => attrs(s)["gen_ai.usage.total_tokens"] !== undefined,
+    );
+  assert.equal(bearers.length, 2);
+  assert.equal(
+    bearers.reduce(
+      (n, s) => n + Number(attrs(s)["gen_ai.usage.total_tokens"]),
+      0,
+    ),
+    240,
+  );
+  const model = bearers.find((s) => s.parentSpanId),
+    root = bearers.find((s) => !s.parentSpanId);
+  assert.equal(model.name, "last");
+  assert.equal(attrs(model)["output.value"], "final response");
+  assert.equal(attrs(root)["fi.agent.gap"], "TRANSCRIPT_UNAVAILABLE");
+  assert.ok(
+    bearers.every((s) => attrs(s)["fi.usage.contribution"] === "additive"),
+  );
+});
+
+const sumAttribute = (all, key) => all.reduce((sum, s) => sum + Number(attrs(s)[key] ?? 0), 0);
+test("turn-only totals belong to the last source generation exactly once", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  const turn = tracer.startTurn({ sessionId: "s", turnId: "turn-only", usagePlan: "turn", startTime: 100 });
+  const first = turn.child({ id: "source-message-1", startTime: 500, kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
+  const last = turn.child({ id: "source-message-2", startTime: 1500, kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
+  // Ending out of order must not make an earlier source generation the owner.
+  last.end({ output: "answer", endTime: 2000, timeToFirstTokenMs: 9 });
+  first.end({ usage, endTime: 1000 });
+  turn.end({ usage: { ...usage, input: 84000, output: 600 }, endTime: 3000 });
+  turn.end({ usage });
+  await tracer.shutdown();
+  const all = spans(f), llms = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
+  assert.equal(llms.length, 2);
+  assert.equal(sumAttribute(all, "gen_ai.usage.total_tokens"), 84600);
+  assert.equal(sumAttribute(all, "gen_ai.cost.total"), 0.01);
+  const owner = llms.find((s) => attrs(s)["gen_ai.usage.total_tokens"] !== undefined);
+  assert.equal(attrs(owner)["output.value"], "answer");
+  assert.equal(attrs(owner)["fi.usage.scope"], "turn");
+  assert.equal(attrs(owner)["fi.usage.contribution"], "additive");
+  assert.equal(attrs(owner)["fi.agent.fidelity"], "reconstructed-message");
+  assert.equal(Number(owner.endTimeUnixNano), 2000000000);
+  const root = all.find((s) => !s.parentSpanId);
+  assert.equal(Number(attrs(root)["fi.agent.summary.total"]), 84600);
+  assert.equal(attrs(root)["fi.usage.contribution"], "none");
+  assert.ok(all.every((s) => attrs(s)["gen_ai.server.time_to_first_token"] === undefined));
+  assert.ok(all.every((s) => attrs(s)["gen_ai.usage.cost"] === undefined));
+});
+
+test("turn-only totals without a generation stay on the AGENT root", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  const turn = tracer.startTurn({ sessionId: "s", turnId: "no-generation", usagePlan: "turn" });
+  turn.child({ id: "tool-record", kind: "tool", name: "read_file", toolCallId: "actual-call-123" }).end({ usage });
+  turn.end({ usage });
+  await tracer.shutdown();
+  const all = spans(f), root = all.find((s) => !s.parentSpanId), tool = all.find((s) => s.parentSpanId);
+  assert.equal(attrs(root)["fi.span.kind"], "AGENT");
+  assert.equal(attrs(root)["fi.usage.scope"], "turn");
+  assert.equal(Number(attrs(root)["gen_ai.usage.total_tokens"]), 120);
+  assert.equal(sumAttribute(all, "gen_ai.usage.total_tokens"), 120);
+  assert.equal(sumAttribute(all, "gen_ai.cost.total"), 0.01);
+  assert.equal(attrs(tool)["tool.name"], "read_file");
+  assert.equal(attrs(tool)["tool_call.id"], "actual-call-123");
+  assert.notEqual(attrs(tool)["fi.agent.source_call_id"], "actual-call-123");
+});
+
+test("request and attempt plans count native calls once; TTFT is ms; estimated and zero costs survive", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  for (const plan of ["request", "attempt"]) {
+    const turn = tracer.startTurn({ sessionId: "s", turnId: plan, usagePlan: plan });
+    turn.child({ id: "r1", kind: "llm", fidelity: "native-request" }).end({ usage: { ...usage, costUsd: 0 }, timeToFirstTokenMs: 125.5 });
+    turn.child({ id: "r2", kind: "llm", fidelity: "native-request" }).end({ usage: { ...usage, costSource: "host-price-table", costEstimator: "fixture-v1" }, timeToFirstTokenMs: 0 });
+    turn.child({ id: "tool-no-source-id", kind: "tool", name: "shell" }).end({ timeToFirstTokenMs: 4 });
+    turn.end({ usage });
+  }
+  await tracer.shutdown();
+  const all = spans(f), models = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
+  assert.equal(sumAttribute(all, "gen_ai.usage.total_tokens"), 480);
+  assert.equal(sumAttribute(all, "gen_ai.cost.total"), 0.02);
+  assert.equal(models.filter((s) => Number(attrs(s)["gen_ai.server.time_to_first_token"]) === 125.5).length, 2);
+  assert.equal(models.filter((s) => Number(attrs(s)["gen_ai.cost.total"]) === 0).length, 2);
+  assert.equal(models.filter((s) => attrs(s)["fi.cost.kind"] === "estimated").length, 2);
+  for (const tool of all.filter((s) => attrs(s)["fi.span.kind"] === "TOOL")) {
+    assert.equal(attrs(tool)["tool_call.id"], undefined);
+    assert.equal(attrs(tool)["gen_ai.server.time_to_first_token"], undefined);
+  }
+});
+
+test("unknown plan, invalid usage and missing cost never invent billable usage", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  const unknown = tracer.startTurn({ sessionId: "s", turnId: "unknown", usagePlan: "unknown" });
+  unknown.child({ id: "r", kind: "llm", fidelity: "native-request" }).end({ usage });
+  unknown.end({ usage });
+  const invalid = tracer.startTurn({ sessionId: "s", turnId: "invalid", usagePlan: "turn" });
+  invalid.child({ id: "message", kind: "generation", fidelity: "reconstructed-message" }).end();
+  invalid.end({ usage: { ...usage, input: -1 } });
+  const native = tracer.startTurn({ sessionId: "s", turnId: "native" });
+  native.child({ id: "r", kind: "llm", fidelity: "native-request" }).end({ usage: { ...usage, costUsd: undefined }, timeToFirstTokenMs: NaN });
+  native.end();
+  await tracer.shutdown();
+  const all = spans(f);
+  assert.equal(sumAttribute(all, "gen_ai.usage.total_tokens"), 120);
+  assert.ok(all.every((s) => attrs(s)["gen_ai.cost.total"] === undefined));
+  assert.ok(all.some((s) => attrs(s)["fi.cost.kind"] === "unknown"));
+  assert.ok(all.some((s) => attrs(s)["fi.agent.gap"] === "UNRESOLVED_USAGE"));
+  assert.ok(all.every((s) => attrs(s)["gen_ai.server.time_to_first_token"] === undefined));
+});
+
+test("turn usage stays on the final source generation even when its stop is missing", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  const turn = tracer.startTurn({ sessionId: "s", turnId: "unfinished", usagePlan: "turn" });
+  turn.child({ id: "first", name: "first", kind: "generation", fidelity: "reconstructed-message" }).end({ usage });
+  turn.child({ id: "last", name: "last", kind: "generation", fidelity: "reconstructed-message" });
+  turn.end({ usage });
+  await tracer.shutdown();
+  const all = spans(f), last = all.find((s) => s.name === "last");
+  assert.equal(sumAttribute(all, "gen_ai.usage.total_tokens"), 120);
+  assert.equal(Number(attrs(last)["gen_ai.usage.total_tokens"]), 120);
+  assert.equal(attrs(last)["fi.agent.outcome"], "incomplete");
+  assert.equal(attrs(all.find((s) => s.name === "first"))["fi.usage.contribution"], "none");
+  assert.equal(attrs(all.find((s) => !s.parentSpanId))["fi.agent.gap"], "MISSING_CHILD_STOP");
+});
+
+test("caller plan mutation cannot double-count overlapping turn totals", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+  const input = { sessionId: "s", turnId: "immutable-plan", usagePlan: "request" };
+  const turn = tracer.startTurn(input);
+  turn.child({ id: "r", kind: "llm", fidelity: "native-request" }).end({ usage });
+  input.usagePlan = "turn";
+  turn.end({ usage });
+  await tracer.shutdown();
+  assert.equal(sumAttribute(spans(f), "gen_ai.usage.total_tokens"), 120);
+  assert.equal(sumAttribute(spans(f), "gen_ai.cost.total"), 0.01);
 });

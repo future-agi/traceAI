@@ -4,6 +4,7 @@ import { createHash, createHmac } from "node:crypto";
 export type Anchor = string | null | readonly Anchor[];
 export type WorkKind =
   | "turn"
+  | "run"
   | "request"
   | "attempt"
   | "tool"
@@ -50,10 +51,11 @@ export function workId(
   turn: Anchor,
   work?: Anchor,
 ): string {
-  if (kind !== "turn" && work === undefined) throw new Error("HELD_IDENTITY");
+  if (kind !== "turn" && kind !== "run" && work === undefined)
+    throw new Error("HELD_IDENTITY");
   return digest(
     key,
-    kind === "turn"
+    kind === "turn" || kind === "run"
       ? ["fi-work-v1", namespace, kind, session, turn]
       : ["fi-work-v1", namespace, kind, session, turn, work!],
   );

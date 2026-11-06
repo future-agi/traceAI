@@ -151,9 +151,15 @@ export function validateFact(f: CanonicalFact): void {
   )
     fail();
   if (
-    !["turn", "request", "attempt", "tool", "activity", "compaction"].includes(
-      f.unit,
-    ) ||
+    ![
+      "turn",
+      "run",
+      "request",
+      "attempt",
+      "tool",
+      "activity",
+      "compaction",
+    ].includes(f.unit) ||
     !["native", "hook", "extension", "transcript"].includes(f.source) ||
     ![
       "observed_request",

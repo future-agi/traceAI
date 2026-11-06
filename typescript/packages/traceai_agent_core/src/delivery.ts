@@ -1,59 +1,49 @@
-import {
-  constants,
-  closeSync,
-  fstatSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
-import { join } from "node:path";
 import type { Context, Span } from "@opentelemetry/api";
 import type {
   ReadableSpan,
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
-import type { ResolvedConfig } from "./config.js";
+import {
+  JsonTraceSerializer,
+  ProtobufTraceSerializer,
+} from "@opentelemetry/otlp-transformer";
+import { deliveryStatePath, type ResolvedConfig } from "./config.js";
 import type { DeliveryState } from "./lifecycle.js";
 import { updateJson } from "./files.js";
 import { postOtlp, type DeliveryResult } from "./validation.js";
 
-/** Persistent disable wins over a stale process snapshot; any unreadable fence fails closed. */
-export function collectionEnabled(config: ResolvedConfig): boolean {
-  if (
-    !config.enabled ||
-    process.env.FI_AGENT_ENABLED === "false" ||
-    process.env.FI_AGENT_ENABLED === "0"
-  )
-    return false;
-  let fd: number | undefined;
-  try {
-    fd = openSync(
-      config.paths.manifest,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-    const st = fstatSync(fd);
-    if (
-      !st.isFile() ||
-      st.nlink !== 1 ||
-      st.size > 65536 ||
-      st.mode & 0o077 ||
-      (process.getuid && st.uid !== process.getuid())
-    )
-      return false;
-    const value = JSON.parse(readFileSync(fd, "utf8"));
-    return (
-      value.schemaVersion === 1 &&
-      value.disabled?.[config.agent] !== true &&
-      (value.generations?.[config.agent] ?? 0) === config.generation
-    );
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "ENOENT";
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
+export { collectionEnabled } from "./collection.js";
+import { collectionEnabled } from "./collection.js";
+type Protocol = "http/json" | "http/protobuf";
+function encode(
+  spans: ReadableSpan[],
+  protocol: Protocol = "http/json",
+): Uint8Array {
+  return (
+    protocol === "http/protobuf" ? ProtobufTraceSerializer : JsonTraceSerializer
+  ).serializeRequest(spans)!;
 }
-function encode(spans: ReadableSpan[]): Uint8Array {
-  return JsonTraceSerializer.serializeRequest(spans)!;
+async function within<T>(
+  operation: Promise<T>,
+  deadline: number,
+  fallback: T,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) return fallback;
+  let timer: NodeJS.Timeout | undefined, abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((resolve) => {
+        abort = () => resolve(fallback);
+        signal?.addEventListener("abort", abort, { once: true });
+        timer = setTimeout(abort, Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (abort) signal?.removeEventListener("abort", abort);
+  }
 }
 /** Finalized standard OTLP, memory-only queue. No retry after ambiguity/partial success; no exactly-once claim. */
 export class BoundedSpanProcessor implements SpanProcessor {
@@ -61,7 +51,13 @@ export class BoundedSpanProcessor implements SpanProcessor {
   private queue: Array<{ span: ReadableSpan; bytes: number }> = [];
   private bytes = 0;
   private active?: Promise<void>;
+  private closing?: Promise<void>;
+  private draining?: Promise<void>;
+  private shutdownDeadline?: number;
+  private readonly beforeExport?: () => Promise<boolean>;
+  private readonly protocol: Protocol;
   private stopped = false;
+  private revoked = false;
   private abort?: AbortController;
   private readonly timer: NodeJS.Timeout;
   private metadata: Promise<void> = Promise.resolve();
@@ -76,9 +72,20 @@ export class BoundedSpanProcessor implements SpanProcessor {
   constructor(
     config: ResolvedConfig,
     private readonly onDelivery?: (result: DeliveryResult) => void,
+    beforeExportOrProtocol?: (() => Promise<boolean>) | Protocol,
+    protocol: Protocol = "http/json",
   ) {
+    this.beforeExport =
+      typeof beforeExportOrProtocol === "function"
+        ? beforeExportOrProtocol
+        : undefined;
+    this.protocol =
+      typeof beforeExportOrProtocol === "string"
+        ? beforeExportOrProtocol
+        : protocol;
     this.config = {
       ...config,
+      revalidate: config.revalidate,
       paths: { ...config.paths },
       credentials: config.credentials ? { ...config.credentials } : undefined,
     };
@@ -95,7 +102,7 @@ export class BoundedSpanProcessor implements SpanProcessor {
         this.loss(1, "DISABLED");
         return;
       }
-      const bytes = encode([span]).byteLength;
+      const bytes = encode([span], this.protocol).byteLength;
       if (
         bytes > 256 * 1024 ||
         this.queue.length >= 256 ||
@@ -123,7 +130,7 @@ export class BoundedSpanProcessor implements SpanProcessor {
     this.delta.acceptedAt = acceptedAt ?? this.delta.acceptedAt;
     if (this.metadataRunning) return;
     this.metadataRunning = true;
-    const path = join(this.config.paths.stateDir, `${this.config.agent}.json`);
+    const path = deliveryStatePath(this.config);
     this.metadata = (async () => {
       while (this.delta.exported || this.delta.dropped) {
         const delta = this.delta;
@@ -134,15 +141,22 @@ export class BoundedSpanProcessor implements SpanProcessor {
           acceptedAt: undefined,
         };
         try {
-          await updateJson<DeliveryState>(path, (old) => ({
-            pending: 0,
-            exported: (old?.exported ?? 0) + delta.exported,
-            dropped: (old?.dropped ?? 0) + delta.dropped,
-            activatedAt: old?.activatedAt ?? new Date().toISOString(),
-            lastAcceptedAt: delta.acceptedAt ?? old?.lastAcceptedAt,
-            lastError:
-              delta.error ?? (delta.acceptedAt ? undefined : old?.lastError),
-          }));
+          await updateJson<DeliveryState>(
+            path,
+            (old) => ({
+              pending: 0,
+              ...(this.config.deliveryBinding
+                ? { binding: this.config.deliveryBinding }
+                : {}),
+              exported: (old?.exported ?? 0) + delta.exported,
+              dropped: (old?.dropped ?? 0) + delta.dropped,
+              activatedAt: old?.activatedAt ?? new Date().toISOString(),
+              lastAcceptedAt: delta.acceptedAt ?? old?.lastAcceptedAt,
+              lastError:
+                delta.error ?? (delta.acceptedAt ? undefined : old?.lastError),
+            }),
+            { lockWaitMs: 200 },
+          );
         } catch {
           /* Bounded diagnostics must fail open too. */
         }
@@ -150,6 +164,14 @@ export class BoundedSpanProcessor implements SpanProcessor {
     })().finally(() => {
       this.metadataRunning = false;
     });
+  }
+  recordDropped(count: number, reason: string): void {
+    if (
+      Number.isSafeInteger(count) &&
+      count > 0 &&
+      /^[A-Z_]{1,80}$/.test(reason)
+    )
+      this.loss(count, reason);
   }
   private loss(count: number, reason: string): void {
     this.state.dropped += count;
@@ -164,19 +186,64 @@ export class BoundedSpanProcessor implements SpanProcessor {
     this.state.pending -= count;
     if (count) this.loss(count, "DISABLED");
   }
+  discard(): void {
+    this.revoked = true;
+    this.stopped = true;
+    clearInterval(this.timer);
+    this.fence();
+  }
   private async send(
     spans: ReadableSpan[],
     deadline = Date.now() + 5000,
   ): Promise<void> {
+    deadline = Math.min(deadline, this.shutdownDeadline ?? Infinity);
+    const controller = new AbortController();
+    this.abort = controller;
+    // Re-read trusted policy and the adapter's durable snapshot at every batch,
+    // including 413 splits. A hung or unreadable policy can never bypass the budget.
+    for (const check of [this.beforeExport, this.config.revalidate]) {
+      if (!check) continue;
+      let allowed = false;
+      try {
+        allowed = await within(
+          Promise.resolve().then(check),
+          deadline,
+          false,
+          controller.signal,
+        );
+      } catch {
+        /* fail closed */
+      }
+      if (!allowed) {
+        if (controller.signal.aborted) {
+          this.loss(spans.length, "SHUTDOWN_BUDGET");
+          return;
+        }
+        this.discard();
+        this.loss(spans.length, "EXPORT_POLICY_REVOKED");
+        return;
+      }
+    }
+    deadline = Math.min(deadline, this.shutdownDeadline ?? Infinity);
+    // The policy check can await I/O: recheck the deadline and disable fence afterwards.
     if (Date.now() >= deadline) {
-      this.loss(spans.length, "EXPORT_DEADLINE");
+      this.loss(
+        spans.length,
+        this.shutdownDeadline === undefined
+          ? "EXPORT_DEADLINE"
+          : "SHUTDOWN_BUDGET",
+      );
       return;
     }
-    if (!collectionEnabled(this.config) || !this.config.credentials) {
+    if (
+      this.revoked ||
+      controller.signal.aborted ||
+      !collectionEnabled(this.config) ||
+      !this.config.credentials
+    ) {
       this.loss(spans.length, "DISABLED");
       return;
     }
-    this.abort = new AbortController();
     // Cross-process disable interrupts a currently outstanding request as well as queued work.
     const fence = setInterval(() => {
       if (!collectionEnabled(this.config)) this.abort?.abort();
@@ -188,8 +255,9 @@ export class BoundedSpanProcessor implements SpanProcessor {
         endpoint: this.config.endpoint,
         projectName: this.config.projectName,
         credentials: this.config.credentials,
-        body: encode(spans),
-        signal: this.abort.signal,
+        body: encode(spans, this.protocol),
+        protocol: this.protocol,
+        signal: controller.signal,
         timeoutMs: deadline - Date.now(),
       });
     } catch {
@@ -216,8 +284,13 @@ export class BoundedSpanProcessor implements SpanProcessor {
           : spans.length;
       this.state.exported += spans.length - rejected;
       this.state.dropped += rejected;
-      this.state.lastError = result.code;
-      this.record(spans.length - rejected, rejected, result.code);
+      const reason =
+        this.shutdownDeadline !== undefined &&
+        Date.now() >= this.shutdownDeadline
+          ? "SHUTDOWN_BUDGET"
+          : result.code;
+      this.state.lastError = reason;
+      this.record(spans.length - rejected, rejected, reason);
       if (result.code === "AUTH_REJECTED") {
         this.stopped = true;
         this.fence();
@@ -229,32 +302,70 @@ export class BoundedSpanProcessor implements SpanProcessor {
       /* Host failures must never become instrumentation failures. */
     }
   }
-  async forceFlush(): Promise<void> {
+  private exportBatch(deadline = Date.now() + 5000): Promise<void> {
     if (this.active) return this.active;
-    // Snapshot a bounded batch; concurrent new work remains for the next tick.
     const items = this.queue.splice(0, 64);
     for (const item of items) this.bytes -= item.bytes;
-    if (!items.length) {
-      await this.metadata;
-      return;
-    }
-    this.active = this.send(items.map((i) => i.span)).finally(() => {
+    if (!items.length) return Promise.resolve();
+    this.active = this.send(
+      items.map((i) => i.span),
+      deadline,
+    ).finally(() => {
       this.state.pending -= items.length;
       this.active = undefined;
     });
-    await this.active;
-    await this.metadata;
+    return this.active;
   }
-  async shutdown(): Promise<void> {
+  async forceFlush(deadline = Date.now() + 5000): Promise<void> {
+    if (this.closing) return this.closing;
+    if (this.draining) return this.draining;
+    await this.exportBatch(deadline);
+    // Joining another export must also join its persisted receipt.
+    await within(this.metadata, deadline, undefined);
+  }
+  /** Drain the bounded queue under one deadline without closing a reusable host provider. */
+  drain(timeoutMs = 5000): Promise<void> {
+    if (this.draining) return this.draining;
+    const budget = Number.isFinite(timeoutMs)
+      ? Math.max(1, Math.min(timeoutMs, 5000))
+      : 5000;
+    const deadline = Date.now() + budget;
+    this.shutdownDeadline = deadline - Math.min(250, Math.floor(budget / 5));
+    this.draining = (async () => {
+      const abort = setTimeout(
+        () => this.abort?.abort(),
+        Math.max(0, this.shutdownDeadline! - Date.now()),
+      );
+      try {
+        const work = async () => {
+          await this.active;
+          while (this.queue.length && Date.now() < this.shutdownDeadline!)
+            await this.exportBatch(this.shutdownDeadline);
+        };
+        await within(work(), this.shutdownDeadline!, undefined);
+        const left = this.queue.length;
+        this.queue = [];
+        this.bytes = 0;
+        this.state.pending -= left;
+        if (left) this.loss(left, "SHUTDOWN_BUDGET");
+        await within(this.active ?? Promise.resolve(), deadline, undefined);
+        await within(this.metadata, deadline, undefined);
+      } finally {
+        clearTimeout(abort);
+        this.shutdownDeadline = undefined;
+        this.draining = undefined;
+      }
+    })();
+    return this.draining;
+  }
+  shutdown(timeoutMs = 5000): Promise<void> {
+    if (this.closing) return this.closing;
     clearInterval(this.timer);
-    this.stopped = true;
-    await this.forceFlush();
-    // Bounded termination, never wait indefinitely for all pending requests.
-    const left = this.queue.length;
-    this.queue = [];
-    this.bytes = 0;
-    this.state.pending = 0;
-    if (left) this.loss(left, "SHUTDOWN_BUDGET");
-    await this.metadata;
+    // Native observers can finalize their root while a previous child export is
+    // in flight. Include those spans, but reject all work after drain completion.
+    this.closing = this.drain(timeoutMs).finally(() => {
+      this.stopped = true;
+    });
+    return this.closing;
   }
 }

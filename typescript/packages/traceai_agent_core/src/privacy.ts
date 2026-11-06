@@ -7,13 +7,116 @@ import {
   type Policy,
   type Usage,
 } from "./schema.js";
-/** Defense in depth for opted-in text only; structure-only is the strong default. */
-export function redact(text: string): string {
-  return text
-    .replace(
-      /(?:bearer\s+|(?:api[_-]?key|secret|password|token)\s*[:=]\s*)[^\s,;"']+/gi,
-      "[REDACTED]",
+/** Credential aliases share one policy at object, JSON and free-text boundaries. */
+export function isSensitiveField(key: string): boolean {
+  const normalized = key
+    .replace(/\\u([a-f0-9]{4})/gi, (_match, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16)),
     )
+    .replace(/[^a-z0-9]/gi, "");
+  if (
+    /^(?:inputtokens|outputtokens|totaltokens|tokencount|tokenizer|publickey|nonsecretkey)$/i.test(
+      normalized,
+    )
+  )
+    return false;
+  return /secret|token|password|passwd|apikey|privatekey|accesskey|credential|authorization|cookie|signingkey|passphrase|^pwd$/i.test(
+    normalized,
+  );
+}
+export const isSensitiveKey = isSensitiveField;
+export const redactValue = (value: unknown, depth = 0): unknown =>
+  redactStructured(value, depth);
+/** Defense in depth for content-on-by-default. Structure-only omits content entirely. */
+export function redact(text: string): string {
+  return redactStructured(text) as string;
+}
+/** Check normalized keys before serialization, including nested JSON-encoded strings. */
+export function redactStructured(value: unknown, depth = 0): unknown {
+  if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
+  if (Array.isArray(value))
+    return value.map((item) => redactStructured(item, depth + 1));
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        isSensitiveField(key)
+          ? "[REDACTED]"
+          : redactStructured(item, depth + 1),
+      ]),
+    );
+  if (typeof value === "string") {
+    // Inspect complete strings before any display truncation. Refuse oversized
+    // content rather than treating a truncated JSON prefix as ordinary text.
+    if (
+      value.length > LIMITS.ingress ||
+      Buffer.byteLength(value) > LIMITS.ingress
+    )
+      return "[REDACTED_SIZE_LIMIT]";
+    if (/^\s*[\[{"]/.test(value)) {
+      try {
+        return JSON.stringify(redactStructured(JSON.parse(value), depth + 1));
+      } catch {
+        /* Opaque text still receives the free-text policy. */
+      }
+    }
+    return redactText(value);
+  }
+  return value;
+}
+/** Redact complete quoted values at their JSON escape depth. An escaped quote
+ * inside a secret cannot be mistaken for the enclosing string delimiter. */
+function redactAssignments(text: string): string {
+  // Backslashes belong to quote delimiters or complete Unicode escapes, not
+  // an overlapping greedy key class that can backtrack over an entire payload.
+  const assignment =
+    /(^|[^a-z0-9_.\\-])((?:\\*["'])?((?:[a-z]|\\u[a-f0-9]{4})(?:[a-z0-9_.-]|\\u[a-f0-9]{4})*)(?:\\*["'])?\s*[:=]\s*)(\\*["'])?/gi;
+  let result = "",
+    offset = 0,
+    match: RegExpExecArray | null;
+  while ((match = assignment.exec(text))) {
+    if (!isSensitiveField(match[3])) continue;
+    let end = text.length;
+    const delimiter = match[4];
+    if (delimiter) {
+      const quote = delimiter.slice(-1),
+        depth = delimiter.length - 1;
+      let slashes = 0;
+      for (let i = assignment.lastIndex; i < text.length; i++) {
+        const char = text[i];
+        if (char === quote && slashes % (2 * (depth + 1)) === depth) {
+          end = i + 1;
+          break;
+        }
+        slashes = char === "\\" ? slashes + 1 : 0;
+      }
+    } else {
+      const remainder = text.slice(assignment.lastIndex);
+      const auth = /^(?:Basic|Bearer|Digest|Token)\s+[^\s,;"']+/i.exec(
+        remainder,
+      );
+      if (auth) end = assignment.lastIndex + auth[0].length;
+      else if (/^[{\[]/.test(remainder)) {
+        // Unparseable structured credential values are ambiguous: omit the tail.
+        end = text.length;
+      } else {
+        end =
+          assignment.lastIndex +
+          (/^[^\s,;"'}\]]*/.exec(remainder)?.[0].length ?? 0);
+      }
+    }
+    result +=
+      text.slice(offset, match.index) +
+      match[1] +
+      (delimiter ? match[2] + '"[REDACTED]"' : "[REDACTED]");
+    offset = end;
+    assignment.lastIndex = end;
+  }
+  return result + text.slice(offset);
+}
+function redactText(text: string): string {
+  return redactAssignments(text)
+    .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")
     .replace(/\b(?:sk-|ghp_|github_pat_)[a-zA-Z0-9_-]{8,}/g, "[REDACTED]")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
     .replace(
@@ -99,9 +202,9 @@ export function minimize(
       continue;
     const text = f.content?.[category];
     if (typeof text !== "string") continue;
-    // Refuse excess before redaction work, and don't split UTF-8 code points.
-    const bounded = text.slice(0, LIMITS.content);
-    const clean = Buffer.from(redact(bounded));
+    // Structural redaction has its own processing bound; truncate only sanitized
+    // content, without splitting UTF-8 code points.
+    const clean = Buffer.from(redact(text));
     const bytes = clean.subarray(0, LIMITS.content);
     (result.content ??= {})[category] = bytes
       .toString("utf8")

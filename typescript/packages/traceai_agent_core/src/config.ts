@@ -1,10 +1,14 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
 import { contentHash, readJson } from "./files.js";
 
 export const DEFAULT_ENDPOINT = "https://api.futureagi.com/tracer/v1/traces";
 export const TRANSPORT_CONTRACT = "finalized-standard-otlp-v1" as const;
+/** Hosted credentials are injected by the environment, never saved or inherited from a local profile. */
+export function environmentCredentialsOnly(agent: string): boolean {
+  return agent === "cursor-cloud";
+}
 export interface Credentials {
   apiKey: string;
   secretKey: string;
@@ -28,6 +32,7 @@ export interface Profile extends Credentials {
   identityKey: string;
   userId: string;
   projectBinding?: string;
+  hostBinding?: string;
 }
 export interface CredentialStore {
   schemaVersion: 1;
@@ -45,6 +50,7 @@ export interface Manifest {
       scope: "user" | "project";
       status: string;
       ownership?: Record<string, string>;
+      createdDirectories?: string[];
     }
   >;
 }
@@ -79,6 +85,9 @@ export interface ResolvedConfig {
   destinationApproved: boolean;
   issues: string[];
   generation: number;
+  deliveryBinding?: string;
+  /** Non-enumerable resolver-owned policy check for every HTTP batch. */
+  revalidate?: () => Promise<boolean>;
 }
 export interface ConfigPaths {
   configDir: string;
@@ -87,6 +96,7 @@ export interface ConfigPaths {
   user: string;
   project?: string;
   projectBinding?: string;
+  hostBinding?: string;
   stateDir: string;
 }
 export function assertAgent(agent: string): void {
@@ -118,6 +128,13 @@ export function endpointFromBase(base: string): string {
 export function destinationId(url: string, project: string): string {
   return contentHash(JSON.stringify([endpoint(url), project])).slice(0, 32);
 }
+/** Delivery evidence is scoped to an approved route and enable epoch. Hermes also binds its native home/account. */
+export function deliveryStatePath(config: ResolvedConfig): string {
+  return join(
+    config.paths.stateDir,
+    `${config.agent}-${config.deliveryBinding ?? `${destinationId(config.endpoint, config.projectName)}-${config.generation}`}.json`,
+  );
+}
 export function hostDirectory(
   agent: string,
   home: string,
@@ -125,23 +142,66 @@ export function hostDirectory(
   discovered?: string,
 ): string {
   if (discovered) return resolve(discovered);
+  if (
+    agent === "goose" &&
+    env.GOOSE_PATH_ROOT &&
+    !isAbsolute(env.GOOSE_PATH_ROOT)
+  )
+    throw new Error("GOOSE_PATH_ROOT_MUST_BE_ABSOLUTE");
   const xdg = env.XDG_CONFIG_HOME || join(home, ".config");
+  const kiroOverride =
+    env.KIRO_HOME && isAbsolute(env.KIRO_HOME)
+      ? resolve(env.KIRO_HOME)
+      : undefined;
+  const kiroHome =
+    kiroOverride &&
+    kiroOverride !== parse(kiroOverride).root &&
+    resolve(home) !== kiroOverride &&
+    !resolve(home).startsWith(kiroOverride + sep)
+      ? kiroOverride
+      : join(home, ".kiro");
+  const expandHome = (path: string) =>
+    path === "~"
+      ? home
+      : path.startsWith("~/")
+        ? join(home, path.slice(2))
+        : path;
   const known: Record<string, string> = {
     "claude-code": env.CLAUDE_CONFIG_DIR || join(home, ".claude"),
     claude: env.CLAUDE_CONFIG_DIR || join(home, ".claude"),
     codex: env.CODEX_HOME || join(home, ".codex"),
     cursor: join(home, ".cursor"),
+    "cursor-cloud": join(xdg, "futureagi", "agents", "cursor-cloud"),
     pi: env.PI_CODING_AGENT_DIR || join(home, ".pi", "agent"),
     opencode: join(xdg, "opencode"),
     grok: join(home, ".grok"),
     antigravity: join(home, ".gemini", "config"),
-    gemini: join(home, ".gemini"),
+    gemini: join(env.GEMINI_CLI_HOME || home, ".gemini"),
     copilot: env.COPILOT_HOME || join(home, ".copilot"),
     muse: join(xdg, "muse"),
-    kiro: join(home, ".kiro"),
+    kiro: kiroHome,
     augment: join(home, ".augment"),
-    "oh-my-pi": env.PI_CODING_AGENT_DIR || join(home, ".omp"),
-    openclaw: join(home, ".openclaw"),
+    "augment-ide": join(home, ".augment"),
+    "oh-my-pi": env.PI_CODING_AGENT_DIR || join(home, ".omp", "agent"),
+    openclaw: env.OPENCLAW_CONFIG_PATH
+      ? dirname(resolve(expandHome(env.OPENCLAW_CONFIG_PATH)))
+      : env.OPENCLAW_STATE_DIR
+        ? resolve(expandHome(env.OPENCLAW_STATE_DIR))
+        : join(
+            env.OPENCLAW_HOME ? resolve(expandHome(env.OPENCLAW_HOME)) : home,
+            ".openclaw",
+          ),
+    goose: env.GOOSE_PATH_ROOT
+      ? join(env.GOOSE_PATH_ROOT, "config")
+      : join(xdg, "goose"),
+    hermes: env.HERMES_HOME || join(home, ".hermes"),
+    "copilot-vscode": join(
+      env.FI_AGENT_CONFIG_DIR || join(xdg, "futureagi", "agents"),
+      "hosts",
+      "copilot-vscode",
+    ),
+    "devin-local": join(xdg, "devin"),
+    "devin-cascade": join(home, ".codeium", "windsurf"),
   };
   const aliases: Record<string, string> = {
     "cursor-cli": "cursor",
@@ -183,8 +243,7 @@ export async function configPaths(
   const host = hostDirectory(options.agent, home, env, options.agentDir);
   let project: string | undefined, projectBinding: string | undefined;
   if (options.projectDir) {
-    const root = await realpath(resolve(options.projectDir));
-    projectBinding = contentHash(root);
+    let root = await realpath(resolve(options.projectDir));
     const hostNames: Record<string, string> = {
       "claude-code": ".claude",
       claude: ".claude",
@@ -195,19 +254,63 @@ export async function configPaths(
       "kiro-cli": ".kiro",
       "kiro-ide": ".kiro",
       pi: ".pi",
+      "oh-my-pi": ".omp",
+      gemini: ".gemini",
+      "devin-local": ".devin",
+      "augment-ide": ".augment",
       opencode: ".opencode",
       grok: ".grok",
       copilot: ".copilot",
       kiro: ".kiro",
       augment: ".augment",
     };
-    project = hostNames[options.agent]
-      ? join(root, hostNames[options.agent], "futureagi.json")
-      : join(root, ".futureagi", "agents.json");
+    const projectPath = (directory: string) =>
+      options.agent === "cursor-cloud"
+        ? join(directory, ".cursor", "futureagi-cloud.json")
+        : hostNames[options.agent]
+          ? join(directory, hostNames[options.agent], "futureagi.json")
+          : join(directory, ".futureagi", "agents.json");
+    // Inherit the nearest config without crossing a nested repository or the home boundary.
+    const initial = root;
+    for (;;) {
+      const candidate = projectPath(root);
+      if (
+        candidate !== join(host, "futureagi.json") &&
+        (await lstat(candidate).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) return false;
+            if (["EACCES", "EPERM", "ELOOP"].includes(error.code ?? ""))
+              return true;
+            throw error;
+          },
+        ))
+      )
+        break;
+      if (
+        await lstat(join(root, ".git")).then(
+          () => true,
+          () => false,
+        )
+      )
+        break;
+      if (root === resolve(home) || dirname(root) === root) {
+        root = initial;
+        break;
+      }
+      root = dirname(root);
+    }
+    project = projectPath(root);
+    if (project === join(host, "futureagi.json")) project = undefined;
+    projectBinding = project ? contentHash(root) : undefined;
   }
   return {
     ...shared,
-    user: join(host, "futureagi.json"),
+    user:
+      options.agent === "cursor-cloud" && projectBinding
+        ? join(host, projectBinding, "futureagi.json")
+        : join(host, "futureagi.json"),
+    ...(options.agent === "hermes" ? { hostBinding: contentHash(host) } : {}),
     project,
     projectBinding,
   };
@@ -264,6 +367,9 @@ function settings(value: unknown): AgentSettings {
     for (const [k, val] of Object.entries(v.transport))
       if (!["baseUrl", "endpoint"].includes(k) || typeof val !== "string")
         throw new Error("INVALID_AGENT_CONFIG");
+    const transport = v.transport as Record<string, string>;
+    if (transport.endpoint !== undefined) endpoint(transport.endpoint);
+    if (transport.baseUrl !== undefined) endpointFromBase(transport.baseUrl);
   }
   return v as unknown as AgentSettings;
 }
@@ -311,16 +417,49 @@ export async function resolveConfig(
     paths = await configPaths(options),
     issues: string[] = [];
   const user = (await readSettings(paths.user)) ?? { schemaVersion: 1 };
-  const project = paths.project
-    ? await readSettings(paths.project, options.agent)
-    : undefined;
-  const store = await readStore(paths.credentials);
+  let project: AgentSettings | undefined;
+  if (paths.project) {
+    try {
+      project = await readSettings(paths.project, options.agent);
+    } catch (error) {
+      // Optional repository configuration is untrusted on every host. Ignore an
+      // unsafe or malformed layer without weakening protected user/credential reads.
+      if (
+        !(
+          /^(UNSAFE_|OVERSIZE_|INVALID_|BASE_URL_MUST_BE_ORIGIN$)/.test(
+            (error as Error).message,
+          ) ||
+          ["EACCES", "EPERM", "ELOOP", "ENOTDIR"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        )
+      )
+        throw error;
+      issues.push("PROJECT_CONFIG_IGNORED");
+    }
+  }
+  const environmentOnly = environmentCredentialsOnly(options.agent);
+  const store: CredentialStore = environmentOnly
+    ? { schemaVersion: 1, profiles: {} }
+    : await readStore(paths.credentials);
+  const hermes = options.agent === "hermes";
+  const approvedProfile = (id: string | undefined): Profile | undefined => {
+    const profile = id ? store.profiles[id] : undefined;
+    if (!hermes || !profile) return profile;
+    if (profile.hostBinding && profile.hostBinding !== paths.hostBinding)
+      return undefined;
+    return (user.profile === id && !profile.projectBinding) ||
+      (paths.projectBinding && profile.projectBinding === paths.projectBinding)
+      ? profile
+      : undefined;
+  };
   const provenance: Record<string, string> = {};
-  const defaultProfile =
-    store.profiles[user.profile ?? store.defaultProfile ?? ""];
+  const defaultProfile = approvedProfile(
+    hermes ? user.profile : (user.profile ?? store.defaultProfile),
+  );
   let merged: AgentSettings = {
     schemaVersion: 1,
-    enabled: !!defaultProfile,
+    enabled: hermes && !!credentialPair(env), // Only explicit native env credentials, never a shared store, may enable an unconfigured Hermes home.
     captureContent: defaultProfile?.captureContent ?? true,
     projectName: defaultProfile?.projectName ?? "coding-agents",
     tags: [],
@@ -335,8 +474,10 @@ export async function resolveConfig(
       (envConfig as Record<string, unknown>)[field] = env[key];
   if (env.FI_AGENT_ENABLED !== undefined)
     envConfig.enabled = bool(env.FI_AGENT_ENABLED);
-  if (env.FI_AGENT_CAPTURE_CONTENT !== undefined)
-    envConfig.captureContent = bool(env.FI_AGENT_CAPTURE_CONTENT);
+  const captureEnv =
+    env.FI_AGENT_CAPTURE_CONTENT ??
+    (hermes ? env.FI_HERMES_CAPTURE_CONTENT : undefined);
+  if (captureEnv !== undefined) envConfig.captureContent = bool(captureEnv);
   if (env.FI_OTLP_ENDPOINT !== undefined || env.FI_BASE_URL !== undefined)
     envConfig.transport =
       env.FI_OTLP_ENDPOINT !== undefined
@@ -357,8 +498,9 @@ export async function resolveConfig(
       }
     }
   }
-  const profileId = merged.profile ?? store.defaultProfile;
-  const saved = profileId ? store.profiles[profileId] : undefined;
+  const profileId =
+    merged.profile ?? (hermes ? undefined : store.defaultProfile);
+  const saved = approvedProfile(profileId);
   const creds =
     credentialPair(env) ??
     (saved ? { apiKey: saved.apiKey, secretKey: saved.secretKey } : undefined);
@@ -375,16 +517,39 @@ export async function resolveConfig(
   const repositorySelectedProfile =
     provenance.profile === "project" &&
     profileId !== (user.profile ?? store.defaultProfile);
-  const destinationApproved =
-    !!externalCredentials ||
-    !!(
-      saved &&
-      (!repositorySelectedProfile ||
-        saved.projectBinding === paths.projectBinding) &&
-      saved.endpoint === url &&
-      saved.projectName === projectName &&
-      (!saved.projectBinding || saved.projectBinding === paths.projectBinding)
-    );
+  const savedDestinationApproved = !!(
+    saved &&
+    (!repositorySelectedProfile ||
+      saved.projectBinding === paths.projectBinding) &&
+    saved.endpoint === url &&
+    saved.projectName === projectName &&
+    (!saved.projectBinding || saved.projectBinding === paths.projectBinding)
+  );
+  // Resolve trusted routing independently: inherited keys never approve a
+  // repository URL, logical project, or unrelated protected profile selection.
+  const trusted = { ...user, ...envConfig, ...options.flags };
+  const trustedProfileId =
+    trusted.profile ?? (hermes ? undefined : store.defaultProfile);
+  const trustedProfile = approvedProfile(trustedProfileId);
+  const trustedUrl = trusted.transport?.endpoint
+    ? endpoint(trusted.transport.endpoint)
+    : trusted.transport?.baseUrl
+      ? endpointFromBase(trusted.transport.baseUrl)
+      : trustedProfile?.endpoint
+        ? endpoint(trustedProfile.endpoint)
+        : DEFAULT_ENDPOINT;
+  const trustedProject =
+    trusted.projectName ?? trustedProfile?.projectName ?? "coding-agents";
+  const destinationApproved = externalCredentials
+    ? (profileId === trustedProfileId &&
+        url === trustedUrl &&
+        projectName === trustedProject &&
+        (!trustedProfile?.projectBinding ||
+          trustedProfile.projectBinding === paths.projectBinding)) ||
+      (savedDestinationApproved &&
+        !!paths.projectBinding &&
+        saved?.projectBinding === paths.projectBinding)
+    : savedDestinationApproved;
   if (creds && !destinationApproved) issues.push("DESTINATION_NOT_APPROVED");
   if (!creds) issues.push("NOT_CONFIGURED");
   const manifest = await readJson<Manifest>(paths.manifest);
@@ -395,10 +560,8 @@ export async function resolveConfig(
   // Only the user's protected profile or explicit environment/flags can approve content. A repository cannot raise it.
   const ceiling =
     options.flags?.captureContent ??
-    bool(env.FI_AGENT_CAPTURE_CONTENT) ??
-    user.captureContent ??
-    saved?.captureContent ??
-    true;
+    bool(captureEnv) ??
+    (user.captureContent !== false && saved?.captureContent !== false);
   const captureContent = !!merged.captureContent && ceiling;
   // Serialized message/image content cannot be selectively recovered safely: preserve stricter switches by omitting the field.
   const hideInputs =
@@ -439,6 +602,53 @@ export async function resolveConfig(
       (errorPreference === undefined && (hideInputs || hideOutputs)),
     debug: bool(env.FI_AGENT_DEBUG) ?? false,
   };
+  if (hermes)
+    config.deliveryBinding = contentHash(
+      JSON.stringify([
+        "hermes-delivery-v1",
+        paths.hostBinding ?? null,
+        profileId ?? null,
+        url,
+        projectName,
+        paths.projectBinding ?? null,
+        config.generation,
+        creds?.apiKey ?? null,
+        creds?.secretKey ?? null,
+      ]),
+    );
+  const snapshot = {
+    ...options,
+    flags: options.flags ? { ...options.flags } : undefined,
+  };
+  const approved = {
+    generation: config.generation,
+    endpoint: url,
+    projectName,
+    apiKey: creds?.apiKey,
+    secretKey: creds?.secretKey,
+    captureContent,
+    hideInputs,
+    hideOutputs,
+    hideErrorDetails: config.hideErrorDetails,
+  };
+  Object.defineProperty(config, "revalidate", {
+    enumerable: false,
+    value: async () => {
+      const current = await resolveConfig(snapshot);
+      return (
+        current.enabled &&
+        current.generation === approved.generation &&
+        current.endpoint === approved.endpoint &&
+        current.projectName === approved.projectName &&
+        current.credentials?.apiKey === approved.apiKey &&
+        current.credentials?.secretKey === approved.secretKey &&
+        current.captureContent === approved.captureContent &&
+        current.hideInputs === approved.hideInputs &&
+        current.hideOutputs === approved.hideOutputs &&
+        current.hideErrorDetails === approved.hideErrorDetails
+      );
+    },
+  });
   // Defense against accidental JSON logging: keys and identity material are not enumerable.
   Object.defineProperty(config, "credentials", {
     value: creds,
@@ -450,4 +660,60 @@ export async function resolveConfig(
   });
   if (disabled) config.provenance.enabled = "kill-switch";
   return config;
+}
+
+/** Setup may reuse only a protected profile approved for the selected scope. */
+export async function selectSetupProfile(
+  options: ResolveOptions & { scope?: "user" | "project" },
+) {
+  const paths = await configPaths(options);
+  if (options.scope === "project" && !paths.project)
+    throw new Error("PROJECT_DIRECTORY_REQUIRED");
+  const environmentOnly = environmentCredentialsOnly(options.agent);
+  const store: CredentialStore = environmentOnly
+    ? { schemaVersion: 1, profiles: {} }
+    : await readStore(paths.credentials);
+  const user = await readSettings(paths.user);
+  const project =
+    options.scope === "project" && paths.project
+      ? await readSettings(paths.project, options.agent)
+      : undefined;
+  let saved: Profile | undefined;
+  if (!environmentOnly && project?.profile) {
+    saved = store.profiles[project.profile];
+    if (
+      !saved ||
+      !saved.projectBinding ||
+      saved.projectBinding !== paths.projectBinding ||
+      (saved.hostBinding && saved.hostBinding !== paths.hostBinding) ||
+      (project.projectName !== undefined &&
+        project.projectName !== saved.projectName) ||
+      (project.transport?.endpoint !== undefined &&
+        endpoint(project.transport.endpoint) !== saved.endpoint) ||
+      (project.transport?.baseUrl !== undefined &&
+        endpointFromBase(project.transport.baseUrl) !== saved.endpoint)
+    )
+      throw new Error("DESTINATION_APPROVAL_REQUIRED");
+  } else if (!environmentOnly) {
+    saved =
+      store.profiles[
+        user?.profile ??
+          (options.agent === "hermes" ? "" : (store.defaultProfile ?? ""))
+      ];
+    if (
+      saved?.projectBinding ||
+      (saved?.hostBinding && saved.hostBinding !== paths.hostBinding)
+    )
+      saved = undefined;
+  }
+  const existing = {
+    ...user,
+    ...(saved?.projectBinding ? project : {}),
+    ...(saved?.projectBinding ? { projectName: saved.projectName } : {}),
+    captureContent:
+      user?.captureContent !== false &&
+      project?.captureContent !== false &&
+      saved?.captureContent !== false,
+  } as AgentSettings;
+  return { paths, existing, saved, project, user };
 }

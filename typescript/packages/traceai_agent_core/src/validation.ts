@@ -1,6 +1,7 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
 import { endpoint, type Credentials } from "./config.js";
+import { ProtobufTraceSerializer } from "@opentelemetry/otlp-transformer";
 export type DeliveryCode =
   | "ACCEPTED"
   | "AUTH_REJECTED"
@@ -21,10 +22,11 @@ export interface PostOptions {
   projectName: string;
   credentials: Credentials;
   body: Uint8Array | string;
+  protocol?: "http/json" | "http/protobuf";
   timeoutMs?: number;
   signal?: AbortSignal;
 }
-/** Exact OTLP JSON destination, verified TLS, no redirects, bounded body and deadline. Never surfaces server text. */
+/** Exact OTLP destination, verified TLS, no redirects, bounded response and deadline. Never surfaces server text. */
 export function postOtlp(options: PostOptions): Promise<DeliveryResult> {
   const url = new URL(endpoint(options.endpoint));
   if (
@@ -54,7 +56,10 @@ export function postOtlp(options: PostOptions): Promise<DeliveryResult> {
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type":
+            options.protocol === "http/protobuf"
+              ? "application/x-protobuf"
+              : "application/json",
           "Content-Length": Buffer.byteLength(options.body),
           "X-Api-Key": options.credentials.apiKey,
           "X-Secret-Key": options.credentials.secretKey,
@@ -91,11 +96,21 @@ export function postOtlp(options: PostOptions): Promise<DeliveryResult> {
                 (res.headers["content-type"] ?? "")
                   .split(";")[0]
                   .trim()
-                  .toLowerCase() === "application/json"
+                  .toLowerCase() ===
+                (options.protocol === "http/protobuf"
+                  ? "application/x-protobuf"
+                  : "application/json")
               )
             )
               throw new Error();
-            const value: unknown = JSON.parse(Buffer.concat(chunks).toString());
+            const value: unknown =
+              options.protocol === "http/protobuf"
+                ? {
+                    ...ProtobufTraceSerializer.deserializeResponse(
+                      Buffer.concat(chunks),
+                    ),
+                  }
+                : JSON.parse(Buffer.concat(chunks).toString());
             if (!value || typeof value !== "object" || Array.isArray(value))
               throw new Error();
             const body = value as Record<string, unknown>;
@@ -153,7 +168,11 @@ export function postOtlp(options: PostOptions): Promise<DeliveryResult> {
 export async function validateCredentials(
   options: Omit<PostOptions, "body">,
 ): Promise<DeliveryResult> {
-  const result = await postOtlp({ ...options, body: '{"resourceSpans":[]}' });
+  const result = await postOtlp({
+    ...options,
+    protocol: "http/json",
+    body: '{"resourceSpans":[]}',
+  });
   // An empty-request timeout is unverified, not rejected credentials.
   return result.code === "TRANSPORT_AMBIGUOUS"
     ? { ...result, code: "UNVERIFIED" }

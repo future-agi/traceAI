@@ -118,6 +118,30 @@ test("content ceiling, redaction and UTF-8 bounds are enforced before IPC", () =
     ) <= 32768,
   );
 });
+test("fact content is structurally sanitized before the IPC display bound", () => {
+  const marker = "SYNTHETIC_LARGE_FACT_CREDENTIAL";
+  const safe = c.minimize(
+    {
+      ...fact(),
+      content: {
+        prompts: JSON.stringify({
+          clientSecretKey: marker,
+          visible: "public",
+          padding: "x".repeat(40000),
+        }),
+      },
+    },
+    {
+      revision: "2",
+      categories: ["prompts"],
+      ceiling: ["prompts"],
+    },
+  );
+  assert.ok(!JSON.stringify(safe).includes(marker));
+  assert.match(safe.content.prompts, /public/);
+  assert.match(safe.content.prompts, /\[REDACTED\]/);
+  assert.equal(Buffer.byteLength(safe.content.prompts), 32768);
+});
 test("usage normalization never doubles inclusive cache/reasoning; missing and resets stay unknown", () => {
   assert.deepEqual(
     c.normalizeUsage(
@@ -171,10 +195,29 @@ test("missing runtime is neutral without creating any fallback file", async () =
 });
 // Cross-language preview semantic-key qualification remains on #349; this package
 // adopts its pure identity/privacy/usage contracts without changing that runtime.
-test('finalized capture has a distinct non-durable protocol and no event-supplied destination', () => {
-  const frame = c.encodeFinalizedCapture({ protocolVersion: 1, transport: c.TRANSPORT_CONTRACT, routeId: 'a'.repeat(32), capability: 'b'.repeat(64), fact: { ...fact(), content: { prompts: 'private' } }, endpoint: 'https://attacker.invalid' });
+test("finalized capture has a distinct non-durable protocol and no event-supplied destination", () => {
+  const frame = c.encodeFinalizedCapture({
+    protocolVersion: 1,
+    transport: c.TRANSPORT_CONTRACT,
+    routeId: "a".repeat(32),
+    capability: "b".repeat(64),
+    fact: { ...fact(), content: { prompts: "private" } },
+    endpoint: "https://attacker.invalid",
+  });
   assert.equal(frame.readUInt32BE(0), frame.length - 4);
-  const body = JSON.parse(frame.subarray(4)); assert.equal(body.endpoint, undefined); assert.equal(body.fact.content, undefined);
-  assert.equal(body.transport, 'finalized-standard-otlp-v1');
-  assert.throws(() => c.encodeFinalizedCapture({ protocolVersion: 1, transport: 'immutable-agent-v1', routeId: 'a'.repeat(32), capability: 'b'.repeat(64), fact: fact() }), /INVALID_CAPTURE_ENVELOPE/);
+  const body = JSON.parse(frame.subarray(4));
+  assert.equal(body.endpoint, undefined);
+  assert.equal(body.fact.content, undefined);
+  assert.equal(body.transport, "finalized-standard-otlp-v1");
+  assert.throws(
+    () =>
+      c.encodeFinalizedCapture({
+        protocolVersion: 1,
+        transport: "immutable-agent-v1",
+        routeId: "a".repeat(32),
+        capability: "b".repeat(64),
+        fact: fact(),
+      }),
+    /INVALID_CAPTURE_ENVELOPE/,
+  );
 });
