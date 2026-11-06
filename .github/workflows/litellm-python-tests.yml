@@ -1,0 +1,73 @@
+name: LiteLLM Python compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'python/frameworks/litellm/**'
+      - 'python/tests/test_framework_litellm.py'
+      - 'python/tests/harness/**'
+      - 'python/fi_instrumentation/**'
+      - '.github/workflows/litellm-python-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/litellm/**'
+      - 'python/tests/test_framework_litellm.py'
+      - 'python/tests/harness/**'
+      - 'python/fi_instrumentation/**'
+      - '.github/workflows/litellm-python-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: LiteLLM (${{ matrix.sdk }}, Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: floor
+            python: '3.10'
+          - sdk: latest
+            python: '3.12'
+          - sdk: latest
+            python: '3.13'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install integration and selected SDK
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: |
+          python -m venv .venv
+          if [ "$SDK" = floor ]; then
+            # PyPI no longer serves 1.43.0; use its immutable upstream release commit.
+            .venv/bin/pip install -e python/frameworks/litellm \
+              'litellm @ git+https://github.com/BerriAI/litellm.git@4603eedcc13bfab2da5a82aed209e6ef496c384d' \
+              'fi-instrumentation-otel==1.2.2' 'openai==1.40.0' 'httpx==0.27.2' \
+              pytest pytest-asyncio
+          else
+            # Use the same Responses runtime documented for users, not an
+            # undeclared runner-only MCP dependency.
+            .venv/bin/pip install -e 'python/frameworks/litellm[responses]' \
+              --upgrade litellm pytest pytest-asyncio
+          fi
+          .venv/bin/pip check
+      - name: Run with outbound network disabled
+        run: |
+          sudo unshare --net -- bash -e -c '
+            ip link set lo up
+            export LITELLM_LOCAL_MODEL_COST_MAP=True
+            export HOME="$2/.test-home"
+            mkdir -p "$HOME"
+            "$1" -I -m pytest --noconftest -q -o addopts="" \
+              "$2/python/frameworks/litellm/tests" \
+              "$2/python/tests/test_framework_litellm.py"
+          ' _ "$PWD/.venv/bin/python" "$PWD"

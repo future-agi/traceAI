@@ -8,18 +8,26 @@ This integration provides support for using OpenTelemetry with the Litellm frame
 1. **Install traceAI Litellm**
 
 ```bash
-pip install pip install traceAI-litellm
+pip install traceAI-litellm
 ```
 
+For `responses` / `aresponses` on Python 3.10+, install the Responses runtime extra:
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+```bash
+pip install 'traceAI-litellm[responses]'
+```
 
-```python
-import os
+Current LiteLLM versions import `mcp` on the Responses path, even without MCP tools. The extra supplies that upstream runtime dependency; the base installation remains compatible with older LiteLLM versions without Responses support.
 
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+
+### Set environment variables
+
+Set your Future AGI credentials for telemetry and your own OpenAI API key for the examples below. Future AGI credentials do not authenticate model inference; OpenAI bills inference to your OpenAI account. When you use another provider through LiteLLM, configure that provider's credentials instead.
+
+```bash
+export FI_API_KEY="your-future-agi-api-key"
+export FI_SECRET_KEY="your-future-agi-secret-key"
+export OPENAI_API_KEY="your-openai-api-key"
 ```
 
 ## Quickstart
@@ -38,13 +46,19 @@ trace_provider = register(
 ```
 
 ### Configure Litellm Instrumentation
-Instrument the Litellm client to enable telemetry collection. This step ensures that all interactions with the Litellm SDK are tracked and monitored.
+Instrument the LiteLLM client to trace `completion` / `acompletion`, `text_completion` / `atext_completion`, `completion_with_retries`, `embedding` / `aembedding`, and `image_generation` / `aimage_generation`. On LiteLLM versions that expose them, `responses` / `aresponses` are also traced (install the Responses extra above). Chat, text completion and Responses streams are traced as you consume them; other SDK endpoints are not covered.
+
+Reported chat/text completion finish reasons are exported in `gen_ai.response.finish_reasons`, ordered by choice index, and on each indexed output message. No finish reason is invented for an unread or partially consumed stream. Tool telemetry excludes MCP authorization, headers and server URLs; provider requests are unchanged. Function schemas are preserved; other built-in tools currently export only their type.
+
+Exhaust streams or explicitly call `close()` / `await aclose()` to finish telemetry and release provider resources promptly. Discarding a stream finalizes its span on garbage collection, but does not guarantee immediate transport cleanup.
 
 ```python
 from traceai_litellm import LiteLLMInstrumentor
 
 LiteLLMInstrumentor().instrument(tracer_provider=trace_provider)
 ```
+
+Use one tracing integration for each LiteLLM call. Do not also enable LiteLLM's native OpenTelemetry callback for calls traced by this instrumentor.
 
 ### Create Litellm Components
 Set up your Litellm client with built-in observability.

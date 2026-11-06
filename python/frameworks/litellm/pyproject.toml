@@ -30,9 +30,15 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
 litellm = ">=1.43.0"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.2.2"
+# LiteLLM imports tenacity lazily for its optional retry helpers.
+tenacity = ">=8.2.3"
+# Current LiteLLM Responses imports MCP even for requests without MCP tools.
+# Keep this optional so the historical LiteLLM/OpenAI floor remains installable.
+mcp = {version = ">=1.0,<3", optional = true, python = ">=3.10"}
 
-
+[tool.poetry.extras]
+responses = ["mcp"]
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"
