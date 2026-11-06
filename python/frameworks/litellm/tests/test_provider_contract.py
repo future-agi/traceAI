@@ -252,7 +252,7 @@ def test_tool_calls_preserved(capture, monkeypatch):
         assert litellm.completion(model="gpt-4o-mini", messages=messages) is response
     assert messages == original_messages
     attrs = attributes(exporter)
-    assert json.loads(attrs[SpanAttributes.INPUT_VALUE]) == messages
+    assert json.loads(attrs[SpanAttributes.INPUT_VALUE])["messages"] == messages
     output = json.loads(attrs[SpanAttributes.OUTPUT_VALUE])["choices"][0]["message"]
     assert output["content"] == "Calling a tool"
     assert output["tool_calls"][0]["function"]["name"] == "lookup_out"

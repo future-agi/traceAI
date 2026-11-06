@@ -34,6 +34,12 @@ from fi_instrumentation import (
     get_attributes_from_context,
     safe_json_dumps,
 )
+try:
+    from fi_instrumentation.instrumentation.config import ChatInput
+except ImportError:
+    # The declared published 1.2.2 floor predates the structured-input API and
+    # the opaque-input guard. Retain its existing path, not a validation fallback.
+    ChatInput = None
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     FiSpanKindValues,
@@ -257,24 +263,31 @@ def _instrument_func_type_completion(
         # aggregate. Omit it when either message-content privacy flag applies.
         hide_message_input = bool(config and (config.hide_input_text or config.hide_input_messages))
         if not hide_message_input and (filtered_messages := process_messages.get("filtered_messages")):
+            # Emit the sanitized conversation as a typed ChatInput so core masks
+            # it per item instead of fail-closing the whole opaque aggregate.
             _set_span_attribute(
-                span, SpanAttributes.INPUT_VALUE, json.dumps(filtered_messages)
+                span,
+                SpanAttributes.INPUT_VALUE,
+                ChatInput({"model": kwargs.get("model"), "messages": filtered_messages})
+                if ChatInput is not None
+                else json.dumps(filtered_messages),
             )
         if input_images := process_messages.get("input_images"):
             _set_span_attribute(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
-        if not hide_message_input and any(
-            _has_tool_context(message) or _has_non_text_content(message)
-            for message in messages
-        ):
-            # Preserve tool linkage and non-text blocks (such as input_audio)
-            # without copying image bytes into input.value.
-            _set_span_attribute(
-                span, SpanAttributes.INPUT_VALUE, safe_json_dumps(filtered_messages)
-            )
-        elif not hide_message_input and (eval_input := process_messages.get("eval_input")):
-            _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
+        # Opaque aggregate fallbacks for cores without the structured ChatInput
+        # API; the typed path above already carries the sanitized conversation.
+        if not hide_message_input and ChatInput is None:
+            if any(
+                _has_tool_context(message) or _has_non_text_content(message)
+                for message in messages
+            ):
+                _set_span_attribute(
+                    span, SpanAttributes.INPUT_VALUE, safe_json_dumps(filtered_messages)
+                )
+            elif eval_input := process_messages.get("eval_input"):
+                _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
 
         for index, input_message in list(enumerate(messages)):
             for key, value in _message_attributes(input_message, config, output=False):

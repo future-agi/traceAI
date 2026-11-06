@@ -115,8 +115,17 @@ async def test_hide_input_images_with_tool_history(
     assert marker not in actual["input.value"]
     assert (marker in json.dumps(actual)) is not hide
     if with_tool:
-        conversation = json.loads(actual["input.value"])
-        assert conversation[1:] == messages[1:]
+        conversation = json.loads(actual["input.value"])["messages"]
+        # Content-bearing keys (tool call arguments can embed image blobs) are
+        # redacted by core whenever images or text are hidden.
+        expected = copy.deepcopy(messages[1:])
+        if hide:
+            for message in expected:
+                for key in ("name", "tool_call_id", "refusal", "tool_calls",
+                            "function_call", "audio"):
+                    if key in message:
+                        message[key] = "__REDACTED__"
+        assert conversation[1:] == expected
         assert "{{gen_ai.input.images.0}}" in json.dumps(conversation[0])
     if hide:
         assert "gen_ai.input.images" not in actual
@@ -242,7 +251,7 @@ def test_base64_image_size_limit(with_tool, limit, image_kind):
     if image_kind == "oversized":
         assert marker not in json.dumps(actual)
     if with_tool:
-        assert json.loads(actual["input.value"])[1:] == messages[1:]
+        assert json.loads(actual["input.value"])["messages"][1:] == messages[1:]
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -420,8 +429,15 @@ def test_image_sanitization_preserves_other_tool_conversation_content():
             api_key="synthetic-key",
         )
     actual = attrs(exporter)
-    conversation = json.loads(actual["input.value"])
+    conversation = json.loads(actual["input.value"])["messages"]
     assert audio in conversation[0]["content"]
-    assert conversation[1:] == original[1:]
+    # Content-bearing keys are redacted by core while images are hidden.
+    expected = copy.deepcopy(original[1:])
+    for message in expected:
+        for key in ("name", "tool_call_id", "refusal", "tool_calls",
+                    "function_call", "audio"):
+            if key in message:
+                message[key] = "__REDACTED__"
+    assert conversation[1:] == expected
     assert marker not in json.dumps(actual)
     assert messages == original

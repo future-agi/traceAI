@@ -98,6 +98,24 @@ def _content(value: Any, config: "TraceConfig") -> Any:
                 if detail is not None:
                     reference["detail"] = detail
                 result.append({"type": kind, "image_url": reference})
+        elif kind == "input_audio":
+            audio = part.get("input_audio")
+            if not _object(audio):
+                raise ValueError("invalid audio content")
+            data, fmt = audio.get("data"), audio.get("format")
+            if type(data) is not str or type(fmt) is not str:
+                raise ValueError("invalid audio content")
+            # Speech carries the same semantic content as text; the binary blob
+            # is masked when input text is private, not under the image flag.
+            result.append(
+                {
+                    "type": kind,
+                    "input_audio": {
+                        "data": _REDACTED if config.hide_input_text else data,
+                        "format": fmt,
+                    },
+                }
+            )
         else:
             # Never trust a caller-supplied modality label we do not understand.
             result.append(_REDACTED)

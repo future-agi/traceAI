@@ -267,7 +267,7 @@ async def test_text_completion_real_sdk(
     assert len(spans) == 1
     assert spans[0].name == ("atext_completion" if asynchronous else "text_completion")
     attrs = spans[0].attributes
-    assert attrs["input.value"] == "synthetic-prompt"
+    assert json.loads(attrs["input.value"])["messages"][0]["content"] == "synthetic-prompt"
     assert attrs["output.value"] == "synthetic-output"
     assert attrs["gen_ai.output.messages.0.message.content"] == "synthetic-output"
     assert attrs["gen_ai.output.messages.0.message.role"] == "assistant"

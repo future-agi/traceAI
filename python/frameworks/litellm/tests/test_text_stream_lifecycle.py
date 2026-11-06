@@ -147,5 +147,6 @@ async def test_text_delegation_emits_one_span(capture, monkeypatch, asynchronous
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].name == ("atext_completion" if asynchronous else "text_completion")
-    assert spans[0].attributes["input.value"] == "positional prompt"
+    input_messages = json.loads(spans[0].attributes["input.value"])["messages"]
+    assert input_messages[0]["content"] == "positional prompt"
     assert litellm.text_completion is original

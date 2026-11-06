@@ -908,7 +908,15 @@ class TestInputValueMultiMessage:
             if c.args[0] == SpanAttributes.INPUT_VALUE
         ]
         assert values, "INPUT_VALUE was never set"
-        return values[-1]
+        final = values[-1]
+        # The span receives a typed ChatInput; resolve it the way core's mask does.
+        try:
+            from fi_instrumentation.instrumentation.config import ChatInput, mask_chat_input
+        except ImportError:
+            ChatInput = None
+        if ChatInput is not None and type(final) is ChatInput:
+            final = mask_chat_input(final, TraceConfig())
+        return final
 
     def test_completion_keeps_all_message_texts(self):
         mock_span = MagicMock()
@@ -950,7 +958,7 @@ class TestInputValueMultiMessage:
             },
         )
         attrs = {c.args[0]: c.args[1] for c in mock_span.set_attribute.call_args_list}
-        final = attrs[SpanAttributes.INPUT_VALUE]
+        final = self._final_input_value(mock_span)
         assert "describe this" in final
         assert "in detail" in final
         assert f"{{{SpanAttributes.INPUT_IMAGES}.0}}" in final
