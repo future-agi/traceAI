@@ -1,4 +1,5 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { claudeAdapter, CAPABILITIES, TESTED_HOST } from "@traceai/claude-code";
 
 export interface AdapterRelease {
   id: string;
@@ -11,6 +12,15 @@ export interface AdapterRelease {
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
+  {
+    id: "claude",
+    packageName: "@traceai/claude-code",
+    version: "0.1.0",
+    mechanism: "exclusive-transcript-hooks",
+    hostRange: TESTED_HOST,
+    qualified: true,
+    reason: CAPABILITIES.qualification,
+  },
   {
     id: "pi",
     packageName: "@traceai/pi-plugin",
@@ -46,8 +56,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
   ...Object.entries({
     cursor: "cursor-plugin",
     "cursor-cli": "cursor-plugin",
-    claude: "claude-code",
-    "claude-code": "claude-code",
     codex: "codex-plugin",
     grok: "grok-plugin",
     antigravity: "antigravity-plugin",
@@ -76,6 +84,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
-  return undefined;
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  return id === "claude" ? claudeAdapter : undefined;
 }
