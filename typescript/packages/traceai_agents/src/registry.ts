@@ -1,4 +1,6 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { copilotAdapter, HOST_VERSION } from "@traceai/copilot";
+import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
 
 export interface AdapterRelease {
   id: string;
@@ -8,6 +10,8 @@ export interface AdapterRelease {
   hostRange?: string;
   qualified: boolean;
   reason: string;
+  /** Stop before credential collection or writes for unqualified surfaces. */
+  setupBlocker?: string;
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
@@ -43,6 +47,24 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     qualified: false,
     reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
   },
+  {
+    id: "copilot",
+    packageName: "@traceai/copilot",
+    version: "0.1.0",
+    mechanism: "process-scoped native telemetry launch",
+    hostRange: HOST_VERSION,
+    qualified: true,
+    reason: "LAUNCH_WITH_FI_AGENT_RUN",
+  },
+  {
+    id: "copilot-vscode",
+    packageName: "@traceai/copilot",
+    version: "0.1.0",
+    mechanism: "native VS Code settings (harness-specific)",
+    qualified: false,
+    reason: EDITOR_HOLD,
+    setupBlocker: EDITOR_HOLD,
+  },
   ...Object.entries({
     cursor: "cursor-plugin",
     "cursor-cli": "cursor-plugin",
@@ -52,7 +74,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     grok: "grok-plugin",
     antigravity: "antigravity-plugin",
     gemini: "gemini-cli",
-    copilot: "copilot",
     muse: "muse-plugin",
     "kiro-cli": "kiro-plugin",
     "kiro-ide": "kiro-plugin",
@@ -76,6 +97,8 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  if (id === "copilot") return copilotAdapter;
+  if (id === "copilot-vscode") return vscodeAdapter;
   return undefined;
 }

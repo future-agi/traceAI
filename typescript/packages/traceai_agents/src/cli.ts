@@ -6,10 +6,9 @@ import {
   inspectStatus,
   enable,
   disable,
+  uninstall,
   resolveConfig,
-  configPaths,
-  readStore,
-  readSettings,
+  readSetupDefaults,
   credentialPair,
   endpoint,
   endpointFromBase,
@@ -20,7 +19,7 @@ import {
 } from "@traceai/agent-core";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
-const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
+const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
 interface Parsed {
   command: string;
   agent?: string;
@@ -44,6 +43,7 @@ function parse(args: string[]): Parsed {
     "--capture-content",
     "--no-capture-content",
     "--configure-only",
+    "--replace-credentials",
     "--json",
     "--check",
     "--last",
@@ -170,14 +170,42 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    projectDir:
+      p.values["--project-dir"] ??
+      (p.agent === "copilot" ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
+  const setupBlocker = adapterRelease(p.agent)?.setupBlocker;
+  if (setupBlocker && ["setup", "enable", "update", "run"].includes(p.command)) {
+    output({ code: setupBlocker, configured: false, registered: false }, json);
+    return 2;
+  }
   if (p.command === "disable") {
     await disable(options);
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
+  }
+  if (p.command === "uninstall") {
+    // Fence active launchers first, even when profiles or project settings are broken.
+    await disable(options);
+    if (!adapter) {
+      output({ code: adapterRelease(p.agent)!.reason }, json);
+      return 2;
+    }
+    let result;
+    if (adapter.uninstallUnconfigured) {
+      try {
+        await resolveConfig(options);
+      } catch {
+        // A missing project or broken profile cannot prevent fencing and
+        // removal of the adapter's separately owned launch registration.
+        result = await adapter.uninstallUnconfigured(options);
+      }
+    }
+    result ??= await uninstall({ ...options, adapter });
+    output(result, json);
+    return result.registered ? 2 : 0;
   }
   if (p.command === "status" || p.command === "doctor") {
     const status = await inspectStatus({
@@ -189,13 +217,15 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return status.exitCode;
   }
   if (p.command === "setup") {
-    const paths = await configPaths(options),
-      store = await readStore(paths.credentials);
+    const scope = p.values["--scope"] as "user" | "project" | undefined;
+    const {
+      existing,
+      old: saved,
+      repositoryProfileTrusted,
+    } = await readSetupDefaults({ ...options, scope });
     let credentials: Credentials | undefined = credentialPair(process.env);
-    const user = await readSettings(paths.user);
-    const saved = store.profiles[user?.profile ?? store.defaultProfile ?? ""];
     const defaultProject =
-      user?.projectName ?? saved?.projectName ?? "coding-agents";
+      existing?.projectName ?? saved?.projectName ?? "coding-agents";
     let projectName = p.values["--project"] ?? process.env.FI_PROJECT_NAME;
     const interactive = !!stdin.isTTY && !!stderr.isTTY && !json;
     if (interactive && !projectName)
@@ -210,20 +240,39 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         : (process.env.FI_OTLP_ENDPOINT ??
             (process.env.FI_BASE_URL
               ? endpointFromBase(process.env.FI_BASE_URL)
-              : (saved?.endpoint ?? DEFAULT_ENDPOINT))),
+              : (existing?.transport?.endpoint ??
+                (existing?.transport?.baseUrl
+                  ? endpointFromBase(existing.transport.baseUrl)
+                  : saved?.endpoint) ??
+                DEFAULT_ENDPOINT))),
     );
     const captureContent = p.flags.has("--no-capture-content")
       ? false
       : p.flags.has("--capture-content")
         ? true
         : process.env.FI_AGENT_CAPTURE_CONTENT === undefined
-          ? (saved?.captureContent ?? true)
+          ? (existing?.captureContent ?? saved?.captureContent ?? true)
           : ["true", "1"].includes(process.env.FI_AGENT_CAPTURE_CONTENT);
     if (!json)
       stderr.write(
         `Destination: ${destination}\nProject: ${JSON.stringify(projectName)}\nCapture: ${captureContent ? "content (redacted and bounded); may include file text and secrets the agent reads" : "structure only"}\n`,
       );
-    if (!credentials && !saved && interactive)
+    if (p.flags.has("--replace-credentials") && !credentials && !interactive) {
+      output(
+        {
+          code: "HEADLESS_CREDENTIALS_REQUIRED",
+          detail:
+            "Supply a new FI_API_KEY + FI_SECRET_KEY environment pair, or run setup --replace-credentials in a terminal. Saved credentials are unchanged.",
+        },
+        json,
+      );
+      return 2;
+    }
+    if (
+      !credentials &&
+      (!saved || p.flags.has("--replace-credentials")) &&
+      interactive
+    )
       credentials = {
         apiKey: await masked("API key (hidden): "),
         secretKey: await masked("Secret key (hidden): "),
@@ -231,8 +280,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     let approveDestination = false;
     if (
       saved &&
-      !credentials &&
-      (saved.endpoint !== destination ||
+      (!repositoryProfileTrusted ||
+        saved.endpoint !== destination ||
         (projectName && saved.projectName !== projectName)) &&
       interactive
     )
@@ -251,14 +300,27 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         : p.flags.has("--capture-content")
           ? true
           : undefined,
-      scope: p.values["--scope"] as "user" | "project" | undefined,
+      scope,
       configureOnly: p.flags.has("--configure-only"),
       credentials,
       approveDestination,
       adapter,
     };
     const result = await setup(opts);
-    output(result, json);
+    output(
+      result.code === "AUTH_REJECTED"
+        ? {
+            ...result,
+            detail:
+              "Credentials rejected; saved profile is unchanged. Run setup with --replace-credentials for hidden terminal entry, or supply a new FI_API_KEY + FI_SECRET_KEY environment pair. Keep --scope project when replacing project credentials.",
+          }
+        : result,
+      json,
+    );
+    if (result.registered && p.agent === "copilot" && !json)
+      stderr.write(
+        "Start traced sessions with: npx @traceai/agents run copilot -- <Copilot arguments>\n",
+      );
     if (result.configured && !result.registered && !opts.configureOnly && !json)
       stderr.write(
         `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
@@ -276,25 +338,33 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output({ code: adapterRelease(p.agent)!.reason }, json);
     return 2;
   }
+  if (p.command === "run") {
+    let config;
+    try {
+      config = await resolveConfig(options);
+    } catch {
+      return adapter.runUnconfigured
+        ? adapter.runUnconfigured(p.rest, options.projectDir)
+        : 2;
+    }
+    return adapter.run
+      ? adapter.run(
+          { config, scope: "user", projectDir: options.projectDir },
+          p.rest,
+        )
+      : 2;
+  }
   const config = await resolveConfig(options),
     context = {
       config,
       scope: "user" as const,
       projectDir: options.projectDir,
     };
-  if (p.command === "uninstall") {
-    await disable(options);
-    const result = await adapter.uninstall(context);
-    output(result, json);
-    return result.registered ? 2 : 0;
-  }
   if (p.command === "update") {
     const result = await adapter.install(context);
     output(result, json);
     return result.registered ? 0 : 2;
   }
-  if (p.command === "run")
-    return adapter.run ? adapter.run(context, p.rest) : 2;
   return 2;
 }
 if (require.main === module)
