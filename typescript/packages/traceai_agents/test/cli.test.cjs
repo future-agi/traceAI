@@ -16,10 +16,11 @@ async function fixture(t) {
     XDG_STATE_HOME: path.join(home, ".local/state"),
     PI_CODING_AGENT_DIR: path.join(home, ".pi/agent"),
   };
-  const run = (args, vars = {}) =>
+  const run = (args, vars = {}, cwd = home) =>
     new Promise((resolve) => {
       const child = spawn(process.execPath, [cli, ...args], {
         env: { ...env, ...vars },
+        cwd,
       });
       let stdout = "",
         stderr = "";
@@ -28,7 +29,7 @@ async function fixture(t) {
       child.on("exit", (code) => resolve({ code, stdout, stderr }));
       child.stdin.end();
     });
-  return { home, run };
+  return { home, run, env };
 }
 test("CLI help names no secret flags; rejected secret argv never echoed", async (t) => {
   const f = await fixture(t);
@@ -292,4 +293,159 @@ test("credential replacement is explicit, actionable headlessly and transactiona
   assert.ok(!(replaced.stdout + replaced.stderr).includes("new-synthetic"));
   const store = JSON.parse(await fs.readFile(file));
   assert.equal(store.profiles[store.defaultProfile].apiKey, accepted);
+});
+
+test("Hermes status and doctor default to cwd; explicit project wins and Python agrees", async (t) => {
+  const f = await fixture(t);
+  const project = path.join(f.home, "workspace");
+  const host = path.join(f.home, "hermes-profile");
+  const bin = path.join(f.home, "bin");
+  const write = async (file, value) => {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fs.writeFile(file, JSON.stringify(value), { mode: 0o600 });
+  };
+  let checks = 0;
+  const server = http.createServer((q, r) => {
+    q.resume();
+    q.on("end", () => {
+      checks++;
+      assert.equal(q.headers["x-project-name"], "project-only");
+      r.setHeader("Content-Type", "application/json");
+      r.end("{}");
+    });
+  });
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise(r => server.close(r)));
+  const endpoint = `http://127.0.0.1:${server.address().port}/tracer/v1/traces`;
+  await fs.mkdir(project, { recursive: true });
+  const { createHash } = require("node:crypto");
+  const profile = { apiKey: "synthetic-api", secretKey: "synthetic-secret", endpoint,
+    projectName: "global", captureContent: true, validatedAt: new Date().toISOString(),
+    identityKey: "a".repeat(64), userId: "test-user" };
+  await write(path.join(f.env.FI_AGENT_CONFIG_DIR, "credentials.json"), {
+    schemaVersion: 1, defaultProfile: "global", profiles: {
+      global: profile, project: { ...profile, projectName: "project-only", captureContent: false,
+        projectBinding: createHash("sha256").update(await fs.realpath(project)).digest("hex") },
+    },
+  });
+  await write(path.join(host, "futureagi.json"), {
+    schemaVersion: 1, profile: "global", enabled: true, captureContent: true, projectName: "global",
+  });
+  await write(path.join(project, ".futureagi/agents.json"), { hermes: {
+    schemaVersion: 1, profile: "project", enabled: true, captureContent: false, projectName: "project-only",
+  } });
+  await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, "hermes"), `#!${process.execPath}\nconst a=process.argv.slice(2);console.log(a.includes('--version')?'test-host':JSON.stringify([{name:'futureagi',version:'0.1.1',status:'enabled'}]));\n`, { mode: 0o700 });
+  const vars = { HERMES_HOME: host, PATH: bin + path.delimiter + f.env.PATH };
+  for (const args of [["status", "hermes", "--check"], ["doctor", "hermes"]]) {
+    const result = await f.run([...args, "--json"], vars, project);
+    const status = JSON.parse(result.stdout);
+    assert.equal(status.projectName, "project-only", result.stdout);
+    assert.equal(status.privacy, "structure-only");
+    assert.equal(status.destination, endpoint);
+  }
+  const overridden = await f.run(["status", "hermes", "--project-dir", f.home, "--json"], vars, project);
+  assert.equal(JSON.parse(overridden.stdout).projectName, "global");
+  assert.equal(JSON.parse(overridden.stdout).privacy, "content-on-by-default");
+  assert.equal(checks, 2);
+  // The E2B Python job supplies this interpreter to compare the two real
+  // resolvers, not a reimplementation of the Python contract in JavaScript.
+  if (process.env.HERMES_RESOLVER_PYTHON) {
+    const { spawnSync } = require("node:child_process");
+    const runtime = spawnSync(process.env.HERMES_RESOLVER_PYTHON, ["-I", "-c",
+      "import json,os,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from traceai_hermes_agent._config import resolve; c=resolve(os.environ.get,project=Path.cwd()); print(json.dumps({k:c[k] for k in ('enabled','project_name','endpoint','capture_content')}))",
+      path.resolve(__dirname, "../../../../python/frameworks/hermes-agent")], {
+      cwd: project, env: { ...f.env, ...vars }, encoding: "utf8",
+    });
+    assert.equal(runtime.status, 0, runtime.stderr);
+    assert.deepEqual(JSON.parse(runtime.stdout), { enabled: true, project_name: "project-only", endpoint, capture_content: false });
+  }
+});
+
+test("Hermes project-only setup disables and re-enables from cwd, preserving explicit directory precedence", async (t) => {
+  const f = await fixture(t);
+  const project = path.join(f.home, 'project');
+  const host = path.join(f.home, 'profile');
+  const bin = path.join(f.home, 'bin');
+  await fs.mkdir(project); await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, 'hermes'), `#!${process.execPath}\nconsole.log(process.argv.includes('--version')?'new-auto-updated-host':JSON.stringify([{name:'futureagi',version:'0.1.1',status:'enabled'}]));\n`, { mode: 0o700 });
+  const vars = { HERMES_HOME: host, PATH: bin + path.delimiter + f.env.PATH };
+  const server = http.createServer((q, r) => { q.resume(); q.on('end', () => { r.setHeader('Content-Type', 'application/json'); r.end('{}'); }); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise(r => server.close(r)));
+  const configured = await f.run(['setup', 'hermes', '--scope', 'project', '--project-dir', project, '--configure-only', '--json'], {
+    ...vars, FI_API_KEY: 'synthetic-project-key', FI_SECRET_KEY: 'synthetic-project-secret',
+    FI_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}/tracer/v1/traces`,
+  });
+  assert.equal(configured.code, 0, configured.stdout);
+  await assert.rejects(fs.stat(path.join(host, 'futureagi.json')), { code: 'ENOENT' });
+  assert.equal((await f.run(['disable', 'hermes', '--json'], vars, project)).code, 0);
+  const explicit = await f.run(['enable', 'hermes', '--project-dir', f.home, '--json'], vars, project);
+  assert.equal(explicit.code, 2);
+  assert.equal(JSON.parse(explicit.stdout).code, 'SETUP_REQUIRED');
+  const enabled = await f.run(['enable', 'hermes', '--json'], vars, project);
+  assert.equal(enabled.code, 0, enabled.stdout);
+  assert.equal(JSON.parse(enabled.stdout).enabled, true);
+  const manifest = JSON.parse(await fs.readFile(path.join(f.env.FI_AGENT_CONFIG_DIR, 'installation.json')));
+  assert.equal(manifest.disabled.hermes, false);
+  assert.equal(manifest.generations.hermes, 2); // setup + disable advance the fence; enable never unfences old batches
+});
+
+test("Hermes uninstall uses core ownership cleanup and preserves unrelated files", async (t) => {
+  const f = await fixture(t);
+  const host = path.join(f.home, 'hermes-profile'), bin = path.join(f.home, 'bin');
+  await fs.mkdir(bin); await fs.mkdir(host);
+  await fs.writeFile(path.join(host, 'unrelated.json'), '{}');
+  await fs.writeFile(path.join(bin, 'hermes'), `#!${process.execPath}\nconsole.log('[]');\n`, { mode: 0o700 });
+  const vars = { HERMES_HOME: host, PATH: bin + path.delimiter + f.env.PATH };
+  const server = http.createServer((q, r) => { q.resume(); q.on('end', () => { r.setHeader('Content-Type', 'application/json'); r.end('{}'); }); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise(r => server.close(r)));
+  assert.equal((await f.run(['setup', 'hermes', '--configure-only', '--json'], {
+    ...vars, FI_API_KEY: 'synthetic-api', FI_SECRET_KEY: 'synthetic-secret',
+    FI_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}/tracer/v1/traces`,
+  })).code, 0);
+  assert.equal((await f.run(['uninstall', 'hermes', '--json'], vars)).code, 0);
+  await assert.rejects(fs.stat(path.join(host, 'futureagi.json')), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(host, 'unrelated.json'), 'utf8'), '{}');
+});
+
+test("Hermes diagnostics never send environment keys to an unapproved repository collector", async (t) => {
+  const f = await fixture(t);
+  let calls = 0;
+  const server = http.createServer((q, r) => { calls++; q.resume(); r.end("{}"); });
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise(r => server.close(r)));
+  const endpoint = `http://127.0.0.1:${server.address().port}/tracer/v1/traces`;
+  await fs.mkdir(path.join(f.home, ".futureagi"));
+  await fs.writeFile(path.join(f.home, ".futureagi/agents.json"), JSON.stringify({ hermes: {
+    schemaVersion: 1, profile: "global", enabled: true, captureContent: true, transport: { endpoint },
+  } }), { mode: 0o600 });
+  await fs.mkdir(f.env.FI_AGENT_CONFIG_DIR, { recursive: true });
+  await fs.writeFile(path.join(f.env.FI_AGENT_CONFIG_DIR, "credentials.json"), JSON.stringify({
+    schemaVersion: 1, defaultProfile: "global", profiles: { global: {
+      endpoint, projectName: "hermes-agent", apiKey: "saved-api", secretKey: "saved-secret", captureContent: true,
+    } },
+  }), { mode: 0o600 });
+  const vars = { HERMES_HOME: path.join(f.home, "unconfigured-home"), FI_API_KEY: "env-api", FI_SECRET_KEY: "env-secret" };
+  const blocked = JSON.parse((await f.run(["doctor", "hermes", "--json"], vars)).stdout);
+  assert.equal(blocked.enabled, false);
+  assert.equal(blocked.privacy, "content-on-by-default");
+  assert.equal(calls, 0);
+  // An endpoint override does not independently approve a repository-selected
+  // profile. Remove that untrusted profile selection before approving the URL.
+  const profileBlocked = JSON.parse((await f.run(["doctor", "hermes", "--json"], { ...vars, FI_OTLP_ENDPOINT: endpoint })).stdout);
+  assert.equal(profileBlocked.enabled, false); assert.equal(calls, 0);
+  await fs.writeFile(path.join(f.home, ".futureagi/agents.json"), JSON.stringify({ hermes: {
+    schemaVersion: 1, enabled: true, transport: { endpoint },
+  } }), { mode: 0o600 });
+  const approved = JSON.parse((await f.run(["doctor", "hermes", "--json"], { ...vars, FI_OTLP_ENDPOINT: endpoint })).stdout);
+  assert.equal(approved.enabled, true);
+  assert.equal(approved.privacy, "content-on-by-default");
+  assert.equal(calls, 1);
+  const noKeys = JSON.parse((await f.run(["doctor", "hermes", "--json"], { HERMES_HOME: vars.HERMES_HOME })).stdout);
+  assert.equal(noKeys.enabled, false);
+  assert.equal(noKeys.credentials, "missing");
+  assert.equal(noKeys.privacy, "content-on-by-default");
+  assert.equal(calls, 1);
 });

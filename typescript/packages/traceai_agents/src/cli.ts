@@ -17,6 +17,7 @@ import {
   type SetupOptions,
   type Credentials,
 } from "@traceai/agent-core";
+import { discoverHermesDirectory } from "@traceai/hermes-agent";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
 const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
@@ -174,7 +175,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     projectDir:
       p.values["--project-dir"] ??
       (["opencode-v1", "copilot"].includes(p.agent) || ["status", "doctor"].includes(p.command) ||
-       (p.agent === "antigravity" && ["setup", "update"].includes(p.command))
+       (p.agent === "antigravity" && ["setup", "update"].includes(p.command)) ||
+       (p.agent === "hermes" && ["enable", "uninstall"].includes(p.command))
         ? process.cwd()
         : undefined),
   };
@@ -190,6 +192,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
   }
+  if (p.agent === "hermes") options.agentDir = await discoverHermesDirectory();
   // CLI qualification does not authorize the separate IDE/App surface. Block it
   // before config reads, credential prompts, validation and writes; disable stays offline.
   if (p.agent === "antigravity-ide") {
@@ -400,7 +403,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       projectDir: options.projectDir,
     };
   if (p.command === "update") {
-    const result = await adapter.install(context);
+    const result = await (adapter.update ? adapter.update(context) : adapter.install(context));
     output(result, json);
     return result.registered && result.trust !== "required" ? 0 : 2;
   }

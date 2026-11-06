@@ -1,3 +1,4 @@
+import { hermesAdapter } from "@traceai/hermes-agent";
 import type { CoreAdapter } from "@traceai/agent-core";
 import { codexAdapter, HOST_VERSION } from "@traceai/codex-plugin";
 import { opencodeV1Adapter } from "./opencode-v1.js";
@@ -18,6 +19,7 @@ export interface AdapterRelease {
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
+  { id: "hermes", packageName: "@traceai/hermes-agent", version: "0.1.0", mechanism: "hermes plugins install", hostRange: "git:90d6b98fd86d20981ee06ddd5b7d93e4320f26a4 (CLI)", qualified: true, reason: "CLI_QUALIFIED_RELEASE_PENDING" },
   {
     id: "codex",
     packageName: "@traceai/codex-plugin",
@@ -107,7 +109,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "kiro-ide": "kiro-plugin",
     augment: "augment-plugin",
     openclaw: "openclaw",
-    hermes: "hermes-agent",
     goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
@@ -131,5 +132,6 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "antigravity") return antigravityAdapter;
   if (id === "copilot") return copilotAdapter;
   if (id === "copilot-vscode") return vscodeAdapter;
+  if (id === "hermes") return hermesAdapter;
   return undefined;
 }
