@@ -16,6 +16,8 @@ import { cascadeAdapter } from "@traceai/devin-cascade";
 import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
 import { claudeAdapter, CAPABILITIES, TESTED_HOST } from "@traceai/claude-code";
 import { gooseAdapter } from "@traceai/goose";
+import { piAdapter } from "@traceai/pi-plugin/adapter";
+import { ohMyPiAdapter } from "@traceai/oh-my-pi-plugin/adapter";
 
 export interface AdapterRelease {
   id: string;
@@ -123,8 +125,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     packageName: "@traceai/pi-plugin",
     version: "0.1.0",
     mechanism: "pi install",
+    hostRange: ">=1.5.0 <2.0.0",
     qualified: false,
-    reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
+    reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
   {
     id: "opencode",
@@ -149,8 +152,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     packageName: "@traceai/oh-my-pi-plugin",
     version: "0.1.0",
     mechanism: "omp install",
-    qualified: false,
-    reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
+    hostRange: ">=18.17.0 <19.0.0",
+    qualified: true,
+    reason: "OMP_18_17_0_NATIVE_PACKAGE_E2B",
   },
   {
     id: "copilot",
@@ -212,6 +216,8 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
+  if (id === "pi") return piAdapter;
+  if (id === "oh-my-pi") return ohMyPiAdapter;
   if (id === "goose") return gooseAdapter;
   if (id === "claude") return claudeAdapter;
   if (id === "opencode") return opencodeAdapter;

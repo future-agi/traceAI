@@ -11,6 +11,11 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
+    },
+    "./content": {
+      "types": "./dist/src/content.d.ts",
+      "import": "./dist/esm/content.js",
+      "require": "./dist/src/content.js"
     }
   },
   "scripts": {
@@ -70,5 +75,12 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "content": [
+        "dist/src/content.d.ts"
+      ]
+    }
   }
 }

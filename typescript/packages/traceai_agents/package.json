@@ -40,7 +40,9 @@
     "@traceai/augment-plugin": "workspace:^",
     "@traceai/devin-cascade": "workspace:^",
     "@traceai/claude-code": "workspace:^",
-    "@traceai/goose": "workspace:^"
+    "@traceai/goose": "workspace:^",
+    "@traceai/pi-plugin": "workspace:^",
+    "@traceai/oh-my-pi-plugin": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
