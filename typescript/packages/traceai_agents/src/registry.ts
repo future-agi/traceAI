@@ -27,7 +27,7 @@ export interface AdapterRelease {
   /** Held surfaces reject activation before credentials, network or host changes. */
   setupHold?: string;
 }
-/** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
+/** Qualification describes real-host evidence, not npm availability or Cloud readback. */
 export const adapterRegistry: readonly AdapterRelease[] = [
   { id: "hermes", packageName: "@traceai/hermes-agent", version: "0.1.0", mechanism: "hermes plugins install", hostRange: "git:90d6b98fd86d20981ee06ddd5b7d93e4320f26a4 (CLI)", qualified: true, reason: "CLI_QUALIFIED_RELEASE_PENDING" },
   {
@@ -45,7 +45,7 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     version: "0.1.0",
     mechanism: "agy plugin install",
     hostRange: "1.x (Linux CLI; tested 1.5.2)",
-    qualified: false,
+    qualified: true,
     reason: "PACKAGE_PUBLICATION_AND_CLOUD_READBACK_REQUIRED",
   },
   {
@@ -119,7 +119,7 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     version: "0.1.0",
     mechanism: "configuration",
     hostRange: ">=1.19.0 <2.0.0",
-    qualified: false,
+    qualified: true,
     reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
   {
@@ -154,7 +154,7 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     version: "0.1.0",
     mechanism: "grok plugin install",
     hostRange: HOST_RANGE,
-    qualified: false,
+    qualified: true,
     reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
   ...Object.entries({

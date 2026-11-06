@@ -284,8 +284,21 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(release_plan.coverage_problems(root, packages), [])
         config = json.loads((root / 'release-please-config.json').read_text())
         manifest = json.loads((root / '.release-please-manifest.json').read_text())
-        self.assertEqual(set(config['packages']), {p.get('release_path', p['dir']) for p in packages})
+        publishable_paths = {p.get('release_path', p['dir']) for p in packages}
+        # Held adapter prototypes keep version metadata for eventual qualification,
+        # but private:true must still exclude them from every publication plan.
+        private_paths = {
+            str(file.parent.relative_to(root)): json.loads(file.read_text())
+            for file in (root / 'typescript/packages').glob('*/package.json')
+            if json.loads(file.read_text()).get('private')
+        }
+        self.assertTrue(publishable_paths <= set(config['packages']))
+        self.assertTrue(set(config['packages']) - publishable_paths <= set(private_paths))
         self.assertEqual(set(manifest), set(config['packages']))
+        for path in set(config['packages']) - publishable_paths:
+            self.assertEqual(manifest[path], private_paths[path]['version'])
+            self.assertEqual(config['packages'][path]['release-type'], 'node')
+            self.assertEqual(config['packages'][path]['package-name'], private_paths[path]['name'])
         for p in packages:
             self.assertEqual(manifest[p.get('release_path', p['dir'])], p['version'])
 

@@ -544,13 +544,14 @@ test("turn usage belongs to the last source generation, or the root if no genera
 const sumAttribute = (all, key) => all.reduce((sum, s) => sum + Number(attrs(s)[key] ?? 0), 0);
 test("turn-only totals belong to the last source generation exactly once", async (t) => {
   const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
-  const turn = tracer.startTurn({ sessionId: "s", turnId: "turn-only", usagePlan: "turn", startTime: 100 });
-  const first = turn.child({ id: "source-message-1", startTime: 500, kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
-  const last = turn.child({ id: "source-message-2", startTime: 1500, kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
+  // Explicit epoch HrTime avoids OTel treating small numbers as performance-clock values.
+  const turn = tracer.startTurn({ sessionId: "s", turnId: "turn-only", usagePlan: "turn", startTime: [0, 100000000] });
+  const first = turn.child({ id: "source-message-1", startTime: [0, 500000000], kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
+  const last = turn.child({ id: "source-message-2", startTime: [1, 500000000], kind: "generation", fidelity: "reconstructed-message", timing: "reconstructed" });
   // Ending out of order must not make an earlier source generation the owner.
-  last.end({ output: "answer", endTime: 2000, timeToFirstTokenMs: 9 });
-  first.end({ usage, endTime: 1000 });
-  turn.end({ usage: { ...usage, input: 84000, output: 600 }, endTime: 3000 });
+  last.end({ output: "answer", endTime: [2, 0], timeToFirstTokenMs: 9 });
+  first.end({ usage, endTime: [1, 0] });
+  turn.end({ usage: { ...usage, input: 84000, output: 600 }, endTime: [3, 0] });
   turn.end({ usage });
   await tracer.shutdown();
   const all = spans(f), llms = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");

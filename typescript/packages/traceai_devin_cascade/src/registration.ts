@@ -9,7 +9,7 @@ import {
 } from "@traceai/agent-core";
 import { isRecord } from "./transcript";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.0"; // x-release-please-version
 export const EVENTS = ["pre_user_prompt", "post_cascade_response_with_transcript"] as const;
 export const MARKER = "--futureagi-cascade";
 interface Receipt { schemaVersion: 1; target: string; command: string; version: string }

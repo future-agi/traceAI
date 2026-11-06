@@ -1125,6 +1125,114 @@
       "release-type": "node",
       "component": "npm-traceai-agents",
       "package-name": "@traceai/agents"
+    },
+    "typescript/packages/traceai_codex_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-codex-plugin",
+      "package-name": "@traceai/codex-plugin",
+      "extra-files": [
+        "src/index.ts",
+        {
+          "type": "json",
+          "path": "plugin/.codex-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_opencode_v1_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-opencode-v1-plugin",
+      "package-name": "@traceai/opencode-v1-plugin"
+    },
+    "typescript/packages/traceai_antigravity_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-antigravity-plugin",
+      "package-name": "@traceai/antigravity-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_copilot": {
+      "release-type": "node",
+      "component": "npm-traceai-copilot",
+      "package-name": "@traceai/copilot",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_hermes_agent": {
+      "release-type": "node",
+      "component": "npm-traceai-hermes-agent",
+      "package-name": "@traceai/hermes-agent",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_openclaw": {
+      "release-type": "node",
+      "component": "npm-traceai-openclaw",
+      "package-name": "@traceai/openclaw",
+      "extra-files": [
+        "src/adapter.ts",
+        {
+          "type": "json",
+          "path": "native/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_grok_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-grok-plugin",
+      "package-name": "@traceai/grok-plugin",
+      "extra-files": [
+        "src/adapter.ts",
+        {
+          "type": "json",
+          "path": "plugin/.grok-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_muse_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-muse-plugin",
+      "package-name": "@traceai/muse-plugin",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_gemini_cli": {
+      "release-type": "node",
+      "component": "npm-traceai-gemini-cli",
+      "package-name": "@traceai/gemini-cli",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_kiro_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-kiro-plugin",
+      "package-name": "@traceai/kiro-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_augment_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-augment-plugin",
+      "package-name": "@traceai/augment-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_devin_cascade": {
+      "release-type": "node",
+      "component": "npm-traceai-devin-cascade",
+      "package-name": "@traceai/devin-cascade",
+      "extra-files": [
+        "src/registration.ts"
+      ]
     }
   }
 }

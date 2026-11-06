@@ -132,5 +132,17 @@
   "typescript/packages/traceai_huggingface_transformers": "0.1.0",
   "python/frameworks/transformers": "0.1.0",
   "typescript/packages/traceai_agent_core": "0.1.0",
-  "typescript/packages/traceai_agents": "0.1.0"
+  "typescript/packages/traceai_agents": "0.1.0",
+  "typescript/packages/traceai_codex_plugin": "0.1.0",
+  "typescript/packages/traceai_opencode_v1_plugin": "0.1.0",
+  "typescript/packages/traceai_antigravity_plugin": "0.1.0",
+  "typescript/packages/traceai_copilot": "0.1.0",
+  "typescript/packages/traceai_hermes_agent": "0.1.0",
+  "typescript/packages/traceai_openclaw": "0.1.0",
+  "typescript/packages/traceai_grok_plugin": "0.1.0",
+  "typescript/packages/traceai_muse_plugin": "0.1.0",
+  "typescript/packages/traceai_gemini_cli": "0.1.0",
+  "typescript/packages/traceai_kiro_plugin": "0.1.0",
+  "typescript/packages/traceai_augment_plugin": "0.1.0",
+  "typescript/packages/traceai_devin_cascade": "0.1.0"
 }

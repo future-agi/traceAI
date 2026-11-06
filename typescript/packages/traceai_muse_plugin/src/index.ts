@@ -13,7 +13,7 @@ import {
   type CoreAdapter,
 } from "@traceai/agent-core";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.0"; // x-release-please-version
 export const PLUGIN_ID = "futureagi-tracing";
 export const EVENTS = [
   "SessionStart",
