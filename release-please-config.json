@@ -1233,6 +1233,55 @@
       "extra-files": [
         "src/registration.ts"
       ]
+    },
+    "typescript/packages/traceai_claude_code": {
+      "release-type": "node",
+      "component": "npm-traceai-claude-code",
+      "package-name": "@traceai/claude-code",
+      "extra-files": [
+        "src/transcript.ts"
+      ]
+    },
+    "typescript/packages/traceai_cursor_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-cursor-plugin",
+      "package-name": "@traceai/cursor-plugin",
+      "extra-files": [
+        "src/events.ts",
+        "src/cli/capabilities.ts"
+      ]
+    },
+    "typescript/packages/traceai_goose": {
+      "release-type": "node",
+      "component": "npm-traceai-goose",
+      "package-name": "@traceai/goose",
+      "extra-files": [
+        "src/paths.ts"
+      ]
+    },
+    "typescript/packages/traceai_oh_my_pi_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-oh-my-pi-plugin",
+      "package-name": "@traceai/oh-my-pi-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_opencode_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-opencode-plugin",
+      "package-name": "@traceai/opencode-plugin",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_pi_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-pi-plugin",
+      "package-name": "@traceai/pi-plugin",
+      "extra-files": [
+        "src/version.ts"
+      ]
     }
   }
 }

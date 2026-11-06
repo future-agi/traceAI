@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json && esbuild src/hook.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/hook.cjs && node -e \"require('node:fs').chmodSync('dist/hook.cjs', 0o755)\"",
     "test": "node --test test/*.test.cjs"
   },
-  "engines": { "node": ">=22.16.0 <23 || >=24.0.0 <25" },
+  "engines": { "node": ">=22.16.0" },
   "dependencies": { "@traceai/agent-core": "workspace:^", "jsonc-parser": "^3.3.1" },
   "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29", "esbuild": "^0.25.0" },
   "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_devin_cascade" },

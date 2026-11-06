@@ -9,7 +9,7 @@
   "scripts": {"build": "tsc -p tsconfig.json && node build.cjs", "test": "node --test test/*.test.cjs"},
   "dependencies": {"@traceai/agent-core": "workspace:^", "proper-lockfile": "4.1.2"},
   "devDependencies": {"@types/node": "^22.15.29", "typescript": "^5.8.3", "esbuild": "0.25.5"},
-  "engines": {"node": ">=22.16.0 <23 || >=24.0.0 <25"},
+  "engines": {"node": ">=22.16.0"},
   "repository": {"type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_antigravity_plugin"},
   "license": "Apache-2.0",
   "publishConfig": {"access": "public"}

@@ -144,5 +144,11 @@
   "typescript/packages/traceai_gemini_cli": "0.1.0",
   "typescript/packages/traceai_kiro_plugin": "0.1.0",
   "typescript/packages/traceai_augment_plugin": "0.1.0",
-  "typescript/packages/traceai_devin_cascade": "0.1.0"
+  "typescript/packages/traceai_devin_cascade": "0.1.0",
+  "typescript/packages/traceai_claude_code": "0.1.0",
+  "typescript/packages/traceai_cursor_plugin": "0.1.0",
+  "typescript/packages/traceai_goose": "0.1.0",
+  "typescript/packages/traceai_oh_my_pi_plugin": "0.1.0",
+  "typescript/packages/traceai_opencode_plugin": "0.1.0",
+  "typescript/packages/traceai_pi_plugin": "0.1.0"
 }
