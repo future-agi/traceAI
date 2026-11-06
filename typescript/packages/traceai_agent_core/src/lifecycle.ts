@@ -27,6 +27,7 @@ import {
   readJson,
   readProtected,
   removeProtected,
+  restoreJsonEntry,
   updateJson,
   ensurePrivateDirectory,
 } from "./files.js";
@@ -357,13 +358,16 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
       createdDirectories.push(directory);
     }
   }
-  if (target.endsWith("/.futureagi/agents.json"))
+  const sharedSettings = target.endsWith("/.futureagi/agents.json");
+  let entryOwnership: { hash: string; previous?: AgentSettings } | undefined;
+  if (sharedSettings)
     await updateJson<Record<string, AgentSettings>>(
       target,
-      (old) => ({
-        ...old,
-        [options.agent]: { ...old?.[options.agent], ...config },
-      }),
+      (old) => {
+        const entry = { ...old?.[options.agent], ...config };
+        entryOwnership = { hash: contentHash(JSON.stringify(entry)), previous: old?.[options.agent] };
+        return { ...old, [options.agent]: entry };
+      },
       false,
     );
   else
@@ -403,8 +407,8 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
         status: "CONFIGURED_NOT_REGISTERED",
         ownership: {
           ...m?.registrations?.[options.agent]?.ownership,
-          ...(previousText === undefined ||
-          m?.registrations?.[options.agent]?.ownership?.[target]
+          ...(!sharedSettings && (previousText === undefined ||
+          m?.registrations?.[options.agent]?.ownership?.[target])
             ? { [target]: targetHash }
             : {}),
           ...(cloudPolicyHash &&
@@ -412,6 +416,15 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
             m?.registrations?.[options.agent]?.ownership?.[paths.user])
             ? { [paths.user]: cloudPolicyHash }
             : {}),
+        },
+        settingsOwnership: {
+          ...m?.registrations?.[options.agent]?.settingsOwnership,
+          ...(entryOwnership ? { [target]: {
+            hash: entryOwnership.hash,
+            previous: m?.registrations?.[options.agent]?.settingsOwnership?.[target]
+              ? m.registrations[options.agent].settingsOwnership![target].previous
+              : entryOwnership.previous,
+          } } : {}),
         },
         createdDirectories: [
           ...new Set([
@@ -718,7 +731,13 @@ export async function uninstall(
   for (const [path, hash] of Object.entries(registration?.ownership ?? {})) {
     // A manifest cannot authorize deleting arbitrary host files or credentials.
     if (path !== paths.user && path !== paths.project) continue;
+    // Legacy whole-file ownership is not authority over another agent's settings.
+    if (path.endsWith("/.futureagi/agents.json")) continue;
     await removeProtected(path, hash, false);
+  }
+  for (const [path, entry] of Object.entries(registration?.settingsOwnership ?? {})) {
+    if (path !== paths.project || !path.endsWith("/.futureagi/agents.json")) continue;
+    await restoreJsonEntry(path, options.agent, entry.hash, entry.previous);
   }
   for (const directory of [...(registration?.createdDirectories ?? [])].sort(
     (a, b) => b.length - a.length,

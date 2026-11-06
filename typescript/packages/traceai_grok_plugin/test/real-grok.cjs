@@ -410,6 +410,10 @@ server.listen(0, "127.0.0.1", async () => {
       all.some((s) => s.name === "subagent"),
       "real nested subagent span must arrive",
     );
+    for (const child of all.filter(s=>s.name==='subagent')) {
+      assert.equal(attrs(child)['fi.agent.outcome'],'success');
+      assert.ok(all.some(s=>s.parentSpanId===child.spanId && attrs(s)['fi.span.kind']==='LLM'));
+    }
     // Pinned upstream gap: SIGINT omits StopCancelled, turn_completed AND turn_ended.
     // Preserve incomplete, never infer successful completion or invent an interruption event.
     assert.equal(results.find((r) => r.name === "cancel").code, 130);

@@ -240,3 +240,19 @@ test('bundled hook is silent, fail-open and does not need workspace node_modules
   assert.deepEqual(await run(JSON.stringify(f.hook('pre_user_prompt'))), { code: 0, stdout: '', stderr: '' });
   assert.deepEqual(await run('x'.repeat(256 * 1024 + 1)), { code: 0, stdout: '', stderr: '' });
 });
+
+
+for (const terminal of ['done','error','interrupted']) test(`recovered action derives root from terminal ${terminal}`, async t=>{
+  const f=await fixture(t);
+  await runtime.handleHook(f.hook('pre_user_prompt'),f.options);
+  const rows=[{type:'user_input',status:'done',user_input:{user_response:'create a hello world file'}},
+    {type:'code_action',status:'error',code_action:{path:'first',new_content:'failed'}},
+    {type:'code_action',status:'done',code_action:{path:'second',new_content:'replacement'}},
+    {type:'planner_response',status:terminal,planner_response:{response:'finished'}}];
+  await save(f, rows.map(JSON.stringify).join('\n')+'\n');
+  await runtime.handleHook(f.hook('post_cascade_response_with_transcript'),f.options);
+  const exported=spans(f), root=exported.find(s=>!s.parentSpanId);
+  assert.ok(root,JSON.stringify(exported));
+  assert.equal(attrs(root)['fi.agent.outcome'],terminal==='done'?'success':terminal==='interrupted'?'interrupted':'error');
+  assert.ok(exported.some(s=>attrs(s)['tool.name']==='cascade.code_action' && s.status.code===2));
+});

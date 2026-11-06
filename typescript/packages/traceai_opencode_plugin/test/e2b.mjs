@@ -18,7 +18,7 @@ await mkdir(join(home, '.config/opencode'), { recursive: true });
 await mkdir(project, { recursive: true });
 await writeFile(join(project, 'sample.txt'), 'Public sample file.\n');
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'),
-  XDG_STATE_HOME: join(home, '.local/state'), XDG_CACHE_HOME: join(home, '.cache'), MOCK_API_KEY: 'mock-only',
+  XDG_STATE_HOME: join(home, '.local/state'), XDG_CACHE_HOME: join(home, '.cache'), MOCK_API_KEY: 'mock-only', ...(process.env.FI_TEST_OUTPUT_PRIVACY === '1' ? { FI_HIDE_OUTPUTS: 'true' } : {}),
   FI_API_KEY: 'test-api-key', FI_SECRET_KEY: 'test-secret-key', FI_PROJECT_NAME: 'coding-agents',
   OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_SHARE: '1' };
 for (const k of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']) delete env[k];
@@ -193,7 +193,7 @@ try {
   assert.ok(inspected.delivery.exported >= 4);
   assert.ok(!status.stdout.includes('test-api-key') && !status.stdout.includes('test-secret-key'));
   await writeFile(join(evidence, 'status.json'), JSON.stringify(inspected, null, 2));
-  const { scenarios } = await import('./live-scenarios.mjs');
+  const { scenarios } = await import(process.env.FI_TEST_OUTPUT_PRIVACY === '1' ? './live-privacy.mjs' : './live-scenarios.mjs');
   await scenarios({ binary, env, project, captures, models, run });
 } finally {
   await writeFile(join(evidence, 'otlp.json'), JSON.stringify(captures, null, 2));

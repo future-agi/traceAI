@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { setup, resolveConfig, createTurnTracer } from '@traceai/agent-core';
 import { Observer } from '../dist/observer.js';
 
-async function fixture(t, hide = true) {
+async function fixture(t, hide = true, env = {}) {
   const home = await mkdtemp(join(tmpdir(), 'opencode-privacy-'));
   const bodies = [];
   const server = createServer(async (req, res) => {
@@ -16,7 +16,7 @@ async function fixture(t, hide = true) {
     res.setHeader('content-type', 'application/json'); res.end('{}');
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const options = { home, agent: 'opencode', env: { FI_HIDE_ERROR_DETAILS: String(hide) } };
+  const options = { home, agent: 'opencode', env: { FI_HIDE_ERROR_DETAILS: String(hide), ...env } };
   await setup({ ...options, configureOnly: true,
     credentials: { apiKey: 'synthetic-fi-api', secretKey: 'synthetic-fi-secret' },
     otlpEndpoint: `http://127.0.0.1:${server.address().port}/tracer/v1/traces` });
@@ -86,4 +86,24 @@ test('structured secrets are redacted before the observer truncates a large fiel
   f.observer.toolAfter('s', 'call', large, false);
   f.event('session.execution.succeeded'); await f.observer.close();
   assert.ok(!JSON.stringify(f.spans()).includes(secret));
+});
+
+
+for (const alias of ['FI_HIDE_OUTPUTS','FI_HIDE_OUTPUT_TEXT','FI_HIDE_OUTPUT_MESSAGES']) for (const kind of ['primary','compaction'])
+  test(`mixed ${kind} history respects ${alias} at OTLP boundary`, async t => {
+    const f = await fixture(t, true, {[alias]:'true'});
+    f.observer.context('s', [{role:'user', content:'public prompt'}, {role:'assistant',content:'SYNTH_ASSISTANT_PRIVATE'},
+      {role:'tool',content:'SYNTH_TOOL_PRIVATE'}], [], kind);
+    f.step('m'); f.event('session.execution.succeeded'); await f.observer.close();
+    const text = JSON.stringify(f.spans());
+    assert.ok(!text.includes('SYNTH_ASSISTANT_PRIVATE')); assert.ok(!text.includes('SYNTH_TOOL_PRIVATE'));
+    assert.ok(f.spans().length >= 2);
+  });
+test('native aborted model step exports interrupted with non-error status', async t => {
+  const f=await fixture(t); f.event('session.step.started',{assistantMessageID:'m', model:{id:'mock',providerID:'mock'},started:Date.now()});
+  f.event('session.step.failed',{assistantMessageID:'m',error:{type:'aborted',message:'Step interrupted'}});
+  f.event('session.execution.interrupted',{reason:'user'}); await f.observer.close();
+  const model=f.spans().find(s=>s.attributes.some(a=>a.key==='fi.span.kind'&&a.value.stringValue==='LLM'));
+  assert.ok(model); assert.ok(model.attributes.some(a=>a.key==='fi.agent.outcome'&&a.value.stringValue==='interrupted'));
+  assert.notEqual(model.status.code,2);
 });

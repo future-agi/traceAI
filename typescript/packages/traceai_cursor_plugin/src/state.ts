@@ -145,7 +145,7 @@ export async function appendEvent(
   const dir = join(c.paths.stateDir, `${c.agent}-turns`);
   await ensurePrivateDirectory(dir);
   const entries = await fs.readdir(dir);
-  if (entries.length > 512) throw new Error("STATE_DIRECTORY_LIMIT");
+  // Completed, content-free deduplication records expire independently of active capacity.
   let count = 0;
   for (const entry of entries)
     if (/^[a-f0-9]{64}\.json$/.test(entry)) {
@@ -166,7 +166,10 @@ export async function appendEvent(
         await fs.unlink(file).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "ENOENT") throw error;
         });
-      else count++;
+      else {
+        const raw = await readProtected(file);
+        if (raw && (JSON.parse(raw) as Envelope).phase !== "finalized") count++;
+      }
     }
   const identity = createHmac("sha256", key)
     .update(JSON.stringify([route, event.conversation, event.generation]))
@@ -347,7 +350,7 @@ async function turnFiles(c: ResolvedConfig): Promise<string[]> {
       if (error.code !== "ENOENT") throw error;
       return [];
     });
-  if (entries.length > 512) throw new Error("STATE_DIRECTORY_LIMIT");
+  // Completed, content-free deduplication records expire independently of active capacity.
   return entries.filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
 }
 function alive(pid: number | undefined): boolean {

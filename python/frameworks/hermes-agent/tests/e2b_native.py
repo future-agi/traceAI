@@ -312,6 +312,40 @@ run(chat + ["-q", "Read the sample README using this project's privacy policy."]
 project_spans = spans[project_start:]
 assert len(project_spans) == 4
 assert all("input.value" not in attrs(s) and "output.value" not in attrs(s) for s in project_spans)
+# Adversarial repository edit: an approved project captured metadata only.
+# Changing the untrusted project JSON must not raise that protected policy.
+project_config_file = project_two / '.futureagi/agents.json'
+project_config = json.loads(project_config_file.read_text())
+profile_id = project_config['hermes']['profile']
+saved_profile = json.loads(credentials.read_text())['profiles'][profile_id]
+assert saved_profile['captureContent'] is False
+assert json.loads((PROFILE / 'futureagi.json').read_text())['captureContent'] is True
+project_config['hermes']['captureContent'] = True
+project_config_file.write_text(json.dumps(project_config))
+run(['hermes', 'gateway', 'stop'], 'review-stop-before-repository-edit')
+attack_start = len(spans)
+run(chat + ['-q', 'REVIEW_PRIVATE_CONTENT: Read README.txt under the protected metadata-only profile.'],
+    'review-repository-privacy-escalation', runtime, project_two)
+attack_spans = list(spans[attack_start:])
+privacy_review = {
+    'protected_profile_captureContent': saved_profile['captureContent'],
+    'user_captureContent': True,
+    'repository_captureContent': True,
+    'spans_received': len(attack_spans),
+    'content_fields_received': sum(k in attrs(s) for s in attack_spans for k in ('input.value', 'output.value')),
+    'private_prompt_received': any('REVIEW_PRIVATE_CONTENT' in str(attrs(s)) for s in attack_spans),
+    'outcomes': [attrs(s).get('fi.agent.outcome') for s in attack_spans if s['name'] == 'hermes.turn'],
+}
+(OUT / 'review-privacy-escalation.json').write_text(json.dumps(privacy_review, indent=2))
+assert privacy_review['spans_received'] > 0, privacy_review
+assert privacy_review['content_fields_received'] == 0, privacy_review
+assert not privacy_review['private_prompt_received'], privacy_review
+# Restore approved policy so all original disable/enable assertions still run.
+project_config['hermes']['captureContent'] = False
+project_config_file.write_text(json.dumps(project_config))
+run(['hermes', 'gateway', 'stop'], 'review-stop-after-repository-edit')
+
+run(chat + ["-q", "Read README.txt with the restored metadata-only policy."], "restored-policy", runtime, project_two)
 before = len(spans)
 run(["node", cli, "disable", "hermes", "--json"], "disable")
 run(chat + ["-q", "Read README.txt once more."], "disabled-turn", runtime)

@@ -314,6 +314,10 @@ export async function scenarios({ binary, env, project, captures, models, run })
     const interruptedRoot = all().slice(interruptBefore).find(root);
     assert.ok(interruptedRoot);
     assert.equal(attrs(interruptedRoot)['fi.agent.outcome'], 'interrupted');
+    const cancelledGeneration = all().slice(interruptBefore).find(s=>attrs(s)['fi.span.kind']==='LLM');
+    assert.ok(cancelledGeneration);
+    assert.equal(attrs(cancelledGeneration)['fi.agent.outcome'],'interrupted');
+    assert.notEqual(cancelledGeneration.status?.code,2);
     results.interrupt = true;
 
     const overflow = await create('Context overflow recovery');

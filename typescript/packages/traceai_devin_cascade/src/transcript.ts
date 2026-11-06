@@ -108,7 +108,9 @@ export function parseSnapshot(bytes: Buffer, key: string, cursor?: Cursor): Pars
     const row = rows[i];
     const status = outcome(row.status);
     if (status === "incomplete") throw new Error("TRANSCRIPT_PARTIAL");
-    if (status !== "success") result = status;
+    // A later native completed planner response can recover an earlier action
+    // failure. The failed action keeps its own status; the last step owns the turn.
+    result = status;
     if (row.type === "planner_response" && isRecord(row.planner_response) && typeof row.planner_response.response === "string") {
       output = row.planner_response.response;
       steps.push({ id: `step-${i}`, kind: "generation", name: "cascade.planner_response", input: JSON.stringify({ prompt: user.user_response, context: steps.slice(-3).map(step => ({ kind: step.kind, input: step.kind === "tool" ? step.input : undefined, output: step.output })) }), output, outcome: status });

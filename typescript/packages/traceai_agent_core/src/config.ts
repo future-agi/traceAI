@@ -50,6 +50,8 @@ export interface Manifest {
       scope: "user" | "project";
       status: string;
       ownership?: Record<string, string>;
+      /** Shared project settings are owned per agent, never as a whole file. */
+      settingsOwnership?: Record<string, { hash: string; previous?: AgentSettings }>;
       createdDirectories?: string[];
     }
   >;

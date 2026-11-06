@@ -160,8 +160,8 @@ export class GrokObserver {
         a.usage = turnUsage(u.usage);
         a.completed = true;
         // The persisted successful turn boundary can recover an earlier failed attempt.
-        if (u.stop_reason === "end_turn" && a.terminal?.event === "StopFailure")
-          a.terminal = { ...a.terminal, event: "Stop", outcome: "success" };
+        if (u.stop_reason === "end_turn" && (!a.terminal || a.terminal.event === "StopFailure"))
+          a.terminal = { sessionId: p.sessionId, promptId: a.promptId, time: m.agentTimestampMs ?? Date.now(), ...a.terminal, event: "Stop", outcome: "success" };
         if (["error", "failed", "failure", "model_error", "api_error"].includes(u.stop_reason))
           a.terminal = {
             ...(a.terminal ?? { event: "StopFailure", sessionId: p.sessionId, promptId: a.promptId, time: m.agentTimestampMs ?? Date.now() }),

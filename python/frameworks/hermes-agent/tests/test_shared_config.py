@@ -264,3 +264,18 @@ def test_hidden_error_details_remove_failed_tool_and_turn_outputs(provider, expo
     for span in exporter.get_finished_spans():
         assert "output.value" not in span.attributes
         assert "PRIVATE_ERROR" not in repr(dict(span.attributes)) + str(span.status.description)
+
+
+@pytest.mark.parametrize("repository_capture", [False, True])
+def test_project_cannot_raise_protected_profile_consent(shared, repository_capture):
+    env, config, host, root = shared
+    store = read_json(config / "credentials.json")
+    store["profiles"]["p"]["captureContent"] = False
+    store["profiles"]["p"]["projectBinding"] = hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+    write(config / "credentials.json", store)
+    write(root / ".futureagi/agents.json", {"hermes": dict(schemaVersion=1, profile="p", captureContent=repository_capture)})
+    resolved = resolve(env.get, host=host, project=root)
+    assert not resolved["capture_content"]
+    assert resolved["hide_inputs"] and resolved["hide_outputs"]
+    env["FI_AGENT_CAPTURE_CONTENT"] = "true"
+    assert resolve(env.get, host=host, project=root)["capture_content"]

@@ -386,3 +386,17 @@ test("logical high-water marks survive compaction and identical prompt text", ()
   );
   db.close();
 });
+
+test('detail-cap aggregation exports one successful root and all native response usage',async t=>{
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'goose-capacity-')), received=[];
+ const server=http.createServer((req,res)=>{const chunks=[];req.on('data',b=>chunks.push(b));req.on('end',()=>{received.push(JSON.parse(Buffer.concat(chunks)));res.end('{}')})});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await fs.rm(home,{recursive:true,force:true})});
+ const config=await core.resolveConfig({agent:'goose',home,env:{FI_API_KEY:'synthetic-api',FI_SECRET_KEY:'synthetic-secret',FI_AGENT_ENABLED:'true',FI_OTLP_ENDPOINT:`http://127.0.0.1:${server.address().port}/traces`}});
+ const rows=Array.from({length:241},(_,i)=>({id:i,message_id:'m-'+i,role:'assistant',content_json:JSON.stringify([{type:'text',text:'answer'}]),metadata_json:JSON.stringify({inference:{provider:'mock',requestedModel:'mock'},usage:{inputTokens:20,outputTokens:8}}),created_timestamp:Math.floor(Date.now()/1000)}));
+ await exportTurn(config,'session',{schemaVersion:2,baseline:[],completed:[],turnId:'turn',stopped:true,pending:true,start:Date.now()-500,tools:{},generation:0,policy:'test'},rows);
+ const spans=received.flatMap(p=>p.resourceSpans.flatMap(r=>r.scopeSpans.flatMap(s=>s.spans)));
+ assert.equal(spans.length,1); const a=attrs(spans[0].attributes);
+ assert.equal(a['fi.agent.outcome'],'success');assert.equal(a['fi.agent.gap'],'SPAN_DETAIL_LIMIT');
+ assert.equal(Number(a['gen_ai.usage.input_tokens']),4820);assert.equal(Number(a['gen_ai.usage.output_tokens']),1928);
+});

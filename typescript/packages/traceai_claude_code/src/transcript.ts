@@ -147,10 +147,10 @@ const blocks = (row: Row): Block[] =>
 const isInterruption = (row: Row): boolean =>
   row.type === "user" &&
   (typeof row.message?.content === "string"
-    ? row.message.content === "[Request interrupted by user]"
+    ? /^\[Request interrupted by user(?: for tool use)?\]$/.test(row.message.content)
     : blocks(row).length === 1 &&
       blocks(row)[0].type === "text" &&
-      blocks(row)[0].text === "[Request interrupted by user]");
+      /^\[Request interrupted by user(?: for tool use)?\]$/.test(blocks(row)[0].text ?? ""));
 export const isHumanPrompt = (row: Row): boolean =>
   row.type === "user" &&
   !isInterruption(row) &&

@@ -181,3 +181,16 @@ test("reused child has distinct execution parents and source-turn prompt attribu
   );
   assert.equal(spans.filter((s) => s.kind === "agent").length, 2);
 });
+
+test('detail capacity preserves terminal success and exact usage beyond the former 512-event limit',async()=>{
+ const f=fake(), engine=new CodexEngine(config,f.tracer);
+ await engine.accept(event('UserPromptSubmit'));
+ for(let i=0;i<300;i++) {
+  await engine.accept(event('PreModelRequest'));
+  await engine.accept(event('PostModelRequest',{status:'completed',token_usage:{input_tokens:20,output_tokens:8}}));
+ }
+ await engine.accept(event('Stop'));
+ assert.equal(f.spans.length,1); assert.equal(f.spans[0].usagePlan,'turn');
+ assert.equal(f.spans[0].end.gap,'SPAN_DETAIL_LIMIT');assert.equal(f.spans[0].end.outcome,'success');
+ assert.equal(f.spans[0].end.usage.input,6000);assert.equal(f.spans[0].end.usage.output,2400);
+});

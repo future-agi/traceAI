@@ -61,10 +61,6 @@ export class CodexEngine {
       };
       this.turns.set(key, state);
     }
-    if (state.events.length >= 512) {
-      state.gap = true;
-      return;
-    }
     state.events.push(event);
     state.gap ||= !!event.gap;
     const sourceSession = event.source_session_id ?? event.session_id;
@@ -123,14 +119,29 @@ export class CodexEngine {
     const prompt = state.events.find(
       (e) => e.hook_event_name === "UserPromptSubmit" && !e.agent_id,
     );
+    const aggregateOnly = state.events.filter(e => ["PreModelRequest", "PreToolUse", "SubagentStart", "PreCompact"].includes(e.hook_event_name)).length > 240;
     const root = this.tracer.startTurn({
       sessionId: first.session_id,
       turnId: first.turn_id!,
       input: prompt?.prompt,
       startTime: first.receivedAt,
       timing: "observed-event",
-      usagePlan: "attempt",
+      usagePlan: aggregateOnly ? "turn" : "attempt",
     });
+    if (aggregateOnly) {
+      const totals: UsageInput = { cacheInInput: true, reasoningInOutput: true };
+      const requests = state.events.filter(e => e.hook_event_name === "PostModelRequest");
+      for (const request of requests) {
+        const counters = usage(request);
+        for (const field of ["input", "output", "cacheRead", "reasoning"] as const)
+          if (counters?.[field] !== undefined) totals[field] = (totals[field] ?? 0) + counters[field]!;
+      }
+      const finalRequest = requests.filter(e => !e.agent_id).at(-1);
+      root.end({ output: last.last_assistant_message, usage: totals, gap: "SPAN_DETAIL_LIMIT",
+        outcome: outcome === "interrupted" ? outcome : finalRequest?.status === "failed" ? "error" : outcome,
+        endTime: last.receivedAt });
+      return;
+    }
     if (state.events.some((e) => e.content_truncated))
       root.event({ name: "codex.content_truncated" });
     const models = new Map<

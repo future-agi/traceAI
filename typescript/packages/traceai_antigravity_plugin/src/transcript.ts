@@ -96,8 +96,7 @@ export async function enrichTranscript(state: Conversation, turns: Turn[], paylo
         Number(a.id.split('-')[1]) <= step).sort((a, b) => Number(b.id.split('-')[1]) - Number(a.id.split('-')[1]))[0];
       if (row.source === 'MODEL' && row.type === 'PLANNER_RESPONSE' && row.status === 'DONE' && invocation) {
         const id = `generation-${step}`;
-        if (!turn.activities.some(a => a.id === id) && turn.activities.length >= 48) turn.capped = true;
-        if (!turn.activities.some(a => a.id === id) && turn.activities.length < 48) {
+        if (!turn.activities.some(a => a.id === id)) {
           const usage: UsageInput = {cacheInInput: true, reasoningInOutput: true};
           for (const [field, target] of [['input_tokens','input'],['output_tokens','output'],['cache_read_tokens','cacheRead'],['thinking_tokens','reasoning']] as const) {
             const value = integer(row[field]); if (value !== undefined) usage[target] = value;
@@ -132,7 +131,7 @@ export async function enrichTranscript(state: Conversation, turns: Turn[], paylo
       if (content) turn.context = `${turn.context ?? turn.input ?? ''}\n${content}`.slice(-20000);
       // Transcript catches rejected tool calls that do not emit PostToolUse.
       if (row.source === 'MODEL' && (row.status === 'INVALID' || row.status === 'ERROR') && row.error &&
-          !turn.activities.some(a=>a.id===`tool-${step}`) && turn.activities.length < 48) {
+          !turn.activities.some(a=>a.id===`tool-${step}`)) {
         turn.activities.push({id:`tool-${step}`,kind:'tool',name:'rejected_tool',parentId:turn.currentInvocation,
           start:Date.now(),end:Date.now(),outcome:'error',output:text(row.error,config,true,true)});
       }

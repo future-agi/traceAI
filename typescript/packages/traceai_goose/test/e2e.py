@@ -94,7 +94,9 @@ class Handler(BaseHTTPRequestHandler):
             ),
             None,
         )
-        did_tool = any(m.get("role") == "tool" for m in messages)
+        tool_steps = sum(m.get("role") == "tool" for m in messages)
+        desired = 24 if "LONGTOOLS_24" in text else 23 if "LONGTOOLS_23" in text else 1
+        did_tool = tool_steps >= desired
         delta = {"role": "assistant", "content": "Synthetic response"}
         finish = "stop"
         if shell and not did_tool:
@@ -108,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
                 "tool_calls": [
                     {
                         "index": 0,
-                        "id": "call_synthetic",
+                        "id": f"call_synthetic_{tool_steps}",
                         "type": "function",
                         "function": {
                             "name": shell,
@@ -193,11 +195,11 @@ for k in list(env):
         del env[k]
 
 
-def run(args, overrides=None, ok=True, cwd=None):
+def run(args, overrides=None, ok=True, cwd=None, timeout=40):
     e = {**env, **(overrides or {})}
     start = time.monotonic()
     p = subprocess.run(
-        args, env=e, cwd=cwd or root, text=True, capture_output=True, timeout=40
+        args, env=e, cwd=cwd or root, text=True, capture_output=True, timeout=timeout
     )
     with (root / "commands.jsonl").open("a") as f:
         f.write(
@@ -318,6 +320,18 @@ try:
     assert (
         status["delivery"]["exported"] == 6 and status["activation"] == "OBSERVED"
     ), status
+    for steps in (23, 24):
+        clear()
+        result = goose(f"LONGTOOLS_{steps} ordinary sequential shell tools then answer", timeout=120)
+        sid = session_id()
+        db = sqlite3.connect(goose_root / "data/sessions/sessions.db")
+        saved = [json.loads(r[0]) for r in db.execute("SELECT metadata_json FROM messages WHERE session_id=? AND role='assistant'", (sid,)) if json.loads(r[0]).get("inference")]
+        db.close()
+        assert len(saved) == steps + 1
+        assert len(spans()) == 2 * steps + 2
+        assert len([s for s in spans() if not s.get("parentSpanId")]) == 1
+        assert sum(int(attrs(s).get("gen_ai.usage.input_tokens", 0)) for s in spans()) == sum(m["usage"]["inputTokens"] for m in saved)
+        (root / f"longtools-{steps}-otlp.json").write_text(json.dumps(exports, indent=2))
     # Goose normalizes Anthropic input usage before writing SQLite: cache is a
     # breakdown, not an additional input charge. Verify the real provider path.
     clear()

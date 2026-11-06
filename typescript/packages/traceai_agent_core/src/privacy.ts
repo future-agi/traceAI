@@ -60,7 +60,7 @@ export function redactStructured(value: unknown, depth = 0): unknown {
         /* Opaque text still receives the free-text policy. */
       }
     }
-    return redactText(value);
+    return redactText(value, depth);
   }
   return value;
 }
@@ -134,7 +134,7 @@ function redactAssignments(text: string): string {
       // YAML block scalar (`key: |`, `key: >-`, ...): the secret is on the following
       // more-indented lines, raw or inside JSON-escaped text (`\n`).
       const block =
-        /^[|>][0-9+-]{0,3}[ \t]*(?:#[^\r\n\\]*)?(\r?\n|\\r?\\n)/.exec(remainder);
+        /^[|>][0-9+-]{0,3}[ \t]*(?:#[^\r\n\\]*)?(\r?\n|(?:\\+r)?\\+n)/.exec(remainder);
       if (block) end = blockScalarEnd(text, match.index, assignment.lastIndex, block);
       else if (auth) end = assignment.lastIndex + auth[0].length;
       else if (/^[{\[]/.test(remainder)) {
@@ -144,6 +144,14 @@ function redactAssignments(text: string): string {
         end =
           assignment.lastIndex +
           (/^[^\s,;"'}\]]*/.exec(remainder)?.[0].length ?? 0);
+        // YAML plain scalars fold indented following lines into the value.
+        // Only a colon assignment qualifies; shell assignments keep word boundaries.
+        const firstLine = /^[^\r\n]*?(\r?\n)/.exec(remainder);
+        if (firstLine && /:\s*$/.test(match[2])) {
+          const continued = blockScalarEnd(text, match.index, assignment.lastIndex, firstLine);
+          const firstEnd = assignment.lastIndex + firstLine[0].length - firstLine[1].length;
+          if (continued > firstEnd) end = continued;
+        }
       }
     }
     result +=
@@ -155,8 +163,62 @@ function redactAssignments(text: string): string {
   }
   return result + text.slice(offset);
 }
-function redactText(text: string): string {
-  return redactAssignments(text)
+function redactEmbeddedJson(text: string, depth: number): string {
+  if (text.length > LIMITS.ingress || Buffer.byteLength(text) > LIMITS.ingress)
+    return "[REDACTED_SIZE_LIMIT]";
+  let start = -1,
+    offset = 0,
+    quoted = false,
+    escaped = false,
+    result = "";
+  const stack: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (start < 0) {
+      if (char !== "{" && char !== "[") continue;
+      start = i;
+    }
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      stack.push(char);
+      if (stack.length > 32) return "[REDACTED_DEPTH_LIMIT]";
+    } else if (char === "}" || char === "]") {
+      if (stack.pop() !== (char === "}" ? "{" : "[")) {
+        stack.length = 0;
+        start = -1;
+        continue;
+      }
+      if (!stack.length) {
+        try {
+          const parsed = JSON.parse(text.slice(start, i + 1));
+          const clean = redactStructured(parsed, depth + 1);
+          const sanitized = JSON.stringify(clean);
+          // Do not rewrite harmless JSON-looking code or change prompt correlation.
+          result += text.slice(offset, start) + (sanitized === JSON.stringify(parsed)
+            ? text.slice(start, i + 1) : sanitized);
+          offset = i + 1;
+        } catch {
+          // Code and other non-JSON fragments still receive free-text redaction.
+        }
+        start = -1;
+      }
+    }
+  }
+  return result + text.slice(offset);
+}
+function redactText(text: string, depth = 0): string {
+  return redactAssignments(redactEmbeddedJson(text, depth))
+    // URI userinfo is credential-bearing for every scheme, including local databases.
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>]*@/gi, (uri) => uri.slice(0, uri.indexOf("://") + 3) + "[REDACTED]@")
     .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")
     .replace(/\b(?:sk-|ghp_|github_pat_)[a-zA-Z0-9_-]{8,}/g, "[REDACTED]")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")

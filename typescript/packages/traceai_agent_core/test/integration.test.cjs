@@ -46,7 +46,7 @@ test('failure envelopes hide result content even without a thrown exception', as
   const tracer = c.createTurnTracer({ config: f.config });
   const turn = tracer.startTurn({ sessionId: 's', turnId: 'failure-payload' });
   turn.child({ id: 'tool', kind: 'tool', name: 'shell' }).end({ output: JSON.stringify({ isError: true, body: 'PRIVATE_FAILURE_PAYLOAD' }) });
-  turn.end({ output: JSON.stringify({ success: false, error: 'PRIVATE_FAILURE_PAYLOAD' }) });
+  turn.end({ outcome: 'error', output: JSON.stringify({ success: false, error: 'PRIVATE_FAILURE_PAYLOAD' }) });
   await tracer.shutdown();
   assert(!JSON.stringify(f.requests).includes('PRIVATE_FAILURE_PAYLOAD'));
   assert(allSpans(f).every(s => s.status.code === 2));

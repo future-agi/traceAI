@@ -131,7 +131,7 @@ async function main() {
     const shell = tools.find((t) =>
       ["shell_command", "exec_command", "shell"].includes(t.name),
     );
-    let tool = count <= (longTurn ? 12 : 1) && shell;
+    let tool = count <= (longTurn ? 40 : 1) && shell;
     // The real shell returns escaped JSON inside ordinary command output.
     const encoded = Buffer.from(
       JSON.stringify({
@@ -140,7 +140,7 @@ async function main() {
       }) + "\n",
     ).toString("base64");
     const command = longTurn
-      ? `printf %010000d ${count}`
+      ? `printf step-${count}`
       : `printf '%s' '${encoded}' | base64 -d; exit 7`;
     const args =
       shell?.name === "exec_command"
@@ -535,34 +535,34 @@ async function main() {
     "tool span",
   );
   const toolSpans = spans.filter((s) => attrs(s)["fi.span.kind"] === "TOOL");
-  assert.equal(toolSpans.length, longTurn ? 12 : 1);
+  assert.equal(toolSpans.length, longTurn ? 40 : 1);
   assert(
     toolSpans.every((s) => attrs(s)["tool.name"] && attrs(s)["tool_call.id"]),
   );
   if (longTurn) {
-    assert.equal(requests.length, 13);
+    assert.equal(requests.length, 41);
     assert(toolSpans.every((s) => attrs(s)["fi.agent.outcome"] === "success"));
     assert.equal(
       spans.reduce(
         (sum, s) => sum + Number(attrs(s)["gen_ai.usage.input_tokens"] ?? 0),
         0,
       ),
-      260,
+      820,
     );
     assert.equal(
       spans.reduce(
         (sum, s) => sum + Number(attrs(s)["gen_ai.usage.output_tokens"] ?? 0),
         0,
       ),
-      104,
+      328,
     );
     console.log(
       "NATIVE_LONG_TURN",
       JSON.stringify({
-        models: 13,
-        tools: 12,
-        input: 260,
-        output: 104,
+        models: 41,
+        tools: 40,
+        input: 820,
+        output: 328,
         outcome: "success",
       }),
     );

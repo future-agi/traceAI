@@ -178,7 +178,7 @@ def resolve(get: Callable[[str], str | None], *, host: Path | None = None,
     legacy_capture = get("FI_HERMES_CAPTURE_CONTENT")
     # Privacy consent comes only from the host, an approved protected profile or
     # explicit environment settings, never from the repository's mere existence.
-    ceiling = boolean(capture_env, boolean(legacy_capture, user.get("captureContent", saved.get("captureContent", False))))
+    ceiling = boolean(capture_env, boolean(legacy_capture, (user.get("captureContent", saved.get("captureContent", False)) and saved.get("captureContent", True))))
     capture = ceiling
     if capture_env is None and legacy_capture is None:
         capture = bool(merged.get("captureContent", ceiling)) and ceiling

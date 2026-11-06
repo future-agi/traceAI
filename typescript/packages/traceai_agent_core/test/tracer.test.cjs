@@ -656,3 +656,40 @@ test("caller plan mutation cannot double-count overlapping turn totals", async (
   assert.equal(sumAttribute(spans(f), "gen_ai.usage.total_tokens"), 120);
   assert.equal(sumAttribute(spans(f), "gen_ai.cost.total"), 0.01);
 });
+
+
+for (const newline of ['\n', '\r\n']) for (const scalar of ['|', 'first']) {
+  const raw = `service:${newline}  password: ${scalar}${newline}    SYNTHETIC_YAML_CANARY${newline}  public: retained`;
+  for (const [name, value] of [ ['raw', raw], ['prefixed', 'tool result: ' + JSON.stringify({content: raw})],
+    ['nested', 'tool result: ' + JSON.stringify({content: JSON.stringify({value: raw})})] ]) {
+    test(`OTLP strips entire sensitive YAML ${scalar} ${JSON.stringify(newline)} ${name}`, async t => {
+      const f = await fixture(t), tracer = c.createTurnTracer({config: f.config});
+      const turn = tracer.startTurn({sessionId: 'yaml', turnId: 'yaml', input: value});
+      turn.child({id: 'model', kind: 'llm', input: value}).end({output: value, outcome: 'success'});
+      turn.end({output: value, outcome: 'success'}); await tracer.shutdown();
+      const actual = JSON.stringify(spans(f));
+      assert.ok(!actual.includes('SYNTHETIC_YAML_CANARY'), actual);
+      assert.ok(actual.includes('retained'), actual);
+      assert.equal(spans(f).length, 2);
+    });
+  }
+}
+for (const scheme of ['postgresql', 'mysql', 'redis', 'mongodb', 'mongodb+srv']) {
+  test(`OTLP redacts ${scheme} userinfo on loopback including encoded passwords`, async t => {
+    const f = await fixture(t), tracer = c.createTurnTracer({config: f.config});
+    const value = `DATABASE_URL=${scheme}://admin:SYNTHETIC_DB_CANARY%40encoded@127.0.0.1:5432/app`;
+    const turn = tracer.startTurn({sessionId:'db', turnId:'db', input: JSON.stringify({connection: value})});
+    turn.end({output: value}); await tracer.shutdown();
+    assert.ok(!JSON.stringify(spans(f)).includes('SYNTHETIC_DB_CANARY'));
+    assert.equal(spans(f).length, 1);
+  });
+}
+for (const output of ['{"status":"failed","count":2}', '{"success":false}', '{"type":"error","message":"example"}'])
+  test(`ordinary generated JSON is not a native failure: ${output}`, async t => {
+    const f = await fixture(t), tracer = c.createTurnTracer({config: f.config});
+    const turn = tracer.startTurn({sessionId:'json', turnId:'json'});
+    turn.child({id:'model', kind:'llm', fidelity:'native-request'}).end({output, outcome:'success'});
+    turn.end({output, outcome:'success'}); await tracer.shutdown();
+    assert.equal(spans(f).length, 2);
+    for (const span of spans(f)) { assert.equal(attrs(span)['fi.agent.outcome'], 'success'); assert.equal(span.status.code, 1); }
+  });

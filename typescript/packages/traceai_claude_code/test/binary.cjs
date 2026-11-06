@@ -113,6 +113,11 @@ const model = http.createServer(async (req, res) => {
           "SUBAGENT_GRANDCHILD: Read /work/sample/sample.txt and return its text.",
       },
     };
+  if (scenario === "interrupt-tool" && !interruptSent && !hasResult) {
+    interruptSent = true;
+    block = {type:"tool_use", id:"toolu_sleep", name:"Bash", input:{command:"sleep 20", description:"Synthetic interruption probe"}};
+    setTimeout(() => activeChild.stdin.write(JSON.stringify({type:"control_request",request_id:"interrupt-bash",request:{subtype:"interrupt"}})+"\n"), 1500);
+  }
   const usage = {
     input_tokens: 17,
     output_tokens: 11,
@@ -211,6 +216,7 @@ async function run(
   } = {},
 ) {
   scenario = name;
+  interruptSent = false;
   const home = "/work/homes/" + name;
   await fs.mkdir(home + "/.claude", { recursive: true, mode: 0o700 });
   const envConfig = {
@@ -363,9 +369,9 @@ async function run(
     "--model",
     "claude-opus-5-5",
     "--allowedTools",
-    "Read,Agent,Task",
+    "Read,Agent,Task,Bash",
     "--tools",
-    "Read,Agent,Task",
+    "Read,Agent,Task,Bash",
     "--max-turns",
     "5",
     ...(multi
@@ -548,6 +554,14 @@ async function run(
       JSON.parse(evidence.status.stdout).issues.includes("HOST_HOOKS_DISABLED"),
     );
   }
+  if (name === "interrupt-tool") {
+    const rows = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert(rows.some(r => r.type === "result" && r.terminal_reason === "aborted_tools" && r.is_error === true));
+    assert.equal(roots.length, 2);
+    assert.equal(a(roots.find(s => a(s)["input.value"]?.includes("PROMPT_SAMPLE")))["fi.agent.outcome"], "interrupted");
+    assert.equal(a(roots.find(s => a(s)["input.value"]?.includes("PROMPT_SECOND")))["fi.agent.outcome"], "success");
+    assert.equal(llms.reduce((n,s) => n + Number(a(s)["gen_ai.usage.output_tokens"] || 0),0),22);
+  }
   if (name === "interrupt-recover") {
     const results = result.stdout
       .trim()
@@ -706,6 +720,7 @@ async function run(
       ["stop-block", {}],
       ["multi", { multi: true }],
       ["interrupt-recover", { multi: true }],
+      ["interrupt-tool", { multi: true }],
       ["host-hooks-disabled", {}],
       ["private", { privacy: false }],
       ["settings-precedence", { settings: true }],

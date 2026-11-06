@@ -120,3 +120,12 @@ test("final turn closes at stop; reconstructed messages are labeled, with no per
   assert.equal(attr["fi.agent.usage.additive"], true);
   assert.equal(attr["output.value"], "answer");
 });
+
+
+test('evicted repeated prompt remains ambiguous without retaining its content', async t => {
+  const f=await fixture(t), p=await file(f, rows('repeat') + Array.from({length:64},(_,i)=>rows('unique-'+i)).join('') + rows('repeat'));
+  const result=await new TranscriptReader(f.config).read(p);
+  assert.equal(result.gap,undefined);
+  assert.equal(correlate(result,'repeat'),undefined);
+  assert.ok(correlate(result,'unique-63'));
+});

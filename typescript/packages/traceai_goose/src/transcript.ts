@@ -211,21 +211,9 @@ export async function exportTurn(
   const generations = parsed.filter(
     (r) => r.role === "assistant" && r.meta.inference,
   );
-  const toolCount = parsed.reduce(
-    (n, r) =>
-      n +
-      (Array.isArray(r.parts)
-        ? r.parts.filter((p: any) => p.type === "toolRequest").length
-        : 0),
-    0,
-  );
-  if (
-    generations.length +
-      toolCount +
-      generations.filter((r) => r.meta.usage?.isCompaction).length >
-    48
-  )
-    throw new Error("SPAN_TURN_LIMIT");
+  const detailCount = generations.reduce((n, row) => n + 1 + (row.meta.usage?.isCompaction ? 1 : 0)
+    + row.parts.filter((part: any) => part.type === "toolRequest").length, 0);
+  const aggregateOnly = detailCount > 240;
   // Only a confirmed, unchanged Stop boundary owns the turn's end time.
   // Delivery on the next prompt must not include the user's idle time.
   const observed = new Set(state.observed ?? []);
@@ -242,7 +230,7 @@ export async function exportTurn(
     turnId: state.turnId,
     input: prompt ? text(prompt.parts) : undefined,
     startTime: state.start,
-    usagePlan: "request",
+    usagePlan: aggregateOnly ? "turn" : "request",
   });
   const lastGeneration = generations.at(-1);
   const complete =
@@ -254,8 +242,22 @@ export async function exportTurn(
     state.stopped && complete && (state.stoppedAt === undefined || stopped)
       ? "success"
       : "incomplete";
+  if (aggregateOnly) {
+    const totals: UsageInput = { cacheInInput: true, reasoningInOutput: true };
+    for (const row of generations) {
+      const counters = usage(row.meta.usage);
+      for (const field of ["input", "output", "cacheRead", "cacheWrite", "reasoning", "costUsd"] as const)
+        if (counters?.[field] !== undefined) totals[field] = (totals[field] ?? 0) + counters[field]!;
+      if (counters?.costSource === "estimated") totals.costSource = "estimated";
+    }
+    turn.end({ output: text(lastGeneration?.parts), outcome, usage: totals, gap: "SPAN_DETAIL_LIMIT", endTime: endedAt });
+    await tracer.shutdown();
+    return;
+  }
   let input = prompt ? text(prompt.parts) : undefined;
+  let children = 0;
   for (const row of generations) {
+    children++;
     const inference = row.meta.inference;
     const id = `model-${messageKey(row)}`;
     // Goose persists second-resolution message timestamps, not OTLP start/end IDs.
@@ -295,6 +297,7 @@ export async function exportTurn(
       endTime: at,
     });
     if (row.meta.usage?.isCompaction) {
+      children++;
       turn
         .child({
           id: `compaction-${messageKey(row)}`,
@@ -321,6 +324,7 @@ export async function exportTurn(
       if (failed) outcome = "error";
       else if (!response && outcome !== "error") outcome = "incomplete";
       const toolStart = timing?.start ?? at;
+      children++;
       const tool = turn.child({
         id: `tool-${messageKey(row)}-${contentHash(part.id)}`,
         parentId: id,
@@ -349,7 +353,9 @@ export async function exportTurn(
         config.hideOutputs || (failed && config.hideErrorDetails)
           ? undefined
           : output;
+      if (children % 32 === 0) await tracer.flush();
     }
+    await tracer.flush();
   }
   const final = [...generations]
     .reverse()

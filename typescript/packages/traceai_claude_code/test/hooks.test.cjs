@@ -1038,7 +1038,7 @@ test("killed atomic writers cannot permanently block session hooks or delivery l
     await assert.rejects(fs.stat(file + ".write-lock"), { code: "ENOENT" });
 });
 
-for (const interrupted of [true, false])
+for (const interrupted of ["[Request interrupted by user]", "[Request interrupted by user for tool use]", false])
   test(`replacement prompt never lends success or output to unfinished prompt; interruption=${interrupted}`, async (t) => {
     const f = await fixture(t);
     const rows = (await readRows(f)).slice(0, -1);
@@ -1047,7 +1047,7 @@ for (const interrupted of [true, false])
         ...rows[0],
         message: {
           role: "user",
-          content: [{ type: "text", text: "[Request interrupted by user]" }],
+          content: [{ type: "text", text: interrupted }],
         },
       });
     await writeRows(f, rows);

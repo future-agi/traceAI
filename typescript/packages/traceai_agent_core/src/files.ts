@@ -234,6 +234,23 @@ export async function updateJson<T>(
     parsed,
   );
 }
+/** Restore/remove one unchanged entry while holding the shared settings lease. */
+export async function restoreJsonEntry<T>(
+  path: string, key: string, expected: string, previous?: T,
+): Promise<void> {
+  await withFileLock(path, async (check) => {
+    const text = await readProtected(path, false);
+    if (text === undefined) return;
+    const entries = JSON.parse(text) as Record<string, T>;
+    if (!Object.hasOwn(entries, key) || contentHash(JSON.stringify(entries[key])) !== expected) return;
+    if (previous === undefined) delete entries[key];
+    else entries[key] = previous;
+    await check();
+    if (Object.keys(entries).length)
+      await replaceProtected(path, JSON.stringify(entries, null, 2) + "\n", contentHash(text), false, check);
+    else if (await readProtected(path, false) === text) await fs.unlink(path);
+  });
+}
 /** Remove only an unchanged owned file; never unlink a symlink or clobber host edits. */
 export async function removeProtected(
   path: string,

@@ -25,6 +25,7 @@ export interface TranscriptTurn {
 export interface TranscriptResult {
   turns: TranscriptTurn[];
   gap?: string;
+  evictedPrompts?: readonly string[];
 }
 /** No home scans. Only host-supplied JSONL paths inside Cursor's transcript tree are eligible.
  * Cursors and partial bytes live in bounded memory; no raw-content recovery journal exists.
@@ -37,6 +38,7 @@ export class TranscriptReader {
   private turns: TranscriptTurn[] = [];
   private gap?: string;
   private contentBytes = 0;
+  private evictedPrompts = new Set<string>();
   private chain = Promise.resolve();
   constructor(private readonly config: ResolvedConfig) {}
   read(file: string): Promise<TranscriptResult> {
@@ -126,6 +128,8 @@ export class TranscriptReader {
         // Never re-emit earlier messages under new byte identities after truncation/replacement.
         this.gap = "TRANSCRIPT_TRUNCATED";
         this.turns = [];
+        this.contentBytes = 0;
+        this.evictedPrompts.clear();
         this.pending = Buffer.alloc(0);
         return { turns: [], gap: this.gap };
       }
@@ -215,8 +219,12 @@ export class TranscriptReader {
                   ended: false,
                 });
                 if (this.turns.length > 64) {
-                  this.turns.shift();
-                  this.gap = "TRANSCRIPT_HISTORY_LIMIT";
+                  const removed = this.turns.shift()!;
+                  this.contentBytes -= removed.messages.reduce((n, m) => n +
+                    Buffer.byteLength(m.input ?? "") + Buffer.byteLength(m.output ?? ""), 0);
+                  // Preserve ambiguity evidence without retaining historical content.
+                  if (this.evictedPrompts.size < 4096) this.evictedPrompts.add(removed.promptHash);
+                  else this.gap = "TRANSCRIPT_HISTORY_IDENTITY_LIMIT";
                 }
               } else if (row.role === "assistant" && this.turns.length) {
                 const turn = this.turns[this.turns.length - 1];
@@ -294,6 +302,7 @@ export class TranscriptReader {
       }
       return {
         turns: this.turns.map((t) => ({ ...t, messages: [...t.messages] })),
+        evictedPrompts: [...this.evictedPrompts],
         gap:
           this.gap ??
           (this.pending.length ? "TRANSCRIPT_PARTIAL_TAIL" : undefined),
@@ -313,6 +322,7 @@ export function correlate(
 ): TranscriptTurn | undefined {
   if (prompt === undefined || result.gap) return undefined;
   const hash = contentHash(prompt.trim());
+  if (result.evictedPrompts?.includes(hash)) return undefined;
   const matching = result.turns.filter((t) => t.promptHash === hash);
   if (matching.length !== 1) return undefined;
   const turn = matching[0];

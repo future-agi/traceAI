@@ -15,7 +15,7 @@ const lockfile = require('proper-lockfile') as {lock(path: string, options: {
   onCompromised: () => void;
 }): Promise<() => Promise<void>>};
 
-const MAX_STATE_BYTES = 42000, MAX_CONVERSATIONS = 128, TTL = 24 * 60 * 60 * 1000;
+const CONTENT_BUDGET = 42000, MAX_STATE_BYTES = 720000, MAX_ENVELOPE_BYTES = 1024 * 1024, MAX_CONVERSATIONS = 128, TTL = 24 * 60 * 60 * 1000;
 function key(config: ResolvedConfig): Buffer {
   return createHash('sha256').update('futureagi-antigravity-state-v1\0').update(config.identityKey ??
     JSON.stringify([config.credentials?.apiKey, config.credentials?.secretKey])).digest();
@@ -84,7 +84,7 @@ async function attachChildren(turn: Turn, config: ResolvedConfig, seen: Set<stri
     try {
       let child: Conversation | undefined;
       do {
-        const raw = await readProtected(conversationPath(config, relation.conversationId));
+        const raw = await readProtected(conversationPath(config, relation.conversationId), true, MAX_ENVELOPE_BYTES);
         child = raw ? unseal(raw, config) : undefined;
         if (child && (!child.active || exiting)) break;
         if (Date.now() >= deadline) break;
@@ -124,7 +124,7 @@ export async function pendingTurns(config: ResolvedConfig): Promise<number> {
   const names = (await fs.readdir(directory).catch(() => [])).filter(n => /^[0-9a-f]{64}\.json$/.test(n)).slice(0, MAX_CONVERSATIONS);
   for (const name of names) {
     try {
-      const path = join(directory, name), raw = await readProtected(path);
+      const path = join(directory, name), raw = await readProtected(path, true, MAX_ENVELOPE_BYTES);
       if (raw) states.push({path, state: unseal(raw, config)});
     } catch { /* another policy/destination is not readable in this context */ }
   }
@@ -161,7 +161,7 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
       retries: {retries: event === 'Stop' ? 460 : 145, minTimeout: 50, maxTimeout: 50, factor: 1},
       onCompromised: () => { compromised = true; }});
     await boundedDirectory(directory, name);
-    const raw = await readProtected(path);
+    const raw = await readProtected(path, true, MAX_ENVELOPE_BYTES);
     let state: Conversation = {schemaVersion: 1, touched: Date.now(), generation: config.generation, completed: []};
     if (raw) {
       try {
@@ -211,7 +211,7 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
     state.joinedChildren = [...joined].slice(-128);
     if (state.active?.capped || finished.some(turn => turn.capped)) await diagnostic(config, 'STATE_ACTIVITY_LIMIT');
     // Bound the whole journal, not just individual fields. Preserve structure if content fills it.
-    if (Buffer.byteLength(JSON.stringify(state)) > MAX_STATE_BYTES) {
+    if (Buffer.byteLength(JSON.stringify(state)) > CONTENT_BUDGET) {
       for (const turn of [...(state.pending ?? []), ...(state.active ? [state.active] : [])]) {
         delete turn.input; delete turn.output; delete turn.context;
         for (const a of turn.activities) { delete a.input; delete a.output; }
@@ -222,7 +222,7 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
     if (!collectionEnabled(config)) return;
     if (compromised) throw new Error('HOOK_LOCK_COMPROMISED');
     // Tombstone before sending: never replay ambiguous or accepted finalized spans on a repeated Stop.
-    await writeProtectedUnderLock(path, seal(state, config), raw === undefined ? null : contentHash(raw));
+    await writeProtectedUnderLock(path, seal(state, config), raw === undefined ? null : contentHash(raw), { maxBytes: MAX_ENVELOPE_BYTES });
     await release(); release = undefined; // Network delivery must not hold up the next hook.
     if (finished.length) {
       const { createTurnTracer } = await import('@traceai/agent-core');

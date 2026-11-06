@@ -147,7 +147,10 @@ export class Observer {
     }
     const s = this.session(sessionID);
     if (!s) return;
-    const input = this.text({ system, messages });
+    // Histories mix user inputs with assistant/tool outputs. Never relabel hidden
+    // outputs as request input (including compaction requests).
+    const input = this.config.hideInputs || this.config.hideOutputs
+      ? undefined : this.text({ system, messages });
     if (kind === "compaction") {
       // A context-length rejection never creates step.started. Compaction replaces
       // that abandoned primary request, before its durable start event is delivered.
@@ -351,7 +354,7 @@ export class Observer {
           const output = s.step.toolCalls?.length
             ? this.text({ text: s.step.output, tool_calls: s.step.toolCalls }, true) : s.step.output;
           s.step.handle?.end({ output, usage: usage(event.data.tokens, event.data.cost),
-            outcome: event.type === "session.step.failed" ? "error" : "success", endTime: s.step.streamed ?? event.created });
+            outcome: event.type === "session.step.failed" ? (event.data.error?.type === "aborted" ? "interrupted" : "error") : "success", endTime: s.step.streamed ?? event.created });
           s.step = undefined;
           s.request = undefined;
         }

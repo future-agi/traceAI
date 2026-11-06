@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { join, dirname } from "node:path";
 import {
   ensurePrivateDirectory,
+  withFileLock,
   readJson,
   updateJson as coreUpdate,
 } from "@traceai/agent-core/files";
@@ -18,7 +19,7 @@ async function updateJson<T>(
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await coreUpdate(path, update);
+      return await coreUpdate(path, update, { maxBytes: 1024 * 1024 });
     } catch (error) {
       if (
         !(error instanceof Error) ||
@@ -103,39 +104,42 @@ export async function capture(
   const dir = directory(config);
   await ensurePrivateDirectory(dir);
   await prune(dir);
-  const ownPath = join(dir, `${digest(event.sessionId)}.json`),
-    own = await readJson<State>(ownPath);
-  const statePath = own?.parent ? join(dir, `${own.parent}.json`) : ownPath;
-  if (event.event === "SubagentStart" && event.subagentId) {
-    const childPath = join(dir, `${digest(event.subagentId)}.json`);
-    await updateJson<State>(childPath, (old) => ({
-      version: 1,
-      updated: Date.now(),
-      events: [],
-      paths: {},
-      claimed: [],
-      ...old,
-      parent: own?.parent ?? digest(event.sessionId),
-    }));
-  }
-  await updateJson<State>(statePath, (old) => {
-    const state: State = old ?? {
-      version: 1,
-      updated: Date.now(),
-      events: [],
-      paths: {},
-      claimed: [],
-    };
-    state.updated = Date.now();
-    if (event.transcriptPath)
-      state.paths[event.sessionId] = event.transcriptPath;
-    const meta = structural(event),
-      key = JSON.stringify(meta);
-    if (!state.events.some((e) => JSON.stringify(e) === key)) {
-      if (state.events.length < 160) state.events.push(meta);
-      else state.gap = true;
+  let statePath = "", isChild = false;
+  await withFileLock(join(dir, "routing"), async () => {
+    const ownPath = join(dir, `${digest(event.sessionId)}.json`);
+    let own = await readJson<State>(ownPath, true, 1024 * 1024);
+    statePath = ownPath;
+    for (let depth = 0; own?.parent && depth < 32; depth++) {
+      isChild = true;
+      statePath = join(dir, `${own.parent}.json`);
+      own = await readJson<State>(statePath, true, 1024 * 1024);
     }
-    return state;
+    let buffered: State | undefined;
+    if (event.event === "SubagentStart" && event.subagentId) {
+      const childPath = join(dir, `${digest(event.subagentId)}.json`);
+      if (childPath !== statePath) {
+        buffered = await readJson<State>(childPath, true, 1024 * 1024);
+        // Every append re-resolves routing under this lease, including hooks that
+        // started before association. No writer can still target the old journal.
+        await updateJson<State>(childPath, () => ({
+          version: 1, updated: Date.now(), events: [], paths: {}, claimed: [],
+          parent: statePath.slice(dir.length + 1, -5),
+        }));
+      }
+    }
+    await updateJson<State>(statePath, old => {
+      const state: State = old ?? { version: 1, updated: Date.now(), events: [], paths: {}, claimed: [] };
+      state.updated = Date.now();
+      state.paths = { ...state.paths, ...buffered?.paths };
+      if (event.transcriptPath) state.paths[event.sessionId] = event.transcriptPath;
+      const seen = new Set(state.events.map(e => JSON.stringify(e)));
+      for (const meta of [structural(event), ...(buffered?.events ?? [])]) {
+        const signature = JSON.stringify(meta);
+        if (!seen.has(signature)) { state.events.push(meta); seen.add(signature); }
+      }
+      state.events.sort((a, b) => a.time - b.time);
+      return state;
+    });
   });
   if (
     ![
@@ -146,7 +150,7 @@ export async function capture(
       "Notification",
       "UserPromptSubmit",
     ].includes(event.event) ||
-    own?.parent
+    isChild
   )
     return;
   // Stop is a gate, not proof of completion: another hook can continue or cancel it.
@@ -162,7 +166,7 @@ async function exportCompleted(
   config: ResolvedConfig,
 ): Promise<void> {
   {
-    const state = await readJson<State>(statePath);
+    const state = await readJson<State>(statePath, true, 1024 * 1024);
     if (!state || !config.enabled) return;
     const rows: unknown[] = [];
     let reads = 0;
@@ -198,6 +202,7 @@ async function exportCompleted(
         e.promptId &&
         !state.claimed.includes(e.promptId),
     );
+    const exportedEvents = new Set<string>();
     for (const prompt of prompts) {
       const turnId = prompt.promptId!;
       if (!completed.has(turnId) && event.event !== "SessionEnd") continue;
@@ -269,7 +274,12 @@ async function exportCompleted(
             );
         }
       }
-      for (const e of events)
+      const deferred = new Map<string, GrokEvent[]>();
+      const replay = (e: GrokEvent): void => {
+        if (e.sessionId !== event.sessionId && !observer.active.has(e.sessionId)) {
+          deferred.set(e.sessionId, [...(deferred.get(e.sessionId) ?? []), e]);
+          return;
+        }
         observer.handle({
           ...e,
           input:
@@ -284,6 +294,13 @@ async function exportCompleted(
               ? outputs.get(e.promptId)
               : undefined,
         });
+        if (e.event === "SubagentStart" && e.subagentId) {
+          const waiting = deferred.get(e.subagentId) ?? [];
+          deferred.delete(e.subagentId);
+          for (const child of waiting) replay(child);
+        }
+      };
+      for (const e of events) replay(e);
       for (const row of rows) {
         const p = record(record(row).params),
           u = record(p.update),
@@ -332,18 +349,14 @@ async function exportCompleted(
         );
       await tracer.flush();
       await tracer.shutdown();
+      for (const e of events) exportedEvents.add(JSON.stringify(e));
     }
-    // Keep only unclaimed prompt state and the latest prompt anchor, bounding multi-day sessions.
+    // Remove only the snapshot actually claimed/exported. Concurrent new prompts
+    // and tool events must survive cleanup; deduplication lives in claimed IDs.
     await updateJson<State>(statePath, (old) => {
       if (!old) return state;
-      const latest = [...old.events]
-        .reverse()
-        .find(
-          (e) =>
-            e.event === "UserPromptSubmit" && e.sessionId === event.sessionId,
-        );
-      if (latest && old.claimed.includes(latest.promptId!))
-        old.events = old.events.filter((e) => e.time >= latest.time);
+      old.events = old.events.filter(e => !exportedEvents.has(JSON.stringify(e)));
+      if (!old.events.length) old.gap = false;
       return old;
     });
   }

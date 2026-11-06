@@ -379,3 +379,26 @@ test("message/image privacy and inherited error-detail privacy are never weakene
   assert.equal(output.hideOutputs, true);
   assert.equal(output.hideErrorDetails, true);
 });
+
+
+test('repeated setup owns only its shared project entry and preserves another agent opt-out', async t => {
+  const f = await fixture(t), projectDir = path.join(f.home, 'project'); await fs.mkdir(projectDir);
+  const openclaw = {agent:'openclaw', projectDir}, goose = {agent:'goose', projectDir, scope:'project'};
+  await f.setup({...openclaw, scope:'user', projectName:'openclaw-global', captureContent:true});
+  await f.setup({...goose, projectName:'goose'});
+  await f.setup({...openclaw, scope:'project', projectName:'openclaw-private', captureContent:false});
+  await f.setup({...goose, projectName:'goose'});
+  await c.uninstall({...f.options, ...goose});
+  const config = await c.resolveConfig({...f.options, ...openclaw});
+  assert.equal(config.projectName, 'openclaw-private'); assert.equal(config.captureContent, false);
+  const saved = JSON.parse(await fs.readFile(config.paths.project, 'utf8'));
+  assert.ok(saved.openclaw); assert.equal(saved.goose, undefined);
+});
+test('uninstall restores preexisting shared entry and preserves subsequent user edits', async t => {
+  const f = await fixture(t), projectDir = path.join(f.home, 'project'); await fs.mkdir(projectDir);
+  const options = {...f.options, agent:'goose', projectDir}, paths = await c.configPaths(options);
+  await c.writeProtected(paths.project, JSON.stringify({goose:{schemaVersion:1, enabled:false}, openclaw:{schemaVersion:1, captureContent:false}}));
+  await f.setup({agent:'goose', projectDir, scope:'project'}); await f.setup({agent:'goose', projectDir, scope:'project'});
+  await c.uninstall(options);
+  assert.deepEqual(JSON.parse(await fs.readFile(paths.project,'utf8')).goose, {schemaVersion:1, enabled:false});
+});

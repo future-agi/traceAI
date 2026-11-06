@@ -116,3 +116,12 @@ test('content-off and error-detail privacy survive transcript enrichment',async 
  const generation=f.state.active.activities.find(a=>a.kind==='llm');
  assert.equal(generation.input,undefined);assert.equal(generation.output,undefined);assert.equal(generation.usage.input,20);
 });
+
+test('detail capacity preserves native success and exact additive usage',()=>{
+ const {emitTurn}=require('../dist/mapper');let result, start;
+ const tracer={startTurn(input){start=input;return {child(){throw Error('detail cap must reserve root capacity')},end(end){result=end}}}};
+ const activities=Array.from({length:300},(_,i)=>({id:'generation-'+i,kind:'llm',name:'generation',start:1,end:2,usage:{input:20,output:10},outcome:'success'}));
+ emitTurn(tracer,'session',{id:'turn',start:1,end:2,outcome:'success',activities});
+ assert.equal(start.usagePlan,'turn');assert.equal(result.outcome,'success');assert.equal(result.gap,'SPAN_DETAIL_LIMIT');
+ assert.equal(result.usage.input,6000);assert.equal(result.usage.output,3000);
+});

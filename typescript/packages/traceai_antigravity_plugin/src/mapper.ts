@@ -115,7 +115,6 @@ export function applyEvent(state: Conversation, event: EventName, p: Payload, co
     }
     const turn = state.active;
     if (!turn) return finished;
-    if (turn.activities.length >= 48) { turn.capped = true; return finished; }
     turn.currentInvocation = id;
     if (!turn.activities.some(a => a.id === id)) turn.activities.push({
       id, kind: 'agent', name: 'invocation', start: now,
@@ -130,7 +129,6 @@ export function applyEvent(state: Conversation, event: EventName, p: Payload, co
   } else if (event === 'PostToolUse') {
     const turn = state.active, step = integer(p.stepIdx);
     if (!turn || step === undefined || turn.activities.some(a => a.id === `tool-${step}`)) return finished;
-    if (turn.activities.length >= 48) { turn.capped = true; return finished; }
     const call = p.toolCall && typeof p.toolCall === 'object' ? p.toolCall as Payload : {};
     // PostToolUse has no source start timestamp. A zero-duration observation does not invent execution duration.
     turn.activities.push({id: `tool-${step}`, kind: 'tool', name: label(call.name, 'tool'),
@@ -148,8 +146,18 @@ export function applyEvent(state: Conversation, event: EventName, p: Payload, co
   return finished;
 }
 export function emitTurn(tracer: TurnTracer, conversationId: string, turn: Turn): void {
+  const aggregateOnly = turn.activities.length > 240;
   const root = tracer.startTurn({sessionId: conversationId, turnId: turn.id, input: turn.input,
-    usagePlan: turn.activities.some(a => a.kind === 'llm') ? 'request' : 'unknown', startTime: new Date(turn.start)});
+    usagePlan: aggregateOnly ? 'turn' : turn.activities.some(a => a.kind === 'llm') ? 'request' : 'unknown', startTime: new Date(turn.start)});
+  if (aggregateOnly) {
+    const totals: UsageInput = {cacheInInput: true, reasoningInOutput: true};
+    for (const a of turn.activities) if (a.kind === 'llm') {
+      for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'costUsd'] as const)
+        if (a.usage?.[field] !== undefined) totals[field] = (totals[field] ?? 0) + a.usage[field]!;
+    }
+    root.end({output: turn.output, outcome: turn.outcome, usage: totals, gap: 'SPAN_DETAIL_LIMIT', endTime: new Date(turn.end ?? turn.start)});
+    return;
+  }
   for (const a of turn.activities) {
     const child = root.child({id: a.id, kind: a.kind === 'llm' ? 'generation' : a.kind, name: a.name, parentId: a.parentId,
       input: a.input, model: a.model, provider: a.kind === 'llm' && a.model?.startsWith('gemini') ? 'google' : undefined,
@@ -160,6 +168,6 @@ export function emitTurn(tracer: TurnTracer, conversationId: string, turn: Turn)
     if (a.end !== undefined)
       child.end({output: a.output, usage: a.usage, outcome: a.outcome ?? 'incomplete', endTime: new Date(a.end)});
   }
-  root.end({output: turn.output, outcome: turn.capped && (!turn.outcome || turn.outcome === 'success') ? 'incomplete' : turn.outcome,
+  root.end({output: turn.output, outcome: turn.outcome, gap: turn.capped ? 'STATE_ACTIVITY_LIMIT' : undefined,
     endTime: new Date(turn.end ?? turn.start)});
 }

@@ -223,3 +223,48 @@ test("native hook installation pins the existing interpreter, gives cold starts 
   assert.equal(inspection.registered, false);
   assert.equal(inspection.detail, "RUNTIME_MISSING_OR_CHANGED");
 });
+
+for (const ordering of ['child-first','overlap']) test(`child prompt association is race-safe (${ordering})`, async t => {
+  const f=await fixture(t);
+  const transcript = async (sid,pid) => {
+    const file=path.join(f.home,'.grok/sessions/project',sid,'updates.jsonl');
+    await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700});
+    const updates=[{sessionUpdate:'agent_message_chunk',content:{text:'completed'}},
+      {sessionUpdate:'turn_completed',prompt_id:pid,stop_reason:'end_turn',usage:{inputTokens:40,outputTokens:10}}];
+    await fs.writeFile(file,updates.map((update,i)=>JSON.stringify({params:{sessionId:sid,update,_meta:{promptId:pid,eventId:sid+'-'+i,streamStartMs:1200,agentTimestampMs:1300}}})).join('\n')+'\n',{mode:0o600});
+    return file;
+  };
+  // Do not expose the completion until after the hooks have raced.
+  await capture(event('UserPromptSubmit'),f.config);
+  const child=event('UserPromptSubmit',{sessionId:'child',promptId:'child-prompt',subagentType:'worker',time:1100});
+  const association=event('SubagentStart',{subagentId:'child',time:1150});
+  if(ordering==='child-first') { await capture(child,f.config); await capture(association,f.config); }
+  else await Promise.all([capture(child,f.config),capture(association,f.config)]);
+  await capture(event('Stop',{sessionId:'child',promptId:'child-prompt',time:1400,transcriptPath:await transcript('child','child-prompt')}),f.config);
+  await capture(event('Stop',{time:1500,transcriptPath:await transcript('session','prompt')}),f.config);
+  const all=f.spans(), sub=all.find(s=>s.name==='subagent');
+  assert.ok(sub); assert.equal(attrs(sub)['fi.agent.outcome'],'success');
+  assert.equal(all.filter(s=>attrs(s)['fi.span.kind']==='LLM').length,2);
+  assert.equal(all.filter(s=>!s.parentSpanId).length,1);
+});
+test('saturated completed turn releases its anchors before an ordinary resumed prompt',async t=>{
+ const f=await fixture(t), file=path.join(f.home,'.grok/sessions/project/session/updates.jsonl');
+ await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700}); await fs.writeFile(file,'',{mode:0o600});
+ const submit=async(pid,n,start)=>{
+  await capture(event('UserPromptSubmit',{promptId:pid,time:start,transcriptPath:file}),f.config);
+  for(let i=0;i<n;i++) {
+   await capture(event('PreToolUse',{promptId:pid,time:start+i*2+1,toolId:'tool-'+pid+'-'+i,toolName:'read'}),f.config);
+   await capture(event('PostToolUse',{promptId:pid,time:start+i*2+2,toolId:'tool-'+pid+'-'+i,toolName:'read'}),f.config);
+  }
+  const update={params:{sessionId:'session',update:{sessionUpdate:'turn_completed',prompt_id:pid,stop_reason:'end_turn',usage:{inputTokens:80,outputTokens:20}},_meta:{promptId:pid,agentTimestampMs:start+500}}};
+  await fs.appendFile(file,JSON.stringify(update)+'\n');
+  await capture(event('Stop',{promptId:pid,time:start+500,transcriptPath:file}),f.config);
+ };
+ await submit('first',84,1000); const prior=f.spans().length;
+ await submit('resumed',1,10000);
+ const all=f.spans().slice(prior), root=all.find(s=>!s.parentSpanId);
+ assert.ok(root);assert.equal(attrs(root)['fi.agent.outcome'],'success');
+ assert.equal(all.filter(s=>attrs(s)['fi.span.kind']==='TOOL').length,1);
+ assert.equal(Number(attrs(root)['gen_ai.usage.input_tokens']),80);
+ assert.equal(Number(attrs(root)['gen_ai.usage.output_tokens']),20);
+});

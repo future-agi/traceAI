@@ -126,7 +126,7 @@ test("verbose turns retain every request, tool, terminal record and usage counte
   assert(Buffer.byteLength(JSON.stringify(state)) <= 42000);
 });
 
-test("structural overflow retains terminal records and reports loss instead of stranding a turn", async (t) => {
+test("structural segments retain all records and terminal boundary without loss", async (t) => {
   const store = new EventStore(await fixture(t));
   for (let i = 0; i < 130; i++)
     await store.append({
@@ -136,9 +136,9 @@ test("structural overflow retains terminal records and reports loss instead of s
     });
   await store.append({ ...e, hook_event_name: "Stop", prompt: undefined });
   const state = await store.take(e);
-  assert.equal(state.events.length, 128);
+  assert.equal(state.events.length, 131);
   assert.equal(state.events.at(-1).hook_event_name, "Stop");
-  assert.equal(state.gap, true);
+  assert.equal(state.gap, false);
 });
 
 test("rollout cursor handles partial UTF-8, malformed lines, and session mismatch", async (t) => {
@@ -182,4 +182,25 @@ test("rollout cursor handles partial UTF-8, malformed lines, and session mismatc
   await fs.appendFile(file, "not-json\n");
   await resumed.read();
   assert(resumed.gap);
+});
+
+
+test('forty-tool turn retains segmented structural history and exact usage', async t => {
+  const store = new EventStore(await fixture(t)); await store.append(e);
+  for (let i=0; i<41; i++) {
+    await store.append({...e, hook_event_name:'PreModelRequest', receivedAt:i*4+1});
+    await store.append({...e, hook_event_name:'PostModelRequest', receivedAt:i*4+2, token_usage:{input_tokens:20,output_tokens:8}});
+    if (i<40) {
+      await store.append({...e, hook_event_name:'PreToolUse', receivedAt:i*4+3, tool_use_id:'tool-'+i});
+      await store.append({...e, hook_event_name:'PostToolUse', receivedAt:i*4+4, tool_use_id:'tool-'+i});
+    }
+  }
+  await store.append({...e, hook_event_name:'Stop', receivedAt:1000});
+  const state = await store.take(e); assert.equal(state.gap,false);
+  assert.equal(state.events[0].prompt,e.prompt,'a structural segment must not revoke available content budget');
+  assert.equal(state.events.filter(x=>x.hook_event_name==='PostModelRequest').length,41);
+  assert.equal(state.events.filter(x=>x.hook_event_name==='PostToolUse').length,40);
+  assert.equal(state.events.reduce((n,x)=>n+(x.token_usage?.input_tokens??0),0),820);
+  assert.equal(state.events.reduce((n,x)=>n+(x.token_usage?.output_tokens??0),0),328);
+  assert.equal(await store.take(e),undefined);
 });
