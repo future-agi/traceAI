@@ -170,7 +170,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    // Match the directory OpenCode passes to its plugin, including for status,
+    // duplicate detection and ownership-aware uninstall after project setup.
+    projectDir: p.values["--project-dir"] ?? (p.agent === "opencode-v1" ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
