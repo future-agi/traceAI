@@ -39,7 +39,8 @@ async function fixture(t, capture = true) {
   t.after(async () => {
     server.closeAllConnections();
     await new Promise((r) => server.close(r));
-    await fs.rm(home, { force: true, recursive: true });
+    // A detached late-transcript finisher may still be writing state as the test ends.
+    await fs.rm(home, { force: true, recursive: true, maxRetries: 20, retryDelay: 100 });
   });
   return { home, options, config, context, requests, endpoint };
 }
