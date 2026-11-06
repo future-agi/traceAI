@@ -1,6 +1,7 @@
 import type { CoreAdapter } from "@traceai/agent-core";
 import { codexAdapter, HOST_VERSION } from "@traceai/codex-plugin";
 import { opencodeV1Adapter } from "./opencode-v1.js";
+import { antigravityAdapter } from "@traceai/antigravity-plugin";
 
 export interface AdapterRelease {
   id: string;
@@ -21,6 +22,23 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     hostRange: HOST_VERSION,
     qualified: true,
     reason: "REGISTRY_PUBLICATION_REQUIRED",
+  },
+  {
+    id: "antigravity",
+    packageName: "@traceai/antigravity-plugin",
+    version: "0.1.0",
+    mechanism: "agy plugin install",
+    hostRange: "1.x (Linux CLI; tested 1.5.2)",
+    qualified: false,
+    reason: "PACKAGE_PUBLICATION_AND_CLOUD_READBACK_REQUIRED",
+  },
+  {
+    id: "antigravity-ide",
+    packageName: "@traceai/antigravity-plugin",
+    version: "0.1.0",
+    mechanism: "native-gui-hooks",
+    qualified: false,
+    reason: "ANTIGRAVITY_GUI_QUALIFICATION_REQUIRED",
   },
   {
     id: "pi",
@@ -61,7 +79,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     claude: "claude-code",
     "claude-code": "claude-code",
     grok: "grok-plugin",
-    antigravity: "antigravity-plugin",
     gemini: "gemini-cli",
     copilot: "copilot",
     muse: "muse-plugin",
@@ -90,5 +107,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "codex") return codexAdapter;
   if (id === "opencode-v1") return opencodeV1Adapter;
+  if (id === "antigravity") return antigravityAdapter;
   return undefined;
 }
