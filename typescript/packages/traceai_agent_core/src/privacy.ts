@@ -66,6 +66,36 @@ export function redactStructured(value: unknown, depth = 0): unknown {
 }
 /** Redact complete quoted values at their JSON escape depth. An escaped quote
  * inside a secret cannot be mistaken for the enclosing string delimiter. */
+/** End offset of a YAML block scalar whose indicator starts at `valueStart`. */
+function blockScalarEnd(
+  text: string,
+  keyAt: number,
+  valueStart: number,
+  block: RegExpExecArray,
+): number {
+  const escaped = block[1].startsWith("\\"),
+    sep = escaped ? "\\n" : "\n";
+  const previous = text.lastIndexOf(sep, keyAt);
+  const lineStart = previous < 0 ? 0 : previous + sep.length;
+  const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
+  const keyIndent = indent(text.slice(lineStart, keyAt + 1));
+  let end = valueStart + block[0].length - block[1].length,
+    position = valueStart + block[0].length;
+  while (position <= text.length) {
+    const next = text.indexOf(sep, position),
+      lineEnd = next < 0 ? text.length : next;
+    const line = text
+      .slice(position, lineEnd)
+      .replace(escaped ? /\\r$/ : /\r$/, "");
+    if (line.trim()) {
+      if (indent(line) <= keyIndent) break;
+      end = lineEnd;
+    }
+    if (next < 0) break;
+    position = next + sep.length;
+  }
+  return end;
+}
 function redactAssignments(text: string): string {
   // Backslashes belong to quote delimiters or complete Unicode escapes, not
   // an overlapping greedy key class that can backtrack over an entire payload.
@@ -95,7 +125,12 @@ function redactAssignments(text: string): string {
       const auth = /^(?:Basic|Bearer|Digest|Token)\s+[^\s,;"']+/i.exec(
         remainder,
       );
-      if (auth) end = assignment.lastIndex + auth[0].length;
+      // YAML block scalar (`key: |`, `key: >-`, ...): the secret is on the following
+      // more-indented lines, raw or inside JSON-escaped text (`\n`).
+      const block =
+        /^[|>][0-9+-]{0,3}[ \t]*(?:#[^\r\n\\]*)?(\r?\n|\\r?\\n)/.exec(remainder);
+      if (block) end = blockScalarEnd(text, match.index, assignment.lastIndex, block);
+      else if (auth) end = assignment.lastIndex + auth[0].length;
       else if (/^[{\[]/.test(remainder)) {
         // Unparseable structured credential values are ambiguous: omit the tail.
         end = text.length;

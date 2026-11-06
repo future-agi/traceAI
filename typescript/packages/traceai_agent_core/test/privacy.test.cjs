@@ -64,3 +64,25 @@ test("shared structural redaction bounds recursive input", () => {
   cycle.next = cycle;
   assert.match(JSON.stringify(redactStructured(cycle)), /REDACTED_DEPTH_LIMIT/);
 });
+
+test("YAML block scalars under sensitive keys are redacted whole (literal, folded, nested, JSON-encoded)", () => {
+  const cases = [
+    "access_token: |\n  MULTILINE_CANARY",
+    "access_token: >\n  MULTILINE_CANARY\n  MULTILINE_CANARY_2",
+    "access_token: |-\n  MULTILINE_CANARY\n\n  MULTILINE_CANARY_2",
+    "service:\n  password: >+  # comment\n    MULTILINE_CANARY\n  name: kept",
+    "client_secret: |2\n    MULTILINE_CANARY\r\n    MULTILINE_CANARY_2\r\n",
+  ];
+  for (const text of cases) {
+    const out = redact(text);
+    assert.ok(!out.includes("MULTILINE_CANARY"), JSON.stringify(out));
+  }
+  // Following non-secret content at the parent indentation survives.
+  assert.ok(redact(cases[3]).includes("name: kept"));
+  assert.ok(redact("api_key: |\n  MULTILINE_CANARY\nmodel: gpt").includes("model: gpt"));
+  // Escaped (JSON-string) form and structured values.
+  const escaped = JSON.stringify({ config: "x: 1\naccess_token: |\n  MULTILINE_CANARY\ny: 2" });
+  assert.ok(!redact(escaped).includes("MULTILINE_CANARY"), redact(escaped));
+  const nested = redactStructured({ tool: { output: "token: >\n  MULTILINE_CANARY" } });
+  assert.ok(!JSON.stringify(nested).includes("MULTILINE_CANARY"), JSON.stringify(nested));
+});

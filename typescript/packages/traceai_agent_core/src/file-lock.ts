@@ -17,8 +17,9 @@ const directory = async (path: string) =>
   checked(await nodeFs.promises.lstat(path));
 type Callback = (error: NodeJS.ErrnoException | null) => void;
 // Use no-follow descriptors for heartbeats too, not just the initial lstat.
-const lockFs = {
-  ...nodeFs,
+// Inherit untouched APIs without evaluating deprecated fs constant getters on
+// Node 24. Defining own descriptors also overrides ESM namespace accessors safely.
+const lockFs = Object.create(nodeFs, Object.getOwnPropertyDescriptors({
   mkdir(path: string, callback: Callback) {
     nodeFs.mkdir(path, { mode: 0o700 }, callback);
   },
@@ -56,7 +57,7 @@ const lockFs = {
     checked(nodeFs.lstatSync(path));
     nodeFs.rmdirSync(path);
   },
-};
+}));
 export async function acquireWriteLock(
   path: string,
   options: { lockWaitMs?: number } = {},

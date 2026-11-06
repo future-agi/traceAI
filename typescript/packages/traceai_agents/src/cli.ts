@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
+import { resolve } from "node:path";
 import { stdin, stdout, stderr } from "node:process";
 import {
   setup,
@@ -9,6 +10,7 @@ import {
   uninstall,
   resolveConfig,
   readSetupDefaults,
+  environmentCredentialsOnly,
   credentialPair,
   endpoint,
   endpointFromBase,
@@ -20,7 +22,7 @@ import {
 import { discoverHermesDirectory } from "@traceai/hermes-agent";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
-const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --agent-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
+const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --agent-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials, --user-only\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
 interface Parsed {
   command: string;
   agent?: string;
@@ -46,6 +48,7 @@ function parse(args: string[]): Parsed {
     "--no-capture-content",
     "--configure-only",
     "--replace-credentials",
+    "--user-only",
     "--json",
     "--check",
     "--last",
@@ -82,34 +85,43 @@ async function ask(text: string): Promise<string> {
 async function masked(text: string): Promise<string> {
   if (!stdin.isTTY || !stderr.isTTY)
     throw new Error("HEADLESS_CREDENTIALS_REQUIRED");
-  stderr.write(text);
   const wasRaw = stdin.isRaw;
-  stdin.setRawMode(true);
-  stdin.resume();
   return new Promise((resolve, reject) => {
-    let value = "";
+    let value = "", finished = false;
+    const restore = (): void => { stdin.setRawMode(!!wasRaw); };
     const done = (error?: Error): void => {
+      if (finished) return;
+      finished = true;
       stdin.off("data", data);
-      stdin.setRawMode(!!wasRaw);
+      stdin.off("end", ended);
+      stdin.off("error", failed);
+      process.off("exit", restore);
+      try { restore(); } catch { error ??= new Error("TERMINAL_RESTORE_FAILED"); }
       stdin.pause();
-      stderr.write("\n");
+      try { stderr.write("\n"); } catch { /* Restore even when the terminal closed. */ }
       error ? reject(error) : resolve(value);
     };
+    const ended = (): void => done(new Error("CANCELLED"));
+    const failed = (): void => done(new Error("TERMINAL_READ_FAILED"));
     const data = (chunk: Buffer): void => {
       for (const c of chunk.toString("utf8")) {
-        if (c === "\u0003" || c === "\u0004") {
-          done(new Error("CANCELLED"));
-          return;
-        }
-        if (c === "\r" || c === "\n") {
-          done();
-          return;
-        }
+        if (c === "\u0003" || c === "\u0004") { ended(); return; }
+        if (c === "\r" || c === "\n") { done(); return; }
         if (c === "\u007f" || c === "\b") value = value.slice(0, -1);
         else if (c >= " " && value.length < 4096) value += c;
       }
     };
-    stdin.on("data", data);
+    try {
+      // A visible prompt is permission to type: disable echo and attach every
+      // handler first, even if stderr.write deschedules this process afterward.
+      stdin.setRawMode(true);
+      stdin.on("data", data);
+      stdin.once("end", ended);
+      stdin.once("error", failed);
+      process.once("exit", restore);
+      stdin.resume();
+      stderr.write(text);
+    } catch { failed(); }
   });
 }
 function output(value: unknown, json: boolean): void {
@@ -173,13 +185,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const options: ResolveOptions = {
     agent: p.agent,
     // Match host workspace discovery and inspect the active project by default.
+    // --user-only ignores the repository layer entirely.
     projectDir:
-      p.values["--project-dir"] ??
-      (["opencode-v1", "copilot", "kiro-ide"].includes(p.agent) || ["status", "doctor"].includes(p.command) ||
-       (p.agent === "antigravity" && ["setup", "update"].includes(p.command)) ||
-       (p.agent === "hermes" && ["enable", "uninstall"].includes(p.command))
-        ? process.cwd()
-        : undefined),
+      (p.values["--project-dir"] ? resolve(p.values["--project-dir"]) : undefined) ??
+      (p.flags.has("--user-only") ? undefined : process.cwd()),
     agentDir: p.values["--agent-dir"],
   };
   const adapter = loadAdapter(p.agent),
@@ -247,7 +256,11 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return status.exitCode;
   }
   if (p.command === "setup") {
-    const scope = p.values["--scope"] as "user" | "project" | undefined;
+    const scope = (p.values["--scope"] ??
+      (environmentCredentialsOnly(p.agent) ? "project" : undefined)) as
+      | "user"
+      | "project"
+      | undefined;
     const {
       existing,
       old: saved,
@@ -301,7 +314,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     if (
       !credentials &&
       (!saved || p.flags.has("--replace-credentials")) &&
-      interactive
+      interactive &&
+      !environmentCredentialsOnly(p.agent)
     )
       credentials = {
         apiKey: await masked("API key (hidden): "),
@@ -341,7 +355,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       result.code === "AUTH_REJECTED" &&
       saved &&
       !credentials &&
-      interactive
+      interactive &&
+      !environmentCredentialsOnly(p.agent)
     ) {
       stderr.write(
         "Saved credentials were rejected. Enter a replacement pair; the saved profile is unchanged unless validation succeeds.\n",
@@ -399,7 +414,11 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     }
     return adapter.run
       ? adapter.run(
-          { config, scope: "user", projectDir: options.projectDir },
+          {
+            config,
+            scope: config.provenance.profile === "project" ? "project" : "user",
+            projectDir: options.projectDir,
+          },
           p.rest,
         )
       : 2;
@@ -407,7 +426,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const config = await resolveConfig(options),
     context = {
       config,
-      scope: (p.values["--scope"] ?? "user") as "user" | "project",
+      scope: (p.values["--scope"] ??
+        (config.provenance.profile === "project" ? "project" : "user")) as
+        | "user"
+        | "project",
       projectDir: options.projectDir,
     };
   if (p.command === "update") {
