@@ -14,6 +14,7 @@ import { kiroIdeAdapter, IDE_HOLD as KIRO_IDE_HOLD } from "@traceai/kiro-plugin/
 import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from "@traceai/augment-plugin";
 import { cascadeAdapter } from "@traceai/devin-cascade";
 import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
+import { claudeAdapter, CAPABILITIES, TESTED_HOST } from "@traceai/claude-code";
 
 export interface AdapterRelease {
   id: string;
@@ -99,6 +100,15 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     reason: "CASCADE_GUI_QUALIFICATION_REQUIRED", setupHold: "CASCADE_GUI_QUALIFICATION_REQUIRED",
   },
   {
+    id: "claude",
+    packageName: "@traceai/claude-code",
+    version: "0.1.0",
+    mechanism: "exclusive-transcript-hooks",
+    hostRange: TESTED_HOST,
+    qualified: true,
+    reason: CAPABILITIES.qualification,
+  },
+  {
     id: "pi",
     packageName: "@traceai/pi-plugin",
     version: "0.1.0",
@@ -164,6 +174,17 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "cursor-cli": "cursor-plugin",
     claude: "claude-code",
     "claude-code": "claude-code",
+    codex: "codex-plugin",
+    grok: "grok-plugin",
+    antigravity: "antigravity-plugin",
+    gemini: "gemini-cli",
+    copilot: "copilot",
+    muse: "muse-plugin",
+    "kiro-cli": "kiro-plugin",
+    "kiro-ide": "kiro-plugin",
+    augment: "augment-plugin",
+    openclaw: "openclaw",
+    hermes: "hermes-agent",
     goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
@@ -182,6 +203,7 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
+  if (id === "claude") return claudeAdapter;
   if (id === "opencode") return opencodeAdapter;
   if (id === "codex") return codexAdapter;
   if (id === "opencode-v1") return opencodeV1Adapter;

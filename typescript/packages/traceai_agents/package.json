@@ -38,7 +38,8 @@
     "@traceai/gemini-cli": "workspace:^",
     "@traceai/kiro-plugin": "workspace:^",
     "@traceai/augment-plugin": "workspace:^",
-    "@traceai/devin-cascade": "workspace:^"
+    "@traceai/devin-cascade": "workspace:^",
+    "@traceai/claude-code": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
