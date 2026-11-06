@@ -1,4 +1,5 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { gooseAdapter } from "@traceai/goose";
 
 export interface AdapterRelease {
   id: string;
@@ -11,6 +12,15 @@ export interface AdapterRelease {
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
+  {
+    id: "goose",
+    packageName: "@traceai/goose",
+    version: "0.1.0",
+    mechanism: "native hooks and saved provider-response records",
+    hostRange: "1.54.0",
+    qualified: true,
+    reason: "QUALIFIED_GOOSE_CLI_1_54_0",
+  },
   {
     id: "pi",
     packageName: "@traceai/pi-plugin",
@@ -59,7 +69,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     augment: "augment-plugin",
     openclaw: "openclaw",
     hermes: "hermes-agent",
-    goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
     id,
@@ -76,6 +85,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
-  return undefined;
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  return id === "goose" ? gooseAdapter : undefined;
 }
