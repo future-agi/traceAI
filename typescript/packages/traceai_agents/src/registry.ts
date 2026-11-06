@@ -15,6 +15,7 @@ import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from 
 import { cascadeAdapter } from "@traceai/devin-cascade";
 import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
 import { claudeAdapter, CAPABILITIES, TESTED_HOST } from "@traceai/claude-code";
+import { gooseAdapter } from "@traceai/goose";
 
 export interface AdapterRelease {
   id: string;
@@ -109,6 +110,15 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     reason: CAPABILITIES.qualification,
   },
   {
+    id: "goose",
+    packageName: "@traceai/goose",
+    version: "0.1.0",
+    mechanism: "native hooks and saved provider-response records",
+    hostRange: "1.54.0",
+    qualified: true,
+    reason: "QUALIFIED_GOOSE_CLI_1_54_0",
+  },
+  {
     id: "pi",
     packageName: "@traceai/pi-plugin",
     version: "0.1.0",
@@ -185,7 +195,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     augment: "augment-plugin",
     openclaw: "openclaw",
     hermes: "hermes-agent",
-    goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
     id,
@@ -203,6 +212,7 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
+  if (id === "goose") return gooseAdapter;
   if (id === "claude") return claudeAdapter;
   if (id === "opencode") return opencodeAdapter;
   if (id === "codex") return codexAdapter;

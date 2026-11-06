@@ -39,7 +39,8 @@
     "@traceai/kiro-plugin": "workspace:^",
     "@traceai/augment-plugin": "workspace:^",
     "@traceai/devin-cascade": "workspace:^",
-    "@traceai/claude-code": "workspace:^"
+    "@traceai/claude-code": "workspace:^",
+    "@traceai/goose": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
