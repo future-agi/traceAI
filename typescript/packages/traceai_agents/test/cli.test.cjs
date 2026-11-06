@@ -54,7 +54,7 @@ test("fresh status and disable work offline, JSON status never asserts connected
   );
   assert.equal(state.disabled.pi, true);
 });
-test("headless setup validates, omits keys from output/project, persists opt-out, does not claim absent adapter", async (t) => {
+test("headless setup validates, omits keys from output/project, persists opt-out, reports the absent Pi host", async (t) => {
   const f = await fixture(t);
   let calls = 0;
   const server = http.createServer((q, r) => {
@@ -102,6 +102,6 @@ test("headless setup validates, omits keys from output/project, persists opt-out
     vars,
   );
   assert.equal(absent.code, 2);
-  assert.equal(JSON.parse(absent.stdout).code, "ADAPTER_NOT_AVAILABLE");
+  assert.equal(JSON.parse(absent.stdout).code, "UNSUPPORTED_HOST_VERSION");
   assert.equal(calls, 2);
 });

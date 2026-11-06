@@ -1,0 +1,61 @@
+{
+  "name": "@traceai/oh-my-pi-plugin",
+  "version": "0.1.0",
+  "description": "Native Oh My Pi plugin for Future AGI prompt, generation, tool and subagent tracing",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "default": "./dist/adapter.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "adapter": [
+        "dist/adapter.d.ts"
+      ]
+    }
+  },
+  "omp": {
+    "extensions": [
+      "./extension.mjs"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.cjs",
+    "prepare": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "extension.mjs",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24.0.0 <25",
+    "bun": ">=1.4.4"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "@traceai/pi-coding-agent": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_oh_my_pi_plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  }
+}
