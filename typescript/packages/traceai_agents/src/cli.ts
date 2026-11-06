@@ -170,7 +170,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    projectDir:
+      p.values["--project-dir"] ??
+      (["status", "doctor"].includes(p.command) ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
@@ -257,13 +259,31 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       approveDestination,
       adapter,
     };
-    const result = await setup(opts);
+    let result = await setup(opts);
+    if (
+      result.code === "AUTH_REJECTED" &&
+      saved &&
+      !credentials &&
+      interactive
+    ) {
+      stderr.write(
+        "Saved credentials were rejected. Enter a replacement pair; the saved profile is unchanged unless validation succeeds.\n",
+      );
+      result = await setup({
+        ...opts,
+        credentials: {
+          apiKey: await masked("API key (hidden): "),
+          secretKey: await masked("Secret key (hidden): "),
+        },
+      });
+    }
     output(result, json);
     if (result.configured && !result.registered && !opts.configureOnly && !json)
       stderr.write(
         `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
       );
-    return result.registered || (opts.configureOnly && result.configured)
+    return (result.registered && result.trust !== "required") ||
+      (opts.configureOnly && result.configured)
       ? 0
       : 2;
   }
@@ -291,7 +311,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   if (p.command === "update") {
     const result = await adapter.install(context);
     output(result, json);
-    return result.registered ? 0 : 2;
+    return result.registered && result.trust !== "required" ? 0 : 2;
   }
   if (p.command === "run")
     return adapter.run ? adapter.run(context, p.rest) : 2;
