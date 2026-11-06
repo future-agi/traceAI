@@ -1112,6 +1112,19 @@
       "extra-files": [
         "traceai_transformers/version.py"
       ]
+    },
+    "typescript/packages/traceai_agent_core": {
+      "release-type": "node",
+      "component": "npm-traceai-agent-core",
+      "package-name": "@traceai/agent-core",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "typescript/packages/traceai_agents": {
+      "release-type": "node",
+      "component": "npm-traceai-agents",
+      "package-name": "@traceai/agents"
     }
   }
 }

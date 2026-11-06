@@ -265,6 +265,47 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/traceai_agent_core:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/otlp-transformer':
+        specifier: ^0.202.0
+        version: 0.202.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/resources':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@traceai/fi-core':
+        specifier: workspace:^
+        version: link:../fi-core
+      '@traceai/fi-semantic-conventions':
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.29
+        version: 22.15.33
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
+  packages/traceai_agents:
+    dependencies:
+      '@traceai/agent-core':
+        specifier: workspace:^
+        version: link:../traceai_agent_core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.29
+        version: 22.15.33
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
   packages/traceai_anthropic:
     dependencies:
       '@opentelemetry/api':
