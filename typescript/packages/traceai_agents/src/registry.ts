@@ -1,5 +1,6 @@
 import type { CoreAdapter } from "@traceai/agent-core";
 import { codexAdapter, HOST_VERSION } from "@traceai/codex-plugin";
+import { opencodeV1Adapter } from "./opencode-v1.js";
 
 export interface AdapterRelease {
   id: string;
@@ -42,8 +43,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     packageName: "@traceai/opencode-v1-plugin",
     version: "0.1.0",
     mechanism: "configuration",
+    hostRange: ">=1.19.0 <2.0.0",
     qualified: false,
-    reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
+    reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
   {
     id: "oh-my-pi",
@@ -86,5 +88,7 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
-  return id === "codex" ? codexAdapter : undefined;
+  if (id === "codex") return codexAdapter;
+  if (id === "opencode-v1") return opencodeV1Adapter;
+  return undefined;
 }

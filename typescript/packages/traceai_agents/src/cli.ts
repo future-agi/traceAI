@@ -170,9 +170,12 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
+    // Match host project discovery and inspect the active project by default.
     projectDir:
       p.values["--project-dir"] ??
-      (["status", "doctor"].includes(p.command) ? process.cwd() : undefined),
+      (p.agent === "opencode-v1" || ["status", "doctor"].includes(p.command)
+        ? process.cwd()
+        : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
