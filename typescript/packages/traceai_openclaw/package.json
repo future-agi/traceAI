@@ -1,0 +1,25 @@
+{
+  "name": "@traceai/openclaw",
+  "version": "0.1.0",
+  "description": "One-command setup and in-process normalization of OpenClaw's official diagnostics traces",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "native", "README.md", "LICENSE"],
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.cjs" },
+  "engines": { "node": ">=24.16.0 <25" },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "jju": "1.4.0"
+  },
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" },
+  "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_openclaw" },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": { "access": "public" }
+}

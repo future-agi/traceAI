@@ -1,4 +1,5 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { openclawAdapter } from "@traceai/openclaw";
 
 export interface AdapterRelease {
   id: string;
@@ -11,6 +12,12 @@ export interface AdapterRelease {
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
+  {
+    id: "openclaw", packageName: "@traceai/openclaw", version: "0.1.0",
+    mechanism: "official diagnostics-otel with in-process normalization; explicit local launcher",
+    hostRange: ">=2026.10.5 <2027.0.0", qualified: true,
+    reason: "LOCAL_AGENT_QUALIFIED_GATEWAY_NOT_SUPPORTED",
+  },
   {
     id: "pi",
     packageName: "@traceai/pi-plugin",
@@ -57,7 +64,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "kiro-cli": "kiro-plugin",
     "kiro-ide": "kiro-plugin",
     augment: "augment-plugin",
-    openclaw: "openclaw",
     hermes: "hermes-agent",
     goose: "goose",
     "devin-local": "devin-plugin",
@@ -76,6 +82,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
-  return undefined;
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  return id === "openclaw" ? openclawAdapter : undefined;
 }
