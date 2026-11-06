@@ -7,6 +7,12 @@ import { copilotAdapter, HOST_VERSION as COPILOT_HOST_VERSION } from "@traceai/c
 import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
 import { openclawAdapter } from "@traceai/openclaw";
 import { grokAdapter, HOST_RANGE } from "@traceai/grok-plugin";
+import { museAdapter } from "@traceai/muse-plugin";
+import { geminiAdapter, TESTED_HOST } from "@traceai/gemini-cli";
+import { kiroAdapter } from "@traceai/kiro-plugin";
+import { kiroIdeAdapter, IDE_HOLD as KIRO_IDE_HOLD } from "@traceai/kiro-plugin/ide";
+import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from "@traceai/augment-plugin";
+import { cascadeAdapter } from "@traceai/devin-cascade";
 
 export interface AdapterRelease {
   id: string;
@@ -18,6 +24,8 @@ export interface AdapterRelease {
   reason: string;
   /** Stop before credential collection or writes for unqualified surfaces. */
   setupBlocker?: string;
+  /** Held surfaces reject activation before credentials, network or host changes. */
+  setupHold?: string;
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
@@ -53,6 +61,41 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     mechanism: "official diagnostics-otel with in-process normalization; explicit local launcher",
     hostRange: ">=2026.10.5 <2027.0.0", qualified: true,
     reason: "LOCAL_AGENT_QUALIFIED_GATEWAY_NOT_SUPPORTED",
+  },
+  {
+    id: "muse", packageName: "@traceai/muse-plugin", version: "0.1.0",
+    mechanism: "native argv hooks + explicit approval", hostRange: "1.4.14-R7309.1 (Linux)",
+    qualified: false, reason: "MUSE_TRANSCRIPT_AND_CHILD_ANCESTRY_UNQUALIFIED",
+  },
+  {
+    id: "gemini", packageName: "@traceai/gemini-cli", version: "0.1.0",
+    mechanism: "exclusive native hooks", hostRange: TESTED_HOST,
+    qualified: false, reason: "GEMINI_MODEL_TRANSPORT_QUALIFICATION_REQUIRED",
+  },
+  {
+    id: "kiro-cli", packageName: "@traceai/kiro-plugin", version: "0.1.0",
+    mechanism: "V3 standalone hooks (user scope, packaged executable)", hostRange: "3.0.0",
+    qualified: false, reason: "KIRO_AUTHENTICATED_V3_TURN_AND_REGISTRY_QUALIFICATION_REQUIRED",
+  },
+  {
+    id: "kiro-ide", packageName: "@traceai/kiro-plugin", version: "0.1.0",
+    mechanism: "workspace v1 hooks (IDE prototype, no copied emitter)",
+    qualified: false, reason: KIRO_IDE_HOLD, setupHold: KIRO_IDE_HOLD,
+  },
+  {
+    id: "augment", packageName: "@traceai/augment-plugin", version: "0.1.0",
+    mechanism: "maintained native hooks", hostRange: "0.37.0",
+    qualified: false, reason: "AUTHENTICATED_AUGGIE_RUN_REQUIRED_NO_GENERIC_MODEL_MOCK",
+  },
+  {
+    id: "augment-ide", packageName: "@traceai/augment-plugin", version: "0.1.0",
+    mechanism: "shared user hooks; separately qualified VS Code and IntelliJ profiles",
+    qualified: false, reason: AUGMENT_IDE_HOLD, setupHold: AUGMENT_IDE_HOLD,
+  },
+  {
+    id: "devin-cascade", packageName: "@traceai/devin-cascade", version: "0.1.0",
+    mechanism: "Cascade transcript hooks (not Devin Local)", qualified: false,
+    reason: "CASCADE_GUI_QUALIFICATION_REQUIRED", setupHold: "CASCADE_GUI_QUALIFICATION_REQUIRED",
   },
   {
     id: "pi",
@@ -119,11 +162,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "cursor-cli": "cursor-plugin",
     claude: "claude-code",
     "claude-code": "claude-code",
-    gemini: "gemini-cli",
-    muse: "muse-plugin",
-    "kiro-cli": "kiro-plugin",
-    "kiro-ide": "kiro-plugin",
-    augment: "augment-plugin",
     goose: "goose",
     "devin-local": "devin-plugin",
   }).map(([id, name]) => ({
@@ -150,5 +188,14 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "hermes") return hermesAdapter;
   if (id === "openclaw") return openclawAdapter;
   if (id === "grok") return grokAdapter;
-  return undefined;
+  switch (id) {
+    case "muse": return museAdapter;
+    case "gemini": return geminiAdapter;
+    case "kiro-cli": return kiroAdapter;
+    case "kiro-ide": return kiroIdeAdapter;
+    case "augment": return augmentAdapter;
+    case "augment-ide": return augmentIdeAdapter;
+    case "devin-cascade": return cascadeAdapter;
+    default: return undefined;
+  }
 }

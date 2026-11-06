@@ -1,0 +1,20 @@
+{
+  "name": "@traceai/devin-cascade",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private Cascade transcript hook adapter; GUI qualification required",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "bin": { "fi-cascade-hook": "dist/hook.cjs" },
+  "files": ["dist", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/hook.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/hook.cjs && node -e \"require('node:fs').chmodSync('dist/hook.cjs', 0o755)\"",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": { "node": ">=22.16.0 <23 || >=24.0.0 <25" },
+  "dependencies": { "@traceai/agent-core": "workspace:^", "jsonc-parser": "^3.3.1" },
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29", "esbuild": "^0.25.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_devin_cascade" },
+  "license": "Apache-2.0"
+}

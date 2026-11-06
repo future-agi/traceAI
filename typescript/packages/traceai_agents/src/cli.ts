@@ -20,7 +20,7 @@ import {
 import { discoverHermesDirectory } from "@traceai/hermes-agent";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
-const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
+const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --agent-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only, --replace-credentials\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
 interface Parsed {
   command: string;
   agent?: string;
@@ -38,6 +38,7 @@ function parse(args: string[]): Parsed {
     "--project",
     "--scope",
     "--project-dir",
+    "--agent-dir",
     "--base-url",
   ]);
   const booleans = new Set([
@@ -174,17 +175,20 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     // Match host workspace discovery and inspect the active project by default.
     projectDir:
       p.values["--project-dir"] ??
-      (["opencode-v1", "copilot"].includes(p.agent) || ["status", "doctor"].includes(p.command) ||
+      (["opencode-v1", "copilot", "kiro-ide"].includes(p.agent) || ["status", "doctor"].includes(p.command) ||
        (p.agent === "antigravity" && ["setup", "update"].includes(p.command)) ||
        (p.agent === "hermes" && ["enable", "uninstall"].includes(p.command))
         ? process.cwd()
         : undefined),
+    agentDir: p.values["--agent-dir"],
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
-  const setupBlocker = adapterRelease(p.agent)?.setupBlocker;
+  const release = adapterRelease(p.agent)!;
+  const setupBlocker = release.setupBlocker ?? release.setupHold;
   if (setupBlocker && ["setup", "enable", "update", "run"].includes(p.command)) {
-    output({ code: setupBlocker, configured: false, registered: false }, json);
+    output({ code: setupBlocker, agent: p.agent, configured: false, registered: false,
+      detail: "This surface requires an independently verified GUI session. No credentials, host registration or network changes were made." }, json);
     return 2;
   }
   if (p.command === "disable") {
@@ -192,7 +196,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
   }
-  if (p.agent === "hermes") options.agentDir = await discoverHermesDirectory();
+  if (p.agent === "hermes" && !options.agentDir)
+    options.agentDir = await discoverHermesDirectory();
   // CLI qualification does not authorize the separate IDE/App surface. Block it
   // before config reads, credential prompts, validation and writes; disable stays offline.
   if (p.agent === "antigravity-ide") {
@@ -235,7 +240,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       adapter,
       check: p.command === "doctor" || p.flags.has("--check"),
     });
-    output(status, json);
+    output({ ...status,
+      ...(p.agent === "augment-ide" && status.activation === "OBSERVED" ? { activation: "HOOK_OBSERVED_EDITOR_UNVERIFIED" } : {}),
+      qualification: release.qualified ? "QUALIFIED" : release.reason,
+    }, json);
     return status.exitCode;
   }
   if (p.command === "setup") {
@@ -366,7 +374,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
           ? `Registration: ${result.code}. ${result.diagnostics?.map(d => d.action).join(" ") || "Configuration alone is not an installed integration."}\n`
           : `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
       );
-    return (result.registered && result.trust !== "required") ||
+    return (result.registered && result.trust !== "required" && result.code !== "TRUST_REQUIRED") ||
       (opts.configureOnly && result.configured)
       ? 0
       : 2;
@@ -399,7 +407,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const config = await resolveConfig(options),
     context = {
       config,
-      scope: "user" as const,
+      scope: (p.values["--scope"] ?? "user") as "user" | "project",
       projectDir: options.projectDir,
     };
   if (p.command === "update") {
