@@ -1,0 +1,31 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const root = process.argv[2];
+const plugin = require(path.join(root, 'node_modules/@traceai/cursor-plugin/dist/cli/index.js'));
+const agents = require(path.join(root, 'node_modules/@traceai/agents/dist/registry.js'));
+const metadata = require(path.join(root, 'node_modules/@traceai/cursor-plugin/package.json'));
+assert.ok(metadata.exports['./cli'], 'shared Cursor package must export its CLI profile');
+assert.equal(plugin.cursorCliAdapter.id, 'cursor-cli');
+assert.equal(plugin.cursorCliAdapter.requiresWorker, false);
+assert.equal(plugin.cursorCliCapabilities.qualified, false);
+assert.equal(agents.loadAdapter('cursor-cli').id, 'cursor-cli');
+const cli = path.join(root, 'node_modules/.bin/fi-agent');
+const env = { ...process.env, HOME: '/work/clean-home', XDG_CONFIG_HOME: '/work/clean-home/.config', XDG_STATE_HOME: '/work/clean-home/.local/state' };
+for (const key of ['FI_API_KEY', 'FI_SECRET_KEY', 'CURSOR_API_KEY']) delete env[key];
+const help = spawnSync(cli, ['--help'], { env, encoding: 'utf8' });
+assert.equal(help.status, 0, help.stderr);
+const status = spawnSync(cli, ['status', 'cursor-cli', '--json'], { env, encoding: 'utf8' });
+assert.equal(status.status, 2, status.stderr);
+const value = JSON.parse(status.stdout);
+assert.equal(value.registration, 'NOT_REGISTERED');
+assert.equal(value.activation, 'NOT_OBSERVED');
+assert.equal(value.credentials, 'missing');
+const disabled = spawnSync(cli, ['disable', 'cursor-cli', '--json'], { env, encoding: 'utf8' });
+assert.equal(disabled.status, 0, disabled.stderr);
+for (const filename of ['hook.cjs', 'observer.cjs', 'cloud-hook.cjs', 'cloud-runtime.cjs']) {
+  const text = fs.readFileSync(path.join(root, 'node_modules/@traceai/cursor-plugin/runtime', filename), 'utf8');
+  assert.ok(!text.includes('/Volumes/nik-ext-1/'), 'tarball must not reference local source paths');
+}
+console.log(JSON.stringify({ test: 'clean-packed-cursor-cli', result: 'PASS', qualified: false, registration: value.registration, activation: value.activation }));

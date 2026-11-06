@@ -183,9 +183,23 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     qualified: true,
     reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
+  {
+    id: "cursor", packageName: "@traceai/cursor-plugin", version: "0.1.0",
+    mechanism: "persistent user hooks; no local-plugin policy changes",
+    qualified: false, hostRange: "3.x hook schema (3.24.18, 3.26.13 observed)",
+    reason: "NPM_AVAILABILITY_REQUIRED",
+  },
+  {
+    id: "cursor-cli", packageName: "@traceai/cursor-plugin", version: "0.1.0",
+    mechanism: "shared user hooks; exclusive print stream pending qualification",
+    qualified: false, reason: "CURSOR_CLI_LIVE_CAPTURE_REQUIRED",
+  },
+  {
+    id: "cursor-cloud", packageName: "@traceai/cursor-plugin", version: "0.1.0",
+    mechanism: "environment install and repository command hooks; injected credentials only",
+    qualified: false, reason: "AUTHORIZED_CLOUD_RUN_AND_NPM_AVAILABILITY_REQUIRED",
+  },
   ...Object.entries({
-    cursor: "cursor-plugin",
-    "cursor-cli": "cursor-plugin",
     claude: "claude-code",
     "claude-code": "claude-code",
     codex: "codex-plugin",
@@ -238,5 +252,16 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
     case "augment-ide": return augmentIdeAdapter;
     case "devin-cascade": return cascadeAdapter;
     default: return undefined;
+  if (!["cursor", "cursor-cli", "cursor-cloud"].includes(id)) return undefined;
+  // Held distributions remain optional until real-host and npm qualification.
+  try {
+    if (id === "cursor-cli")
+      return (require("@traceai/cursor-plugin/cli") as { cursorCliAdapter: CoreAdapter }).cursorCliAdapter;
+    if (id === "cursor-cloud")
+      return (require("@traceai/cursor-plugin/cloud") as { cursorCloudAdapter: CoreAdapter }).cursorCloudAdapter;
+    return (require("@traceai/cursor-plugin") as { cursorAdapter: CoreAdapter }).cursorAdapter;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+    return undefined;
   }
 }

@@ -1,0 +1,52 @@
+{
+  "name": "@traceai/cursor-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cursor IDE hook adapter for finalized Future AGI turn traces (qualification pending)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./cloud": {
+      "types": "./dist/cloud.d.ts",
+      "default": "./dist/cloud.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "default": "./dist/cli/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node build.cjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "files": [
+    "dist",
+    "runtime",
+    ".cursor-plugin",
+    "hooks",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24.0.0 <25"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "esbuild": "^0.25.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_cursor_plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI"
+}
