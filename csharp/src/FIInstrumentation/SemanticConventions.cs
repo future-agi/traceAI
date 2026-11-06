@@ -6,6 +6,89 @@ namespace FIInstrumentation;
 /// </summary>
 public static class SemanticConventions
 {
+    // Coding-agent usage and provenance.
+    /// <summary>Source tool name on TOOL spans; do not rely on the display span name.</summary>
+    public const string ToolName = "tool.name";
+
+    /// <summary>Scope of canonical usage: request, attempt, turn or unknown. A turn aggregate is not a measured individual request.</summary>
+    public const string FiUsageScope = "fi.usage.scope";
+
+    /// <summary>Use none for non-additive summaries and additive for the sole owner of canonical usage. Never duplicate canonical tokens or cost on summaries: older aggregate readers sum all span kinds.</summary>
+    public const string FiUsageContribution = "fi.usage.contribution";
+
+    /// <summary>Cost provenance understood by Future AGI: provider_reported, estimated or unknown. Unknown must not be represented by an invented zero.</summary>
+    public const string FiCostKind = "fi.cost.kind";
+
+    /// <summary>Evidence fidelity: native-request, reconstructed-message, aggregate-turn or unknown. Only source-observed requests/messages may be LLM spans.</summary>
+    public const string FiAgentFidelity = "fi.agent.fidelity";
+
+    /// <summary>Timing provenance: source, reconstructed or observed-event. Reconstructed message timing is not measured request latency or TTFT.</summary>
+    public const string FiAgentTiming = "fi.agent.timing";
+
+    /// <summary>Terminal outcome: success, error, interrupted or incomplete; missing stop events are incomplete, not success.</summary>
+    public const string FiAgentOutcome = "fi.agent.outcome";
+
+    /// <summary>Boolean provenance flag for canonical usage ownership; not itself a backend aggregation gate. Request/attempt plans count each observed model operation once. For turn-only totals, place canonical usage exactly once on the last source-observed generation (marked scope=turn), or the AGENT root if there is no generation. Keep all other spans summary-only; never fabricate a model request.</summary>
+    public const string FiAgentUsageAdditive = "fi.agent.usage.additive";
+
+    /// <summary>One immutable plan per turn: request, attempt, turn or unknown. Never mix per-request counters and overlapping turn totals; unknown plans remain summary-only.</summary>
+    public const string FiAgentUsagePlan = "fi.agent.usage.plan";
+
+    /// <summary>Boolean: source input count already includes cache reads/writes. Normalize input once; cache detail counters are subsets, not additional total tokens.</summary>
+    public const string FiAgentUsageCacheInInput = "fi.agent.usage.cache_in_input";
+
+    /// <summary>Boolean: source output count already includes reasoning. Normalize output once; reasoning is a subset, not extra total tokens.</summary>
+    public const string FiAgentUsageReasoningInOutput = "fi.agent.usage.reasoning_in_output";
+
+    /// <summary>Source of the cost, for example reported or host-price-table; independent of whether this span contributes to totals.</summary>
+    public const string FiAgentCostSource = "fi.agent.cost.source";
+
+    /// <summary>Identifier/version of the estimator or price table for estimated costs; omit for reported costs. Never include credentials.</summary>
+    public const string FiAgentCostEstimator = "fi.agent.cost.estimator";
+
+    /// <summary>Bounded diagnostic code for missing evidence, for example MISSING_PARENT, MISSING_CHILD_STOP or UNRESOLVED_USAGE; not raw error content.</summary>
+    public const string FiAgentGap = "fi.agent.gap";
+
+    /// <summary>Versioned transport contract identifier; not an endpoint URL or credential.</summary>
+    public const string FiAgentTransport = "fi.agent.transport";
+
+    /// <summary>Opaque integration correlation identifier; not a substitute for a source-provided tool_call.id.</summary>
+    public const string FiAgentSourceCallId = "fi.agent.source_call_id";
+
+    /// <summary>Non-additive normalized input token summary; never summed into canonical usage.</summary>
+    public const string FiAgentSummaryInput = "fi.agent.summary.input";
+
+    /// <summary>Non-additive normalized output token summary; never summed into canonical usage.</summary>
+    public const string FiAgentSummaryOutput = "fi.agent.summary.output";
+
+    /// <summary>Non-additive input plus output token summary; never summed into canonical usage.</summary>
+    public const string FiAgentSummaryTotal = "fi.agent.summary.total";
+
+    /// <summary>Non-additive cache-read token summary, a subset of normalized input.</summary>
+    public const string FiAgentSummaryCacheRead = "fi.agent.summary.cache_read";
+
+    /// <summary>Non-additive cache-write token summary, a subset of normalized input.</summary>
+    public const string FiAgentSummaryCacheWrite = "fi.agent.summary.cache_write";
+
+    /// <summary>Non-additive reasoning token summary, a subset of normalized output.</summary>
+    public const string FiAgentSummaryReasoning = "fi.agent.summary.reasoning";
+
+    /// <summary>Non-additive cost summary in USD; never place this amount in canonical cost as well unless this span owns the usage.</summary>
+    public const string FiAgentSummaryCostUsd = "fi.agent.summary.cost_usd";
+
+    /// <summary>JSON-encoded array of configured bounded tags, subject to the integration privacy policy.</summary>
+    public const string FiAgentTags = "fi.agent.tags";
+
+    /// <summary>Agent lifecycle event type, for example compaction; not a model invocation.</summary>
+    public const string FiAgentEvent = "fi.agent.event";
+
+    /// <summary>Source input completeness, for example partial; do not present an excerpt as the full model input.</summary>
+    public const string FiAgentInputCompleteness = "fi.agent.input.completeness";
+
+    /// <summary>Provenance of captured content, for example a source transcript; not evidence of native request capture.</summary>
+    public const string FiAgentContentSource = "fi.agent.content.source";
+
+
     // ── FI Span Kind ─────────────────────────────────────────────────
     public const string FiSpanKind = "fi.span.kind";
 
@@ -126,6 +209,7 @@ public static class SemanticConventions
 
     // ── GenAI Performance / Streaming ────────────────────────────────
     public const string GenAiClientOperationDuration = "gen_ai.client.operation.duration";
+    /// <summary>Measured time to first token in milliseconds for the Future AGI span attribute consumer. Not the OTel histogram unit (seconds). Convert seconds to milliseconds before emission; omit for reconstructed timing. The current gateway seconds writer is inconsistent with the dashboard and requires a separate migration.</summary>
     public const string GenAiServerTimeToFirstToken = "gen_ai.server.time_to_first_token";
     public const string GenAiServerTimePerOutputToken = "gen_ai.server.time_per_output_token";
     public const string GenAiServerQueueTime = "gen_ai.server.queue_time";
