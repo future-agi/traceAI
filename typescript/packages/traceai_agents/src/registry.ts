@@ -1,4 +1,5 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
 
 export interface AdapterRelease {
   id: string;
@@ -24,8 +25,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     packageName: "@traceai/opencode-plugin",
     version: "0.1.0",
     mechanism: "opencode plugin add",
-    qualified: false,
-    reason: "HOST_AND_REGISTRY_QUALIFICATION_REQUIRED",
+    hostRange: OPENCODE_HOST,
+    qualified: OPENCODE_QUALIFIED,
+    reason: OPENCODE_QUALIFIED ? "PINNED_HOST_QUALIFIED" : "OPENCODE_V2_QUALIFICATION_REQUIRED",
   },
   {
     id: "opencode-v1",
@@ -76,6 +78,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
-  return undefined;
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  return id === "opencode" ? opencodeAdapter : undefined;
 }

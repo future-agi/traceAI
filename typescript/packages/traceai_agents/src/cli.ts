@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
+import { resolve } from "node:path";
 import { stdin, stdout, stderr } from "node:process";
 import {
   setup,
@@ -80,34 +81,43 @@ async function ask(text: string): Promise<string> {
 async function masked(text: string): Promise<string> {
   if (!stdin.isTTY || !stderr.isTTY)
     throw new Error("HEADLESS_CREDENTIALS_REQUIRED");
-  stderr.write(text);
   const wasRaw = stdin.isRaw;
-  stdin.setRawMode(true);
-  stdin.resume();
   return new Promise((resolve, reject) => {
-    let value = "";
+    let value = "", finished = false;
+    const restore = (): void => { stdin.setRawMode(!!wasRaw); };
     const done = (error?: Error): void => {
+      if (finished) return;
+      finished = true;
       stdin.off("data", data);
-      stdin.setRawMode(!!wasRaw);
+      stdin.off("end", ended);
+      stdin.off("error", failed);
+      process.off("exit", restore);
+      try { restore(); } catch { error ??= new Error("TERMINAL_RESTORE_FAILED"); }
       stdin.pause();
-      stderr.write("\n");
+      try { stderr.write("\n"); } catch { /* Restore even when the terminal closed. */ }
       error ? reject(error) : resolve(value);
     };
+    const ended = (): void => done(new Error("CANCELLED"));
+    const failed = (): void => done(new Error("TERMINAL_READ_FAILED"));
     const data = (chunk: Buffer): void => {
       for (const c of chunk.toString("utf8")) {
-        if (c === "\u0003" || c === "\u0004") {
-          done(new Error("CANCELLED"));
-          return;
-        }
-        if (c === "\r" || c === "\n") {
-          done();
-          return;
-        }
+        if (c === "\u0003" || c === "\u0004") { ended(); return; }
+        if (c === "\r" || c === "\n") { done(); return; }
         if (c === "\u007f" || c === "\b") value = value.slice(0, -1);
         else if (c >= " " && value.length < 4096) value += c;
       }
     };
-    stdin.on("data", data);
+    try {
+      // A visible prompt is permission to type: disable echo and attach every
+      // handler first, even if stderr.write deschedules this process afterward.
+      stdin.setRawMode(true);
+      stdin.on("data", data);
+      stdin.once("end", ended);
+      stdin.once("error", failed);
+      process.once("exit", restore);
+      stdin.resume();
+      stderr.write(text);
+    } catch { failed(); }
   });
 }
 function output(value: unknown, json: boolean): void {
@@ -170,7 +180,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    projectDir: p.values["--project-dir"] ? resolve(p.values["--project-dir"]) :
+      (p.agent === "opencode" && ["status", "doctor"].includes(p.command) ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
@@ -257,7 +268,17 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       approveDestination,
       adapter,
     };
-    const result = await setup(opts);
+    let result = await setup(opts);
+    if (result.code === "AUTH_REJECTED" && saved && !credentials && interactive) {
+      stderr.write("The saved keys were rejected. Enter a replacement pair for the displayed destination.\n");
+      result = await setup({
+        ...opts,
+        credentials: {
+          apiKey: await masked("API key (hidden): "),
+          secretKey: await masked("Secret key (hidden): "),
+        },
+      });
+    }
     output(result, json);
     if (result.configured && !result.registered && !opts.configureOnly && !json)
       stderr.write(
