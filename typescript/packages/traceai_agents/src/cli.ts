@@ -6,6 +6,7 @@ import {
   inspectStatus,
   enable,
   disable,
+  uninstall,
   resolveConfig,
   configPaths,
   readStore,
@@ -18,6 +19,7 @@ import {
   type SetupOptions,
   type Credentials,
 } from "@traceai/agent-core";
+import { discoverHermesDirectory } from "@traceai/hermes-agent";
 import { adapterRelease, adapterRegistry, loadAdapter } from "./registry.js";
 
 const usage = `Future AGI agent tracing\n\n  fi-agent setup <agent> --project <name>\n  fi-agent status [agent] [--json] [--check]\n  fi-agent doctor <agent>\n  fi-agent enable|disable|update|uninstall <agent>\n  fi-agent run <agent> -- <agent arguments>\n  fi-agent open [--last]\n\nSetup options: --scope user|project, --project-dir <path>, --base-url <origin>,\n               --no-capture-content, --configure-only\nKeys: https://app.futureagi.com/dashboard/keys\nCredentials use masked terminal entry or FI_API_KEY + FI_SECRET_KEY; never argv.\n`;
@@ -170,7 +172,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    projectDir: p.values["--project-dir"] ??
+      (p.agent === "hermes" && ["status", "doctor", "enable", "uninstall"].includes(p.command) ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
@@ -179,6 +182,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
   }
+  if (p.agent === "hermes") options.agentDir = await discoverHermesDirectory();
   if (p.command === "status" || p.command === "doctor") {
     const status = await inspectStatus({
       ...options,
@@ -193,7 +197,15 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       store = await readStore(paths.credentials);
     let credentials: Credentials | undefined = credentialPair(process.env);
     const user = await readSettings(paths.user);
-    const saved = store.profiles[user?.profile ?? store.defaultProfile ?? ""];
+    const project = p.agent === "hermes" && p.values["--scope"] === "project" && paths.project
+      ? await readSettings(paths.project, p.agent) : undefined;
+    const candidate = store.profiles[project?.profile ?? user?.profile ??
+      (p.agent === "hermes" ? "" : store.defaultProfile ?? "")];
+    const saved = candidate && (p.agent !== "hermes" ||
+      ((!candidate.hostBinding || candidate.hostBinding === paths.hostBinding) &&
+        (!project?.profile || candidate.projectBinding === paths.projectBinding) &&
+        (!candidate.projectBinding || candidate.projectBinding === paths.projectBinding)))
+      ? candidate : undefined;
     const defaultProject =
       user?.projectName ?? saved?.projectName ?? "coding-agents";
     let projectName = p.values["--project"] ?? process.env.FI_PROJECT_NAME;
@@ -276,6 +288,11 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output({ code: adapterRelease(p.agent)!.reason }, json);
     return 2;
   }
+  if (p.command === "uninstall" && p.agent === "hermes") {
+    const result = await uninstall({ ...options, adapter });
+    output(result, json);
+    return result.registered ? 2 : 0;
+  }
   const config = await resolveConfig(options),
     context = {
       config,
@@ -289,7 +306,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return result.registered ? 2 : 0;
   }
   if (p.command === "update") {
-    const result = await adapter.install(context);
+    const result = await (adapter.update ? adapter.update(context) : adapter.install(context));
     output(result, json);
     return result.registered ? 0 : 2;
   }
