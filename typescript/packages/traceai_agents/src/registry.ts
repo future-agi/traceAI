@@ -6,6 +6,7 @@ import { antigravityAdapter } from "@traceai/antigravity-plugin";
 import { copilotAdapter, HOST_VERSION as COPILOT_HOST_VERSION } from "@traceai/copilot";
 import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
 import { openclawAdapter } from "@traceai/openclaw";
+import { grokAdapter, HOST_RANGE } from "@traceai/grok-plugin";
 
 export interface AdapterRelease {
   id: string;
@@ -104,12 +105,20 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     reason: EDITOR_HOLD,
     setupBlocker: EDITOR_HOLD,
   },
+  {
+    id: "grok",
+    packageName: "@traceai/grok-plugin",
+    version: "0.1.0",
+    mechanism: "grok plugin install",
+    hostRange: HOST_RANGE,
+    qualified: false,
+    reason: "REGISTRY_PUBLICATION_REQUIRED",
+  },
   ...Object.entries({
     cursor: "cursor-plugin",
     "cursor-cli": "cursor-plugin",
     claude: "claude-code",
     "claude-code": "claude-code",
-    grok: "grok-plugin",
     gemini: "gemini-cli",
     muse: "muse-plugin",
     "kiro-cli": "kiro-plugin",
@@ -140,5 +149,6 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "copilot-vscode") return vscodeAdapter;
   if (id === "hermes") return hermesAdapter;
   if (id === "openclaw") return openclawAdapter;
+  if (id === "grok") return grokAdapter;
   return undefined;
 }
