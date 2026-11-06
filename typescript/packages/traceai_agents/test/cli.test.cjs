@@ -98,20 +98,19 @@ test("headless setup validates, omits keys from output/project, persists opt-out
   );
   assert.equal(user.captureContent, false);
   assert.ok(!JSON.stringify(user).includes("dummy-"));
+  // pnpm puts workspace bins (including the Pi SDK's `pi`) on PATH for tests;
+  // this case needs a machine without Pi.
+  const noPi = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter((dir) => dir && !require("node:fs").existsSync(path.join(dir, "pi")))
+    .join(path.delimiter);
   const absent = await f.run(
     ["setup", "pi", "--project", "cli-project", "--json"],
-    vars,
+    { ...vars, PATH: noPi },
   );
   assert.equal(absent.code, 2);
-  // With the real Pi adapter wired in, a missing host is an installation failure
-  // that names the missing executable, never a registered integration.
-  const absentResult = JSON.parse(absent.stdout);
-  assert.equal(absentResult.registered, false);
-  assert.ok(
-    absentResult.code === "UNSUPPORTED_HOST_VERSION" ||
-      (absentResult.code === "INSTALLATION_FAILED" && absent.stdout.includes("PI_NOT_FOUND")),
-    absent.stdout,
-  );
+  assert.equal(JSON.parse(absent.stdout).code, "UNSUPPORTED_HOST_VERSION");
+  assert.ok(absent.stdout.includes("PI_NOT_FOUND"), absent.stdout);
   assert.equal(calls, 2);
 });
 
