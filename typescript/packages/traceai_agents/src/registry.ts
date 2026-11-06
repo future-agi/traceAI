@@ -1,4 +1,5 @@
 import type { CoreAdapter } from "@traceai/agent-core";
+import { antigravityAdapter } from "@traceai/antigravity-plugin";
 
 export interface AdapterRelease {
   id: string;
@@ -11,6 +12,23 @@ export interface AdapterRelease {
 }
 /** Proposed names only. Adapter owners must supply a tested host range before enabling a release. */
 export const adapterRegistry: readonly AdapterRelease[] = [
+  {
+    id: "antigravity",
+    packageName: "@traceai/antigravity-plugin",
+    version: "0.1.0",
+    mechanism: "agy plugin install",
+    hostRange: "1.x (Linux CLI; tested 1.5.2)",
+    qualified: false,
+    reason: "PACKAGE_PUBLICATION_AND_CLOUD_READBACK_REQUIRED",
+  },
+  {
+    id: "antigravity-ide",
+    packageName: "@traceai/antigravity-plugin",
+    version: "0.1.0",
+    mechanism: "native-gui-hooks",
+    qualified: false,
+    reason: "ANTIGRAVITY_GUI_QUALIFICATION_REQUIRED",
+  },
   {
     id: "pi",
     packageName: "@traceai/pi-plugin",
@@ -50,7 +68,6 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     "claude-code": "claude-code",
     codex: "codex-plugin",
     grok: "grok-plugin",
-    antigravity: "antigravity-plugin",
     gemini: "gemini-cli",
     copilot: "copilot",
     muse: "muse-plugin",
@@ -76,6 +93,6 @@ export function adapterRelease(id: string): AdapterRelease | undefined {
 /** Adapter implementation owners register their tested, statically imported lifecycle here.
  * Never load a project-supplied executable path or treat a manifest alone as qualification.
  */
-export function loadAdapter(_id: string): CoreAdapter | undefined {
-  return undefined;
+export function loadAdapter(id: string): CoreAdapter | undefined {
+  return id === "antigravity" ? antigravityAdapter : undefined;
 }

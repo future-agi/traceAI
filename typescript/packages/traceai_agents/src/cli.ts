@@ -170,7 +170,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     throw new Error("UNSUPPORTED_AGENT");
   const options: ResolveOptions = {
     agent: p.agent,
-    projectDir: p.values["--project-dir"],
+    // Antigravity hooks use the explicit workspace, including for duplicate checks.
+    projectDir: p.values["--project-dir"] ??
+      (p.agent === "antigravity" && ["setup", "update", "status", "doctor"].includes(p.command)
+        ? process.cwd() : undefined),
   };
   const adapter = loadAdapter(p.agent),
     json = p.flags.has("--json");
@@ -178,6 +181,21 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     await disable(options);
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
+  }
+  // CLI qualification does not authorize the separate IDE/App surface. Block it
+  // before config reads, credential prompts, validation and writes; disable stays offline.
+  if (p.agent === "antigravity-ide") {
+    output({
+      code: adapterRelease(p.agent)!.reason,
+      agent: p.agent,
+      qualification: "BLOCKED",
+      registration: "NOT_REGISTERED",
+      activation: "NOT_OBSERVED",
+      configuration: "NOT_INSPECTED",
+      credentialCheck: "NOT_ATTEMPTED",
+      detail: "Antigravity IDE and App tracing requires separate real GUI qualification. No GUI hooks or credentials are installed by this command.",
+    }, json);
+    return 2;
   }
   if (p.command === "status" || p.command === "doctor") {
     const status = await inspectStatus({
@@ -261,7 +279,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     output(result, json);
     if (result.configured && !result.registered && !opts.configureOnly && !json)
       stderr.write(
-        `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
+        p.agent === "antigravity"
+          ? `Registration: ${result.code}. ${result.diagnostics?.map(d => d.action).join(" ") || "Configuration alone is not an installed integration."}\n`
+          : `Registration: ${adapterRelease(p.agent)!.reason}. Configuration alone is not an installed integration.\n`,
       );
     return result.registered || (opts.configureOnly && result.configured)
       ? 0
