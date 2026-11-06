@@ -156,7 +156,9 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
   try {
     await ensurePrivateDirectory(directory);
     release = await lockfile.lock(path, {realpath: false, lockfilePath: lockPath, stale: 30000, update: 1000,
-      retries: {retries: 120, minTimeout: 50, maxTimeout: 50, factor: 1},
+      // Wait for the lock for nearly the whole hook budget (hook.ts: 8 s, Stop 25 s) so
+      // bursts of overlapping hooks queue instead of dropping events.
+      retries: {retries: event === 'Stop' ? 460 : 145, minTimeout: 50, maxTimeout: 50, factor: 1},
       onCompromised: () => { compromised = true; }});
     await boundedDirectory(directory, name);
     const raw = await readProtected(path);
