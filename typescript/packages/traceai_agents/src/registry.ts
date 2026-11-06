@@ -8,13 +8,13 @@ import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
 import { openclawAdapter } from "@traceai/openclaw";
 import { grokAdapter, HOST_RANGE } from "@traceai/grok-plugin";
 import { museAdapter } from "@traceai/muse-plugin";
-import { geminiAdapter, TESTED_HOST } from "@traceai/gemini-cli";
+import { geminiAdapter, TESTED_HOST as GEMINI_TESTED_HOST } from "@traceai/gemini-cli";
 import { kiroAdapter } from "@traceai/kiro-plugin";
 import { kiroIdeAdapter, IDE_HOLD as KIRO_IDE_HOLD } from "@traceai/kiro-plugin/ide";
 import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from "@traceai/augment-plugin";
 import { cascadeAdapter } from "@traceai/devin-cascade";
 import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
-import { claudeAdapter, CAPABILITIES, TESTED_HOST } from "@traceai/claude-code";
+import { claudeAdapter, CAPABILITIES, TESTED_HOST as CLAUDE_TESTED_HOST } from "@traceai/claude-code";
 import { gooseAdapter } from "@traceai/goose";
 import { piAdapter } from "@traceai/pi-plugin/adapter";
 import { ohMyPiAdapter } from "@traceai/oh-my-pi-plugin/adapter";
@@ -74,7 +74,7 @@ const explicitAdapters: AdapterRelease[] = [
   },
   {
     id: "gemini", packageName: "@traceai/gemini-cli", version: "0.1.0",
-    mechanism: "exclusive native hooks", hostRange: TESTED_HOST,
+    mechanism: "exclusive native hooks", hostRange: GEMINI_TESTED_HOST,
     qualified: false, reason: "GEMINI_MODEL_TRANSPORT_QUALIFICATION_REQUIRED",
   },
   {
@@ -107,7 +107,7 @@ const explicitAdapters: AdapterRelease[] = [
     packageName: "@traceai/claude-code",
     version: "0.1.0",
     mechanism: "exclusive-transcript-hooks",
-    hostRange: TESTED_HOST,
+    hostRange: CLAUDE_TESTED_HOST,
     qualified: true,
     reason: CAPABILITIES.qualification,
   },
@@ -192,7 +192,7 @@ const explicitAdapters: AdapterRelease[] = [
   {
     id: "cursor-cli", packageName: "@traceai/cursor-plugin", version: "0.1.0",
     mechanism: "shared user hooks; exclusive print stream pending qualification",
-    qualified: false, reason: "CURSOR_CLI_LIVE_CAPTURE_REQUIRED",
+    qualified: false, reason: "NPM_AVAILABILITY_REQUIRED",
   },
   {
     id: "cursor-cloud", packageName: "@traceai/cursor-plugin", version: "0.1.0",

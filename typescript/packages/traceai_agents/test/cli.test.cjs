@@ -103,7 +103,15 @@ test("headless setup validates, omits keys from output/project, persists opt-out
     vars,
   );
   assert.equal(absent.code, 2);
-  assert.equal(JSON.parse(absent.stdout).code, "UNSUPPORTED_HOST_VERSION");
+  // With the real Pi adapter wired in, a missing host is an installation failure
+  // that names the missing executable, never a registered integration.
+  const absentResult = JSON.parse(absent.stdout);
+  assert.equal(absentResult.registered, false);
+  assert.ok(
+    absentResult.code === "UNSUPPORTED_HOST_VERSION" ||
+      (absentResult.code === "INSTALLATION_FAILED" && absent.stdout.includes("PI_NOT_FOUND")),
+    absent.stdout,
+  );
   assert.equal(calls, 2);
 });
 

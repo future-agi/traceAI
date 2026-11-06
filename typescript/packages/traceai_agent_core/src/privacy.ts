@@ -105,7 +105,13 @@ function redactAssignments(text: string): string {
     offset = 0,
     match: RegExpExecArray | null;
   while ((match = assignment.exec(text))) {
-    if (!isSensitiveField(match[3])) continue;
+    if (!isSensitiveField(match[3])) {
+      // Give back whitespace after the separator so the next key keeps its
+      // prefix (e.g. `service:\n  password: x`).
+      assignment.lastIndex =
+        match.index + match[1].length + match[2].trimEnd().length;
+      continue;
+    }
     let end = text.length;
     const delimiter = match[4];
     if (delimiter) {

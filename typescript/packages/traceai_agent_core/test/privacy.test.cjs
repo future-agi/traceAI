@@ -86,3 +86,9 @@ test("YAML block scalars under sensitive keys are redacted whole (literal, folde
   const nested = redactStructured({ tool: { output: "token: >\n  MULTILINE_CANARY" } });
   assert.ok(!JSON.stringify(nested).includes("MULTILINE_CANARY"), JSON.stringify(nested));
 });
+
+test("a non-sensitive key on the previous line never hides the next sensitive key", () => {
+  for (const text of ["service:\n  password: abc123SECRET", "a: 1\nb:\n  api_key: abc123SECRET", "{\"name\": \"x\",\n \"token\": abc123SECRET}"]) {
+    assert.ok(!redact(text).includes("abc123SECRET"), JSON.stringify(redact(text)));
+  }
+});

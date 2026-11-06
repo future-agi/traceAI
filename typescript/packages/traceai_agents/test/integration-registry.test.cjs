@@ -22,10 +22,15 @@ test("assembly retains every qualified and held registry entry without duplicate
     const entry = adapterRelease(id);
     assert.ok(entry.setupBlocker || entry.setupHold, id);
   }
-  // Unassembled lanes are not silently promoted by another adapter's evidence.
-  for (const id of ["pi", "opencode", "oh-my-pi", "cursor", "cursor-cli", "claude", "goose"]) {
+  // Every merged group dispatches to its own adapter; held ones keep a reason.
+  for (const id of ["claude", "goose", "oh-my-pi", "pi", "opencode", "cursor", "cursor-cli", "cursor-cloud"]) {
+    assert.ok(loadAdapter(id), id);
+    assert.equal(loadAdapter(id).id, id, id);
+  }
+  for (const id of ["claude", "goose", "oh-my-pi"]) assert.equal(adapterRelease(id)?.qualified, true, id);
+  for (const id of ["pi", "cursor", "cursor-cli", "cursor-cloud"]) {
     assert.equal(adapterRelease(id)?.qualified, false, id);
-    assert.equal(loadAdapter(id), undefined, id);
+    assert.ok(adapterRelease(id)?.reason, id);
   }
 });
 
@@ -38,7 +43,8 @@ test("all assembled packages have release metadata and explicit build coverage",
     "traceai_agent_core", "traceai_agents", "traceai_codex_plugin", "traceai_opencode_v1_plugin",
     "traceai_antigravity_plugin", "traceai_copilot", "traceai_hermes_agent", "traceai_openclaw",
     "traceai_grok_plugin", "traceai_muse_plugin", "traceai_gemini_cli", "traceai_kiro_plugin",
-    "traceai_augment_plugin", "traceai_devin_cascade",
+    "traceai_augment_plugin", "traceai_devin_cascade", "traceai_claude_code", "traceai_cursor_plugin",
+    "traceai_goose", "traceai_oh_my_pi_plugin", "traceai_opencode_plugin", "traceai_pi_plugin",
   ];
   for (const dir of packages) {
     const relative = `typescript/packages/${dir}`;
