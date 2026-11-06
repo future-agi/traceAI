@@ -33,7 +33,7 @@ export interface AdapterRelease {
   setupHold?: string;
 }
 /** Qualification describes real-host evidence, not npm availability or Cloud readback. */
-export const adapterRegistry: readonly AdapterRelease[] = [
+const explicitAdapters: AdapterRelease[] = [
   { id: "hermes", packageName: "@traceai/hermes-agent", version: "0.1.0", mechanism: "hermes plugins install", hostRange: "git:90d6b98fd86d20981ee06ddd5b7d93e4320f26a4 (CLI)", qualified: true, reason: "CLI_QUALIFIED_RELEASE_PENDING" },
   {
     id: "codex",
@@ -199,6 +199,10 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     mechanism: "environment install and repository command hooks; injected credentials only",
     qualified: false, reason: "AUTHORIZED_CLOUD_RUN_AND_NPM_AVAILABILITY_REQUIRED",
   },
+];
+const explicitIds = new Set(explicitAdapters.map((a) => a.id));
+export const adapterRegistry: readonly AdapterRelease[] = [
+  ...explicitAdapters,
   ...Object.entries({
     claude: "claude-code",
     "claude-code": "claude-code",
@@ -214,7 +218,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
     openclaw: "openclaw",
     hermes: "hermes-agent",
     "devin-local": "devin-plugin",
-  }).map(([id, name]) => ({
+  })
+    .filter(([id]) => !explicitIds.has(id))
+    .map(([id, name]) => ({
     id,
     packageName: `@traceai/${name}`,
     version: "0.1.0",
@@ -251,7 +257,7 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
     case "augment": return augmentAdapter;
     case "augment-ide": return augmentIdeAdapter;
     case "devin-cascade": return cascadeAdapter;
-    default: return undefined;
+  }
   if (!["cursor", "cursor-cli", "cursor-cloud"].includes(id)) return undefined;
   // Held distributions remain optional until real-host and npm qualification.
   try {
