@@ -23,24 +23,19 @@ async function fixture(t) {
   });
   return { home, config, run };
 }
-test('held editor setup stops before credentials, validation or file writes', async (t) => {
+test('editor setup reaches shared key validation without a qualification blocker', async (t) => {
   const f = await fixture(t);
   let calls = 0;
-  const server = http.createServer((q, r) => { calls++; r.end('{}'); });
+  const server = http.createServer((q, r) => { calls++; q.resume(); r.setHeader('content-type', 'application/json'); r.end('{}'); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   t.after(() => new Promise(r => server.close(r)));
   const env = { FI_API_KEY: 'synthetic-private-api', FI_SECRET_KEY: 'synthetic-private-secret', FI_OTLP_ENDPOINT: `http://127.0.0.1:${server.address().port}/v1/traces` };
-  for (const command of ['setup', 'enable', 'update', 'run']) {
-    const result = await f.run([command, 'copilot-vscode', '--json'], env);
-    assert.equal(result.code, 2);
-    assert.equal(JSON.parse(result.stdout).code, hold);
-    assert.equal(JSON.parse(result.stdout).registered, false);
-    assert.ok(!/synthetic-private/.test(result.stdout + result.stderr));
-  }
-  const configured = await f.run(['setup', 'copilot-vscode', '--configure-only', '--json'], env);
-  assert.equal(JSON.parse(configured.stdout).code, hold);
-  assert.equal(calls, 0);
-  await assert.rejects(fs.stat(f.config), { code: 'ENOENT' });
+  const result = await f.run(['setup', 'copilot-vscode', '--json'], env);
+  assert.equal(result.code, 2); // No code host in this stripped fixture.
+  assert.notEqual(JSON.parse(result.stdout).code, hold);
+  assert.equal(JSON.parse(result.stdout).registered, false);
+  assert.ok(!/synthetic-private/.test(result.stdout + result.stderr));
+  assert.ok(calls > 0);
 });
 test('status diagnoses an unqualified editor in stripped GUI-like environment', async (t) => {
   const f = await fixture(t);
@@ -52,8 +47,7 @@ test('status diagnoses an unqualified editor in stripped GUI-like environment', 
   assert.equal(status.registration, 'NOT_REGISTERED');
   assert.equal(status.activation, 'NOT_OBSERVED');
   assert.equal(status.productReadback, 'unverified');
-  assert.ok(status.issues.includes("VSCODE_HARNESS_SELECTION_REQUIRED"));
-  assert.match(status.adapterDetail, new RegExp(hold));
+  assert.ok(status.issues.includes("VSCODE_EXTENSION_NOT_INSTALLED"));
 });
 test('disable and uninstall are offline and preserve user-owned telemetry settings', async (t) => {
   const f = await fixture(t);

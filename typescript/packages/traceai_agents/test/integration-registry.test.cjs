@@ -18,7 +18,7 @@ test("assembly retains every qualified and held registry entry without duplicate
     assert.equal(adapterRelease(id)?.qualified, false, id);
     assert.ok(adapterRelease(id)?.reason, id);
   }
-  for (const id of ["copilot-vscode", "kiro-ide", "augment-ide", "devin-cascade"]) {
+  for (const id of ["kiro-ide", "augment-ide", "devin-cascade"]) {
     const entry = adapterRelease(id);
     assert.ok(entry.setupBlocker || entry.setupHold, id);
   }
@@ -41,7 +41,7 @@ test("all assembled packages have release metadata and explicit build coverage",
   const scripts = JSON.parse(fs.readFileSync(path.join(root, "typescript/package.json"))).scripts;
   const packages = [
     "traceai_agent_core", "traceai_agents", "traceai_codex_plugin", "traceai_opencode_v1_plugin",
-    "traceai_antigravity_plugin", "traceai_copilot", "traceai_hermes_agent", "traceai_openclaw",
+    "traceai_antigravity_plugin", "traceai_copilot", "traceai_vscode_extension", "traceai_hermes_agent", "traceai_openclaw",
     "traceai_grok_plugin", "traceai_muse_plugin", "traceai_gemini_cli", "traceai_kiro_plugin",
     "traceai_augment_plugin", "traceai_devin_cascade", "traceai_claude_code", "traceai_cursor_plugin",
     "traceai_goose", "traceai_oh_my_pi_plugin", "traceai_opencode_plugin", "traceai_pi_plugin",
