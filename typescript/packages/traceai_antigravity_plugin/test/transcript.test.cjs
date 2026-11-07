@@ -117,6 +117,68 @@ test('content-off and error-detail privacy survive transcript enrichment',async 
  assert.equal(generation.input,undefined);assert.equal(generation.output,undefined);assert.equal(generation.usage.input,20);
 });
 
+for (const policy of ['default', 'hideInputs', 'hideOutputs', 'contentOff']) {
+ for (const toolOnly of [false, true]) {
+  test(`generation tool arguments respect ${policy} (toolOnly=${toolOnly})`, async t => {
+   const f = await fixture(t);
+   if (policy === 'hideInputs') f.config.hideInputs = true;
+   if (policy === 'hideOutputs') f.config.hideOutputs = true;
+   if (policy === 'contentOff') f.config.captureContent = false;
+   const argument = 'PRIVATE_TOOL_ARGUMENT_19275', reply = 'PUBLIC_MODEL_REPLY_19275';
+   const row = {
+    step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE',
+    input_tokens: 20, output_tokens: 10,
+    ...(toolOnly ? {} : {content: reply}),
+    tool_calls: [{name: 'read_file', args: {Path: argument, password: 'SYNTH_PASSWORD_19275'}}]
+   };
+   applyEvent(f.state, 'PreInvocation', {...f.payload, lastUserInput: argument}, f.config);
+   applyEvent(f.state, 'PostToolUse', {...f.payload, stepIdx: 2, toolCall: row.tool_calls[0]}, f.config);
+   await fs.writeFile(f.transcriptPath, JSON.stringify(row) + '\n');
+   await enrichTranscript(f.state, [f.state.active], f.payload, f.config);
+   const generation = f.state.active.activities.find(a => a.kind === 'llm');
+   assert.equal(generation.usage.input, 20);
+   assert.equal(generation.usage.output, 10);
+   assert.equal(generation.outcome, 'success');
+   if (policy === 'hideOutputs' || policy === 'contentOff') {
+    assert.equal(generation.output, undefined);
+   } else {
+    const output = JSON.parse(generation.output);
+    assert.equal(output.content, toolOnly ? undefined : reply);
+    assert.equal(output.tool_calls[0].name, 'read_file');
+    if (policy === 'hideInputs') {
+     assert.deepEqual(output.tool_calls, [{name: 'read_file'}]);
+    } else {
+     assert.equal(output.tool_calls[0].args.Path, argument);
+     assert.ok(generation.input.includes(argument));
+     assert.ok(!generation.output.includes('SYNTH_PASSWORD_19275'));
+    }
+   }
+   if (policy === 'hideInputs' || policy === 'contentOff') {
+    assert.equal(generation.input, undefined);
+    assert.ok(!JSON.stringify(f.state).includes(argument), 'arguments must not survive in the saved turn');
+   }
+  });
+ }
+}
+
+for (const toolCalls of [
+ [{name: 'read_file', args: 'PRIVATE_TOOL_ARGUMENT_19275', unexpected: {value: 'PRIVATE_TOOL_ARGUMENT_19275'}}],
+ [{name: {value: 'PRIVATE_TOOL_ARGUMENT_19275'}}, null, 'PRIVATE_TOOL_ARGUMENT_19275'],
+ {name: 'read_file', args: 'PRIVATE_TOOL_ARGUMENT_19275'},
+ 'PRIVATE_TOOL_ARGUMENT_19275'
+]) test('hidden tool inputs cannot escape through unrecognized transcript fields or shapes', async t => {
+ const f = await fixture(t); f.config.hideInputs = true;
+ applyEvent(f.state, 'PreInvocation', f.payload, f.config);
+ await fs.writeFile(f.transcriptPath, JSON.stringify({
+  step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE',
+  content: 'Public reply', tool_calls: toolCalls
+ }) + '\n');
+ await enrichTranscript(f.state, [f.state.active], f.payload, f.config);
+ const generation = f.state.active.activities.find(a => a.kind === 'llm');
+ assert.ok(generation.output.includes('Public reply'));
+ assert.ok(!JSON.stringify(f.state).includes('PRIVATE_TOOL_ARGUMENT_19275'));
+});
+
 test('detail capacity preserves native success and exact additive usage',()=>{
  const {emitTurn}=require('../dist/mapper');let result, start;
  const tracer={startTurn(input){start=input;return {child(){throw Error('detail cap must reserve root capacity')},end(end){result=end}}}};

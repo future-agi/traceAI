@@ -6,6 +6,17 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { integer, text, type Conversation, type Payload, type Turn } from './mapper.js';
 
 const MAX_READ = 1024 * 1024;
+function generationOutput(row: Payload, config: ResolvedConfig): string | undefined {
+  // Tool arguments are inputs even when the transcript nests them in a model
+  // response. Keep only tool names under an input-hiding policy; unknown shapes
+  // must not provide a second route for hidden arguments into output.value.
+  const toolCalls = config.hideInputs
+    ? (Array.isArray(row.tool_calls) ? row.tool_calls.map(call => ({
+      name: typeof call?.name === 'string' ? call.name : 'tool'
+    })) : undefined)
+    : row.tool_calls;
+  return text(toolCalls ? {content: row.content, tool_calls: toolCalls} : row.content, config, true);
+}
 function transcriptPath(payload: Payload, config: ResolvedConfig): string | undefined {
   if (typeof payload.transcriptPath !== 'string' || typeof payload.conversationId !== 'string') return undefined;
   const home = dirname(dirname(dirname(config.paths.user)));
@@ -107,7 +118,7 @@ export async function enrichTranscript(state: Conversation, turns: Turn[], paylo
             model:invocation.model, outcome:'success', usage,
             // This is reconstructed context, not a claim to capture the exact wire/system prompt.
             input: text(turn.context ?? turn.input, config),
-            output:text(row.tool_calls ? {content:row.content, tool_calls:row.tool_calls} : row.content, config, true)});
+            output:generationOutput(row, config)});
         }
       }
       const tool = turn.activities.find(a => a.id === `tool-${step}`);
