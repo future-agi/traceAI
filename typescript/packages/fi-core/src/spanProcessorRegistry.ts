@@ -1,25 +1,30 @@
-import { Context } from "@opentelemetry/api";
 import { globalErrorHandler } from "@opentelemetry/core";
-import { BatchSpanProcessor, SimpleSpanProcessor, ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { BatchSpanProcessor, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
+import type { Context } from "@opentelemetry/api";
+import type { ReadableSpan, Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { rememberAutoSpanSink } from "./auto-span-delivery";
 
-// OTel 2 fixes the processor list at construction. Stop new deliveries when the
-// legacy add API replaces the default, but keep its SDK-owned flush/shutdown.
-// Keep actual SDK processors at the top level: released native adapters (such as
-// VoltAgent) borrow the default exporter's transport for their own batch queue.
+// Compatibility defaults stay real SDK processors at the top level, so native
+// adapters can borrow the transport while shutdown still drains accepted work.
 export class DefaultSimpleSpanProcessor extends SimpleSpanProcessor {
   private enabled = true;
-  disable(): void { this.enabled = false; }
-  onEnd(span: ReadableSpan): void {
-    if (this.enabled) super.onEnd(span);
-  }
+  disable(): void { this.enabled = false; rememberAutoSpanSink(this); }
+  onEnd(span: ReadableSpan): void { if (this.enabled) super.onEnd(span); }
 }
-
 export class DefaultBatchSpanProcessor extends BatchSpanProcessor {
   private enabled = true;
-  disable(): void { this.enabled = false; }
-  onEnd(span: ReadableSpan): void {
-    if (this.enabled) super.onEnd(span);
+  constructor(private readonly destination: SpanExporter) { super(destination); }
+  disable(): void { this.enabled = false; rememberAutoSpanSink(this); }
+  onEnd(span: ReadableSpan): void { if (this.enabled) super.onEnd(span); }
+  async forceFlush(): Promise<void> {
+    await super.forceFlush();
+    await this.destination.forceFlush?.();
   }
+}
+function reportHookFailure(): void {
+  // Preserve the SDK error-handler notification, never application error text.
+  try { globalErrorHandler(new Error("Span processor hook failed")); } catch { /* Preserve sibling hooks. */ }
 }
 
 /** Keeps the legacy addSpanProcessor API on OTel 2's public processor interface. */
@@ -29,6 +34,9 @@ export class SpanProcessorRegistry implements SpanProcessor {
 
   constructor(processors: SpanProcessor[], private readonly disableDefault?: () => void) {
     this.processors = [...processors];
+    // Trusted core-owned composition, not an opaque onEnd claim. The census reads
+    // this same live list on every request, including through retained Contexts.
+    rememberAutoSpanSink(this, { _spanProcessors: this.processors });
   }
 
   add(processor: SpanProcessor): void {
@@ -44,9 +52,7 @@ export class SpanProcessorRegistry implements SpanProcessor {
     for (const processor of this.processors) {
       try {
         processor.onStart(span, parentContext);
-      } catch (error) {
-        globalErrorHandler(error as Error);
-      }
+      } catch { reportHookFailure(); }
     }
   }
 
@@ -57,9 +63,7 @@ export class SpanProcessorRegistry implements SpanProcessor {
     for (const processor of this.processors) {
       try {
         (processor as SpanProcessor & { onEnding?(span: Span): void }).onEnding?.(span);
-      } catch (error) {
-        globalErrorHandler(error as Error);
-      }
+      } catch { reportHookFailure(); }
     }
   }
 
@@ -68,9 +72,7 @@ export class SpanProcessorRegistry implements SpanProcessor {
     for (const processor of this.processors) {
       try {
         processor.onEnd(span);
-      } catch (error) {
-        globalErrorHandler(error as Error);
-      }
+      } catch { reportHookFailure(); }
     }
   }
 
@@ -81,11 +83,17 @@ export class SpanProcessorRegistry implements SpanProcessor {
   }
 
   shutdown(): Promise<void> {
-    this.shutdownPromise ??= Promise.all(
-      this.processors.map(async processor => {
-        await processor.shutdown();
-      }),
-    ).then(() => undefined);
+    if (!this.shutdownPromise) {
+      // Stop acceptance synchronously; retained children still own their drain.
+      rememberAutoSpanSink(this);
+      // Publish the promise before calling application code, including reentrant
+      // shutdown/add attempts. Async mapping also isolates synchronous throws.
+      this.shutdownPromise = Promise.resolve().then(() => Promise.all(
+        this.processors.map(async processor => {
+          await processor.shutdown();
+        }),
+      )).then(() => undefined);
+    }
     return this.shutdownPromise;
   }
 }

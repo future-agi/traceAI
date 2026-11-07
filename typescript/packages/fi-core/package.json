@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-core",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "OpenTelemetry tracing for AI applications: tracer setup, span helpers, and exporters for Future AGI.",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -11,12 +11,18 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
+    },
+    "./privacy": {
+      "types": "./dist/src/privacy-runtime.d.ts",
+      "import": "./dist/esm/privacy.js",
+      "require": "./dist/src/privacy-runtime.js"
     }
   },
+  "typesVersions": { "*": { "privacy": ["dist/src/privacy-runtime.d.ts"] } },
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
-    "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
+    "postbuild": "node scripts/postbuild.cjs",
     "test": "jest",
     "test:provider": "node --test test/provider-lifecycle.test.cjs",
     "test:watch": "jest --watch",

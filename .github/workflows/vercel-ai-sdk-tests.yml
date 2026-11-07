@@ -1,0 +1,94 @@
+name: Vercel AI SDK native telemetry tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_vercel/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/vercel-ai-sdk-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: AI SDK ${{ matrix.sdk }} / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+        sdk: ['floor', 'current', 'latest']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: corepack enable
+      - name: Install, build, test and pack
+        working-directory: typescript
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/vercel...'
+          pnpm --filter '@traceai/vercel...' --workspace-concurrency=1 run build
+          pnpm --filter '@traceai/vercel' test --runInBand
+          pnpm --filter '@traceai/vercel' pack --pack-destination "$RUNNER_TEMP/package"
+          # @traceai/vercel depends on @traceai/fi-core from this revision (it may not be published yet):
+          # stage the workspace dependencies as tarballs too, as strands-typescript-tests.yml does.
+          pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/package"
+          pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/package"
+      - name: Install clean consumer with published dependencies
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: |
+          TARBALLS="$(find "$RUNNER_TEMP/package" -maxdepth 1 -name '*.tgz' | sort)"
+          case "$SDK" in
+            floor) PACKAGES='ai@6.0.0 @ai-sdk/openai@3.0.0' ;;
+            current) PACKAGES='ai@7.0.159 @ai-sdk/openai@4.0.106 @ai-sdk/otel@1.0.159' ;;
+            latest) PACKAGES='ai@latest @ai-sdk/openai@latest @ai-sdk/otel@latest' ;;
+          esac
+          npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund \
+            $TARBALLS $PACKAGES @opentelemetry/api@1.9.1 \
+            @opentelemetry/sdk-trace-base@1.30.1 @opentelemetry/sdk-trace-node@1.30.1 @opentelemetry/context-async-hooks@1.30.1 \
+            @opentelemetry/resources@1.30.1 @opentelemetry/exporter-trace-otlp-http@0.57.2
+      - name: Real SDK and OTLP contract, no external network
+        run: |
+          NODE="$(command -v node)"
+          SCRIPT="$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/contract.mjs"
+          for PROCESSOR in simple batch; do
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$SCRIPT" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/privacy-contract.mjs" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/input-contract.mjs" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+          done
+      # SDK 6 abort/error finalization is an upstream gap, documented in README.
+      # test/lifecycle.mjs also reproduces it on the floor; do not claim floor coverage here.
+      - name: Native abort and transport-error lifecycle (SDK 7)
+        if: matrix.sdk != 'floor'
+        run: |
+          NODE="$(command -v node)"
+          for PROCESSOR in simple batch; do
+            sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+              'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+              bash "$(id -un)" "$NODE" "$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/lifecycle.mjs" "$RUNNER_TEMP/consumer" "$PROCESSOR"
+          done
+      - name: Run customer README snippets
+        if: matrix.sdk != 'floor'
+        run: |
+          NODE="$(command -v node)"
+          SCRIPT="$GITHUB_WORKSPACE/typescript/packages/traceai_vercel/test/readme.mjs"
+          sudo env PATH="$PATH" unshare --net -- bash -eu -c \
+            'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' \
+            bash "$(id -un)" "$NODE" "$SCRIPT" "$RUNNER_TEMP/consumer"
+      - name: Check release configuration
+        run: python3 .github/release/release_plan.py --check

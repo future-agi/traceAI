@@ -601,6 +601,11 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_auto": {
+      "release-type": "node",
+      "component": "npm-traceai-auto",
+      "package-name": "@traceai/auto"
+    },
     "typescript/packages/traceai_bedrock": {
       "release-type": "node",
       "component": "npm-traceai-bedrock",

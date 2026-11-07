@@ -1,6 +1,6 @@
 {
   "name": "@traceai/openai",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "OpenTelemetry instrumentation for OpenAI",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -64,7 +64,8 @@
     "rimraf": "^6.0.1",
     "ts-jest": "^29.1.4",
     "tsc-alias": "^1.8.16",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@opentelemetry/core": "^2.0.1"
   },
   "keywords": [
     "opentelemetry",

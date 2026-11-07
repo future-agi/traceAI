@@ -1,3 +1,34 @@
+## [1.3.0] - pending release
+### Added
+- Semantic conventions for agent cost, time to first token and coding-agent spans in
+  `fi_instrumentation.fi_types` (#605): `tool_call.id`, `tool.name`, `fi.usage.*`, `fi.cost.kind`
+  and the `fi.agent.*` attributes.
+
+### Changed
+- **The base64 image cap now defaults to 0** (it was 32000). `base64_image_max_length` and
+  `FI_BASE64_IMAGE_MAX_LENGTH` keep working: set a positive value to export image payloads up
+  to that many characters.
+- Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
+- The replacement is `[image-redacted]`, for the whole value or JSON string token.
+- At the default cap 0, a non-URL value in an image payload position (typed image attributes,
+  and the payload fields of image content parts) is replaced with `[image-redacted]`, even when it
+  is short or is already a `__REDACTED__` marker. URL references in image content parts, such as
+  `https://...`, are kept.
+- An invalid, negative or non-integer cap resolves to 0 and logs
+  `Invalid base64 image cap; using 0.` instead of raising.
+- The TypeScript SDK is stricter: it never exports base64 images at any cap.
+
+### Known limitations
+- `fi-instrumentation-otel` currently requires `wrapt>=1.15.0,<2.0.0`; environments that require `wrapt>=2` cannot satisfy this dependency.
+- Headerless base64 images (PNG, JPEG, GIF, WebP without a data: URL) are redacted only when they are the whole value or a whole JSON string token; padded or embedded headerless runs are exported.
+- A declared image payload whose base64 contains spaces is exported.
+- An over-cap image payload stored under a key outside the payload fields (data, bytes, content, image, image_url, url, base64, b64_json) of an image-declaring object, without a data: URL, is not detected by the image cap (e.g. {"type":"image","mime_type":"image/heic","blob":"<base64>"}); other media policy may still withhold it.
+- Residual with an explicit positive cap: a payload that becomes recognizable only after multi-pass decoding inside a JSON string token, after a precise redaction has made the scope strict JSON, can be exported. The default cap 0 is not affected.
+- With an explicit positive cap, the precise recognizer keeps this residual.
+
+### Notes
+- `traceai-agno` needs `fi-instrumentation-otel>=1.3.0`; its dependency floor will be raised in the agno release that follows the core release.
+
 ## [1.2.2] - 2026-10-30
 ### Fixed
 - Apply content privacy to creation attributes and links before OpenTelemetry SDK

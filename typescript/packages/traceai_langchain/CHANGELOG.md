@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.6] - pending release
+### Fix
+- Function-call arguments are kept in exported messages. Legacy OpenAI `function_call.arguments` was read as `args`, so `gen_ai.input.messages` / `gen_ai.output.messages` dropped the arguments; `args` is still accepted as a fallback.
+
 ## [0.1.5](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.4...npm-traceai-langchain-v0.1.5) (2026-11-05)
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.3] - pending release
+### Fix
+- The base64 image cap follows `@traceai/fi-core`. At the default cap 0, the value or JSON string token containing a `data:` image URL becomes `[image-redacted]`. Nonempty image `source.bytes` strings also become `[image-redacted]`. An invalid cap resolves to 0 and logs `Invalid base64 image cap; using 0.`
+
 ## [0.1.2](https://github.com/future-agi/traceAI/compare/npm-traceai-strands-v0.1.1...npm-traceai-strands-v0.1.2) (2026-11-05)
 
 

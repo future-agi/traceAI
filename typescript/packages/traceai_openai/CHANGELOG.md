@@ -1,3 +1,9 @@
+## [0.1.17] - pending release
+### Feature
+- Embeddings now also set `gen_ai.request.model` from the request and `gen_ai.response.model` from the response when present, while retaining `embedding.model_name`.
+- Streaming chat completions, completions and Responses record `gen_ai.response.time_to_first_token` (seconds from the request start to the first generated content: text, reasoning, refusals, tool calls or audio). Timing reads only the events the SDK already delivers and keeps no content.
+- Chat completion responses are shared with `@traceai/fi-core` for the zero-code agent `@traceai/auto`.
+
 ## [0.1.14] - 2026-10-18
 ### Fix
 - Content hiding now applies to the prompt. With `hideInputs` / `FI_HIDE_INPUTS=true`, `input.value`, `gen_ai.input.messages` and `raw.input` were still exported, because they are passed when the span is created and `@traceai/fi-core` did not mask creation-time attributes. Fixed in `@traceai/fi-core` 1.1.0; this release depends on it (0.1.13 was published against `@traceai/fi-core` `^0.1.13`, which has the bug).
