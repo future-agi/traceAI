@@ -166,7 +166,7 @@ test('editor config and kill switch do not share CLI profile files', async (t) =
   await disable({ ...f, agent: 'copilot-vscode' });
   assert.equal((await resolveConfig({ ...f, agent: 'copilot-vscode' })).enabled, false);
 });
-test('lifecycle remains closed and never edits native settings, even when invoked directly', async (t) => {
+test('missing host fails detection without touching user settings; qualification remains separate', async (t) => {
   const f = await fixture(t);
   const location = discoverSettings({ ...f, platform: 'linux' });
   await fs.mkdir(path.dirname(location.userSettings), { recursive: true, mode: 0o700 });
@@ -175,17 +175,9 @@ test('lifecycle remains closed and never edits native settings, even when invoke
   const config = await resolveConfig({ ...f, agent: 'copilot-vscode' });
   const context = { config, scope: 'user' };
   assert.equal((await adapter.detect(context)).supported, false);
-  for (const method of ['install', 'inspect', 'uninstall']) {
-    const result = await adapter[method](context);
-    assert.equal(result.registered, false);
-    assert.equal(result.activated, false);
-    assert.equal(await fs.readFile(location.userSettings, 'utf8'), base);
-  }
-  const status = await inspectStatus({ ...f, agent: 'copilot-vscode', adapter });
-  assert.equal(status.registration, 'NOT_REGISTERED');
-  assert.equal(status.activation, 'NOT_OBSERVED');
-  assert.match(status.adapterDetail, /VSCODE_GUI_AND_TRANSPORT_QUALIFICATION_REQUIRED/);
-  assert.equal(status.exitCode, 2);
-  assert.equal(adapter.run, undefined);
+  await assert.rejects(adapter.install(context), /VSCODE_CLI_NOT_FOUND/);
+  assert.equal((await adapter.inspect(context)).registered, false);
+  assert.equal((await adapter.uninstall(context)).registered, false);
+  assert.equal(await fs.readFile(location.userSettings, 'utf8'), base);
   assert.deepEqual(settings.qualifiedEditorVersions, []);
 });

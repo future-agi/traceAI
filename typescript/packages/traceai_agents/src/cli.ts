@@ -202,6 +202,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
   if (p.command === "disable") {
     await disable(options);
+    await adapter?.onEnabledChange?.(options, false);
     output({ code: "DISABLED", agent: p.agent }, json);
     return 0;
   }
@@ -403,6 +404,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   }
   if (p.command === "enable") {
     await enable(options);
+    await adapter?.onEnabledChange?.(options, true);
     output(await inspectStatus({ ...options, adapter }), json);
     return adapter ? 0 : 2;
   }

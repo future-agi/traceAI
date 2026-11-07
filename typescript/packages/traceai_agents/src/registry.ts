@@ -171,10 +171,9 @@ const explicitAdapters: AdapterRelease[] = [
     id: "copilot-vscode",
     packageName: "@traceai/copilot",
     version: "0.1.0",
-    mechanism: "native VS Code settings (harness-specific)",
+    mechanism: "native Copilot OTLP via Future AGI VS Code extension",
     qualified: false,
     reason: EDITOR_HOLD,
-    setupBlocker: EDITOR_HOLD,
   },
   {
     id: "grok",

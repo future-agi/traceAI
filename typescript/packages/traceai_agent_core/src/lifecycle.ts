@@ -74,6 +74,8 @@ export interface CoreAdapter {
   inspect(context: AdapterContext): Promise<AdapterInspection>;
   uninstall(context: AdapterContext): Promise<AdapterInspection>;
   uninstallUnconfigured?(options: ResolveOptions): Promise<AdapterInspection>;
+  /** Offline host-owned settings reconciliation after the shared enable/disable fence. */
+  onEnabledChange?(options: ResolveOptions, enabled: boolean): Promise<void>;
   runUnconfigured?(args: string[], projectDir?: string): Promise<number>;
   run?(context: AdapterContext, args: string[]): Promise<number>;
 }

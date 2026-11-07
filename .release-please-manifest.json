@@ -150,5 +150,6 @@
   "typescript/packages/traceai_goose": "0.1.0",
   "typescript/packages/traceai_oh_my_pi_plugin": "0.1.0",
   "typescript/packages/traceai_opencode_plugin": "0.1.0",
-  "typescript/packages/traceai_pi_plugin": "0.1.0"
+  "typescript/packages/traceai_pi_plugin": "0.1.0",
+  "typescript/packages/traceai_vscode_extension": "0.1.0"
 }

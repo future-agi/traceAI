@@ -1282,6 +1282,11 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "typescript/packages/traceai_vscode_extension": {
+      "release-type": "node",
+      "component": "npm-traceai-vscode-extension",
+      "package-name": "@traceai/vscode-extension"
     }
   }
 }
