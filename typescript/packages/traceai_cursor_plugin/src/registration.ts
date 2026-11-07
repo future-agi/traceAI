@@ -471,7 +471,9 @@ export async function inspect(c: AdapterContext): Promise<AdapterInspection> {
     duplicate,
     activated: false,
     trust: "unknown",
-    detail: runtimeIssue ?? "GUI_ACTIVATION_NOT_OBSERVED",
+    // Core owns destination/enable-epoch-scoped activation evidence. A healthy
+    // registration must not contradict it with an unconditional GUI warning.
+    detail: runtimeIssue,
     issues: [...(runtimeIssue ? [runtimeIssue] : []), ...gaps],
   };
 }

@@ -43,6 +43,35 @@ async function fixture(t, handler) {
     });
   return { home, options, requests, endpoint, setup };
 }
+test("Cursor's shared-hook alias uses one ownership record, delivery route and disable epoch", async (t) => {
+  const f = await fixture(t);
+  const ide = { ...f.options, agent: "cursor" };
+  const cli = { ...f.options, agent: "cursor-cli" };
+  await f.setup({ agent: "cursor-cli" });
+  const left = await c.resolveConfig(ide), right = await c.resolveConfig(cli);
+  assert.equal(right.agent, "cursor");
+  assert.equal(c.deliveryStatePath(left), c.deliveryStatePath(right));
+  await c.disable(cli);
+  assert.equal(c.collectionEnabled(left), false);
+  assert.equal(c.collectionEnabled(right), false);
+  await c.enable(ide);
+  assert.equal(c.collectionEnabled(right), false);
+  const current = await c.resolveConfig(cli);
+  assert.equal(c.collectionEnabled(current), true);
+  await f.setup({ agent: "cursor", captureContent: false });
+  assert.equal(c.collectionEnabled(current), false);
+  assert.equal((await c.resolveConfig(cli)).captureContent, false);
+  const manifest = await c.readJson(current.paths.manifest);
+  assert.deepEqual(Object.keys(manifest.registrations), ["cursor"]);
+  await c.uninstall(cli);
+  assert.deepEqual((await c.readJson(current.paths.manifest)).registrations, {});
+  await assert.rejects(fs.stat(current.paths.user), { code: "ENOENT" });
+  assert.equal((await c.resolveConfig(ide)).enabled, false);
+  // Sharing a directory alone does not make different adapters aliases.
+  for (const name of ["cursor-cloud", "opencode-v1", "kiro-cli", "kiro-ide"])
+    assert.equal(c.canonicalAgent(name), name);
+});
+
 test("validation uses empty OTLP and three headers; writes private files only after acceptance", async (t) => {
   const f = await fixture(t),
     result = await f.setup();

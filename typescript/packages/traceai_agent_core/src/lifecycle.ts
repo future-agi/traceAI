@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { lstat, rmdir } from "node:fs/promises";
 import {
+  canonicalAgent,
   controlPaths,
   deliveryStatePath,
   environmentCredentialsOnly,
@@ -186,6 +187,7 @@ export async function setupDefaults(options: SetupOptions) {
   };
 }
 export async function setup(options: SetupOptions): Promise<SetupResult> {
+  options = { ...options, agent: canonicalAgent(options.agent) };
   const { paths, existing, old, project } = await setupBaseline(options);
   const env = options.env ?? process.env;
   const environmentOnly = environmentCredentialsOnly(options.agent);
@@ -442,7 +444,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
       code: "CONFIGURED_NOT_REGISTERED",
       validation,
     };
-  if (!options.adapter || options.adapter.id !== options.agent)
+  if (!options.adapter || canonicalAgent(options.adapter.id) !== options.agent)
     return {
       configured: true,
       registered: false,
@@ -536,6 +538,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   }
 }
 export async function disable(options: ResolveOptions): Promise<void> {
+  options = { ...options, agent: canonicalAgent(options.agent) };
   const paths = controlPaths(options);
   // Fence first. No profile lookup, credentials, registration or network needed.
   await updateJson<Manifest>(paths.manifest, (m) => ({
@@ -548,6 +551,7 @@ export async function disable(options: ResolveOptions): Promise<void> {
   }));
 }
 export async function enable(options: ResolveOptions): Promise<void> {
+  options = { ...options, agent: canonicalAgent(options.agent) };
   const config = await resolveConfig(options);
   if (!config.destinationApproved || !config.credentials)
     throw new Error("SETUP_REQUIRED");
@@ -598,7 +602,7 @@ export async function inspectStatus(
 ): Promise<AgentStatus> {
   const config = await resolveConfig(options),
     manifest = await readJson<Manifest>(config.paths.manifest);
-  const saved = manifest?.registrations?.[options.agent];
+  const saved = manifest?.registrations?.[config.agent];
   const recorded = await readJson<DeliveryState>(deliveryStatePath(config));
   const delivery = (recorded &&
   (!config.deliveryBinding || recorded.binding === config.deliveryBinding)
@@ -697,6 +701,7 @@ export async function reconcileRegistration<T>(
 export async function uninstall(
   options: ResolveOptions & { adapter?: CoreAdapter },
 ): Promise<AdapterInspection> {
+  options = { ...options, agent: canonicalAgent(options.agent) };
   await disable(options);
   const paths = await configPaths(options);
   const manifest = await readJson<Manifest>(paths.manifest);

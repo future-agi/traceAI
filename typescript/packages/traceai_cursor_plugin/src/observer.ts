@@ -64,10 +64,13 @@ export class CursorObserver {
         this.gap("MISSING_STOP");
       }
     if (e.event === "sessionEnd") {
-      for (const [key, item] of this.active)
-        if (JSON.parse(key)[0] === e.conversation) {
-          await this.finishTurn(key, item, e, true);
-        }
+      const turns = [...this.active].filter(([key]) => JSON.parse(key)[0] === e.conversation);
+      // Session totals cannot be copied onto several unfinished turns. Preserve
+      // their own response usage instead when no unique turn owns the terminal.
+      const terminal = turns.length > 1 ? { ...e, usage: undefined } : e;
+      if (turns.length > 1 && e.usage) this.gap("AMBIGUOUS_SESSION_USAGE");
+      for (const [key, item] of turns)
+        await this.finishTurn(key, item, terminal, true);
       // sessionEnd uses the conversation id as generation_id in the CLI, unlike stop.
       // Do not add an empty fallback after a source turn has already been exported.
       if (
@@ -239,6 +242,9 @@ export class CursorObserver {
     sessionEnd = false,
   ): Promise<void> {
     item.transcript ??= e.transcript;
+    // sessionEnd finalizes active turns before the ordinary event merge. Its
+    // model is still source metadata for the reconstructed messages.
+    item.model = e.model ?? item.model;
     let gap = item.missingPrompt
       ? sessionEnd
         ? "MISSING_PROMPT_AND_STOP"
