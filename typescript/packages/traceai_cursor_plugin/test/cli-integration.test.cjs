@@ -47,7 +47,7 @@ test('fixture stream reaches real local OTLP as one aggregate-run + one tool wit
   await tracer.shutdown();
   const spans = flatten(f.requests); assert.equal(spans.length, 2);
   const root = spans.find(s => !s.parentSpanId), child = spans.find(s => s.parentSpanId);
-  assert.equal(root.name, 'cursor-cli.run'); assert.equal(attrs(root)['fi.agent.fidelity'], 'aggregate-run');
+  assert.equal(root.name, 'cursor.run'); assert.equal(attrs(root)['fi.agent.fidelity'], 'aggregate-run');
   assert.equal(attrs(root)['fi.agent.unit'], 'run'); assert.equal(child.parentSpanId, root.spanId);
   assert.equal(child.traceId, root.traceId); assert.equal(attrs(child)['fi.span.kind'], 'TOOL');
   const exported = JSON.stringify(spans);
@@ -84,7 +84,7 @@ test('metadata-only and persistent disable prevent content and queued delivery',
   await c.disable(f.options); await stale.shutdown();
   assert.equal(flatten(f.requests).length, before);
 });
-test('shared hook and preview/plugin owners block stream route; CLI uninstall retains IDE hooks', async t => {
+test('shared hook and preview/plugin owners block the separately held stream route', async t => {
   const f = await fixture(t);
   await assertExclusiveCliStream(f.context);
   const hookPath = path.join(f.home, '.cursor/hooks.json');
@@ -94,9 +94,8 @@ test('shared hook and preview/plugin owners block stream route; CLI uninstall re
   await fs.mkdir(path.join(f.home, '.cursor/plugins'));
   await assert.rejects(assertExclusiveCliStream(f.context), /OWNERSHIP_UNVERIFIED/);
   await c.updateJson(f.config.paths.manifest, old => ({ ...old, registrations: { cursor: { version: '0.1.0', scope: 'user', status: 'REGISTERED' } } }));
-  const removed = await cursorCliAdapter.uninstall(f.context);
-  assert.equal(removed.detail, 'CURSOR_IDE_SHARED_HOOKS_RETAINED');
-  assert.equal((await cursorCliAdapter.install(f.context)).registered, false);
+  await assert.rejects(assertExclusiveCliStream(f.context), /ALIAS_UNPROVEN/);
+  await assert.rejects(cursorCliAdapter.install(f.context), /CURSOR_CLI_NOT_FOUND/);
   assert.equal(await cursorCliAdapter.run(f.context, []), 2);
 });
 test('argument validation does not alter output, permission, trust or plugin behavior', () => {

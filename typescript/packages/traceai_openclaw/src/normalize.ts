@@ -103,7 +103,14 @@ export function normalizeSpan(span: ReadableSpan, config: ResolvedConfig, sessio
     if (ownsUsage && numeric.has(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)
       attributes[key] = value;
     const target = contentFields[key as keyof typeof contentFields];
-    if (!unknownShape && target && typeof value === 'string' && !(target === 'input.value'
+    // Native input_messages is serialized conversation history, not just the
+    // current prompt. It can contain assistant output and past tool errors even
+    // when this model request succeeds. Omit this mixed field under either
+    // privacy switch rather than trusting roles/error markers in an opaque or
+    // truncated host payload. Independently captured tool inputs remain visible.
+    const hiddenHistory = key === 'openclaw.content.input_messages' &&
+      (config.hideOutputs || config.hideErrorDetails);
+    if (!unknownShape && !hiddenHistory && target && typeof value === 'string' && !(target === 'input.value'
       ? config.hideInputs
       : config.hideOutputs || (config.hideErrorDetails && failed)))
       attributes[target] = text(value, config);

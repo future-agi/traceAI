@@ -272,6 +272,13 @@ export async function runCopilot(
     timer = undefined;
     drain();
     lines.end();
+    // Native EOF is the only reliable missing-terminal boundary. Ordinary
+    // exporter flushes must not race roots still being written by Copilot.
+    if (collectionEnabled(config))
+      for (const span of spans.end()) {
+        seen++;
+        processor.onEnd(span);
+      }
     await processor.shutdown();
     processor = undefined;
     if (!seen || rejected)

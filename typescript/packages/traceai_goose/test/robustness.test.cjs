@@ -72,12 +72,13 @@ async function fixture(t) {
     config,
     received,
     stateFile,
-    hook: (event) =>
+    hook: (event, rest = {}) =>
       handleHook({
         event,
         session_id: "s",
         working_dir: root,
         message: event === "UserPromptSubmit" ? "request" : undefined,
+        ...rest,
       }),
     add: (rows) => {
       for (const r of rows)
@@ -271,6 +272,136 @@ test("saved Anthropic input already includes cache reads and writes", async (t) 
   assert.equal(model["gen_ai.usage.cache_read_tokens"], 200);
   assert.equal(model["gen_ai.usage.cache_write_tokens"], 50);
   assert.equal(spans.reduce((n, s) => n + (attrs(s)["gen_ai.usage.input_tokens"] || 0), 0), 350);
+});
+
+test("explicit cancellation owns the root outcome without inventing cancellation on exit", async (t) => {
+  for (const reason of ["user_cancel", "exit", "unknown_reason", undefined]) {
+    await t.test(String(reason), async (t) => {
+      const f = await fixture(t);
+      await f.hook("UserPromptSubmit");
+      f.add(simpleRows());
+      // Even a complete response without Stop is not proof of successful completion.
+      await f.hook("SessionEnd", { reason });
+      const roots = f.spans().filter((s) => !s.parentSpanId);
+      assert.equal(roots.length, 1);
+      assert.equal(attrs(roots[0])["fi.agent.outcome"], reason === "user_cancel" ? "interrupted" : "incomplete");
+      assert.equal(f.spans().filter((s) => attrs(s)["fi.span.kind"] === "LLM").length, 1);
+      await f.hook("SessionEnd", { reason });
+      assert.equal(f.spans().length, 2);
+    });
+  }
+});
+
+test("cancelled roots retain interrupted when tools fail or have no response", async (t) => {
+  for (const failed of [false, true]) {
+    await t.test(String(failed), async (t) => {
+      const f = await fixture(t);
+      await f.hook("UserPromptSubmit");
+      f.add([
+        simpleRows()[0],
+        row(2, "assistant", [{ type: "toolRequest", id: "call", toolCall: {
+          status: "success", value: { name: "read", arguments: {} },
+        } }], inference),
+        ...(failed ? [row(3, "user", [{ type: "toolResponse", id: "call", toolResult: {
+          status: "error", error: "synthetic failure",
+        } }])] : []),
+      ]);
+      await f.hook("SessionEnd", { reason: "user_cancel" });
+      const root = f.spans().find((s) => !s.parentSpanId);
+      const tool = f.spans().find((s) => attrs(s)["fi.span.kind"] === "TOOL");
+      assert.equal(attrs(root)["fi.agent.outcome"], "interrupted");
+      assert.equal(attrs(tool)["fi.agent.outcome"], failed ? "error" : "incomplete");
+    });
+  }
+});
+
+async function bundledEnd(reason = "exit") {
+  const child = spawn(process.execPath, [path.join(__dirname, "../dist/hook.cjs")], {
+    env: { ...process.env, NODE_NO_WARNINGS: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (b) => (output += b));
+  child.stderr.on("data", (b) => (output += b));
+  const exited = once(child, "exit");
+  child.stdin.end(JSON.stringify({ event: "SessionEnd", session_id: "s", reason }));
+  assert.deepEqual(await exited, [0, null]);
+  assert.equal(output, "");
+}
+
+test("bundled terminal hook waits six seconds for responses and releases its SQLite read transaction", async (t) => {
+  const f = await fixture(t);
+  await f.hook("UserPromptSubmit");
+  f.add([simpleRows()[0]]);
+  await f.hook("PreToolUse", { tool_call_id: "call" });
+  await f.hook("PostToolUse", { tool_call_id: "call" });
+  await f.hook("Stop");
+  const stoppedAt = (await core.readJson(f.stateFile)).stoppedAt;
+  const write = (async () => {
+    await new Promise((r) => setTimeout(r, 6000));
+    assert.equal(f.spans().length, 0, "must not export an early incomplete root");
+    f.add([
+      row(2, "assistant", [{
+        type: "toolRequest",
+        id: "call",
+        toolCall: { status: "success", value: { name: "read", arguments: {} } },
+      }], inference),
+      row(3, "assistant", [{ type: "text", text: "completed" }], inference),
+    ]);
+    // The final generation alone is insufficient while a tool response is uncommitted.
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(f.spans().length, 0);
+    f.add([row(4, "user", [{
+      type: "toolResponse",
+      id: "call",
+      toolResult: {
+        status: "success",
+        value: { content: [{ type: "text", text: "read result" }] },
+      },
+    }])]);
+  })();
+  await Promise.all([bundledEnd(), write]);
+  const spans = f.spans();
+  const root = spans.find((s) => !s.parentSpanId);
+  assert.equal(spans.length, 4);
+  assert.equal(attrs(root)["fi.agent.outcome"], "success");
+  assert.ok(Math.abs(Number(root.endTimeUnixNano) / 1e6 - stoppedAt) < 2,
+    "SQLite persistence wait must not inflate turn duration");
+  assert.equal(spans.filter((s) => attrs(s)["fi.span.kind"] === "LLM").length, 2);
+  assert.equal(spans.reduce((n, s) => n + (attrs(s)["gen_ai.usage.input_tokens"] || 0), 0), 16);
+  assert.equal(spans.reduce((n, s) => n + (attrs(s)["gen_ai.usage.output_tokens"] || 0), 0), 4);
+  assert.equal((await core.readJson(f.stateFile)).pending, false);
+  await bundledEnd();
+  assert.equal(f.spans().length, 4);
+});
+
+test("missing terminal response stays incomplete and returns within the hook budget", async (t) => {
+  const f = await fixture(t);
+  await f.hook("UserPromptSubmit");
+  f.add([simpleRows()[0]]);
+  await f.hook("Stop");
+  const start = Date.now();
+  await bundledEnd();
+  assert.ok(Date.now() - start < 9000);
+  const roots = f.spans().filter((s) => !s.parentSpanId);
+  assert.equal(roots.length, 1);
+  assert.equal(attrs(roots[0])["fi.agent.outcome"], "incomplete");
+  assert.equal((await core.readJson(f.stateFile)).pending, false);
+});
+
+test("a disable during terminal persistence wait prevents export", async (t) => {
+  const f = await fixture(t);
+  await f.hook("UserPromptSubmit");
+  f.add([simpleRows()[0]]);
+  await f.hook("Stop");
+  const change = (async () => {
+    await new Promise((r) => setTimeout(r, 100));
+    await core.disable({ agent: "goose", projectDir: f.root });
+    f.add([simpleRows()[1]]);
+  })();
+  await Promise.all([f.hook("SessionEnd"), change]);
+  assert.equal(f.spans().length, 0);
+  assert.equal((await core.readJson(f.stateFile)).pending, false);
 });
 
 // Kill a real writer exactly after acquiring its claim, not a hand-made lock fixture.

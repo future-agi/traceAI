@@ -15,13 +15,12 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execv(node, [node, cli, "setup", "pi", "--scope", "project", "--project", "coding-agents", "--configure-only"])
 transcript = ""
-steps = [("Replace them? [y/N]", "y"), ("API key (hidden):", api), ("Secret key (hidden):", secret)]
-if mode == "fresh":
-    steps = [("API key (hidden):", api), ("Secret key (hidden):", secret)]
-elif mode == "paste":
-    steps = [("Replace them? [y/N]", "y"), ("API key (hidden):", api + "\r\n" + secret)]
+# The unified CLI offers masked replacement directly after rejecting saved keys.
+steps = [("API key (hidden):", api), ("Secret key (hidden):", secret)]
+if mode == "paste":
+    steps = [("API key (hidden):", api + "\r\n" + secret)]
 elif mode in ("cancel", "terminate"):
-    steps = [("Replace them? [y/N]", "y"), ("API key (hidden):", "\x03")]
+    steps = [("API key (hidden):", "\x03")]
 expected_steps = len(steps)
 index = 0
 status = None
@@ -39,7 +38,7 @@ try:
                 break
             transcript += data.decode(errors="replace")
             if index < len(steps) and steps[index][0] in transcript:
-                if mode == "terminate" and index == 1:
+                if mode == "terminate" and index == 0:
                     os.kill(pid, signal.SIGTERM)
                 else:
                     os.write(fd, (steps[index][1] + "\r").encode())

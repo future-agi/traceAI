@@ -235,7 +235,7 @@ export function createOpenClawAdapter(command?: Command): CoreAdapter {
           child.once('error', () => { cleanup(); resolveCode(127); });
           child.once('close', (code, signal) => {
             cleanup();
-            resolveCode(code ?? (signal === 'SIGINT' ? 130 : 143));
+            resolveCode(code ?? (signal === 'SIGINT' ? 130 : signal === 'SIGKILL' ? 137 : 143));
           });
         });
         return exitCode;

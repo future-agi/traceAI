@@ -49,6 +49,32 @@ async function fixture(t) {
   };
   return { root, host, project, settings, context, installed };
 }
+async function nativeHost(t, f) {
+  const bin = path.join(f.root, "bin");
+  await fs.mkdir(bin);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}:${oldPath}`;
+  t.after(() => { process.env.PATH = oldPath; });
+  await fs.writeFile(path.join(bin, "pi"), `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("1.5.0"); process.exit(0); }
+const dir = args.includes("-l") ? path.join(process.cwd(), ".pi") : process.env.PI_CODING_AGENT_DIR;
+fs.mkdirSync(dir, { recursive: true });
+const file = path.join(dir, "settings.json");
+const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+const sourceOf = p => typeof p === "string" ? p : p.source;
+settings.packages = (settings.packages || []).filter(p => sourceOf(p) !== args[1]);
+if (args[0] === "install") {
+  settings.packages.push(args[1]);
+  const root = path.join(dir, "npm/node_modules/@traceai/pi-plugin");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "0.1.0", pi: { extensions: ["./extension.mjs"] } }));
+}
+fs.writeFileSync(file, JSON.stringify(settings));
+`, { mode: 0o755 });
+}
+
 test("host detection uses the executable, including group-writable application locations", async (t) => {
   const f = await fixture(t);
   const bin = path.join(f.root, "Applications");
@@ -117,6 +143,84 @@ test("uninstall preserves a pre-existing native install that setup does not own"
   assert.equal(result.detail, "NOT_OWNED_REMOVE_WITH_PI");
   assert.equal(await fs.readFile(f.settings, "utf8"), text);
 });
+for (const scope of ["user", "project"]) {
+  test(`${scope} activation clears reload advice only for matching delivery evidence`, async (t) => {
+    const f = await fixture(t);
+    await nativeHost(t, f);
+    const context = { ...f.context, scope };
+    await piAdapter.install(context);
+    const pending = await piAdapter.inspect(context);
+    assert.equal(pending.activated, false);
+    assert.equal(pending.detail, scope === "project" ? "PROJECT_TRUST_IS_MANAGED_BY_PI" : "RESTART_OR_RELOAD_PI");
+    const evidence = { exported: 5, dropped: 0, activatedAt: new Date().toISOString(), binding: context.config.deliveryBinding };
+    await c.updateJson(c.deliveryStatePath(context.config), () => evidence);
+    const active = await piAdapter.inspect(context);
+    assert.equal(active.registered, true);
+    assert.equal(active.activated, true);
+    assert.equal(active.detail, undefined);
+    // Pi scopes delivery by destination and enable epoch in the state filename.
+    for (const change of [{ projectName: "another-project" }, { generation: context.config.generation + 1 }]) {
+      const changed = { ...context, config: { ...context.config, ...change } };
+      assert.equal((await piAdapter.inspect(changed)).activated, false);
+      assert.equal((await piAdapter.inspect(changed)).detail, pending.detail);
+    }
+  });
+
+  test(`uninstall finds owned ${scope} registration after configuration scope changes`, async (t) => {
+    const f = await fixture(t);
+    await nativeHost(t, f);
+    const context = { ...f.context, scope };
+    const settings = scope === "user" ? f.settings : path.join(f.project, ".pi/settings.json");
+    await fs.mkdir(path.dirname(settings), { recursive: true });
+    const unrelated = { packages: ["npm:unrelated"], compaction: { enabled: false } };
+    await fs.writeFile(settings, JSON.stringify(unrelated));
+    assert.equal((await piAdapter.install(context)).registered, true);
+    const otherScope = { ...context, scope: scope === "user" ? "project" : "user" };
+    // Repeated setup discovers the existing registration without claiming it anew.
+    assert.equal((await piAdapter.install(otherScope)).registered, true);
+    assert.equal((await piAdapter.uninstall(otherScope)).registered, false);
+    assert.deepEqual(JSON.parse(await fs.readFile(settings, "utf8")), unrelated);
+    assert.equal((await piAdapter.uninstall(otherScope)).registered, false);
+  });
+}
+
+test("cross-scope uninstall still preserves edited owned registrations", async (t) => {
+  const f = await fixture(t);
+  await nativeHost(t, f);
+  await piAdapter.install(f.context);
+  const settings = JSON.stringify({ packages: [{ source: PACKAGE_SOURCE, extensions: ["extension.mjs"] }] });
+  await fs.writeFile(f.settings, settings);
+  const result = await piAdapter.uninstall({ ...f.context, scope: "project" });
+  assert.equal(result.detail, "REGISTRATION_CHANGED");
+  assert.equal(await fs.readFile(f.settings, "utf8"), settings);
+});
+
+test("cross-scope uninstall cannot claim a manual installation", async (t) => {
+  const f = await fixture(t);
+  await nativeHost(t, f);
+  await f.installed();
+  const settings = JSON.stringify({ packages: [PACKAGE_SOURCE, "npm:unrelated"] });
+  await fs.writeFile(f.settings, settings);
+  const result = await piAdapter.uninstall({ ...f.context, scope: "project" });
+  assert.equal(result.detail, "NOT_OWNED_REMOVE_WITH_PI");
+  assert.equal(await fs.readFile(f.settings, "utf8"), settings);
+});
+
+test("a manual registration in the selected scope prevents cross-scope removal", async (t) => {
+  const f = await fixture(t);
+  await nativeHost(t, f);
+  await piAdapter.install(f.context);
+  const userBefore = await fs.readFile(f.settings, "utf8");
+  const projectSettings = path.join(f.project, ".pi/settings.json");
+  await fs.mkdir(path.dirname(projectSettings), { recursive: true });
+  const manual = JSON.stringify({ packages: [PACKAGE_SOURCE] });
+  await fs.writeFile(projectSettings, manual);
+  const result = await piAdapter.uninstall({ ...f.context, scope: "project" });
+  assert.equal(result.detail, "NOT_OWNED_REMOVE_WITH_PI");
+  assert.equal(await fs.readFile(projectSettings, "utf8"), manual);
+  assert.equal(await fs.readFile(f.settings, "utf8"), userBefore);
+});
+
 test("unsafe symlink settings are rejected without following them", async (t) => {
   const f = await fixture(t);
   const target = path.join(f.root, "other.json");

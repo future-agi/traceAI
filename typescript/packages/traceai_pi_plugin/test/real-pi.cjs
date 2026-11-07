@@ -753,6 +753,14 @@ async function main() {
   assert.equal(status.credentialCheck, "ACCEPTED");
   assert(status.delivery.exported > 0);
   assert(status.delivery.lastAcceptedAt);
+  assert.deepEqual(status.issues, []);
+  const doctor = await exec(
+    process.execPath,
+    [cli, "doctor", "pi", "--json"],
+    { cwd, env },
+  );
+  assert.deepEqual(JSON.parse(doctor.stdout).issues, []);
+  regressions.healthyStatusDoctor = true;
   await nativeRegressions.killWriter(base, env);
   const disable = await exec(
     process.execPath,
@@ -768,6 +776,15 @@ async function main() {
   assert(!JSON.stringify(spans()).includes("dummy-fi-secret"));
   assert(!JSON.stringify(spans()).includes("dummy-fi-api"));
   regressions.disableAfterKilledWriter = true;
+  // A project profile changes configuration scope, not the existing native user
+  // installation. Uninstall must still use the user registration's own receipt.
+  await exec(
+    process.execPath,
+    [cli, "setup", "pi", "--scope", "project", "--configure-only",
+      "--project", "coding-agents", "--json"],
+    { cwd, env: setupEnv },
+  );
+  assert.equal(JSON.parse(await fs.readFile(path.join(agentDir, "settings.json"), "utf8")).packages.length, 1);
   await nativeRegressions.killWriter(base, env);
   const removed = await exec(
     process.execPath,
@@ -783,7 +800,9 @@ async function main() {
   assert.equal(afterRemoval.compaction.enabled, false);
   // Exercise project-only setup on the actual Pi package manager, with no user
   // configuration left to mask project-resolution bugs.
-  await fs.unlink(path.join(agentDir, "futureagi.json"));
+  await assert.rejects(fs.stat(path.join(agentDir, "futureagi.json")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(cwd, ".pi/futureagi.json")), { code: "ENOENT" });
+  regressions.uninstallAfterProjectConfigureOnly = true;
   await fs.unlink(path.join(env.FI_AGENT_CONFIG_DIR, "credentials.json"));
   const projectSetup = await exec(
     process.execPath,
@@ -897,6 +916,27 @@ async function main() {
     0,
   );
   regressions.projectLifecycle = true;
+  // Persist native qualification independently of the shared CLI's TTY recovery
+  // checks below. A later failure must still fail this script, not hide which
+  // native scenarios actually completed.
+  await fs.writeFile("/work/pi-native-evidence.json", JSON.stringify({
+    status: "NATIVE_SCENARIOS_PASS",
+    host: "@earendil-works/pi-coding-agent@1.5.0",
+    node: process.version,
+    roots: spans().filter((s) => !s.parentSpanId).length,
+    spans: spans().length,
+    providerRequests: requests.length,
+    regressions,
+  }, null, 2));
+  await fs.writeFile("/work/pi-native-otlp.json", JSON.stringify(batches, null, 2));
+  // Uninstall removes owned project configuration. Restore the project account
+  // explicitly before testing credential recovery against a second user account.
+  await exec(
+    process.execPath,
+    [cli, "setup", "pi", "--scope", "project", "--project",
+      "coding-agents", "--configure-only", "--json"],
+    { cwd, env: setupEnv },
+  );
   // Keep a different, valid user account while revoking the project account.
   acceptedUserKeys = ["user-account-A", "user-account-secret"];
   await exec(

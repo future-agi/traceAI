@@ -109,6 +109,9 @@ module.exports = {
         await delivery.forceFlush();
       },
       async flush() {
+        // All native records have been delivered: mirror runCopilot's EOF
+        // finalization, including missing-terminal recovery, before draining.
+        for (const span of mapper.end()) delivery.onEnd(span);
         await delivery.drain();
       },
       async close() {

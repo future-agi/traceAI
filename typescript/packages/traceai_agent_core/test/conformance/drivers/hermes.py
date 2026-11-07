@@ -14,6 +14,12 @@ class Context:
         self.hooks = {}
     def register_hook(self, name, callback):
         self.hooks.setdefault(name, []).append(callback)
+    # Match the native PluginContext API: the gateway's process cwd and an
+    # arbitrary hook payload cannot establish the active client's workspace.
+    def session_surface(self):
+        return 'cli'
+    def session_cwd(self):
+        return request['project']
     def fire(self, name, **kwargs):
         kwargs.setdefault('telemetry_schema_version', 'hermes.observer.v1')
         for callback in self.hooks.get(name, []):

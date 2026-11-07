@@ -186,7 +186,8 @@ function promptContext(config: ResolvedConfig, session?: string) {
           ...(!seen.size ? { [SC.FI_AGENT_GAP]: 'MISSING_NATIVE_SPANS' } : {}),
           'fi.agent.usage_owner': ownsTurnUsage ? 'turn' : 'none',
           [SC.FI_AGENT_TIMING]: 'observed-event',
-          [SC.FI_AGENT_OUTCOME]: success ? 'success' : exitCode === 130 || exitCode === 143 ? 'cancelled' : 'error' },
+          [SC.FI_AGENT_OUTCOME]: success ? 'success' :
+            exitCode === 130 || exitCode === 143 ? 'interrupted' : exitCode === 137 ? 'incomplete' : 'error' },
         status: { code: success ? 1 : 2 }, events: [], links: [],
         resource: resourceFromAttributes({ 'service.name': 'openclaw', project_name: config.projectName, project_type: 'observe' }),
         instrumentationScope: { name: '@traceai/openclaw' },

@@ -2,6 +2,7 @@
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, isAbsolute } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { lock } from "proper-lockfile";
 import {
   contentHash,
@@ -20,6 +21,7 @@ import { EVENTS, nativeConflict } from "./paths.js";
 import { registeredFor } from "./registration.js";
 import {
   exportTurn,
+  hasTerminalResponse,
   messageIndex,
   messageKey,
   persistedPrompt,
@@ -31,6 +33,8 @@ import {
 } from "./transcript.js";
 
 const STATE_LIMIT = 1024 * 1024;
+// Leave time for export inside the bundled hook's eight-second capture budget.
+const TERMINAL_WAIT_MS = 6500;
 // Only called while holding this session's recoverable .hook-lock. Keep one
 // lease per state write; legacy O_EXCL .lock claims are intentionally inert.
 const saveState = (file: string, state: SessionState) =>
@@ -47,6 +51,7 @@ interface Hook {
   message?: string;
   working_dir?: string;
   tool_call_id?: string;
+  reason?: string;
 }
 const policy = (c: ResolvedConfig) =>
   contentHash(
@@ -265,16 +270,34 @@ export async function handleHook(event: Hook): Promise<void> {
       return;
     }
     if (event.event === "SessionEnd") {
-      const db = await openTranscript();
-      let rows: Row[], completed: string[];
-      try {
-        db.exec("BEGIN");
-        const index = messageIndex(db, event.session_id);
-        rows = readRows(db, event.session_id, state.baseline, index);
-        completed = index.map((r) => r.key);
-      } finally {
-        db.close();
-      }
+      const interrupted = event.reason === "user_cancel";
+      const deadline = Date.now() + TERMINAL_WAIT_MS;
+      let rows: Row[], completed: string[], ready: boolean;
+      do {
+        // Release the read transaction before waiting so the host can commit
+        // late responses. Every iteration sees a fresh, consistent snapshot.
+        const db = await openTranscript();
+        try {
+          db.exec("BEGIN");
+          const index = messageIndex(db, event.session_id);
+          rows = readRows(db, event.session_id, state.baseline, index);
+          completed = index.map((r) => r.key);
+        } finally {
+          db.close();
+        }
+        ready = hasTerminalResponse(rows);
+        if (interrupted || !state.stopped || ready || Date.now() >= deadline)
+          break;
+        await delay(Math.min(50, Math.max(0, deadline - Date.now())));
+      } while (true);
+      // SessionEnd confirms the records committed after Stop, not extra model
+      // work. Keep Stop's timestamp so persistence wait and user idle time are
+      // never counted as turn duration. Any intervening tool hook clears Stop.
+      if (state.stopped && ready && !interrupted)
+        state = { ...state, observed: completed };
+      state = { ...state, interrupted };
+      // The wait must not bypass a disable, privacy change or removed registration.
+      config = await resolveConfig({ agent: "goose", projectDir });
       await saveState(file, {
         ...state,
         pending: false,
@@ -282,6 +305,13 @@ export async function handleHook(event: Hook): Promise<void> {
         observed: completed,
         tools: {},
       });
+      if (
+        !collectionEnabled(config) ||
+        !(await registeredFor(config)) ||
+        state.generation !== config.generation ||
+        state.policy !== policy(config)
+      )
+        return;
       await exportTurn(config, event.session_id, state, rows);
     }
   } catch (e) {

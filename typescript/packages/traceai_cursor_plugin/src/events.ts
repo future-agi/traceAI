@@ -252,7 +252,7 @@ export function normalizeEvent(
     result.input = filtered(p.task, config);
     result.output = filtered(p.summary, config, true, failure);
   }
-  if (profile === "ide" && (expected === "stop" || expected === "afterAgentResponse"))
+  if (profile === "ide" && ["stop", "afterAgentResponse", "sessionEnd"].includes(expected))
     result.usage = usage(p);
   if (profile === "cloud") {
     let output = object(p.tool_output);

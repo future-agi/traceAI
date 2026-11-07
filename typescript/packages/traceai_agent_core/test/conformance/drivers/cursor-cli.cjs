@@ -1,5 +1,5 @@
-// Current CLI profile is held; trace probes exercise its documented shared IDE-hook
-// route explicitly as cursor. CLI lifecycle/disable/uninstall still use cursor-cli.
+// CLI trace probes use the shared Cursor hook route, not the separately held
+// print-stream transport. Lifecycle/disable/uninstall still use cursor-cli.
 module.exports = {
   ...require("./cursor.cjs").forAgent("cursor-cli"),
   captureAgent: "cursor",

@@ -544,6 +544,19 @@ async function main() {
           captures.length,
           scenario === "mid-disable" || midUninstall ? fenceCount : 0,
         );
+      } else if (scenario === "rejected") {
+        // A 401 fences future batches. Depending on native completion timing,
+        // the first rejected batch may contain only a tool or the full turn.
+        // The host must still finish both requests without retrying export.
+        assert.equal(captures.length, 1, "do not retry rejected credentials");
+        const spans = flatten(captures[0].body);
+        spanCount = spans.length;
+        spanNames = spans.map(s => s.name);
+        assert.ok(spanCount > 0 && spanCount <= expectedSpans);
+        assert.equal(status.delivery.exported, 0);
+        assert.equal(status.delivery.lastError, "AUTH_REJECTED");
+        assert.ok(!JSON.stringify(captures[0].body).includes(API));
+        assert.ok(!JSON.stringify(captures[0].body).includes(SECRET));
       } else if (scenario === "protobuf") {
         assert.ok(captures.length > 0);
         assert.ok(
@@ -583,6 +596,8 @@ async function main() {
             (s) => attrs(s)["gen_ai.operation.name"] === "invoke_agent",
           ),
         );
+        for (const root of roots)
+          assert.equal(attrs(root)[SC.FI_AGENT_OUTCOME], interrupted ? "interrupted" : "success");
         for (const s of spans.filter((s) => s.parentSpanId))
           assert.ok(
             spans.some(
@@ -680,14 +695,9 @@ async function main() {
               /PRIVATE_TOOL_ERROR_DETAIL/,
             );
         }
-        if (scenario === "rejected") {
-          assert.equal(status.delivery.exported, 0);
-          assert.equal(status.delivery.lastError, "AUTH_REJECTED");
-        } else {
-          assert.equal(status.delivery.exported, expectedSpans);
-          assert.ok(status.delivery.lastAcceptedAt);
-          assert.equal(status.activation, "OBSERVED");
-        }
+        assert.equal(status.delivery.exported, expectedSpans);
+        assert.ok(status.delivery.lastAcceptedAt);
+        assert.equal(status.activation, "OBSERVED");
       }
       if (scenario === "delayed-collector") {
         assert.ok(
@@ -706,7 +716,7 @@ async function main() {
           "untrusted destination must never receive even a credential probe",
         );
       }
-      if (captures.length && scenario !== "mid-disable" && !midUninstall) {
+      if (captures.length && scenario !== "rejected" && scenario !== "mid-disable" && !midUninstall) {
         const spans = captures.flatMap((c) => flatten(c.body));
         let measured = 0;
         for (const span of spans) {

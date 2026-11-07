@@ -29,6 +29,8 @@ export interface SessionState {
   promptHash?: string;
   stopped?: boolean;
   stoppedAt?: number;
+  /** Only an explicit native cancellation reason establishes interruption. */
+  interrupted?: boolean;
   /** Canonical authorized root; SessionEnd omits working_dir on resumed runs. */
   projectDir?: string;
   pending: boolean;
@@ -168,6 +170,37 @@ function usage(value: any): UsageInput | undefined {
       : {}),
   };
 }
+/** A Stop can precede the SQLite commit. Silence or an unfinished tool is not a terminal record. */
+export function hasTerminalResponse(rows: Row[]): boolean {
+  const parsed = rows.map((row) => ({
+    role: row.role,
+    parts: JSON.parse(row.content_json),
+    meta: JSON.parse(row.metadata_json || "{}"),
+  }));
+  if (parsed.some((row) => !Array.isArray(row.parts))) return false;
+  const generations = parsed.filter(
+    (row) => row.role === "assistant" && row.meta?.inference,
+  );
+  const last = generations.at(-1);
+  if (
+    !last ||
+    !text(last.parts) ||
+    last.parts.some((p: any) => p?.type === "toolRequest")
+  )
+    return false;
+  const responses = new Set(
+    parsed
+      .flatMap((row) => row.parts)
+      .filter((p: any) => p?.type === "toolResponse")
+      .map((p: any) => p.id),
+  );
+  return generations.every((row) =>
+    row.parts.every(
+      (p: any) => p?.type !== "toolRequest" || responses.has(p.id),
+    ),
+  );
+}
+
 /** Only persisted provider-response records own billing. Agent/session totals are never added. */
 export async function exportTurn(
   config: ResolvedConfig,
@@ -238,10 +271,12 @@ export async function exportTurn(
     text(lastGeneration.parts) &&
     !lastGeneration.parts.some((p: any) => p.type === "toolRequest");
   // Goose emits Stop even on provider failures with no saved response. Absence is not success.
-  let outcome: "success" | "error" | "incomplete" =
-    state.stopped && complete && (state.stoppedAt === undefined || stopped)
-      ? "success"
-      : "incomplete";
+  let outcome: "success" | "error" | "interrupted" | "incomplete" =
+    state.interrupted
+      ? "interrupted"
+      : state.stopped && complete && (state.stoppedAt === undefined || stopped)
+        ? "success"
+        : "incomplete";
   if (aggregateOnly) {
     const totals: UsageInput = { cacheInInput: true, reasoningInOutput: true };
     for (const row of generations) {
@@ -321,8 +356,12 @@ export async function exportTurn(
         source?.status === "error" ||
         result?.status === "error" ||
         result?.value?.isError === true;
-      if (failed) outcome = "error";
-      else if (!response && outcome !== "error") outcome = "incomplete";
+      // The terminal cancellation owns the root outcome; individual tool failures
+      // and unfinished tools keep their own statuses without replacing it.
+      if (!state.interrupted) {
+        if (failed) outcome = "error";
+        else if (!response && outcome !== "error") outcome = "incomplete";
+      }
       const toolStart = timing?.start ?? at;
       children++;
       const tool = turn.child({

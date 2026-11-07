@@ -5,6 +5,13 @@ import { contentHash, readJson } from "./files.js";
 
 export const DEFAULT_ENDPOINT = "https://api.futureagi.com/tracer/v1/traces";
 export const TRANSPORT_CONTRACT = "finalized-standard-otlp-v1" as const;
+/** Cursor CLI and IDE execute the same hooks and read the same settings file.
+ * Keep their delivery evidence, revocation epoch and ownership under one identity.
+ * Other hosts that merely share a directory are not lifecycle aliases.
+ */
+export function canonicalAgent(agent: string): string {
+  return agent === "cursor-cli" ? "cursor" : agent;
+}
 /** Hosted credentials are injected by the environment, never saved or inherited from a local profile. */
 export function environmentCredentialsOnly(agent: string): boolean {
   return agent === "cursor-cloud";
@@ -415,6 +422,7 @@ export function credentialPair(
 export async function resolveConfig(
   options: ResolveOptions,
 ): Promise<ResolvedConfig> {
+  options = { ...options, agent: canonicalAgent(options.agent) };
   const env = options.env ?? process.env,
     paths = await configPaths(options),
     issues: string[] = [];

@@ -50,10 +50,11 @@ const server = http.createServer(async(req,res)=>{
     if(mode==='auth-failure'){res.writeHead(401,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:'synthetic provider auth failure',type:'authentication_error'}}));return;}
     const tool=(body.tools||[]).find(t=>t.function?.name==='read');
     const afterTool=body.messages.some(m=>m.role==='tool');
-    const useTool=mode==='tools'&&tool&&!afterTool;
+    const useTool=(mode==='tools'||mode==='tool-error')&&tool&&!afterTool;
     const id='mock-'+requests.length;
     const output=useTool?null:'LOCAL_MOCK_DONE';
-    const toolCalls=useTool?[{index:0,id:'read-e2b',type:'function',function:{name:'read',arguments:JSON.stringify({path:'/work/project/README.md'})}}]:undefined;
+    const toolPath=mode==='tool-error'?'/work/project/HISTORICAL_MISSING_FILE':'/work/project/README.md';
+    const toolCalls=useTool?[{index:0,id:'read-e2b',type:'function',function:{name:'read',arguments:JSON.stringify({path:toolPath})}}]:undefined;
     res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});
     const chunk=(choices,usage)=>res.write('data: '+JSON.stringify({id,object:'chat.completion.chunk',created:1,model:'local-mock',choices,...(usage?{usage}:{})})+'\n\n');
     chunk([{index:0,delta:{role:'assistant',...(output?{content:output}:{tool_calls:toolCalls})},finish_reason:null}]);
@@ -172,6 +173,33 @@ const server = http.createServer(async(req,res)=>{
   assert.equal(attrs(resumedRoot)['session.id'],attrs(firstRoot)['session.id']);
   assert.equal(captured.filter(s=>!s.parentSpanId).length,1);
   evidence.scenarios.push({name:'resumed-session-separate-prompts',passed:true});
+  assert.ok(captured.some(s=>s.name==='openclaw.model.call'&&attrs(s)['input.value']?.includes('LOCAL_MOCK_DONE')),
+    'resumed native history contains prior assistant output before privacy filtering');
+  evidence.spans.push(...captured);captured=[];requests=[];
+  for(const flag of ['FI_HIDE_OUTPUTS','FI_HIDE_OUTPUT_TEXT','FI_HIDE_OUTPUT_MESSAGES']) {
+    await run(process.execPath,[cli,...invocation],{...process.env,FI_HIDE_ERROR_DETAILS:'false',[flag]:'true'});
+    assert.equal(requests.length,1);
+    assert.ok(captured.some(s=>attrs(s)['fi.span.kind']==='LLM'));
+    assert.ok(!JSON.stringify(captured).includes('LOCAL_MOCK_DONE'),'prior and current assistant output stay hidden');
+    assert.ok(captured.filter(s=>attrs(s)['fi.span.kind']==='LLM').every(s=>attrs(s)['input.value']===undefined));
+    evidence.scenarios.push({name:'resumed-history-'+flag,passed:true});
+    evidence.spans.push(...captured);captured=[];requests=[];
+  }
+  mode='tool-error';
+  const errorHistoryInvocation=invocation.map(s=>s==='e2b-conversation'?'error-history-conversation':s);
+  await run(process.execPath,[cli,...errorHistoryInvocation]);
+  assert.ok(captured.some(s=>s.name==='openclaw.tool.execution'&&s.status.code===2));
+  assert.ok(captured.some(s=>s.name==='openclaw.model.call'&&attrs(s)['input.value']?.includes('HISTORICAL_MISSING_FILE')),
+    'native model history really includes the failed tool result');
+  evidence.scenarios.push({name:'historical-tool-error-baseline',passed:true});
+  evidence.spans.push(...captured);captured=[];requests=[];
+  mode='plain';
+  await run(process.execPath,[cli,...errorHistoryInvocation],{...process.env,FI_HIDE_ERROR_DETAILS:'true'});
+  assert.equal(requests.length,1);
+  assert.ok(captured.some(s=>attrs(s)['fi.span.kind']==='LLM'&&attrs(s)['output.value']?.includes('LOCAL_MOCK_DONE')));
+  assert.ok(!JSON.stringify(captured).includes('HISTORICAL_MISSING_FILE'));
+  assert.equal(captured.find(s=>s.name==='openclaw.prompt').status.code,1);
+  evidence.scenarios.push({name:'resumed-history-FI_HIDE_ERROR_DETAILS',passed:true});
   evidence.spans.push(...captured);captured=[];requests=[];
   mode='retry'; retries=0;
   await run(process.execPath,[cli,...invocation.map(s=>s==='e2b-conversation'?'retry-conversation':s)]);
