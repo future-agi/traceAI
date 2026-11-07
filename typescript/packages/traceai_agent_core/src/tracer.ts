@@ -62,6 +62,8 @@ export interface EndInput {
   gap?: string;
 }
 export interface TurnInput {
+  /** Observed host surface, not inferred from the setup command. */
+  surface?: "cli" | "app";
   unit?: "turn" | "run" | "stop-summary";
   gaps?: string[];
   deferRoot?: boolean;
@@ -370,6 +372,8 @@ export function createTurnTracer(options: {
           (value.startTime === undefined ? "observed-event" : "source"),
         [SC.FI_AGENT_USAGE_PLAN]: value.usagePlan ?? "request",
       };
+      if (value.surface === "cli" || value.surface === "app")
+        attributes["fi.agent.surface"] = value.surface;
       if (value.gaps?.length)
         attributes["fi.agent.gaps"] = value.gaps
           .filter((v) => /^[A-Z_]{1,80}$/.test(v))

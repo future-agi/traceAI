@@ -59,7 +59,7 @@ test('native named-hook-map; only observer events, no permission decisions',()=>
   assert.ok(map.Stop[0].command.includes("'/opt/node/bin/node' ./hook.cjs Stop"));
   assert.equal(neutral('Stop'),'{"decision":""}\n'); assert.equal(neutral('PostToolUse'),'{}\n');
 });
-test('reject IDE/App and missing surface without reading a transcript',()=>{
+test('isCli remains CLI-only; app is a distinct supported surface',()=>{
   assert.equal(isCli(p),true);
   assert.equal(isCli({...p,transcriptPath:'/home/me/.gemini/antigravity/brain/a/t.jsonl'}),false);
   assert.equal(isCli({...p,transcriptPath:'/home/me/.gemini/antigravity-ide/brain/a/t.jsonl'}),false);
@@ -123,6 +123,21 @@ test('real recorded CLI fixture replay produces three roots, shared session for 
   const status=await core.inspectStatus(f.options);assert.equal(status.delivery.exported,16);
   assert.equal(status.productReadback,'unverified');
   console.log('RECORDED_FIXTURE_OTLP',JSON.stringify({roots:3,tools:6,invocationActivities:7,llm:0,errors:2}));
+});
+test('CLI and app checkpoints and trace identities do not collide for the same conversation ID', async t => {
+  const f = await fixture(t);
+  for (const surface of ['cli', 'app']) {
+    const transcriptPath = p.transcriptPath.replace('antigravity-cli', surface === 'app' ? 'antigravity' : 'antigravity-cli');
+    await handleEvent('PreInvocation', {...p, transcriptPath, workspacePaths: [], lastUserInput: 'same prompt'}, f.options);
+    await handleEvent('PostInvocation', {...p, transcriptPath, workspacePaths: []}, f.options);
+    await handleEvent('Stop', {...p, transcriptPath, workspacePaths: [], fullyIdle: true, terminationReason: 'NO_TOOL_CALL'}, f.options);
+  }
+  const roots = f.spans().filter(s => !s.parentSpanId);
+  assert.equal(roots.length, 2);
+  assert.deepEqual(roots.map(s => attrs(s)['fi.agent.surface']), ['cli', 'app']);
+  assert.notEqual(roots[0].traceId, roots[1].traceId);
+  assert.notEqual(attrs(roots[0])['session.id'], attrs(roots[1])['session.id']);
+  assert.equal((await fs.readdir(path.join(f.resolved.paths.stateDir, 'antigravity-conversations'))).filter(n => n.endsWith('.json')).length, 2);
 });
 test('redact quoted credentials in mixed text and whole known keys before truncation',()=>{
   for(const value of ['prefix {"password":"private pass phrase"} suffix', "password='private pass phrase'", 'prefix '+JSON.stringify(JSON.stringify({api_key:'private pass phrase'}))])
@@ -284,7 +299,7 @@ test('nonterminal runtime imports no OTel exporter',async t=>{
 test('real agy 1.5.2 native installation, idempotence, standalone hooks and ownership-safe uninstall',
   {skip:process.env.AGY_TEST_REAL!=='1'},async t=>{
   const f=await fixture(t), ctx={config:f.resolved,scope:'user',projectDir:f.project};
-  assert.deepEqual(await adapter.detect(ctx),{supported:true,version:'1.5.2',reason:'LINUX_CLI_ONLY'});
+  assert.deepEqual(await adapter.detect(ctx),{supported:true,version:'1.5.2',reason:undefined});
   const install=await adapter.install(ctx);assert.equal(install.registered,true);
   assert.equal((await adapter.install(ctx)).registered,true);
   const list=await run('agy',['plugin','list','--json'],f.env);assert.equal(list.code,0);

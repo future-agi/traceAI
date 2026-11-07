@@ -18,6 +18,7 @@ export interface Activity {
   outcome?: TurnOutcome;
 }
 export interface Turn {
+  surface?: Surface;
   /** Explicit native invoke_subagent result, never inferred from prompt text. */
   children?: {conversationId: string; toolId: string; input?: string}[];
   capped?: boolean;
@@ -34,6 +35,7 @@ export interface Turn {
   activities: Activity[];
 }
 export interface Conversation {
+  surface?: Surface;
   schemaVersion: 1;
   touched: number;
   generation: number;
@@ -52,10 +54,25 @@ export interface Conversation {
 export function integer(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
+export type Surface = 'cli' | 'app';
+/** Only observed native surfaces. Reject ambiguous, foreign and traversal paths;
+ * transcript reads additionally require the exact configured-home conversation. */
+export function surface(payload: Payload): Surface | undefined {
+  const paths = [payload.transcriptPath, payload.artifactDirectoryPath].filter(x => x !== undefined);
+  let result: Surface | undefined;
+  for (const path of paths) {
+    if (typeof path !== 'string' || !path.startsWith('/') || /[\\\x00-\x1f]/.test(path) ||
+        path.split('/').some(part => part === '.' || part === '..')) return undefined;
+    const match = /^\/(?:[^/]+\/)*\.gemini\/(antigravity-cli|antigravity)\//.exec(path);
+    if (!match) return undefined;
+    const found = match[1] === 'antigravity-cli' ? 'cli' : 'app';
+    if (result && result !== found) return undefined;
+    result = found;
+  }
+  return result;
+}
 export function isCli(payload: Payload): boolean {
-  const paths = [payload.transcriptPath, payload.artifactDirectoryPath].filter((x): x is string => typeof x === 'string');
-  return paths.some(x => x.replace(/\\/g, '/').includes('/.gemini/antigravity-cli/')) &&
-    !paths.some(x => /\/\.gemini\/antigravity(?:-ide)?\//.test(x.replace(/\\/g, '/')));
+  return surface(payload) === 'cli';
 }
 export function text(value: unknown, config: ResolvedConfig, output = false, error = false): string | undefined {
   if (!config.captureContent || (output ? config.hideOutputs : config.hideInputs) || (error && config.hideErrorDetails)) return undefined;
@@ -110,7 +127,7 @@ export function applyEvent(state: Conversation, event: EventName, p: Payload, co
         // A native subagent starts at step zero with no USER_INPUT. Keep it pending
         // until a parent's explicit invoke_subagent record supplies ownership.
         state.origin = !p.lastUserInput && (step === 0 || state.origin === 'unresolved') ? 'unresolved' : 'user';
-        state.active = {id: turnId, userStep, start: now, input: text(p.lastUserInput, config), activities: []};
+        state.active = {id: turnId, surface: surface(p), userStep, start: now, input: text(p.lastUserInput, config), activities: []};
       }
     }
     const turn = state.active;
@@ -147,13 +164,19 @@ export function applyEvent(state: Conversation, event: EventName, p: Payload, co
 }
 export function emitTurn(tracer: TurnTracer, conversationId: string, turn: Turn): void {
   const aggregateOnly = turn.activities.length > 240;
-  const root = tracer.startTurn({sessionId: conversationId, turnId: turn.id, input: turn.input,
+  const root = tracer.startTurn({sessionId: turn.surface === 'app' ? `app:${conversationId}` : conversationId,
+    surface: turn.surface, turnId: turn.id, input: turn.input,
     usagePlan: aggregateOnly ? 'turn' : turn.activities.some(a => a.kind === 'llm') ? 'request' : 'unknown', startTime: new Date(turn.start)});
   if (aggregateOnly) {
     const totals: UsageInput = {cacheInInput: true, reasoningInOutput: true};
     for (const a of turn.activities) if (a.kind === 'llm') {
       for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'costUsd'] as const)
         if (a.usage?.[field] !== undefined) totals[field] = (totals[field] ?? 0) + a.usage[field]!;
+      // The aggregate uses inclusive counters, even when native response rows do not.
+      if (a.usage?.input !== undefined && !a.usage.cacheInInput)
+        totals.input = (totals.input ?? 0) + (a.usage.cacheRead ?? 0) + (a.usage.cacheWrite ?? 0);
+      if (a.usage?.output !== undefined && !a.usage.reasoningInOutput)
+        totals.output = (totals.output ?? 0) + (a.usage.reasoning ?? 0);
     }
     root.end({output: turn.output, outcome: turn.outcome, usage: totals, gap: 'SPAN_DETAIL_LIMIT', endTime: new Date(turn.end ?? turn.start)});
     return;

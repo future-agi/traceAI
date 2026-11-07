@@ -6,7 +6,7 @@ import type { ResolveOptions, ResolvedConfig, DeliveryState } from '@traceai/age
 import { resolveConfig, destinationId, deliveryStatePath } from '@traceai/agent-core/config';
 import { collectionEnabled } from '@traceai/agent-core/fence';
 import { ensurePrivateDirectory, readProtected, writeProtectedUnderLock, updateJson, contentHash } from '@traceai/agent-core/files';
-import { applyEvent, emitTurn, EVENTS, integer, isCli, type Conversation, type EventName, type Payload, type Turn } from './mapper.js';
+import { applyEvent, emitTurn, EVENTS, integer, surface, type Conversation, type EventName, type Payload, type Surface, type Turn } from './mapper.js';
 import { enrichTranscript, settleTranscript } from './transcript.js';
 // Pinned, maintained lock implementation: bounded retry plus stale-lock recovery.
 const lockfile = require('proper-lockfile') as {lock(path: string, options: {
@@ -67,9 +67,9 @@ function project(payload: Payload): string | undefined {
 }
 export interface HostIdentity {pid: number; start: string}
 interface RuntimeOptions extends Partial<ResolveOptions> {host?: HostIdentity}
-function conversationPath(config: ResolvedConfig, conversationId: string): string {
+function conversationPath(config: ResolvedConfig, conversationId: string, source: Surface = 'cli'): string {
   const id = createHmac('sha256', key(config)).update(JSON.stringify([
-    destinationId(config.endpoint, config.projectName), conversationId
+    destinationId(config.endpoint, config.projectName), source === 'app' ? `app:${conversationId}` : conversationId
   ])).digest('hex');
   return join(config.paths.stateDir, 'antigravity-conversations', `${id}.json`);
 }
@@ -84,7 +84,7 @@ async function attachChildren(turn: Turn, config: ResolvedConfig, seen: Set<stri
     try {
       let child: Conversation | undefined;
       do {
-        const raw = await readProtected(conversationPath(config, relation.conversationId), true, MAX_ENVELOPE_BYTES);
+        const raw = await readProtected(conversationPath(config, relation.conversationId, turn.surface), true, MAX_ENVELOPE_BYTES);
         child = raw ? unseal(raw, config) : undefined;
         if (child && (!child.active || exiting)) break;
         if (Date.now() >= deadline) break;
@@ -95,7 +95,7 @@ async function attachChildren(turn: Turn, config: ResolvedConfig, seen: Set<stri
       if (child.active) turns.push({...child.active, end: Date.now(), outcome: 'incomplete'});
       if (!turns.length) throw new Error('CHILD_STATE_UNAVAILABLE');
       const home = dirname(dirname(dirname(config.paths.user)));
-      const payload = {conversationId: relation.conversationId, transcriptPath: join(home, '.gemini', 'antigravity-cli', 'brain', relation.conversationId, '.system_generated', 'logs', 'transcript_full.jsonl')};
+      const payload = {conversationId: relation.conversationId, transcriptPath: join(home, '.gemini', turn.surface === 'app' ? 'antigravity' : 'antigravity-cli', 'brain', relation.conversationId, '.system_generated', 'logs', 'transcript_full.jsonl')};
       try { await enrichTranscript(child, turns, payload, config); }
       catch { await diagnostic(config, 'SUBAGENT_TRANSCRIPT_UNAVAILABLE'); }
       let attached = true;
@@ -128,12 +128,13 @@ export async function pendingTurns(config: ResolvedConfig): Promise<number> {
       if (raw) states.push({path, state: unseal(raw, config)});
     } catch { /* another policy/destination is not readable in this context */ }
   }
-  const linked = new Set(states.flatMap(s => (s.state.joinedChildren ?? []).map(id => conversationPath(config, id))));
+  const linked = new Set(states.flatMap(s => (s.state.joinedChildren ?? []).map(id => conversationPath(config, id, s.state.surface))));
   return states.reduce((total, {path, state}) => total + (state.active ? 1 : 0) + (!linked.has(path) ? state.pending?.length ?? 0 : 0), 0);
 }
 /** Only a lease timeout is retryable: callers must not replay ambiguous exports. */
 export async function handleEvent(event: string, payload: Payload, options: RuntimeOptions = {}): Promise<'retry-lock' | void> {
-  if ((!EVENTS.includes(event as EventName) && event !== 'HostExit') || !isCli(payload) || typeof payload.conversationId !== 'string' ||
+  const source = surface(payload);
+  if ((!EVENTS.includes(event as EventName) && event !== 'HostExit') || !source || typeof payload.conversationId !== 'string' ||
       !/^[A-Za-z0-9_-]{1,128}$/.test(payload.conversationId)) return;
   let config: ResolvedConfig;
   try {
@@ -149,7 +150,7 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
     return;
   }
   const directory = join(config.paths.stateDir, 'antigravity-conversations');
-  const path = conversationPath(config, payload.conversationId), name = path.slice(directory.length + 1);
+  const path = conversationPath(config, payload.conversationId, source), name = path.slice(directory.length + 1);
   const lockPath = path.replace(/\.json$/, '.event-lock-v2');
   let release: (() => Promise<void>) | undefined;
   let compromised = false;
@@ -172,6 +173,7 @@ export async function handleEvent(event: string, payload: Payload, options: Runt
         state = {schemaVersion: 1, touched: Date.now(), generation: config.generation, completed: []};
       }
     }
+    state.surface = source;
     if (event === 'HostExit' && (!options.host || !state.active ||
         state.host?.pid !== options.host.pid || state.host?.start !== options.host.start)) return;
     if (event === 'PreInvocation') {

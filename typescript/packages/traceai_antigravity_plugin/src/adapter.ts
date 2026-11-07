@@ -46,6 +46,16 @@ async function pruneRuntime(c: AdapterContext, receipt: Receipt | undefined, kee
     await fs.rmdir(path);
   } catch { /* preserve modified, absent or unsafe runtimes */ }
 }
+/** agy leaves this directory after uninstall. Never recurse or follow symlinks. */
+async function pruneEmptyAppData(c: AdapterContext): Promise<void> {
+  const directory = join(homePath(c), '.gemini', 'antigravity', 'plugin_data', PLUGIN_NAME);
+  try {
+    await safeParents(dirname(directory));
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid())) return;
+    await fs.rmdir(directory);
+  } catch { /* absent, nonempty or unsafe directories belong to the user */ }
+}
 const quote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const receiptPath = (c: AdapterContext): string => join(c.config.paths.configDir, 'antigravity-registration.json');
@@ -118,7 +128,7 @@ export const antigravityAdapter: CoreAdapter = {
     UNOWNED_PLUGIN_CONFLICT: 'Inspect agy plugin list --json. Back up and remove the conflicting futureagi-tracing plugin yourself before setup; unrelated plugins are preserved.',
     ENABLE_PLUGIN_IN_AGY: 'Run agy plugin enable futureagi-tracing, then run fi-agent doctor antigravity from your workspace.',
     PLUGIN_NOT_INSTALLED: 'Run fi-agent setup antigravity --project <name> to install the native plugin.',
-    UNEXPECTED_INSTALL_LOCATION: 'Inspect agy plugin list --json and use the supported Linux CLI version; setup did not verify the installed path.',
+    UNEXPECTED_INSTALL_LOCATION: 'Inspect agy plugin list --json and use supported agy 1.x on Linux or macOS; setup did not verify the installed path.',
     INSTALLED_CONTENT_MISMATCH: 'The installed plugin differs from this package. Back it up and resolve the conflict before running setup again.',
     PERSISTENT_NODE_REQUIRED: 'Install Node.js persistently (not inside an npx cache), then run setup again.',
     PINNED_NODE_MISSING: 'The installed Node interpreter is missing. Install Node.js and run setup again to repair the hook command.',
@@ -128,13 +138,15 @@ export const antigravityAdapter: CoreAdapter = {
     AGY_COMMAND_FAILED: 'Ensure agy is installed on PATH and agy plugin list --json works in this shell, then retry.',
     INVALID_PLUGIN_LIST: 'Use the supported agy CLI version and check that agy plugin list --json returns a plugin list.',
     UNSAFE_PLUGIN_FILE: 'Check installed plugin ownership and file types; symlinks, hardlinks and files owned by another user are not accepted.',
-    HOST_VERSION_NOT_QUALIFIED: 'Use the supported Antigravity CLI 1.x line on Linux (tested with 1.5.2); other major versions require qualification.',
-    LINUX_CLI_ONLY: 'Use this integration with Antigravity CLI on Linux, not the IDE or App.',
+    HOST_VERSION_NOT_QUALIFIED: 'Use agy 1.x on Linux or macOS (CLI tested with 1.5.2; desktop App 2.28.2 with agy 1.4.2); other agy major versions require qualification.',
+    UNSUPPORTED_PLATFORM: 'Use Antigravity on Linux or macOS. Windows setup is not yet qualified.',
   },
   async detect(c) {
+    if (process.platform !== 'linux' && process.platform !== 'darwin')
+      return {supported: false, reason: 'UNSUPPORTED_PLATFORM'};
     const version = (await command(c, ['--version'])).trim();
-    return {supported: supportedHostVersion(version) && process.platform === 'linux', version,
-      reason: supportedHostVersion(version) ? 'LINUX_CLI_ONLY' : 'HOST_VERSION_NOT_QUALIFIED'};
+    return {supported: supportedHostVersion(version), version,
+      reason: supportedHostVersion(version) ? undefined : 'HOST_VERSION_NOT_QUALIFIED'};
   },
   async install(c) {
     // Native agy installs user-global. Project configuration is resolved from workspacePaths;
@@ -195,7 +207,7 @@ export const antigravityAdapter: CoreAdapter = {
       : !list.length ? 'PLUGIN_NOT_INSTALLED'
       : !verified ? 'UNOWNED_PLUGIN_CONFLICT'
       : !interpreter ? 'PINNED_NODE_MISSING'
-      : !list[0].enabled ? 'ENABLE_PLUGIN_IN_AGY' : pendingTurns ? 'PENDING_TURNS' : 'CLI_ONLY_QUALIFIED_TRANSCRIPT_GENERATIONS';
+      : !list[0].enabled ? 'ENABLE_PLUGIN_IN_AGY' : pendingTurns ? 'PENDING_TURNS' : 'CLI_APP_TRANSCRIPT_GENERATIONS';
     return {registered: verified && list[0].enabled && !duplicate && interpreter, duplicate, pendingTurns,
       hostVersion: (await command(c, ['--version'])).trim(), trust: 'unknown', detail};
   },
@@ -207,6 +219,7 @@ export const antigravityAdapter: CoreAdapter = {
     if (list.length) await command(c, ['plugin', 'uninstall', PLUGIN_NAME]);
     const registered = (await plugins(c)).some(p => p.name === PLUGIN_NAME);
     if (!registered) {
+      if (receipt) await pruneEmptyAppData(c);
       await pruneRuntime(c, receipt);
       await fs.unlink(receiptPath(c)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     }
