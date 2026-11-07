@@ -26,7 +26,7 @@ test('retry trees share one prompt root without span-id collisions, usage duplic
   const options={agent:'openclaw',home,env:{FI_AGENT_ENABLED:'true',FI_API_KEY:'synthetic-public',FI_SECRET_KEY:'synthetic-private',FI_OTLP_ENDPOINT:`http://127.0.0.1:${server.address().port}/traces`}};
   const config=await resolveConfig(options);
   let previous;
-  for(const exitCode of [0,130]) {
+  for(const [exitCode, outcome] of [[0,'success'],[1,'error'],[130,'interrupted'],[143,'interrupted'],[137,'incomplete']]) {
     const delivery=await createLauncherDelivery(config,'stable-session');
     const capture=new LauncherCaptureProcessor(config,delivery.fd,Buffer.from(delivery.key,'hex'),'stable-session');
     for(const nativeTrace of ['a','b']) {
@@ -44,7 +44,7 @@ test('retry trees share one prompt root without span-id collisions, usage duplic
     assert.equal(batch.filter(s=>!s.parentSpanId).length,1);
     assert.ok(root); assert.notEqual(root.traceId,previous);previous=root.traceId;
     assert.equal(root.status.code,exitCode===0?1:2);
-    assert.equal(attributes(root)['fi.agent.outcome'],exitCode===0?'success':'cancelled');
+    assert.equal(attributes(root)['fi.agent.outcome'],outcome);
     assert.ok(batch.every(s=>attributes(s)['session.id']==='stable-session'));
     assert.ok(batch.every(s=>attributes(s)['fi.agent.turn_correlation']==='launcher-invocation'));
     for(const child of batch.filter(s=>s!==root)) {
