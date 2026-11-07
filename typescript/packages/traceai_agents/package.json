@@ -34,11 +34,9 @@
     "@traceai/hermes-agent": "workspace:^",
     "@traceai/openclaw": "workspace:^",
     "@traceai/grok-plugin": "workspace:^",
-    "@traceai/muse-plugin": "workspace:^",
-    "@traceai/gemini-cli": "workspace:^",
-    "@traceai/kiro-plugin": "workspace:^",
-    "@traceai/augment-plugin": "workspace:^",
-    "@traceai/devin-cascade": "workspace:^",
+    "@traceai/cursor-plugin": "workspace:^",
+    "@traceai/opencode-plugin": "workspace:^",
+    "@traceai/opencode-v1-plugin": "workspace:^",
     "@traceai/claude-code": "workspace:^",
     "@traceai/goose": "workspace:^",
     "@traceai/pi-plugin": "workspace:^",
@@ -46,8 +44,7 @@
   },
   "devDependencies": {
     "typescript": "^5.8.3",
-    "@types/node": "^22.15.29",
-    "@traceai/cursor-plugin": "workspace:^"
+    "@types/node": "^22.15.29"
   },
   "repository": {
     "type": "git",

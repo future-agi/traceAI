@@ -27,8 +27,8 @@ test("assembly retains every qualified and held registry entry without duplicate
     assert.ok(loadAdapter(id), id);
     assert.equal(loadAdapter(id).id, id, id);
   }
-  for (const id of ["claude", "goose", "oh-my-pi"]) assert.equal(adapterRelease(id)?.qualified, true, id);
-  for (const id of ["pi", "cursor", "cursor-cli", "cursor-cloud"]) {
+  for (const id of ["claude", "goose", "oh-my-pi", "pi", "cursor", "cursor-cli"]) assert.equal(adapterRelease(id)?.qualified, true, id);
+  for (const id of ["cursor-cloud"]) {
     assert.equal(adapterRelease(id)?.qualified, false, id);
     assert.ok(adapterRelease(id)?.reason, id);
   }

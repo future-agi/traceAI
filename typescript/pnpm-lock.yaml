@@ -307,9 +307,6 @@ importers:
       '@traceai/antigravity-plugin':
         specifier: workspace:^
         version: link:../traceai_antigravity_plugin
-      '@traceai/augment-plugin':
-        specifier: workspace:^
-        version: link:../traceai_augment_plugin
       '@traceai/claude-code':
         specifier: workspace:^
         version: link:../traceai_claude_code
@@ -319,12 +316,9 @@ importers:
       '@traceai/copilot':
         specifier: workspace:^
         version: link:../traceai_copilot
-      '@traceai/devin-cascade':
+      '@traceai/cursor-plugin':
         specifier: workspace:^
-        version: link:../traceai_devin_cascade
-      '@traceai/gemini-cli':
-        specifier: workspace:^
-        version: link:../traceai_gemini_cli
+        version: link:../traceai_cursor_plugin
       '@traceai/goose':
         specifier: workspace:^
         version: link:../traceai_goose
@@ -334,18 +328,18 @@ importers:
       '@traceai/hermes-agent':
         specifier: workspace:^
         version: link:../traceai_hermes_agent
-      '@traceai/kiro-plugin':
-        specifier: workspace:^
-        version: link:../traceai_kiro_plugin
-      '@traceai/muse-plugin':
-        specifier: workspace:^
-        version: link:../traceai_muse_plugin
       '@traceai/oh-my-pi-plugin':
         specifier: workspace:^
         version: link:../traceai_oh_my_pi_plugin
       '@traceai/openclaw':
         specifier: workspace:^
         version: link:../traceai_openclaw
+      '@traceai/opencode-plugin':
+        specifier: workspace:^
+        version: link:../traceai_opencode_plugin
+      '@traceai/opencode-v1-plugin':
+        specifier: workspace:^
+        version: link:../traceai_opencode_v1_plugin
       '@traceai/pi-plugin':
         specifier: workspace:^
         version: link:../traceai_pi_plugin
@@ -353,9 +347,6 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
     devDependencies:
-      '@traceai/cursor-plugin':
-        specifier: workspace:^
-        version: link:../traceai_cursor_plugin
       '@types/node':
         specifier: ^22.15.29
         version: 22.15.33

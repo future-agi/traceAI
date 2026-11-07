@@ -4,20 +4,22 @@ import { codexAdapter, HOST_VERSION } from "@traceai/codex-plugin";
 import { opencodeV1Adapter } from "./opencode-v1.js";
 import { antigravityAdapter } from "@traceai/antigravity-plugin";
 import { copilotAdapter, HOST_VERSION as COPILOT_HOST_VERSION } from "@traceai/copilot";
-import { vscodeAdapter, EDITOR_HOLD } from "@traceai/copilot/vscode";
 import { openclawAdapter } from "@traceai/openclaw";
-import { grokAdapter, HOST_RANGE } from "@traceai/grok-plugin";
-import { museAdapter } from "@traceai/muse-plugin";
-import { geminiAdapter, TESTED_HOST as GEMINI_TESTED_HOST } from "@traceai/gemini-cli";
-import { kiroAdapter } from "@traceai/kiro-plugin";
-import { kiroIdeAdapter, IDE_HOLD as KIRO_IDE_HOLD } from "@traceai/kiro-plugin/ide";
-import { augmentAdapter, augmentIdeAdapter, IDE_HOLD as AUGMENT_IDE_HOLD } from "@traceai/augment-plugin";
-import { cascadeAdapter } from "@traceai/devin-cascade";
+import { cursorAdapter } from "@traceai/cursor-plugin";
+import { cursorCliAdapter } from "@traceai/cursor-plugin/cli";
+import { grokAdapter, HOST_RANGE as GROK_HOST_RANGE } from "@traceai/grok-plugin";
 import { opencodeAdapter, OPENCODE_HOST, OPENCODE_QUALIFIED } from "./adapters/opencode.js";
 import { claudeAdapter, CAPABILITIES, TESTED_HOST as CLAUDE_TESTED_HOST } from "@traceai/claude-code";
 import { gooseAdapter } from "@traceai/goose";
 import { piAdapter } from "@traceai/pi-plugin/adapter";
 import { ohMyPiAdapter } from "@traceai/oh-my-pi-plugin/adapter";
+
+// Release metadata must be readable without installing held/private packages.
+// Keep these pinned evidence/hold values in sync with the adapter exports.
+const EDITOR_HOLD = "VSCODE_GUI_AND_TRANSPORT_QUALIFICATION_REQUIRED";
+const KIRO_IDE_HOLD = "KIRO_IDE_GUI_AND_PAYLOAD_QUALIFICATION_REQUIRED";
+const AUGMENT_IDE_HOLD = "AUGMENT_IDE_GUI_QUALIFICATION_REQUIRED";
+const GEMINI_TESTED_HOST = "0.67.0";
 
 export interface AdapterRelease {
   id: string;
@@ -126,8 +128,8 @@ const explicitAdapters: AdapterRelease[] = [
     version: "0.1.0",
     mechanism: "pi install",
     hostRange: ">=1.5.0 <2.0.0",
-    qualified: false,
-    reason: "REGISTRY_PUBLICATION_REQUIRED",
+    qualified: true,
+    reason: "PI_1_5_0_NATIVE_HOST_QUALIFIED",
   },
   {
     id: "opencode",
@@ -179,20 +181,21 @@ const explicitAdapters: AdapterRelease[] = [
     packageName: "@traceai/grok-plugin",
     version: "0.1.0",
     mechanism: "grok plugin install",
-    hostRange: HOST_RANGE,
+    hostRange: GROK_HOST_RANGE,
     qualified: true,
     reason: "REGISTRY_PUBLICATION_REQUIRED",
   },
   {
     id: "cursor", packageName: "@traceai/cursor-plugin", version: "0.1.0",
     mechanism: "persistent user hooks; no local-plugin policy changes",
-    qualified: false, hostRange: "3.x hook schema (3.24.18, 3.26.13 observed)",
-    reason: "NPM_AVAILABILITY_REQUIRED",
+    qualified: true, hostRange: "3.x hook schema (3.24.18, 3.26.13 observed)",
+    reason: "CURSOR_3_26_13_MAC_CLOUD_READBACK_QUALIFIED",
   },
   {
     id: "cursor-cli", packageName: "@traceai/cursor-plugin", version: "0.1.0",
-    mechanism: "shared user hooks; exclusive print stream pending qualification",
-    qualified: false, reason: "NPM_AVAILABILITY_REQUIRED",
+    mechanism: "shared user hooks with deferred transcript finisher; print stream pending qualification",
+    hostRange: "2026.11.05 CLI (macOS)",
+    qualified: true, reason: "CURSOR_CLI_MAC_CLOUD_READBACK_QUALIFIED",
   },
   {
     id: "cursor-cloud", packageName: "@traceai/cursor-plugin", version: "0.1.0",
@@ -232,8 +235,9 @@ export const adapterRegistry: readonly AdapterRelease[] = [
 export function adapterRelease(id: string): AdapterRelease | undefined {
   return adapterRegistry.find((item) => item.id === id);
 }
-/** Adapter implementation owners register their tested, statically imported lifecycle here.
- * Never load a project-supplied executable path or treat a manifest alone as qualification.
+/** Qualified public packages are installed with the CLI. Held/private packages
+ * are optional, resolved only from these fixed package specifiers, never from
+ * project configuration. Availability is separate from real-host qualification.
  */
 export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "pi") return piAdapter;
@@ -245,27 +249,33 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "opencode-v1") return opencodeV1Adapter;
   if (id === "antigravity") return antigravityAdapter;
   if (id === "copilot") return copilotAdapter;
-  if (id === "copilot-vscode") return vscodeAdapter;
   if (id === "hermes") return hermesAdapter;
   if (id === "openclaw") return openclawAdapter;
   if (id === "grok") return grokAdapter;
-  switch (id) {
-    case "muse": return museAdapter;
-    case "gemini": return geminiAdapter;
-    case "kiro-cli": return kiroAdapter;
-    case "kiro-ide": return kiroIdeAdapter;
-    case "augment": return augmentAdapter;
-    case "augment-ide": return augmentIdeAdapter;
-    case "devin-cascade": return cascadeAdapter;
-  }
-  if (!["cursor", "cursor-cli", "cursor-cloud"].includes(id)) return undefined;
-  // Held distributions remain optional until real-host and npm qualification.
+  if (id === "cursor") return cursorAdapter;
+  if (id === "cursor-cli") return cursorCliAdapter;
   try {
-    if (id === "cursor-cli")
-      return (require("@traceai/cursor-plugin/cli") as { cursorCliAdapter: CoreAdapter }).cursorCliAdapter;
-    if (id === "cursor-cloud")
-      return (require("@traceai/cursor-plugin/cloud") as { cursorCloudAdapter: CoreAdapter }).cursorCloudAdapter;
-    return (require("@traceai/cursor-plugin") as { cursorAdapter: CoreAdapter }).cursorAdapter;
+    switch (id) {
+      case "copilot-vscode":
+        return (require("@traceai/copilot/vscode") as { vscodeAdapter: CoreAdapter }).vscodeAdapter;
+      case "muse":
+        return (require("@traceai/muse-plugin") as { museAdapter: CoreAdapter }).museAdapter;
+      case "gemini":
+        return (require("@traceai/gemini-cli") as { geminiAdapter: CoreAdapter }).geminiAdapter;
+      case "kiro-cli":
+        return (require("@traceai/kiro-plugin") as { kiroAdapter: CoreAdapter }).kiroAdapter;
+      case "kiro-ide":
+        return (require("@traceai/kiro-plugin/ide") as { kiroIdeAdapter: CoreAdapter }).kiroIdeAdapter;
+      case "augment":
+        return (require("@traceai/augment-plugin") as { augmentAdapter: CoreAdapter }).augmentAdapter;
+      case "augment-ide":
+        return (require("@traceai/augment-plugin") as { augmentIdeAdapter: CoreAdapter }).augmentIdeAdapter;
+      case "devin-cascade":
+        return (require("@traceai/devin-cascade") as { cascadeAdapter: CoreAdapter }).cascadeAdapter;
+      case "cursor-cloud":
+        return (require("@traceai/cursor-plugin/cloud") as { cursorCloudAdapter: CoreAdapter }).cursorCloudAdapter;
+      default: return undefined;
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
     return undefined;

@@ -222,6 +222,13 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     }, json);
     return 2;
   }
+  // An unpublished optional integration must not prompt for credentials, send
+  // validation traffic or leave a misleading configured-only installation.
+  // Uninstall still reaches its offline disable fence below.
+  if (!adapter && p.command !== "uninstall") {
+    output({ code: release.reason, agent: p.agent, configured: false, registered: false }, json);
+    return 2;
+  }
   if (p.command === "uninstall") {
     // Fence active launchers first, even when profiles or project settings are broken.
     await disable(options);

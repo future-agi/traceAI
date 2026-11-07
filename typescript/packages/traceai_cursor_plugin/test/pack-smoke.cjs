@@ -58,14 +58,15 @@ async function main() {
     { env, encoding: "utf8" },
   );
   assert.equal(status.status, 2);
-  assert.match(JSON.parse(status.stdout).qualification, /NPM_AVAILABILITY/);
+  assert.equal(JSON.parse(status.stdout).qualification, "QUALIFIED");
   assert.equal(cursor.qualification.live, true);
   const pkg = JSON.parse(
     await fs.readFile(
       path.join(root, "node_modules/@traceai/cursor-plugin/package.json"),
     ),
   );
-  assert.equal(pkg.private, true);
+  assert.notEqual(pkg.private, true);
+  assert.equal(pkg.publishConfig.access, "public");
   const hooks = JSON.parse(
     await fs.readFile(
       path.join(root, "node_modules/@traceai/cursor-plugin/hooks/hooks.json"),

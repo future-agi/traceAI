@@ -1,7 +1,6 @@
 {
   "name": "@traceai/grok-plugin",
   "version": "0.1.0",
-  "private": true,
   "description": "Native Grok Build hooks and turn tracing for Future AGI",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const execFile = promisify(require('node:child_process').execFile);
-const { adapterRegistry, loadAdapter } = require('../dist/registry.js');
+const { adapterRegistry } = require('../dist/registry.js');
 const ids = ['muse', 'gemini', 'kiro-cli', 'kiro-ide', 'augment', 'augment-ide', 'devin-cascade'];
 
 test('held registry keeps distinct surfaces and both Kiro package entries', () => {
@@ -13,10 +13,12 @@ test('held registry keeps distinct surfaces and both Kiro package entries', () =
     const entries = adapterRegistry.filter(a => a.id === id);
     assert.equal(entries.length, 1, id);
     assert.equal(entries[0].qualified, false, id);
-    assert.equal(loadAdapter(id).id, id);
+    assert.ok(entries[0].reason, id);
   }
-  assert.equal(require('@traceai/kiro-plugin').kiroAdapter.id, 'kiro-cli');
-  assert.equal(require('@traceai/kiro-plugin/ide').kiroIdeAdapter.id, 'kiro-ide');
+  // Inspect the workspace implementation explicitly; it is not a CLI dependency.
+  // optional-adapters.test.cjs separately covers present/absent runtime loading.
+  assert.equal(require('../../traceai_kiro_plugin/dist/index.js').kiroAdapter.id, 'kiro-cli');
+  assert.equal(require('../../traceai_kiro_plugin/dist/ide/index.js').kiroIdeAdapter.id, 'kiro-ide');
 });
 
 test('held GUI activation refuses before credentials or filesystem writes', async t => {
