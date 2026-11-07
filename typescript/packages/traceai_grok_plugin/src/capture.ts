@@ -156,8 +156,6 @@ export async function capture(
   // Stop is a gate, not proof of completion: another hook can continue or cancel it.
   // The pinned host writes turn_completed after Stop returns. SessionEnd/idle notification
   // flush that turn without a service or requiring the next prompt.
-  if (event.event === "SessionEnd")
-    await new Promise((resolve) => setTimeout(resolve, 150));
   await exportCompleted(statePath, event, config);
 }
 async function exportCompleted(
@@ -168,33 +166,6 @@ async function exportCompleted(
   {
     const state = await readJson<State>(statePath, true, 1024 * 1024);
     if (!state || !config.enabled) return;
-    const rows: unknown[] = [];
-    let reads = 0;
-    for (const [sid, path] of Object.entries(state.paths).slice(0, 32)) {
-      const home = dirname(dirname(config.paths.user));
-      const cursor = new TranscriptCursor(sid, home);
-      // Bound total source reads per hook (8 MiB), with partial-line/truncation detection.
-      while (reads++ < 8 && rows.length < 10000) {
-        await cursor
-          .read(path, (row) => {
-            if (rows.length < 10000) rows.push(row);
-          })
-          .catch(() => {
-            cursor.gap = true;
-          });
-        if (cursor.lastReadBytes < 1024 * 1024 || cursor.gap) break;
-      }
-      state.gap ||= cursor.gap || reads > 8 || rows.length >= 10000;
-    }
-    const completed = new Set(
-      rows
-        .filter(
-          (row) =>
-            record(record(record(row).params).update).sessionUpdate ===
-            "turn_completed",
-        )
-        .map((row) => record(record(record(row).params).update).prompt_id),
-    );
     const prompts = state.events.filter(
       (e) =>
         e.event === "UserPromptSubmit" &&
@@ -202,6 +173,66 @@ async function exportCompleted(
         e.promptId &&
         !state.claimed.includes(e.promptId),
     );
+    if (!prompts.length) return;
+    const rows: unknown[] = [];
+    const completed = new Set<string>();
+    const home = dirname(dirname(config.paths.user));
+    const sources = Object.entries(state.paths)
+      .slice(0, 32)
+      .map(([sid, path]) => ({ path, cursor: new TranscriptCursor(sid, home) }));
+    // Stop must return before the host persists completion. Only wait at SessionEnd
+    // for a prompt whose terminal gate was observed. Grok's SIGINT shutdown omits
+    // that gate and completion, and caps its hooks at 1.5 seconds.
+    const settling = prompts.filter((prompt) =>
+      state.events.some((e) =>
+        e.sessionId === prompt.sessionId &&
+        e.promptId === prompt.promptId &&
+        ["Stop", "StopFailure", "StopCancelled"].includes(e.event),
+      ),
+    );
+    // Leave time for SDK startup and export inside the hook's eight-second budget.
+    const deadline = Date.now() +
+      (event.event === "SessionEnd" && settling.length ? 6500 : 0);
+    let bytesRead = 0;
+    do {
+      for (const { path, cursor } of sources) {
+        // Retain cursors across polls so history is not reread or charged repeatedly.
+        // Bound total source reads (8 MiB) and rows, including partial-line retries.
+        while (
+          !cursor.gap && bytesRead < 8 * 1024 * 1024 && rows.length < 10000
+        ) {
+          try {
+            await cursor.read(path, (row) => {
+              if (rows.length >= 10000) return;
+              rows.push(row);
+              const p = record(record(row).params), u = record(p.update);
+              if (
+                p.sessionId === event.sessionId &&
+                u.sessionUpdate === "turn_completed"
+              ) completed.add(u.prompt_id);
+            });
+            bytesRead += cursor.lastReadBytes;
+          } catch (error) {
+            // The host can create its transcript after the hook starts.
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+              cursor.gap = true;
+            break;
+          }
+          if (cursor.lastReadBytes < 1024 * 1024) break;
+        }
+        state.gap ||=
+          cursor.gap || bytesRead >= 8 * 1024 * 1024 || rows.length >= 10000;
+      }
+      const remaining = deadline - Date.now();
+      if (
+        event.event !== "SessionEnd" ||
+        settling.every((prompt) => completed.has(prompt.promptId!)) ||
+        state.gap || !sources.length || remaining <= 0
+      ) break;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(150, remaining)),
+      );
+    } while (true);
     const exportedEvents = new Set<string>();
     for (const prompt of prompts) {
       const turnId = prompt.promptId!;

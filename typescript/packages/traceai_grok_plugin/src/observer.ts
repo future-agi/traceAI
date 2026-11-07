@@ -231,7 +231,8 @@ export class GrokObserver {
     };
     const content =
       u.sessionUpdate === "tool_call"
-        ? { tool: u.title, arguments: u.rawInput }
+        // Arguments are tool input even when embedded in a generation's output.
+        ? { tool: u.title, ...(this.config.hideInputs ? {} : { arguments: u.rawInput }) }
         : record(u.content).text;
     model.failed ||= failedResult(content);
     const addition = (text(content, this.config, true, model.failed) ?? "").slice(

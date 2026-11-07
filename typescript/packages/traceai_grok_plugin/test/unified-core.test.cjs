@@ -10,7 +10,7 @@ const { capture } = require("../dist/capture.js");
 const plugin = require("../dist");
 const { text } = require("../dist/events.js");
 
-async function fixture(t, overrides = {}) {
+async function fixture(t, overrides = {}, env = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "grok-unified-"));
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -23,7 +23,7 @@ async function fixture(t, overrides = {}) {
     });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const options = { agent: "grok", home, env: {} };
+  const options = { agent: "grok", home, env };
   const setup = {
     ...options,
     credentials: { apiKey: "test-api", secretKey: "test-secret" },
@@ -79,6 +79,33 @@ test("Grok generations are LLMs with partial inputs, tool ids and one last-gener
   assert.equal(attrs(tool)["tool_call.id"], "call-1");
   assert.ok(all.every((s) => attrs(s)["gen_ai.cost.total"] === undefined && attrs(s)["gen_ai.server.time_to_first_token"] === undefined));
 });
+
+for (const policy of ["FI_HIDE_INPUTS", "FI_HIDE_INPUT_TEXT", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_INPUT_IMAGES"]) {
+  test(`${policy} removes reconstructed tool arguments without hiding assistant output`, async (t) => {
+    const f = await fixture(t, {}, { [policy]: "true" });
+    assert.equal(f.config.hideInputs, true);
+    const tracer = core.createTurnTracer({ config: f.config });
+    const observer = new plugin.GrokObserver(tracer, f.config);
+    observer.handle(event("UserPromptSubmit"));
+    observer.transcript(row({
+      sessionUpdate: "tool_call", title: "read_file", toolCallId: "call-1",
+      rawInput: { path: "PRIVATE_TOOL_INPUT", nested: { text: "PRIVATE_TOOL_INPUT" } },
+    }, { streamStartMs: 1100, agentTimestampMs: 1120, eventId: "tool-call" }));
+    generation(observer, 1, "Visible assistant answer");
+    observer.handle(event("Stop", { time: 1500 }));
+    observer.transcript(row({ sessionUpdate: "turn_completed", prompt_id: "prompt", stop_reason: "end_turn", usage: { inputTokens: 80, outputTokens: 20 } }));
+    observer.finish("session");
+    await tracer.shutdown();
+    const all = f.spans();
+    assert.equal(all.length, 3);
+    assert.doesNotMatch(JSON.stringify(all), /PRIVATE_TOOL_INPUT/);
+    const outputs = all.map((s) => attrs(s)["output.value"]).filter(Boolean);
+    assert.ok(outputs.includes('{"tool":"read_file"}'), "the tool identity remains useful");
+    assert.ok(outputs.includes("Visible assistant answer"));
+    assert.ok(all.every((s) => attrs(s)["input.value"] === undefined));
+    assert.equal(all.filter((s) => attrs(s)["gen_ai.usage.total_tokens"] !== undefined).length, 1);
+  });
+}
 
 test("a source turn without generations owns additive usage on its root", async (t) => {
   const f = await fixture(t), tracer = core.createTurnTracer({ config: f.config }), observer = new plugin.GrokObserver(tracer, f.config);
