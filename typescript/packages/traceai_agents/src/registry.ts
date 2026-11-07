@@ -51,9 +51,9 @@ const explicitAdapters: AdapterRelease[] = [
     packageName: "@traceai/antigravity-plugin",
     version: "0.1.0",
     mechanism: "agy plugin install",
-    hostRange: "1.x (Linux CLI; tested 1.5.2)",
+    hostRange: "agy 1.x (Linux/macOS CLI; tested 1.5.2; macOS App 2.28.2 with agy 1.4.2)",
     qualified: true,
-    reason: "PACKAGE_PUBLICATION_AND_CLOUD_READBACK_REQUIRED",
+    reason: "CLI_AND_MAC_APP_2_28_2_CLOUD_READBACK_QUALIFIED",
   },
   {
     id: "antigravity-ide",

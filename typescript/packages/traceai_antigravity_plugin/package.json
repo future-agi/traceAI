@@ -1,7 +1,7 @@
 {
   "name": "@traceai/antigravity-plugin",
   "version": "0.1.0",
-  "description": "Native Antigravity CLI hooks and setup adapter for Future AGI tracing",
+  "description": "Native Antigravity CLI and desktop App hooks with one-command Future AGI tracing setup",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },

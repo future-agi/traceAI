@@ -51,6 +51,13 @@ function attrs(span) {
     (span.attributes || []).map((a) => [a.key, Object.values(a.value)[0]]),
   );
 }
+test("turn surface is an optional bounded attribute, not arbitrary source content", async (t) => {
+  const f = await fixture(t), tracer = c.createTurnTracer({config: f.config});
+  for (const surface of ["cli", "app", "untrusted-value", undefined])
+    tracer.startTurn({sessionId: "surfaces", turnId: String(surface), surface}).end();
+  await tracer.flush(); await tracer.shutdown();
+  assert.deepEqual(spans(f).map(s => attrs(s)["fi.agent.surface"]), ["cli", "app", undefined, undefined]);
+});
 for (const mode of ["revoked", "unreadable"])
   test(`delivery policy ${mode} after spans are queued fails closed`, async (t) => {
     const f = await fixture(t);

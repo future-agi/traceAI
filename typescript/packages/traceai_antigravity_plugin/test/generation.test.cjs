@@ -36,7 +36,7 @@ test('real agy native plugin: two turns, Gemini requests, successful/error tool 
     const args=tool?.name==='read_file'?{Path:requestedPath}:{AbsolutePath:requestedPath};
     const parts=(count===1||count===3)&&tool?[{functionCall:{name:tool.name,args}}]:[{text:`Synthetic answer ${count}.`}];
     const response={candidates:[{index:0,content:{role:'model',parts},finishReason:'STOP'}],
-      usageMetadata:{promptTokenCount:20*count,candidatesTokenCount:7,thoughtsTokenCount:3,totalTokenCount:20*count+10},modelVersion:'gemini-4-argon-medium'};
+      usageMetadata:{promptTokenCount:20*count,cachedContentTokenCount:5,candidatesTokenCount:7,thoughtsTokenCount:3,totalTokenCount:20*count+10},modelVersion:'gemini-4-argon-medium'};
     const sse=req.url.includes('alt=sse');res.setHeader('Content-Type',sse?'text/event-stream':'application/json');
     res.end(sse?'data: '+JSON.stringify(response)+'\n\n':JSON.stringify([response]));
   });});
@@ -103,6 +103,8 @@ test('real agy native plugin: two turns, Gemini requests, successful/error tool 
   assert.ok(llms.every(s=>attrs(s)['input.value']&&attrs(s)['output.value']));
   assert.equal(llms.reduce((n,s)=>n+Number(attrs(s)['gen_ai.usage.input_tokens']),0),200);
   assert.equal(llms.reduce((n,s)=>n+Number(attrs(s)['gen_ai.usage.output_tokens']),0),40);
+  assert.equal(llms.reduce((n,s)=>n+Number(attrs(s)['gen_ai.usage.cache_read_tokens']),0),20);
+  assert.ok(roots.every(s=>attrs(s)['fi.agent.surface']==='cli'));
   assert.ok(roots.every(s=>attrs(s)['gen_ai.usage.total_tokens']===undefined));
   assert.ok(spans.every(s=>!s.parentSpanId||spans.some(p=>p.spanId===s.parentSpanId&&p.traceId===s.traceId)));
   const status=await core.inspectStatus({...options,adapter:antigravityAdapter});

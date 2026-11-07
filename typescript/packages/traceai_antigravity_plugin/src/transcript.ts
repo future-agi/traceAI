@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { safeParents } from '@traceai/agent-core/files';
 import type { ResolvedConfig, UsageInput } from '@traceai/agent-core';
 import { setTimeout as delay } from 'node:timers/promises';
-import { integer, text, type Conversation, type Payload, type Turn } from './mapper.js';
+import { integer, surface, text, type Conversation, type Payload, type Turn } from './mapper.js';
 
 const MAX_READ = 1024 * 1024;
 function generationOutput(row: Payload, config: ResolvedConfig): string | undefined {
@@ -18,11 +18,14 @@ function generationOutput(row: Payload, config: ResolvedConfig): string | undefi
   return text(toolCalls ? {content: row.content, tool_calls: toolCalls} : row.content, config, true);
 }
 function transcriptPath(payload: Payload, config: ResolvedConfig): string | undefined {
-  if (typeof payload.transcriptPath !== 'string' || typeof payload.conversationId !== 'string') return undefined;
+  const source = surface(payload);
+  if (!source || typeof payload.transcriptPath !== 'string' || typeof payload.conversationId !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(payload.conversationId)) return undefined;
   const home = dirname(dirname(dirname(config.paths.user)));
-  const expected = join(home, '.gemini', 'antigravity-cli', 'brain', payload.conversationId,
-    '.system_generated', 'logs', 'transcript_full.jsonl');
-  return resolve(payload.transcriptPath) === expected ? expected : undefined;
+  const directory = join(home, '.gemini', source === 'app' ? 'antigravity' : 'antigravity-cli', 'brain', payload.conversationId,
+    '.system_generated', 'logs');
+  const names = source === 'app' ? ['transcript_full.jsonl', 'transcript.jsonl'] : ['transcript_full.jsonl'];
+  return names.map(name => join(directory, name)).find(expected => resolve(payload.transcriptPath as string) === expected);
 }
 /** agy has no turn_ended row. Require a DONE response for each successful observed
  * invocation rather than assuming the transcript exists when Stop arrives. */
@@ -108,7 +111,9 @@ export async function enrichTranscript(state: Conversation, turns: Turn[], paylo
       if (row.source === 'MODEL' && row.type === 'PLANNER_RESPONSE' && row.status === 'DONE' && invocation) {
         const id = `generation-${step}`;
         if (!turn.activities.some(a => a.id === id)) {
-          const usage: UsageInput = {cacheInInput: true, reasoningInOutput: true};
+          // Native CLI and App transcripts separate uncached input_tokens from
+          // cache_read_tokens (agy subtracts cache reads from provider prompt usage).
+          const usage: UsageInput = {cacheInInput: false, reasoningInOutput: true};
           for (const [field, target] of [['input_tokens','input'],['output_tokens','output'],['cache_read_tokens','cacheRead'],['thinking_tokens','reasoning']] as const) {
             const value = integer(row[field]); if (value !== undefined) usage[target] = value;
           }
