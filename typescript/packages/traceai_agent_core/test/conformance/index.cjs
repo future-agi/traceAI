@@ -415,13 +415,15 @@ async function runConformance(driver) {
           assert.throws(() => checkPrivacy(missing, policy, expected));
           if (expected.childAgents) {
             const noAgents = structuredClone(f.batches);
-            for (const b of noAgents) for (const r of b.resourceSpans || []) for (const scope of r.scopeSpans || []) {
-              const agents = scope.spans.filter(x => x.parentSpanId && (attributes(x)["fi.span.kind"] ?? attributes(x)["gen_ai.span.kind"]) === "AGENT");
-              for (const agent of agents) {
-                for (const span of scope.spans) if (span.parentSpanId === agent.spanId) span.parentSpanId = agent.parentSpanId;
-                scope.spans = scope.spans.filter(x => x !== agent);
-              }
-            }
+            const all = spans(noAgents);
+            const agents = all.filter(x => x.parentSpanId && (attributes(x)["fi.span.kind"] ?? attributes(x)["gen_ai.span.kind"]) === "AGENT");
+            // Native parents/children can arrive in different OTLP scopes/batches.
+            // Preserve topology globally so this mutation isolates the count guard.
+            for (const agent of agents)
+              for (const span of all)
+                if (span.traceId === agent.traceId && span.parentSpanId === agent.spanId) span.parentSpanId = agent.parentSpanId;
+            for (const b of noAgents) for (const r of b.resourceSpans || []) for (const scope of r.scopeSpans || [])
+              scope.spans = scope.spans.filter(x => !agents.includes(x));
             assert.throws(() => checkPrivacy(noAgents, policy, expected), /non-root agent spans/);
           }
           const noUsage = structuredClone(f.batches);
