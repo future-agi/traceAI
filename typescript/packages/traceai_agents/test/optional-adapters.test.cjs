@@ -9,7 +9,6 @@ const http = require("node:http");
 const exec = promisify(execFile);
 
 const optional = {
-  "copilot-vscode": ["@traceai/copilot/vscode", "vscodeAdapter"],
   muse: ["@traceai/muse-plugin", "museAdapter"],
   gemini: ["@traceai/gemini-cli", "geminiAdapter"],
   "kiro-cli": ["@traceai/kiro-plugin", "kiroAdapter"],
@@ -92,6 +91,5 @@ test("held registry metadata matches the implementation without importing it at 
   for (const [id, module, constant] of [
     ['kiro-ide', '../../traceai_kiro_plugin/dist/ide/index.js', 'IDE_HOLD'],
     ['augment-ide', '../../traceai_augment_plugin/dist/index.js', 'IDE_HOLD'],
-    ['copilot-vscode', '../../traceai_copilot/dist/vscode/index.js', 'EDITOR_HOLD'],
   ]) assert.equal(adapterRelease(id).reason, require(module)[constant]);
 });

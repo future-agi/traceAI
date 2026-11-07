@@ -37,10 +37,10 @@ test('editor setup reaches shared key validation without a qualification blocker
   assert.ok(!/synthetic-private/.test(result.stdout + result.stderr));
   assert.ok(calls > 0);
 });
-test('status diagnoses an unqualified editor in stripped GUI-like environment', async (t) => {
+test('status diagnoses a missing editor extension in stripped GUI-like environment', async (t) => {
   const f = await fixture(t);
   const list = await f.run(['status', '--json']);
-  assert.equal(JSON.parse(list.stdout).agents.find(a => a.agent === 'copilot-vscode').qualification, hold);
+  assert.equal(JSON.parse(list.stdout).agents.find(a => a.agent === 'copilot-vscode').qualification, 'QUALIFIED');
   const result = await f.run(['status', 'copilot-vscode', '--json']);
   assert.equal(result.code, 2);
   const status = JSON.parse(result.stdout);

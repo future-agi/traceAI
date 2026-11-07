@@ -4,6 +4,7 @@ import { codexAdapter, HOST_VERSION } from "@traceai/codex-plugin";
 import { opencodeV1Adapter } from "./opencode-v1.js";
 import { antigravityAdapter } from "@traceai/antigravity-plugin";
 import { copilotAdapter, HOST_VERSION as COPILOT_HOST_VERSION } from "@traceai/copilot";
+import { vscodeAdapter as copilotVscodeAdapter } from "@traceai/copilot/vscode";
 import { openclawAdapter } from "@traceai/openclaw";
 import { cursorAdapter } from "@traceai/cursor-plugin";
 import { cursorCliAdapter } from "@traceai/cursor-plugin/cli";
@@ -16,7 +17,6 @@ import { ohMyPiAdapter } from "@traceai/oh-my-pi-plugin/adapter";
 
 // Release metadata must be readable without installing held/private packages.
 // Keep these pinned evidence/hold values in sync with the adapter exports.
-const EDITOR_HOLD = "VSCODE_GUI_AND_TRANSPORT_QUALIFICATION_REQUIRED";
 const KIRO_IDE_HOLD = "KIRO_IDE_GUI_AND_PAYLOAD_QUALIFICATION_REQUIRED";
 const AUGMENT_IDE_HOLD = "AUGMENT_IDE_GUI_QUALIFICATION_REQUIRED";
 const GEMINI_TESTED_HOST = "0.67.0";
@@ -172,8 +172,9 @@ const explicitAdapters: AdapterRelease[] = [
     packageName: "@traceai/copilot",
     version: "0.1.0",
     mechanism: "native Copilot OTLP via Future AGI VS Code extension",
-    qualified: false,
-    reason: EDITOR_HOLD,
+    hostRange: "VS Code 1.143.1 and 1.145.2 (macOS, Default profile)",
+    qualified: true,
+    reason: "VSCODE_MAC_CLOUD_READBACK_QUALIFIED",
   },
   {
     id: "grok",
@@ -248,6 +249,7 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "opencode-v1") return opencodeV1Adapter;
   if (id === "antigravity") return antigravityAdapter;
   if (id === "copilot") return copilotAdapter;
+  if (id === "copilot-vscode") return copilotVscodeAdapter;
   if (id === "hermes") return hermesAdapter;
   if (id === "openclaw") return openclawAdapter;
   if (id === "grok") return grokAdapter;
@@ -255,8 +257,6 @@ export function loadAdapter(id: string): CoreAdapter | undefined {
   if (id === "cursor-cli") return cursorCliAdapter;
   try {
     switch (id) {
-      case "copilot-vscode":
-        return (require("@traceai/copilot/vscode") as { vscodeAdapter: CoreAdapter }).vscodeAdapter;
       case "muse":
         return (require("@traceai/muse-plugin") as { museAdapter: CoreAdapter }).museAdapter;
       case "gemini":

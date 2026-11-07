@@ -4,8 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { adapterRegistry, adapterRelease, loadAdapter } = require("../dist/registry.js");
 
-const qualified = ["codex", "opencode-v1", "antigravity", "copilot", "hermes", "openclaw", "grok"];
-const held = ["antigravity-ide", "copilot-vscode", "muse", "gemini", "kiro-cli", "kiro-ide", "augment", "augment-ide", "devin-cascade"];
+const qualified = ["codex", "opencode-v1", "antigravity", "copilot", "copilot-vscode", "hermes", "openclaw", "grok"];
+const held = ["antigravity-ide", "muse", "gemini", "kiro-cli", "kiro-ide", "augment", "augment-ide", "devin-cascade"];
 
 test("assembly retains every qualified and held registry entry without duplicates", () => {
   assert.equal(new Set(adapterRegistry.map((entry) => entry.id)).size, adapterRegistry.length);
