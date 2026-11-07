@@ -512,6 +512,8 @@ test("blocked Stop continuation adds usage once and publishes only the actual fi
     llms = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
   assert.equal(roots.length, 1);
   assert.match(attrs(roots[0])["output.value"], /FINAL_MODEL_OUTPUT/);
+  // The root shows the final reply as plain text, not serialized content blocks.
+  assert.doesNotMatch(attrs(roots[0])["output.value"], /^\s*\[|"type"\s*:\s*"text"/);
   assert.equal(llms.length, 4);
   assert.equal(new Set(all.map((s) => s.spanId)).size, all.length);
   assert.equal(new Set(all.map((s) => s.traceId)).size, 1);

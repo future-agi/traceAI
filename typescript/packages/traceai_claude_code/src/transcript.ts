@@ -685,7 +685,19 @@ export async function exportTranscriptTurn(
       const generationOutput = contentAllowed
         ? text(output, config)
         : undefined;
-      if (!prefix) lastOutput = generationOutput;
+      if (!prefix) {
+        // The turn root shows the final reply as plain text, like other agents'
+        // roots; the generation keeps its structured content blocks.
+        const reply = group
+          .flatMap((r) =>
+            typeof r.message?.content === "string"
+              ? [r.message.content]
+              : blocks(r).filter((b) => b.type === "text").map((b) => b.text ?? ""),
+          )
+          .filter(Boolean)
+          .join("\n");
+        lastOutput = contentAllowed ? (reply ? text(reply, config) : generationOutput) : undefined;
+      }
       generation.end({
         output: generationOutput,
         usage: usage(last),
