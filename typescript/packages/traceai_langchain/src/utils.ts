@@ -214,9 +214,13 @@ function getFunctionCallDataFromAdditionalKwargs(
   const functionCallName = isString(functionCall.name)
     ? functionCall.name
     : undefined;
-  const functionCallArgs = isString(functionCall.args)
-    ? functionCall.args
-    : undefined;
+  // Legacy OpenAI function_call uses `arguments`; retain the existing `args`
+  // spelling as a fallback for non-standard adapters.
+  const functionCallArgs = isString(functionCall.arguments)
+    ? functionCall.arguments
+    : isString(functionCall.args)
+      ? functionCall.args
+      : undefined;
   return {
     [SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]: functionCallName,
     [SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON]:

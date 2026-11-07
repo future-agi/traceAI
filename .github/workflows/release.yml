@@ -290,9 +290,8 @@ jobs:
   nuget:
     name: Publish NuGet
     needs: [plan, nuget-build]
-    if: >-
-      !cancelled() && needs.nuget-build.result == 'success'
-      && needs.plan.outputs.publish_nuget == 'true'
+    # Intentionally OFF; a repository variable must not enable publication.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: nuget
     timeout-minutes: 20

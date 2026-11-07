@@ -36,6 +36,14 @@ def test_text_privacy_is_directional(direction, opposite):
 
 
 def test_text_flag_keeps_explicitly_typed_images():
-    config = TraceConfig(hide_input_text=True)
+    # F2 (RL 2310bu): the text flag never hides typed images; pinned at the previous
+    # default cap. At the default cap 0 a typed image value is an over-cap payload.
+    config = TraceConfig(hide_input_text=True, base64_image_max_length=32_000)
     assert config.mask("gen_ai.input.images.0", "image-reference") == "image-reference"
     assert config.mask("gen_ai.input.messages.0.message.contents.0.message_content.image.image.url", "image-reference") == "image-reference"
+    default = TraceConfig(hide_input_text=True)
+    # Observed on the merged head (E2B tracebacks, final-r5-targeted line 45 and ifin): a gen_ai.input.images
+    # value is not an image-cap key and keeps a non-data reference; a message image URL slot is an image key
+    # and at the default cap 0 its non-empty payload is replaced whole.
+    assert default.mask("gen_ai.input.images.0", "image-reference") == "image-reference"
+    assert default.mask("gen_ai.input.messages.0.message.contents.0.message_content.image.image.url", "image-reference") == "[image-redacted]"

@@ -30,14 +30,19 @@ def test_pii_leaves_are_scanned_before_escaping(separator, structured, key):
 
 @pytest.mark.parametrize("url", ["HTTPS://example.invalid/image", "hTtPs://example.invalid/image", "HtTp://example.invalid/image"])
 @pytest.mark.parametrize("hide", ["hide_input_images", "hide_input_text"])
-def test_case_insensitive_scheme_preserves_original_reference(url, hide):
+@pytest.mark.parametrize("cap", [None, 32_000])
+def test_case_insensitive_scheme_preserves_original_reference(url, hide, cap):
     payload = {"model": "model", "messages": [{"role": "user", "content": [
         {"type": "text", "text": "visible"}, {"type": "image_url", "image_url": {"url": url}},
     ]}]}
-    result = json.loads(TraceConfig(**{hide: True}).mask("input.value", ChatInput(payload)))
+    options = {hide: True} if cap is None else {hide: True, "base64_image_max_length": cap}
+    result = json.loads(TraceConfig(**options).mask("input.value", ChatInput(payload)))
     text, image = result["messages"][0]["content"]
     assert text["text"] == (REDACTED_VALUE if hide == "hide_input_text" else "visible")
-    assert image["image_url"] == (REDACTED_VALUE if hide == "hide_input_images" else {"url": url})
+    # F2 (RL 2310bu): at the default cap 0 the hidden slot of an image part is an image
+    # payload position, so its marker is replaced whole; a positive cap keeps the marker.
+    hidden_image = REDACTED_VALUE if cap else "[image-redacted]"
+    assert image["image_url"] == (hidden_image if hide == "hide_input_images" else {"url": url})
 
 
 @pytest.mark.parametrize("url", ["ftp://example.invalid/image", "javascript:alert(1)", "relative.png"])

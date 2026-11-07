@@ -1,3 +1,4 @@
+export { enable, type EnableGenkitOptions, type EnableGenkitResult, type GenkitAutoSpanProcessor } from "./auto";
 export {
   FIGenkitSpanProcessor,
   exportEvents,

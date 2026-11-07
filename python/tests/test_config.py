@@ -40,7 +40,7 @@ class TestTraceConfig:
         assert config.hide_input_text is False
         assert config.hide_output_text is False
         assert config.hide_embedding_vectors is False
-        assert config.base64_image_max_length == 32_000
+        assert config.base64_image_max_length == 0
 
     def test_trace_config_explicit_values(self, clean_env):
         """Test TraceConfig with explicitly set values."""
@@ -117,7 +117,7 @@ class TestTraceConfig:
         
         # Should fall back to defaults for invalid values
         assert config.hide_inputs is False  # default
-        assert config.base64_image_max_length == 32_000  # default
+        assert config.base64_image_max_length == 0  # default
 
     def test_trace_config_frozen(self, clean_env):
         """Test that TraceConfig is frozen (immutable)."""

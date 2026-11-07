@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm run build:ordered",
     "build:deps": "pnpm --filter @traceai/fi-core --filter @traceai/fi-semantic-conventions run build",
-    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel --filter @traceai/chromadb --filter @traceai/pinecone --filter @traceai/qdrant --filter @traceai/weaviate --filter @traceai/milvus --filter @traceai/lancedb --filter @traceai/mongodb --filter @traceai/pgvector --filter @traceai/redis --filter @traceai/together --filter @traceai/huggingface --filter @traceai/huggingface-transformers --filter @traceai/vllm --filter @traceai/deepseek --filter @traceai/fireworks --filter @traceai/cerebras --filter @traceai/xai --filter @traceai/google-genai-sdk run build",
+    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel --filter @traceai/chromadb --filter @traceai/pinecone --filter @traceai/qdrant --filter @traceai/weaviate --filter @traceai/milvus --filter @traceai/lancedb --filter @traceai/mongodb --filter @traceai/pgvector --filter @traceai/redis --filter @traceai/together --filter @traceai/huggingface --filter @traceai/huggingface-transformers --filter @traceai/vllm --filter @traceai/deepseek --filter @traceai/fireworks --filter @traceai/cerebras --filter @traceai/xai --filter @traceai/google-genai-sdk --filter @traceai/auto run build",
     "build:ordered": "pnpm run build:deps && pnpm run build:consumers",
     "test": "pnpm run -r test",
     "test:coverage": "pnpm run -r test:coverage",
@@ -32,7 +32,8 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.1.4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@jest/globals": "29.7.0"
   },
   "dependencies": {
     "@traceai/fi-semantic-conventions": "workspace:*",

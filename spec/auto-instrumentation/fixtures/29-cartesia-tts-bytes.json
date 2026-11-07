@@ -1,0 +1,44 @@
+{
+  "name": "cartesia-tts-bytes",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cartesia.ai/tts/bytes",
+    "headers": {
+      "content-type": "application/json",
+      "cartesia-version": "2025-04-16"
+    },
+    "json": {
+      "model_id": "sonic-2",
+      "transcript": "Hi there",
+      "voice": {
+        "mode": "id",
+        "id": "v1"
+      },
+      "output_format": {
+        "container": "wav",
+        "encoding": "pcm_f32le",
+        "sample_rate": 44100
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "audio/wav"
+    },
+    "binary": {
+      "size": 777,
+      "content_type": "audio/wav"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_to_speech sonic-2",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "cartesia",
+      "gen_ai.audio.transcript": "Hi there",
+      "traceai.audio.output_bytes": 777
+    }
+  }
+}

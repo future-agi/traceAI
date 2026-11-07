@@ -4,10 +4,12 @@
     "outDir": "dist/esnext",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/esnext/tsconfig.esnext.tsbuildinfo",
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    "resolveJsonModule": true
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "src/**/*.json"
   ],
   "references": [],
   "exclude": [

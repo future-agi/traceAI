@@ -37,7 +37,9 @@ class NuGetWorkflowTests(unittest.TestCase):
 
     def test_publish_is_top_level_gated_and_included_in_verdict(self):
         self.assertIn('needs: [plan, nuget-build]', self.publish)
-        self.assertIn("!cancelled() && needs.nuget-build.result == 'success'\n      && needs.plan.outputs.publish_nuget == 'true'", self.publish)
+        # The implementation below is dormant, not permission to publish.
+        self.assertIn('    if: ${{ false }}\n', self.publish)
+        self.assertNotIn('publish_nuget', self.publish)
         self.assertIn('environment: nuget', self.publish)
         self.assertIn('    permissions:\n      contents: write\n      id-token: write\n', self.publish)
         self.assertIn('include: ${{ fromJson(needs.plan.outputs.nuget) }}', self.publish)

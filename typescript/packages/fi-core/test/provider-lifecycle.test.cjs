@@ -241,28 +241,47 @@ test('shutdown drains the default batch even without forceFlush', async () => {
   assert.deepEqual(receiver.spans().map(span => span.name), ['last-span']);
 });
 
-test('active FITracer privacy survives async context on the OTLP wire', async () => {
-  const receiver = await collector();
-  const provider = setup({ endpoint: receiver.endpoint, batch: true });
-  const tracer = new FITracer({ tracer: provider.getTracer('privacy'), traceConfig: { hideErrorDetails: true } });
-  await context.with(setSession(context.active(), { sessionId: 'wire-session' }), async () => {
-    await tracer.startActiveSpan('private-parent', async span => {
-      await Promise.resolve();
-      trace.getActiveSpan().recordException(new Error('synthetic-secret-error'));
-      trace.getActiveSpan().setStatus({ code: 2, message: 'synthetic-secret-status' });
-      tracer.startActiveSpan('private-child', child => child.end());
-      span.end();
+for (const kind of ['ordinary', 'credential-shaped', 'unbound']) {
+  const title = 'active FITracer privacy survives async context on the OTLP wire';
+  test(kind === 'ordinary' ? title : `${title} (${kind})`, async () => {
+    const receiver = await collector();
+    const provider = setup({ endpoint: receiver.endpoint, batch: true });
+    const tracer = new FITracer({ tracer: provider.getTracer('privacy'), traceConfig: { hideErrorDetails: true } });
+    const id = kind === 'ordinary' ? 'wire-session' : kind === 'credential-shaped' ? 'sk-' + 'W'.repeat(24) : 'wire-unbound-correlation';
+    const expected = kind === 'ordinary' ? id : '<redacted>';
+    // A raw attribute write is not the typed setSession -> startActiveSpan handoff.
+    const active = kind === 'unbound' ? context.active() : setSession(context.active(), { sessionId: id });
+    await context.with(active, async () => {
+      await tracer.startActiveSpan('private-parent', async span => {
+        if (kind === 'unbound') span.setAttribute('session.id', id);
+        span.setAttribute('control.label', 'wire-public-control');
+        await Promise.resolve();
+        trace.getActiveSpan().recordException(new Error('synthetic-secret-error'));
+        trace.getActiveSpan().setStatus({ code: 2, message: 'synthetic-secret-status' });
+        tracer.startActiveSpan('private-child', child => {
+          if (kind === 'unbound') child.setAttribute('session.id', id);
+          child.setAttribute('control.label', 'wire-public-control');
+          child.end();
+        });
+        span.end();
+      });
     });
+    await provider.forceFlush();
+    const spans = receiver.spans();
+    assert.equal(spans.length, 2);
+    for (const span of spans) {
+      assert.equal(span.attributes.find(attribute => attribute.key === 'session.id')?.value.stringValue, expected);
+      assert.equal(span.attributes.find(attribute => attribute.key === 'control.label')?.value.stringValue, 'wire-public-control');
+    }
+    assert.equal(JSON.stringify(receiver.requests).includes(id), kind === 'ordinary');
+    assert.equal(JSON.stringify(receiver.requests).includes('synthetic-secret'), false);
+    const parent = spans.find(span => span.name === 'private-parent');
+    const child = spans.find(span => span.name === 'private-child');
+    assert.equal(parent.status.code, 2);
+    assert.equal(child.parentSpanId, parent.spanId);
+    assert.equal(child.traceId, parent.traceId);
   });
-  await provider.forceFlush();
-  const spans = receiver.spans();
-  assert.equal(spans.length, 2);
-  for (const span of spans) {
-    assert.ok(span.attributes.some(attribute => attribute.key === 'session.id' && attribute.value.stringValue === 'wire-session'));
-  }
-  assert.equal(JSON.stringify(receiver.requests).includes('synthetic-secret'), false);
-  assert.equal(spans.find(span => span.name === 'private-parent').status.code, 2);
-});
+}
 
 test('gRPC batching uses the chosen processor and shuts down its channel', async () => {
   const grpc = load('@grpc/grpc-js');
