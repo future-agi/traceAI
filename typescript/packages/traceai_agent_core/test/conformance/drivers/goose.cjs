@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Native SQLite response records and hooks, based on hooks.test.cjs/goose.test.cjs.
 const fs = require("node:fs/promises"),
   path = require("node:path");
@@ -70,8 +71,8 @@ module.exports = {
                   : []),
               ],
               {
-                inference: { provider: "mock", requestedModel: "conf-model" },
-                usage: { inputTokens: 10, outputTokens: 4 },
+                inference: { provider: "mock", requestedModel: requestUsage(s, i).model },
+                usage: { inputTokens: requestUsage(s, i).input, outputTokens: requestUsage(s, i).output },
               },
             );
             if (i === 0)

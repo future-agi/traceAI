@@ -32,6 +32,7 @@ export interface Scenario {
   overlap?: boolean;
   lateMs?: number;
   aggregate?: boolean;
+  requestUsage?: Array<{ model: string; input: number; output: number }>;
   inputTokens?: number;
   outputTokens?: number;
 }
@@ -71,8 +72,17 @@ export interface CommandResult {
 export interface Driver {
   agent: string;
   group?: string;
+  /** Native invocation/harness agent spans in addition to the prompt root. */
+  childAgents?: number;
+  /** Aggregate-only native records may have a different non-content shape. */
+  aggregateChildAgents?: number;
   aggregateUsage?: boolean;
   incompleteUsageUnavailable?: boolean;
+  /** Sources with turn totals assign them once, to the last generation. */
+  generationUsage?: "last-generation";
+  requestIdentity?: "order";
+  /** Policies that prevent transcript correlation; native usage stays additive on the root. */
+  rootFallbackPolicies?: string[];
   /** Explicit shared native capture route; never changes the CLI lifecycle agent. */
   captureAgent?: string;
   /** Install a synthetic native host fixture, not a fake CoreAdapter. */
@@ -115,15 +125,20 @@ export function checkShape(
   batches: unknown[],
   expected: {
     calls: number;
+    childAgents?: number;
     tools: number;
     turns?: number;
     outcome?: string;
     model?: string;
+    requestUsage?: Scenario["requestUsage"];
+    requestIdentity?: "order";
+    generationUsage?: "last-generation";
+    toolOutcome?: "success" | "error";
     inputTokens?: number;
     outputTokens?: number;
   },
 ): void;
-export function checkPrivacy(batches: unknown[], policy: string): void;
+export function checkPrivacy(batches: unknown[], policy: string, expected?: Parameters<typeof checkShape>[1]): void;
 export function attributes(span: any): Record<string, unknown>;
 export function spans(batches: unknown[]): any[];
 export function delay(milliseconds: number): Promise<void>;
@@ -146,3 +161,5 @@ export const MARKERS: Readonly<{
 }>;
 export const FLAGS: readonly string[];
 export const packages: string;
+
+export function requestUsage(scenario: Scenario, index: number): { model: string; input: number; output: number };

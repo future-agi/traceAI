@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Production native capture + invocation-owned launcher delivery (prompt.test.cjs).
 const { packages, delay } = require("../index.cjs");
 const { createLauncherDelivery, LauncherCaptureProcessor } = require(
@@ -6,6 +7,8 @@ const { createLauncherDelivery, LauncherCaptureProcessor } = require(
 const { randomBytes } = require("node:crypto");
 module.exports = {
   agent: "openclaw",
+  childAgents: 1,
+  aggregateChildAgents: 2,
   aggregateUsage: true,
   async create(f) {
     return {
@@ -48,9 +51,9 @@ module.exports = {
             "openclaw.model.call",
             {
               "openclaw.model_call.observation_unit": "request",
-              "gen_ai.request.model": "conf-model",
-              "gen_ai.usage.input_tokens": 10,
-              "gen_ai.usage.output_tokens": 4,
+              "gen_ai.request.model": requestUsage(s, i).model,
+              "gen_ai.usage.input_tokens": requestUsage(s, i).input,
+              "gen_ai.usage.output_tokens": requestUsage(s, i).output,
               "openclaw.content.input_messages": JSON.stringify([
                 { role: "user", content: `${s.input} ${s.secret}` },
                 { role: "assistant", content: s.output },
@@ -78,8 +81,8 @@ module.exports = {
               path: s.input,
               password: "SYNTH_PASSWORD_19275",
             }),
-            "openclaw.content.tool_output": s.tool,
-          });
+            "openclaw.content.tool_output": s.outcome === "error" ? s.error : s.tool,
+          }, false, s.outcome === "error");
         if (s.overlap)
           await Promise.all(
             Array.from({ length: s.tools }, () => Promise.resolve().then(tool)),

@@ -9,6 +9,7 @@ const { capture } = require(packages + "/traceai_grok_plugin/dist/capture.js");
 module.exports = {
   agent: "grok",
   aggregateUsage: true,
+    generationUsage: "last-generation",
   incompleteUsageUnavailable: true,
   async create(f) {
     const file = path.join(f.home, ".grok/sessions/conf-session/updates.jsonl");
@@ -98,11 +99,12 @@ module.exports = {
         }
         await fs.appendFile(file, rows.map(JSON.stringify).join("\n") + "\n");
         const tool = (i) =>
-          event("PostToolUse", {
+          event(s.outcome === "error" ? "PostToolUseFailure" : "PostToolUse", {
             toolUseId: "tool-" + i,
             toolName: "read",
             toolInput: { path: s.input },
-            toolResult: s.tool,
+            toolResult: s.outcome === "error" ? { error: s.error } : s.tool,
+            errorDetails: s.outcome === "error" ? s.error : undefined,
             durationMs: 1,
           });
         if (s.overlap)

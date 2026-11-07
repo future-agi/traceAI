@@ -192,21 +192,10 @@ test("each real usage-limit turn exports one ERROR root; sessionEnd model_params
   const f = await replayFixture(t, "real-3.26.13-transcript-0.jsonl");
   const rows = load("error");
   await f.send(rows[0]);
-  // This fixture starts with an unrelated terminal-only session. Preserve it with a gap,
-  // rather than silently dropping the host's session boundary (no prompt or usage claim).
-  const terminalOnly = spans(f.requests);
-  assert.equal(terminalOnly.length, 1);
-  assert.equal(
-    attributes(terminalOnly[0])["fi.agent.gap"],
-    "MISSING_PROMPT_AND_STOP",
-  );
-  assert.equal(attributes(terminalOnly[0])["input.value"], undefined);
-  assert.equal(
-    attributes(terminalOnly[0])["gen_ai.usage.total_tokens"],
-    undefined,
-  );
+  // An aborted session with no prompt, tool work or usage is a diagnostic, not a trace.
+  assert.equal(spans(f.requests).length, 0);
   await f.send(rows[0]);
-  assert.equal(spans(f.requests).length, 1);
+  assert.equal(spans(f.requests).length, 0);
   for (const row of rows.slice(1, 3)) await f.send(row);
   // An error stop can precede transcript writes too. Preserve the ERROR fallback,
   // but wait for the one-shot deadline instead of expecting an incomplete export in the hook.
@@ -218,13 +207,13 @@ test("each real usage-limit turn exports one ERROR root; sessionEnd model_params
     )
       await new Promise((r) => setTimeout(r, 50));
   };
-  await waitForRoots(2);
-  const all = spans(f.requests).slice(1);
+  await waitForRoots(1);
+  const all = spans(f.requests);
   assert.equal(all.length, 1);
   assert.equal(all[0].status.code, 2);
   for (const row of rows.slice(3)) await f.send(row);
-  await waitForRoots(3);
-  const both = spans(f.requests).slice(1);
+  await waitForRoots(2);
+  const both = spans(f.requests);
   assert.equal(both.length, 2);
   assert.equal(both[1].status.code, 2);
   assert.equal(

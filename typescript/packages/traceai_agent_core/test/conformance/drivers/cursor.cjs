@@ -17,6 +17,8 @@ function driver(agent) {
     agent,
     group: "cursor",
     aggregateUsage: true,
+    generationUsage: "last-generation",
+    rootFallbackPolicies: ["off", "FI_HIDE_INPUTS", "FI_HIDE_INPUT_TEXT", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_INPUT_IMAGES"],
     async create(f) {
       const file = path.join(
         f.home,

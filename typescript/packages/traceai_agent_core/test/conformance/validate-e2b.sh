@@ -16,4 +16,7 @@ pnpm --dir packages/traceai_agent_core pack --pack-destination /work/conformance
 pack=$?
 printf '{"suite":%s,"coreTests":%s,"typeConsumer":%s,"packagePack":%s}\n' "$suite" "$core" "$types" "$pack" > /work/conformance-validation.json
 cat /work/conformance-validation.json
-exit "$suite"
+for rc in "$suite" "$core" "$types" "$pack"; do
+  [ "$rc" -eq 0 ] || exit "$rc"
+done
+exit 0

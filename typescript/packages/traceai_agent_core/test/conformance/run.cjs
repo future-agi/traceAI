@@ -26,6 +26,7 @@ const agents = [
     driver.prepareHost = require("./host-fixture.cjs").prepareHost;
     const report = await runConformance(driver);
     console.log("CONFORMANCE_JSON=" + JSON.stringify(report));
+    process.exitCode = report.failures.length ? 1 : 0;
     return;
   }
   const results = [];
@@ -51,6 +52,8 @@ const agents = [
                 `HARNESS_ERROR exit=${r.code} timeout=${r.timedOut}: ${r.stderr.slice(-1600)}`,
               ],
             };
+        if (line && (r.code !== 0 || r.timedOut) && !report.failures.length)
+          report.failures.push(`HARNESS_ERROR exit=${r.code} timeout=${r.timedOut}`);
         results.push(report);
         console.log(
           `${agent}: ${report.checks.filter((c) => c.status === "PASS").length} pass / ${report.failures.length} fail`,

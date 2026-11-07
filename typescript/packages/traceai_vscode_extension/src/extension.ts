@@ -58,7 +58,11 @@ export async function activate(context: vscode.ExtensionContext) {
       }
       if (!active) relay.fence();
       const capture = resolved.captureContent && !resolved.hideInputs && !resolved.hideOutputs && !resolved.hideErrorDetails;
-      const conflicts = await synchronize(path, active, capture);
+      // Enablement belongs to the relay's per-export policy, not the native
+      // exporter configuration. Removing/readding these startup settings restarts
+      // CopilotClient and can tear down the owning extension host mid-toggle.
+      // Keep the loopback route installed while disabled; uninstall restores it.
+      const conflicts = active ? await synchronize(path, true, capture) : [];
       if (disposed) return;
       bar.text = active ? 'Future AGI: tracing' : 'Future AGI: disabled';
       bar.tooltip = conflicts.length ? 'Tracing settings were edited. Run fi-agent doctor copilot-vscode.' :
@@ -88,7 +92,7 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
       if ((await config()).enabled) { await disable(options); relay?.fence(); } else await enable(options);
       await tick();
-      void vscode.window.showInformationMessage('Tracing preference updated. Reload VS Code to restart native Copilot telemetry.');
+      void vscode.window.showInformationMessage(`Future AGI tracing ${active ? 'enabled' : 'disabled'}.`);
     } catch { void vscode.window.showWarningMessage('Tracing could not be changed. Run fi-agent doctor copilot-vscode.'); }
   }));
   const timer = setInterval(() => { void tick(); }, 2000);

@@ -155,7 +155,9 @@ export function createVscodeAdapter(options: VscodeOptions = {}): CoreAdapter {
     install, update: install, inspect, uninstall,
     uninstallUnconfigured: uninstall,
     async onEnabledChange(_options, enabled) {
-      if ((await synchronize(file, enabled)).length) throw new Error('VSCODE_OWNED_SETTING_CHANGED');
+      // Core already fences export before calling this hook. Keep the native
+      // loopback destination stable; changing it restarts the Copilot host.
+      if (enabled && (await synchronize(file, true)).length) throw new Error('VSCODE_OWNED_SETTING_CHANGED');
     }
   };
 }

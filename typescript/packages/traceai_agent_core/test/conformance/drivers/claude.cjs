@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Synthetic on-disk transcript + real hook boundary, based on hooks.test.cjs.
 const fs = require("node:fs/promises"),
   path = require("node:path");
@@ -47,7 +48,7 @@ module.exports = {
               {
                 id: `${s.id}-message-${i}`,
                 role: "assistant",
-                model: "conf-model",
+                model: requestUsage(s, i).model,
                 content: [
                   { type: "text", text: s.output },
                   ...(i === 0
@@ -63,7 +64,7 @@ module.exports = {
                     : []),
                 ],
                 stop_reason: i === s.calls - 1 ? "end_turn" : "tool_use",
-                usage: { input_tokens: 10, output_tokens: 4 },
+                usage: { input_tokens: requestUsage(s, i).input, output_tokens: requestUsage(s, i).output },
               },
               { requestRef: `${s.id}-request-${i}` },
             ),

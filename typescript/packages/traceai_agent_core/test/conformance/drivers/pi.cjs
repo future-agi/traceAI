@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Native extension callbacks from each package's extension.test.cjs; no tracer doubles.
 const { packages, delay } = require("../index.cjs");
 function driver(agent) {
@@ -106,7 +107,7 @@ function driver(agent) {
                 role: "assistant",
                 timestamp: Date.now() + i,
                 completedAt: Date.now() + i + 1,
-                model: "conf-model",
+                model: requestUsage(s, i).model,
                 provider: "mock",
                 content: [{ type: "text", text: s.output }],
                 stopReason:
@@ -116,7 +117,7 @@ function driver(agent) {
                       ? "aborted"
                       : "stop",
                 errorMessage: s.outcome === "error" ? s.error : undefined,
-                usage: { input: 10, output: 4, cacheRead: 0, cacheWrite: 0 },
+                usage: { input: requestUsage(s, i).input, output: requestUsage(s, i).output, cacheRead: 0, cacheWrite: 0 },
               },
             });
           }

@@ -63,6 +63,7 @@ export class CursorObserver {
         this.completed.add(key);
         this.gap("MISSING_STOP");
       }
+    if (e.gap) this.gap(e.gap);
     if (e.event === "sessionEnd") {
       const turns = [...this.active].filter(([key]) => JSON.parse(key)[0] === e.conversation);
       // Session totals cannot be copied onto several unfinished turns. Preserve
@@ -79,8 +80,14 @@ export class CursorObserver {
         await this.tracer.flush();
         return;
       }
+      // Opening/aborting the CLI before submitting a prompt still sends sessionEnd.
+      // A duration, model or zero counters alone do not prove any agent work. Keep
+      // tool-only print sessions (finished above) and positive source usage.
+      if (!e.usage || !Object.values(e.usage).some(value => typeof value === "number" && value > 0)) {
+        this.gap("EMPTY_SESSION");
+        return;
+      }
     }
-    if (e.gap) this.gap(e.gap);
     const key = this.key(e);
     if (this.completed.has(key)) return;
     const missingPrompt = e.event !== "beforeSubmitPrompt";

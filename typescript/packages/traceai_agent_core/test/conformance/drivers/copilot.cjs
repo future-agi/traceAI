@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Native console exporter records through the production mapper and HTTP delivery.
 const { packages, delay } = require("../index.cjs");
 const { NativeSpans } = require(packages + "/traceai_copilot/dist/index.js");
@@ -52,8 +53,9 @@ module.exports = {
           send(
             "chat",
             {
-              "gen_ai.usage.input_tokens": 10,
-              "gen_ai.usage.output_tokens": 4,
+              "gen_ai.request.model": requestUsage(s, i).model,
+              "gen_ai.usage.input_tokens": requestUsage(s, i).input,
+              "gen_ai.usage.output_tokens": requestUsage(s, i).output,
               "gen_ai.input.messages": JSON.stringify([
                 {
                   role: "user",
@@ -88,8 +90,8 @@ module.exports = {
               path: s.input,
               password: "SYNTH_PASSWORD_19275",
             }),
-            "gen_ai.tool.call.result": s.tool,
-          });
+            "gen_ai.tool.call.result": s.outcome === "error" ? s.error : s.tool,
+          }, false, s.outcome === "error");
         if (s.overlap)
           await Promise.all(
             Array.from({ length: s.tools }, () => Promise.resolve().then(tool)),

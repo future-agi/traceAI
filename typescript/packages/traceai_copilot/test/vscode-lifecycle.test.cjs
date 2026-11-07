@@ -42,13 +42,19 @@ test('validated core setup installs VSIX, journals settings and reports live hea
   status = await inspectStatus(f.options); assert.equal(status.activation, 'OBSERVED');
   await setup(f.options); assert.equal(f.calls.filter(a => a.includes('--install-extension')).length, 1);
 });
-test('disable, enable and uninstall restore settings without deleting unrelated keys', async t => {
+test('disable/enable leave the native route stable; only uninstall restores settings', async t => {
   const f = await fixture(t); await setup(f.options);
+  const before = await fs.readFile(f.settings, 'utf8'), stat = await fs.stat(f.settings);
   await disable(f.options); await f.adapter.onEnabledChange(f.options, false);
-  assert.deepEqual(JSON.parse((await fs.readFile(f.settings, 'utf8')).replace('// original', '')), { 'editor.fontSize':14 });
+  assert.equal((await resolveConfig(f.options)).enabled, false);
+  assert.equal(await fs.readFile(f.settings, 'utf8'), before);
+  assert.equal((await fs.stat(f.settings)).ino, stat.ino, 'disable must not rewrite watched native startup settings');
   await enable(f.options); await f.adapter.onEnabledChange(f.options, true);
-  assert.equal(JSON.parse((await fs.readFile(f.settings, 'utf8')).replace('// original', ''))['chat.agentHost.otel.enabled'], true);
+  assert.equal((await resolveConfig(f.options)).enabled, true);
+  assert.equal(await fs.readFile(f.settings, 'utf8'), before);
+  assert.equal((await fs.stat(f.settings)).ino, stat.ino);
   const removed = await uninstall(f.options); assert.equal(removed.registered, false);
+  assert.deepEqual(JSON.parse((await fs.readFile(f.settings, 'utf8')).replace('// original', '')), { 'editor.fontSize':14 });
   assert.equal(f.calls.filter(a => a.includes('--uninstall-extension')).length, 1);
   assert.equal((await resolveConfig(f.options)).enabled, false);
   assert.equal(await readInstallation(installationPath(f)), undefined);

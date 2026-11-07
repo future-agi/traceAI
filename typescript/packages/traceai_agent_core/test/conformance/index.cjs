@@ -215,15 +215,25 @@ function checkShape(batches, expected) {
     expected.tools,
     `tools=${tools.length}, expected=${expected.tools}`,
   );
+  const childAgents = all.filter(s => s.parentSpanId &&
+    (attributes(s)["fi.span.kind"] ?? attributes(s)["gen_ai.span.kind"]) === "AGENT");
+  assert.equal(childAgents.length, expected.childAgents ?? 0, "non-root agent spans");
+  assert.equal(all.length, roots.length + llms.length + tools.length + childAgents.length, "unexpected span shape");
   for (const s of llms) {
     const model =
       attributes(s)["gen_ai.request.model"] ||
       attributes(s)["gen_ai.response.model"];
     assert(model, "generation missing model");
-    if (expected.model) assert.equal(model, expected.model, "generation model");
+    if (expected.model && (!expected.requestUsage || expected.requestIdentity === "order")) assert.equal(model, expected.model, "generation model");
   }
-  for (const s of tools)
+  for (const s of tools) {
     assert(attributes(s)["tool.name"], "tool missing tool.name");
+    if (expected.toolOutcome) {
+      if (attributes(s)["fi.agent.outcome"] !== undefined)
+        assert.equal(attributes(s)["fi.agent.outcome"], expected.toolOutcome, "tool outcome");
+      assert.equal(({STATUS_CODE_OK:1, STATUS_CODE_ERROR:2})[s.status?.code] ?? s.status?.code, expected.toolOutcome === "error" ? 2 : 1, "tool status code");
+    }
+  }
   for (const r of roots) {
     assert(attributes(r)["session.id"], "root missing session.id");
     assert.equal(
@@ -272,6 +282,31 @@ function checkShape(batches, expected) {
           !attributes(r)["gen_ai.usage.output_tokens"],
         "usage present on both root and generations",
       );
+  // A conserved total is not enough: moving one request's tokens to another
+  // generation corrupts attribution. Source aggregate-only drivers explicitly
+  // declare last-generation ownership; all other drivers carry request usage.
+  for (const root of roots) {
+    const generations = llms.filter(s => s.traceId === root.traceId).sort((a, b) =>
+      BigInt(a.startTimeUnixNano || 0) < BigInt(b.startTimeUnixNano || 0) ? -1 :
+      BigInt(a.startTimeUnixNano || 0) > BigInt(b.startTimeUnixNano || 0) ? 1 : 0);
+    for (const [i, s] of generations.entries()) {
+      const aggregate = expected.generationUsage === "last-generation";
+      for (const [key, total] of [
+        ["gen_ai.usage.input_tokens", expected.inputTokens ?? expected.calls * 10],
+        ["gen_ai.usage.output_tokens", expected.outputTokens ?? expected.calls * 4],
+      ]) {
+        let value = aggregate ? (i === generations.length - 1 ? total / roots.length : 0) : total / llms.length;
+        if (expected.requestUsage) {
+          const model = attributes(s)["gen_ai.request.model"] || attributes(s)["gen_ai.response.model"];
+          const request = expected.requestIdentity === "order" ? expected.requestUsage[i] : expected.requestUsage.find(r => r.model === model);
+          assert(request, "unrecognized generation request model");
+          if (expected.requestIdentity !== "order") assert.equal(generations.filter(g => (attributes(g)["gen_ai.request.model"] || attributes(g)["gen_ai.response.model"]) === model).length, 1, "duplicate request model");
+          value = key.endsWith("input_tokens") ? request.input : request.output;
+        }
+        assert.equal(Number(attributes(s)[key] || 0), value, `per-generation ${key} (${s.name})`);
+      }
+    }
+  }
   if (roots.length > 1) {
     assert.equal(
       new Set(roots.map((r) => attributes(r)["session.id"])).size,
@@ -285,7 +320,8 @@ function checkShape(batches, expected) {
     );
   }
 }
-function checkPrivacy(batches, policy) {
+function checkPrivacy(batches, policy, expected) {
+  if (expected) checkShape(batches, expected);
   const text = JSON.stringify(batches);
   assert(spans(batches).length, "privacy check requires real exported spans");
   const missing =
@@ -358,8 +394,63 @@ async function runConformance(driver) {
         const s = scenario(options);
         await d.turn(s);
         if (d.flush) await d.flush();
-        if (policy) checkPrivacy(f.batches, policy);
-        else checkShape(f.batches, s);
+        const expected = {
+          ...s,
+          inputTokens: s.inputTokens ?? s.calls * 10,
+          outputTokens: s.outputTokens ?? s.calls * 4,
+          generationUsage: driver.generationUsage,
+          requestIdentity: driver.requestIdentity,
+          childAgents: (s.aggregate ? driver.aggregateChildAgents : undefined) ?? driver.childAgents ?? 0,
+          toolOutcome: s.outcome === "error" ? "error" : "success",
+          // Cursor cannot read transcripts when content capture is disabled.
+          // Its native turn totals remain additive on the root, never lost.
+          ...(driver.rootFallbackPolicies?.includes(policy) ? { calls: 0 } : {}),
+        };
+        if (policy) checkPrivacy(f.batches, policy, expected);
+        else checkShape(f.batches, expected);
+        if (name === "privacy.off") await record("guard.privacy-dropped-spans-and-usage", async () => {
+          const missing = structuredClone(f.batches);
+          for (const b of missing) for (const r of b.resourceSpans || []) for (const scope of r.scopeSpans || [])
+            scope.spans = scope.spans.filter(x => !x.parentSpanId);
+          assert.throws(() => checkPrivacy(missing, policy, expected));
+          if (expected.childAgents) {
+            const noAgents = structuredClone(f.batches);
+            for (const b of noAgents) for (const r of b.resourceSpans || []) for (const scope of r.scopeSpans || []) {
+              const agents = scope.spans.filter(x => x.parentSpanId && (attributes(x)["fi.span.kind"] ?? attributes(x)["gen_ai.span.kind"]) === "AGENT");
+              for (const agent of agents) {
+                for (const span of scope.spans) if (span.parentSpanId === agent.spanId) span.parentSpanId = agent.parentSpanId;
+                scope.spans = scope.spans.filter(x => x !== agent);
+              }
+            }
+            assert.throws(() => checkPrivacy(noAgents, policy, expected), /non-root agent spans/);
+          }
+          const noUsage = structuredClone(f.batches);
+          for (const span of spans(noUsage)) span.attributes = (span.attributes || []).filter(a => !a.key.startsWith("gen_ai.usage."));
+          assert.throws(() => checkPrivacy(noUsage, policy, expected));
+        });
+        if (name === "outcome.error") await record("guard.failed-tool-as-success", async () => {
+          const wrong = structuredClone(f.batches);
+          const tool = spans(wrong).find(x => (attributes(x)["fi.span.kind"] ?? attributes(x)["gen_ai.span.kind"]) === "TOOL");
+          assert(tool, "missing failed-tool fixture");
+          tool.status = {code:1};
+          tool.attributes = tool.attributes.filter(a => a.key !== "fi.agent.outcome");
+          tool.attributes.push({key:"fi.agent.outcome",value:{stringValue:"success"}});
+          assert.throws(() => checkShape(wrong, expected), /tool outcome|tool status/);
+        });
+        if (name === "trace.shape-and-exact-usage") await record("guard.misattributed-generation-usage", async () => {
+          const wrong = structuredClone(f.batches);
+          const llms = spans(wrong).filter(x => (attributes(x)["fi.span.kind"] ?? attributes(x)["gen_ai.span.kind"]) === "LLM");
+          assert.equal(llms.length, 2);
+          const key = "gen_ai.usage.input_tokens";
+          const total = llms.reduce((n,x) => n + Number(attributes(x)[key] || 0),0);
+          // Move all usage to a different generation while keeping its sum exact.
+          const owner = llms.findIndex(x => Number(attributes(x)[key] || 0) > 0);
+          for (const [i,span] of llms.entries()) {
+            span.attributes = span.attributes.filter(a => a.key !== key && a.key !== "gen_ai.usage.total_tokens");
+            span.attributes.push({key,value:{intValue:i === 1-owner ? total : 0}});
+          }
+          assert.throws(() => checkShape(wrong, expected), /per-generation/);
+        });
       } finally {
         if (evidenceDir) {
           const dir = path.join(evidenceDir, driver.agent);
@@ -378,6 +469,13 @@ async function runConformance(driver) {
     });
   }
   await traceCase("trace.shape-and-exact-usage");
+  if (!driver.generationUsage)
+    await traceCase("usage.distinct-request-attribution", {
+      requestUsage: [
+        { model: "conf-model-first", input: 11, output: 3 },
+        { model: "conf-model-second", input: 29, output: 7 },
+      ], inputTokens: 40, outputTokens: 10,
+    });
   // Only hosts that supply native turn-level totals can exercise this fallback;
   // request-only adapters must never invent an aggregate counter.
   if (driver.aggregateUsage)
@@ -402,7 +500,7 @@ async function runConformance(driver) {
         scenario({ id: "turn-2", input: MARKERS.input + " second" }),
       );
       if (d.flush) await d.flush();
-      checkShape(f.batches, { turns: 2, calls: 4, tools: 4 });
+      checkShape(f.batches, { turns: 2, calls: 4, tools: 4, generationUsage: driver.generationUsage, toolOutcome: "success", childAgents: (driver.childAgents ?? 0) * 2 });
     } finally {
       await f.close();
     }
@@ -630,4 +728,5 @@ module.exports = {
   MARKERS,
   FLAGS,
   packages,
+  requestUsage: (scenario, index) => scenario.requestUsage?.[index] ?? { model: scenario.model, input: 10, output: 4 },
 };

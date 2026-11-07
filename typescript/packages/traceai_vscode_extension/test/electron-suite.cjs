@@ -26,10 +26,17 @@ async function suite() {
   assert.ok(started,'extension relay did not start');
   for(let i=0;i<100 && await count()<1;i++) await delay(100);
   assert.equal(await count(),1);
+  const fs = require('node:fs/promises');
+  const settingsPath = require('node:path').join(process.env.HOME, 'editor/User/settings.json');
+  const nativeSettings = await fs.readFile(settingsPath, 'utf8'), inode = (await fs.stat(settingsPath)).ino;
   await vscode.commands.executeCommand('futureagi.tracing.toggle');
   assert.equal((await send()).status,200); await delay(300); assert.equal(await count(),1);
+  assert.equal(await fs.readFile(settingsPath, 'utf8'), nativeSettings);
+  assert.equal((await fs.stat(settingsPath)).ino, inode, 'disable must not restart native telemetry');
   await vscode.commands.executeCommand('futureagi.tracing.toggle');
   assert.equal((await send()).status,200);
+  assert.equal(await fs.readFile(settingsPath, 'utf8'), nativeSettings);
+  assert.equal((await fs.stat(settingsPath)).ino, inode);
   for(let i=0;i<100 && await count()<2;i++) await delay(100);
   assert.equal(await count(),2);
   console.log('ELECTRON_EXTENSION_ACTIVATION_PASS');

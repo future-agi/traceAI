@@ -120,9 +120,11 @@ async function exportTurn(
         ? "CANCELLED_CONFIG_OR_DISABLE"
         : observer.deliveryError
           ? "DELIVERY_" + observer.deliveryError
-          : full
-            ? "EXPORTED_FULL"
-            : "EXPORTED_FALLBACK",
+          : observer.gaps.has("EMPTY_SESSION")
+            ? "EMPTY_SESSION"
+            : full
+              ? "EXPORTED_FULL"
+              : "EXPORTED_FALLBACK",
       true,
     );
     await updateJson(join(c.paths.stateDir, "cursor-diagnostics.json"), () => ({

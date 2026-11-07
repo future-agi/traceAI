@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Native hook subprocesses exercise the durable journal and inter-process locks.
 const fs = require("node:fs/promises"),
   path = require("node:path");
@@ -49,7 +50,7 @@ module.exports = {
         await emit("UserPromptSubmit", { prompt: `${s.input} ${s.secret}` });
         for (let i = 0; i < s.calls; i++) {
           await emit("PreModelRequest", {
-            model: "conf-model",
+            model: requestUsage(s, i).model,
             messages: [
               { role: "user", content: s.input },
               { role: "assistant", content: s.output },
@@ -62,14 +63,14 @@ module.exports = {
             content: [{ text: s.output }],
           });
           await emit("PostModelRequest", {
-            model: "conf-model",
+            model: requestUsage(s, i).model,
             status:
               s.outcome === "error" && i === s.calls - 1
                 ? "failed"
                 : "completed",
             error: s.outcome === "error" ? s.error : undefined,
             response: s.output,
-            token_usage: { input_tokens: 10, output_tokens: 4 },
+            token_usage: { input_tokens: requestUsage(s, i).input, output_tokens: requestUsage(s, i).output },
           });
         }
         const tool = async (i) => {
@@ -81,7 +82,7 @@ module.exports = {
           await emit("PostToolUse", {
             tool_use_id: "tool-" + i,
             tool_name: "read",
-            tool_response: s.tool,
+            tool_response: s.outcome === "error" ? { is_error: true, error: s.error } : s.tool,
           });
         };
         if (s.overlap)

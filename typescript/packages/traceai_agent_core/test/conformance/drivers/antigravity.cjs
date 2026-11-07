@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // Native named hooks and PLANNER_RESPONSE transcript records from transcript.test.cjs.
 const fs = require("node:fs/promises"),
   path = require("node:path");
@@ -7,6 +8,8 @@ const { handleEvent } = require(
 );
 module.exports = {
   agent: "antigravity",
+  childAgents: 1,
+  requestIdentity: "order",
   async create(f) {
     const file = path.join(
       f.home,
@@ -40,16 +43,16 @@ module.exports = {
           }) + "\n",
         );
         await send("PreInvocation");
-        const records = [];
+        const records = [], responseStart = Date.now();
         for (let i = 0; i < s.calls; i++) {
           records.push({
             step_index: step++,
             source: "MODEL",
             type: "PLANNER_RESPONSE",
             status: "DONE",
-            created_at: new Date().toISOString(),
-            input_tokens: 10,
-            output_tokens: 4,
+            created_at: new Date(responseStart + i).toISOString(),
+            input_tokens: requestUsage(s, i).input,
+            output_tokens: requestUsage(s, i).output,
             content: s.output,
             ...(i < s.tools
               ? {

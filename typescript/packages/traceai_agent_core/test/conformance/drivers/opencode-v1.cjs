@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // V1 event/hook order derived from fixtures/opencode-1.19.0-session.json.
 const { packages, delay } = require("../index.cjs");
 module.exports = {
@@ -48,7 +49,7 @@ module.exports = {
             parentID: s.id,
             role: "assistant",
             sessionID: s.session,
-            modelID: "conf-model",
+            modelID: requestUsage(s, i).model,
             providerID: "mock",
             time: { created: time },
           };
@@ -120,8 +121,8 @@ module.exports = {
               time: { created: time, completed: time + 2 },
               finish: "stop",
               tokens: {
-                input: 10,
-                output: 4,
+                input: requestUsage(s, i).input,
+                output: requestUsage(s, i).output,
                 reasoning: 0,
                 cache: { read: 0, write: 0 },
               },

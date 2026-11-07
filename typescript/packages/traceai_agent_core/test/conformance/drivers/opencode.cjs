@@ -1,3 +1,4 @@
+const { requestUsage } = require("../index.cjs");
 // V2 native observer events, from privacy-export.test.mjs and observer.test.mjs.
 const { packages, delay } = require("../index.cjs");
 module.exports = {
@@ -51,7 +52,7 @@ module.exports = {
           );
           event("session.step.started", {
             assistantMessageID: `${s.id}-m${i}`,
-            model: { id: "conf-model", providerID: "mock" },
+            model: { id: requestUsage(s, i).model, providerID: "mock" },
             started: Date.now(),
           });
           event("session.text.ended", {
@@ -61,8 +62,8 @@ module.exports = {
           event("session.step.ended", {
             assistantMessageID: `${s.id}-m${i}`,
             tokens: {
-              input: 10,
-              output: 4,
+              input: requestUsage(s, i).input,
+              output: requestUsage(s, i).output,
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },

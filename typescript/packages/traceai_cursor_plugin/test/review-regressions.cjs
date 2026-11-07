@@ -41,6 +41,10 @@ async function terminalRegression({ send, readSpans }, name, capture = true) {
       await send(row);
     }
   const all = readSpans().slice(before);
+  if (print) {
+    assert.equal(all.length, 0, `${name}: terminal alone must not invent a turn`);
+    return { case: name, spanCount: 0, duplicateTerminalsSuppressed: true, tree: [] };
+  }
   assert.equal(
     all.length,
     1,
