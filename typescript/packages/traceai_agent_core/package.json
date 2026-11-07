@@ -11,6 +11,10 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
     },
+    "./test/conformance": {
+      "types": "./test/conformance/index.d.ts",
+      "default": "./test/conformance/index.cjs"
+    },
     "./client": {
       "types": "./dist/src/client.d.ts",
       "import": "./dist/esm/client.js",
@@ -95,6 +99,7 @@
   "scripts": {
     "build": "node build.cjs",
     "test": "node --test --test-concurrency=4 test/*.test.cjs test/forks/*/*.test.cjs",
+    "test:conformance": "node test/conformance/run.cjs",
     "prepare": "pnpm run build"
   },
   "files": [
@@ -102,6 +107,8 @@
     "bin",
     "schema",
     "profiles",
+    "test/conformance/index.cjs",
+    "test/conformance/index.d.ts",
     "README.md",
     "LICENSE"
   ],
