@@ -8,6 +8,8 @@ import {
   readProtected,
   updateJson,
   contentHash,
+  deliveryStatePath,
+  type DeliveryState,
   type CoreAdapter,
   type AdapterContext,
   type AdapterInspection,
@@ -165,8 +167,13 @@ async function inspect(c: AdapterContext): Promise<AdapterInspection> {
   } catch {
     /* not installed */
   }
+  const registered = count === 1 && installed && !disabled && !legacy;
+  const delivery = await readJson<DeliveryState>(deliveryStatePath(c.config));
+  const activated = registered && !!delivery?.activatedAt &&
+    (!c.config.deliveryBinding || delivery.binding === c.config.deliveryBinding);
   return {
-    registered: count === 1 && installed && !disabled && !legacy,
+    registered,
+    activated,
     duplicate: count > 1 || legacy,
     hostVersion: version,
     issues: [
@@ -176,9 +183,11 @@ async function inspect(c: AdapterContext): Promise<AdapterInspection> {
     trust: c.scope === "project" ? "unknown" : "confirmed",
     detail: disabled
       ? "EXTENSION_DISABLED"
-      : c.scope === "project"
-        ? "PROJECT_TRUST_IS_MANAGED_BY_PI"
-        : "RESTART_OR_RELOAD_PI",
+      : activated
+        ? undefined
+        : c.scope === "project"
+          ? "PROJECT_TRUST_IS_MANAGED_BY_PI"
+          : "RESTART_OR_RELOAD_PI",
   };
 }
 export const piAdapter: CoreAdapter = {
@@ -241,22 +250,39 @@ export const piAdapter: CoreAdapter = {
     return after;
   },
   async uninstall(c) {
-    const paths = locations(c),
-      owner = await readJson<Owned>(paths.owned);
-    if (!owner || owner.scope !== c.scope)
-      return { ...(await inspect(c)), detail: "NOT_OWNED_REMOVE_WITH_PI" };
-    const expected = c.scope === "project" ? paths.project : paths.user;
-    if (owner.settings !== expected || owner.source !== PACKAGE_SOURCE)
-      throw new Error("REGISTRATION_CHANGED");
-    const current = await readJson<Settings>(owner.settings, false);
-    const entry = current?.packages?.find((p) => sourceOf(p) === owner.source);
-    if (!entry || contentHash(JSON.stringify(entry)) !== owner.entryHash)
-      return { ...(await inspect(c)), detail: "REGISTRATION_CHANGED" };
-    await command(c, [
-      "remove",
-      owner.source,
-      ...(c.scope === "project" ? ["-l"] : []),
-    ]);
+    // Configure-only setup can change the profile scope without moving Pi's native
+    // installation. Find the registration in the current scope first, then the
+    // other visible scope; never infer ownership from a profile or remove a manual
+    // registration in order to reach an owned one in another scope.
+    const scopes: Array<"user" | "project"> = [
+      c.scope,
+      c.scope === "project" ? "user" : "project",
+    ];
+    for (const scope of scopes) {
+      if (scope === "project" && c.config.issues.includes("PROJECT_CONFIG_IGNORED"))
+        continue;
+      const paths = locations({ ...c, scope });
+      const expected = scope === "project" ? paths.project : paths.user;
+      if (!expected) continue;
+      const current = await readJson<Settings>(expected, false);
+      const entries = current?.packages?.filter((p) => ourSource(sourceOf(p))) ?? [];
+      if (!entries.length) continue;
+      const owner = await readJson<Owned>(paths.owned);
+      if (!owner || owner.scope !== scope)
+        return { ...(await inspect(c)), detail: "NOT_OWNED_REMOVE_WITH_PI" };
+      if (owner.settings !== expected || owner.source !== PACKAGE_SOURCE)
+        throw new Error("REGISTRATION_CHANGED");
+      const entry = entries[0];
+      if (entries.length !== 1 || sourceOf(entry) !== owner.source ||
+          contentHash(JSON.stringify(entry)) !== owner.entryHash)
+        return { ...(await inspect(c)), detail: "REGISTRATION_CHANGED" };
+      await command(c, [
+        "remove",
+        owner.source,
+        ...(scope === "project" ? ["-l"] : []),
+      ]);
+      return inspect(c);
+    }
     return inspect(c);
   },
 };
