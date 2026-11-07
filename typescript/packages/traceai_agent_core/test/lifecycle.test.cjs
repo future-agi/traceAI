@@ -423,6 +423,24 @@ test('repeated setup owns only its shared project entry and preserves another ag
   const saved = JSON.parse(await fs.readFile(config.paths.project, 'utf8'));
   assert.ok(saved.openclaw); assert.equal(saved.goose, undefined);
 });
+for (const preexisting of [false, true]) test(`repeated setup never claims manual shared-entry edits (preexisting=${preexisting})`, async t => {
+  const f = await fixture(t), projectDir = path.join(f.home, 'project'); await fs.mkdir(projectDir);
+  const options = { ...f.options, agent: 'goose', projectDir }, paths = await c.configPaths(options);
+  const foreign = { schemaVersion: 1, captureContent: false, tags: ['other-agent'] };
+  await c.writeProtected(paths.project, JSON.stringify({ openclaw: foreign,
+    ...(preexisting ? { goose: { schemaVersion: 1, enabled: false, tags: ['original'] } } : {}) }));
+  const setup = () => f.setup({ agent: 'goose', projectDir, scope: 'project' });
+  await setup();
+  await c.updateJson(paths.project, old => ({ ...old, goose: { ...old.goose, environment: 'manual-environment', tags: ['manual-tag'] } }));
+  const edited = (await c.readJson(paths.project)).goose;
+  await setup(); await setup();
+  assert.deepEqual((await c.readJson(paths.project)).goose, edited);
+  await c.uninstall(options);
+  const saved = await c.readJson(paths.project);
+  assert.deepEqual(saved.goose, edited);
+  assert.deepEqual(saved.openclaw, foreign);
+});
+
 test('uninstall restores preexisting shared entry and preserves subsequent user edits', async t => {
   const f = await fixture(t), projectDir = path.join(f.home, 'project'); await fs.mkdir(projectDir);
   const options = {...f.options, agent:'goose', projectDir}, paths = await c.configPaths(options);

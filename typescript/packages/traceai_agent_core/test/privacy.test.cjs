@@ -87,6 +87,18 @@ test("YAML block scalars under sensitive keys are redacted whole (literal, folde
   assert.ok(!JSON.stringify(nested).includes("MULTILINE_CANARY"), JSON.stringify(nested));
 });
 
+test('sensitive YAML plain scalars redact all inline words, preserving line boundaries and shell assignment semantics', () => {
+  for (const newline of ['\n', '\r\n']) {
+    assert.equal(redact('password: first SYNTHETIC_PRIVATE_SUFFIX'), '[REDACTED]');
+    assert.equal(redact(`password: first SYNTHETIC_PRIVATE_SUFFIX${newline}`), `[REDACTED]${newline}`);
+    const text = `service:${newline}  passwd: first SYNTHETIC_PRIVATE_SUFFIX${newline}  public: retained`;
+    assert.equal(redact(text), `service:${newline}  [REDACTED]${newline}  public: retained`);
+    const folded = `password: first SYNTHETIC_PRIVATE_SUFFIX${newline}  FOLDED_SECRET_SUFFIX${newline}public: retained`;
+    assert.equal(redact(folded), `[REDACTED]${newline}public: retained`);
+  }
+  assert.equal(redact('PASSWORD=synthetic-value public-command --flag'), '[REDACTED] public-command --flag');
+});
+
 test("a non-sensitive key on the previous line never hides the next sensitive key", () => {
   for (const text of ["service:\n  password: abc123SECRET", "a: 1\nb:\n  api_key: abc123SECRET", "{\"name\": \"x\",\n \"token\": abc123SECRET}"]) {
     assert.ok(!redact(text).includes("abc123SECRET"), JSON.stringify(redact(text)));

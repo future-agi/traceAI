@@ -19,6 +19,30 @@ message ExportTraceServiceRequest { repeated ResourceSpans resource_spans=1; }`;
 export const TraceRequest = parseProto(schema).root.lookupType('ExportTraceServiceRequest');
 type Obj = Record<string, any>;
 const structural = /^(?:gen_ai\.(?:operation\.name|system|provider\.name|request\.model|response\.(?:model|id)|usage\.[a-z_.]+|cost\.[a-z_.]+|server\.[a-z_.]+)|llm\.(?:model_name|provider|token_count\.[a-z_]+)|tool\.name|service\.(?:name|version)|telemetry\.sdk\.(?:name|version|language)|gen_ai\.(?:tool\.name|tool\.call\.id|agent\.name|conversation\.id)|fi\.(?:span\.kind|agent\.(?:name|surface|outcome|version))|error\.type|session\.id)$/;
+// Exact semantic-convention counters, not arbitrary names containing "token".
+// Only numeric OTLP values qualify; strings/containers cannot use this exemption.
+const numericTokenFields = new Set([
+  'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'gen_ai.usage.total_tokens',
+  'gen_ai.usage.cache_read_tokens', 'gen_ai.usage.cache_write_tokens',
+  'gen_ai.usage.cache_creation_tokens', 'gen_ai.usage.reasoning_tokens',
+  'gen_ai.usage.input_tokens.audio', 'gen_ai.usage.input_tokens.cache_read',
+  'gen_ai.usage.input_tokens.cache_write', 'gen_ai.usage.output_tokens.audio',
+  'gen_ai.usage.output_tokens.reasoning', 'gen_ai.usage.cache_read.input_tokens',
+  'gen_ai.usage.cache_write.input_tokens', 'gen_ai.usage.reasoning.output_tokens',
+  'llm.token_count.prompt', 'llm.token_count.completion', 'llm.token_count.total',
+  'llm.token_count.prompt_details.cache_read', 'llm.token_count.prompt_details.cache_write',
+  'llm.token_count.prompt_details.audio', 'llm.token_count.completion_details.reasoning',
+  'llm.token_count.completion_details.audio', 'gen_ai.server.time_to_first_token',
+]);
+function safeAttributeKey(x: Obj): boolean {
+  if (!x || typeof x.key !== 'string' || x.key.length > 256) return false;
+  if (!isSensitiveKey(x.key)) return true;
+  const value = x.value;
+  if (!numericTokenFields.has(x.key) || !value || Object.keys(value).length !== 1) return false;
+  return typeof value.intValue === 'string' && /^\d{1,20}$/.test(value.intValue) ||
+    typeof value.intValue === 'number' && Number.isSafeInteger(value.intValue) && value.intValue >= 0 ||
+    typeof value.doubleValue === 'number' && Number.isFinite(value.doubleValue) && value.doubleValue >= 0;
+}
 function safeValue(v: Obj, depth = 0): Obj {
   if (!v || typeof v !== 'object' || depth > 12) return { stringValue: '[OMITTED]' };
   if (typeof v.stringValue === 'string') return { stringValue: redact(v.stringValue).slice(0, 32768) };
@@ -28,15 +52,14 @@ function safeValue(v: Obj, depth = 0): Obj {
   if (typeof v.doubleValue === 'number' && Number.isFinite(v.doubleValue)) return { doubleValue: v.doubleValue };
   if (Array.isArray(v.arrayValue?.values)) return { arrayValue: { values: v.arrayValue.values.slice(0, 128).map((x: Obj) => safeValue(x, depth + 1)) } };
   if (Array.isArray(v.kvlistValue?.values)) return { kvlistValue: { values: v.kvlistValue.values.slice(0, 128)
-    .filter((x: Obj) => typeof x.key === 'string' && x.key.length <= 256 && !isSensitiveKey(x.key))
+    .filter(safeAttributeKey)
     .map((x: Obj) => ({ key: x.key, value: safeValue(x.value, depth + 1) })) } };
   // Opaque bytes cannot be redacted safely; omit them instead of forwarding hidden credentials.
   return { stringValue: '[OMITTED]' };
 }
 function attrs(list: unknown, restricted: boolean): Obj[] {
   if (!Array.isArray(list)) return [];
-  return list.slice(0, 256).filter(x => x && typeof x.key === 'string' && x.key.length <= 256 &&
-    !/api.?key|secret|authorization|cookie|password/i.test(x.key) && (!restricted || structural.test(x.key)))
+  return list.slice(0, 256).filter(x => safeAttributeKey(x) && (!restricted || structural.test(x.key)))
     .map(x => ({ key: x.key, value: safeValue(x.value) }));
 }
 const pick = (o: Obj, keys: string[]) => Object.fromEntries(keys.filter(k => o[k] !== undefined).map(k => [k, o[k]]));

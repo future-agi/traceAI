@@ -674,6 +674,40 @@ for (const newline of ['\n', '\r\n']) for (const scalar of ['|', 'first']) {
     });
   }
 }
+for (const newline of ['\n', '\r\n']) for (const ending of ['eof', 'newline', 'mapping', 'folded']) {
+  const raw = `service:${newline}  password: first SYNTHETIC_PRIVATE_SUFFIX` +
+    (ending === 'eof' ? '' : ending === 'newline' ? newline :
+      (ending === 'folded' ? `${newline}    FOLDED_SECRET_SUFFIX` : '') + `${newline}  public: retained`);
+  test(`OTLP redacts the complete multiword YAML scalar at ${ending} ${JSON.stringify(newline)}`, async t => {
+    const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+    for (const [id, value] of [['raw', raw], ['encoded', 'tool result: ' + JSON.stringify({ content: raw })]]) {
+      const turn = tracer.startTurn({ sessionId: 'yaml-inline', turnId: id, input: value });
+      turn.child({ id: 'read', name: 'read', kind: 'tool', input: value }).end({ output: value, outcome: 'success' });
+      turn.end({ output: value });
+    }
+    await tracer.shutdown();
+    assert.equal(spans(f).length, 4);
+    for (const span of spans(f)) {
+      assert.doesNotMatch(JSON.stringify(span), /SYNTHETIC_PRIVATE_SUFFIX|FOLDED_SECRET_SUFFIX/);
+      assert.match(attrs(span)['input.value'], /REDACTED/);
+      assert.match(attrs(span)['output.value'], /REDACTED/);
+      if (ending === 'mapping' || ending === 'folded') assert.match(attrs(span)['output.value'], /public: retained/);
+    }
+  });
+}
+for (const outcome of [undefined, 'success', 'error', 'interrupted', 'incomplete']) {
+  test(`opaque tool output never overrides the adapter outcome ${outcome ?? 'default'}`, async t => {
+    const f = await fixture(t), tracer = c.createTurnTracer({ config: f.config });
+    const turn = tracer.startTurn({ sessionId: 'json-read', turnId: 'read' });
+    turn.child({ id: 'read', name: 'read', kind: 'tool' }).end({ output: '{"isError":true,"is_error":true}', outcome });
+    turn.end(); await tracer.shutdown();
+    const tool = spans(f).find(s => s.name === 'read');
+    assert.equal(spans(f).length, 2);
+    assert.equal(attrs(tool)['fi.agent.outcome'], outcome ?? 'success');
+    assert.equal(tool.status.code ?? 0, outcome === 'error' ? 2 : !outcome || outcome === 'success' ? 1 : 0);
+  });
+}
+
 for (const scheme of ['postgresql', 'mysql', 'redis', 'mongodb', 'mongodb+srv']) {
   test(`OTLP redacts ${scheme} userinfo on loopback including encoded passwords`, async t => {
     const f = await fixture(t), tracer = c.createTurnTracer({config: f.config});

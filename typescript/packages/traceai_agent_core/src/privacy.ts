@@ -89,7 +89,8 @@ function blockScalarEnd(
       .replace(escaped ? /\\r$/ : /\r$/, "");
     if (line.trim()) {
       if (indent(line) <= keyIndent) break;
-      end = lineEnd;
+      // Leave the complete raw/escaped line separator outside the scalar.
+      end = position + line.length;
     }
     if (next < 0) break;
     position = next + sep.length;
@@ -136,22 +137,21 @@ function redactAssignments(text: string): string {
       const block =
         /^[|>][0-9+-]{0,3}[ \t]*(?:#[^\r\n\\]*)?(\r?\n|(?:\\+r)?\\+n)/.exec(remainder);
       if (block) end = blockScalarEnd(text, match.index, assignment.lastIndex, block);
-      else if (auth) end = assignment.lastIndex + auth[0].length;
       else if (/^[{\[]/.test(remainder)) {
         // Unparseable structured credential values are ambiguous: omit the tail.
         end = text.length;
-      } else {
+      } else if (/:\s*$/.test(match[2])) {
+        // YAML plain scalars include the entire first line, even at EOF or
+        // without a folded continuation. Shell '=' assignments remain separate.
+        const firstLine = /^[^\r\n]*?(\r?\n)/.exec(remainder);
+        end = firstLine
+          ? blockScalarEnd(text, match.index, assignment.lastIndex, firstLine)
+          : text.length;
+      } else if (auth) end = assignment.lastIndex + auth[0].length;
+      else {
         end =
           assignment.lastIndex +
           (/^[^\s,;"'}\]]*/.exec(remainder)?.[0].length ?? 0);
-        // YAML plain scalars fold indented following lines into the value.
-        // Only a colon assignment qualifies; shell assignments keep word boundaries.
-        const firstLine = /^[^\r\n]*?(\r?\n)/.exec(remainder);
-        if (firstLine && /:\s*$/.test(match[2])) {
-          const continued = blockScalarEnd(text, match.index, assignment.lastIndex, firstLine);
-          const firstEnd = assignment.lastIndex + firstLine[0].length - firstLine[1].length;
-          if (continued > firstEnd) end = continued;
-        }
       }
     }
     result +=

@@ -363,13 +363,22 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     }
   }
   const sharedSettings = target.endsWith("/.futureagi/agents.json");
-  let entryOwnership: { hash: string; previous?: AgentSettings } | undefined;
+  let entryOwnership: {
+    hash: string;
+    previousHash?: string;
+    previous?: AgentSettings;
+  } | undefined;
   if (sharedSettings)
     await updateJson<Record<string, AgentSettings>>(
       target,
       (old) => {
         const entry = { ...old?.[options.agent], ...config };
-        entryOwnership = { hash: contentHash(JSON.stringify(entry)), previous: old?.[options.agent] };
+        entryOwnership = {
+          hash: contentHash(JSON.stringify(entry)),
+          previousHash: old?.[options.agent] === undefined
+            ? undefined : contentHash(JSON.stringify(old[options.agent])),
+          previous: old?.[options.agent],
+        };
         return { ...old, [options.agent]: entry };
       },
       false,
@@ -425,8 +434,12 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
           ...m?.registrations?.[options.agent]?.settingsOwnership,
           ...(entryOwnership ? { [target]: {
             hash: entryOwnership.hash,
-            previous: m?.registrations?.[options.agent]?.settingsOwnership?.[target]
-              ? m.registrations[options.agent].settingsOwnership![target].previous
+            // Repeated setup may merge manual fields. Only retain the original
+            // restoration snapshot if the entry still matches our last write.
+            // Otherwise the pre-setup entry (including user edits) must survive.
+            previous: entryOwnership.previousHash !== undefined &&
+              m?.registrations?.[options.agent]?.settingsOwnership?.[target]?.hash === entryOwnership.previousHash
+              ? m?.registrations?.[options.agent]?.settingsOwnership?.[target]?.previous
               : entryOwnership.previous,
           } } : {}),
         },

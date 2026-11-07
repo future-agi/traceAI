@@ -78,6 +78,61 @@ test('gzip protobuf roundtrip preserves exact int64 timestamps and native IDs', 
   assert.deepEqual(out.traceId, span.traceId); assert.equal(out.startTimeUnixNano, span.startTimeUnixNano);
   assert.doesNotMatch(JSON.stringify(out), /private-/);
 });
+for (const protobuf of [false, true]) for (const captureContent of [true, false]) {
+  test(`${protobuf ? 'protobuf' : 'JSON'} relay scrubs credential aliases in every attribute list (content=${captureContent})`, async t => {
+    const f = await fixture(t); f.config.captureContent = captureContent;
+    const raw = sample(), resource = raw.resourceSpans[0], scope = resource.scopeSpans[0], span = scope.spans[0];
+    if (protobuf) {
+      span.traceId = Buffer.from(span.traceId, 'hex'); span.spanId = Buffer.from(span.spanId, 'hex');
+    }
+    const aliases = ['access_token', 'refresh_token', 'private_key', 'passwd', 'Access-Token', 'refreshToken', 'PRIVATE.KEY', 'pwd', 'signing_key', 'credentials'];
+    const counters = [
+      ['gen_ai.usage.input_tokens', { intValue: '42' }],
+      ['gen_ai.usage.output_tokens', { intValue: '7' }],
+      ['gen_ai.usage.total_tokens', { intValue: '49' }],
+      ['gen_ai.usage.cache_read_tokens', { intValue: '5' }],
+      ['gen_ai.usage.cache_write_tokens', { intValue: '3' }],
+      ['gen_ai.usage.output_tokens.reasoning', { intValue: '2' }],
+      ['gen_ai.usage.cache_read.input_tokens', { intValue: '5' }],
+      ['gen_ai.usage.cache_write.input_tokens', { intValue: '3' }],
+      ['gen_ai.usage.reasoning.output_tokens', { intValue: '2' }],
+      ['llm.token_count.prompt', { intValue: '42' }],
+      ['gen_ai.server.time_to_first_token', { doubleValue: 0.125 }],
+    ];
+    const attributes = () => [
+      attr('service.name', 'visible-service'),
+      ...aliases.map((key, i) => attr(key, `SYNTHETIC_ALIAS_CANARY_${i}`)),
+      ...counters.map(([key, value]) => ({ key, value })),
+      // Neither arbitrary token-prefixed names nor non-numeric counter values qualify.
+      attr('gen_ai.usage.input_tokens', 'SYNTHETIC_USAGE_CANARY'),
+      attr('gen_ai.usage.access_token', 'SYNTHETIC_USAGE_CANARY'),
+      { key: 'gen_ai.usage.access_token', value: { intValue: '123456' } },
+      { key: 'gen_ai.usage.total_tokens', value: { arrayValue: { values: [{ stringValue: 'SYNTHETIC_USAGE_CANARY' }] } } },
+      { key: 'nested', value: { kvlistValue: { values: aliases.map(key => attr(key, 'SYNTHETIC_NESTED_CANARY')) } } },
+    ];
+    resource.resource.attributes = attributes(); scope.scope.attributes = attributes(); span.attributes = attributes();
+    span.events = [{ name: 'event', attributes: attributes() }];
+    span.links = [{ traceId: span.traceId, spanId: span.spanId, attributes: attributes() }];
+    assert.equal(await f.post(encode(raw, protobuf), { headers: { 'Content-Type': protobuf ? 'application/x-protobuf' : 'application/json' } }), 200);
+    await waitFor(() => f.relay.state.exported === 1);
+    const out = decode(f.received[0].body, protobuf), r = out.resourceSpans[0], s = r.scopeSpans[0], p = s.spans[0];
+    assert.doesNotMatch(JSON.stringify(out), /SYNTHETIC_.*CANARY/);
+    const lists = [r.resource.attributes, s.scope.attributes, p.attributes, p.links[0].attributes];
+    if (captureContent) lists.push(p.events[0].attributes);
+    else assert.equal(p.events?.length ?? 0, 0);
+    for (const list of lists) {
+      for (const key of aliases) assert.equal(list.some(a => a.key === key), false, key);
+      assert.equal(list.some(a => a.key === 'gen_ai.usage.access_token'), false);
+      assert.equal(list.find(a => a.key === 'service.name').value.stringValue, 'visible-service');
+      for (const [key, value] of counters) {
+        const matches = list.filter(a => a.key === key);
+        assert.equal(matches.length, 1, key);
+        assert.deepEqual(matches[0].value, value, key);
+      }
+    }
+  });
+}
+
 test('compressed and decompressed bodies are bounded', async t => {
   const f = await fixture(t, { maxBytes: 2048 });
   assert.equal(await f.post('x'.repeat(2049), { headers: { 'Content-Length': '2049' } }), 413);

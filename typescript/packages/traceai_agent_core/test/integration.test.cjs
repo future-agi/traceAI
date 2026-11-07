@@ -45,7 +45,8 @@ test('failure envelopes hide result content even without a thrown exception', as
   const f = await fixture(t, 'codex', { FI_HIDE_ERROR_DETAILS: 'true' });
   const tracer = c.createTurnTracer({ config: f.config });
   const turn = tracer.startTurn({ sessionId: 's', turnId: 'failure-payload' });
-  turn.child({ id: 'tool', kind: 'tool', name: 'shell' }).end({ output: JSON.stringify({ isError: true, body: 'PRIVATE_FAILURE_PAYLOAD' }) });
+  // The adapter, not the content serializer, interprets the native failure envelope.
+  turn.child({ id: 'tool', kind: 'tool', name: 'shell' }).end({ outcome: 'error', output: JSON.stringify({ isError: true, body: 'PRIVATE_FAILURE_PAYLOAD' }) });
   turn.end({ outcome: 'error', output: JSON.stringify({ success: false, error: 'PRIVATE_FAILURE_PAYLOAD' }) });
   await tracer.shutdown();
   assert(!JSON.stringify(f.requests).includes('PRIVATE_FAILURE_PAYLOAD'));

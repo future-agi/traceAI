@@ -184,6 +184,30 @@ test("two prompts are two roots, request usage is additive exactly once, native 
   await f.commands.futureagi.handler("", f.ctx);
   assert.equal(f.ui.length, 0);
 });
+for (const [name, text, isError] of [
+  ['JSON fixture', '{"isError":true,"is_error":true,"message":"ordinary file content"}', false],
+  ['YAML scalar at EOF', 'password: first SYNTHETIC_PRIVATE_SUFFIX', false],
+  ['YAML mapping', 'service:\n  password: first SYNTHETIC_PRIVATE_SUFFIX\n  public: retained', false],
+  ['native tool failure', '{"isError":false,"message":"ordinary error content"}', true],
+]) test(`native read callback preserves outcome and redacts ${name}`, async t => {
+  const f = await fixture(t);
+  await f.emit('before_agent_start');
+  await request(f);
+  await f.emit('tool_execution_start', { toolCallId: 'read-fixture', toolName: 'read', args: { path: 'fixture' } });
+  await f.emit('tool_execution_end', {
+    toolCallId: 'read-fixture', isError, result: { content: [{ type: 'text', text }] },
+  });
+  await f.emit('agent_settled', { aborted: false });
+  await f.emit('session_shutdown');
+  const spans = f.spans(), tool = spans.find(s => s.name === 'read');
+  assert.equal(spans.length, 3);
+  assert.equal(attrs(tool)['fi.agent.outcome'], isError ? 'error' : 'success');
+  assert.equal(tool.status.code, isError ? 2 : 1);
+  assert.doesNotMatch(JSON.stringify(spans), /SYNTHETIC_PRIVATE_SUFFIX/);
+  if (name === 'JSON fixture') assert.equal(attrs(tool)['output.value'], text);
+  if (name === 'YAML mapping') assert.match(attrs(tool)['output.value'], /public: retained/);
+});
+
 test("abort, tool failure, active-turn compaction and explicit subagent boundary", async (t) => {
   const f = await fixture(t);
   await request(f);

@@ -91,13 +91,26 @@ test('full structured fields are redacted before the adapter truncates prompt an
   assert.ok(serialized.includes('[REDACTED]'));
 });
 
-test('failure envelopes stay errors and hidden details cannot leak through later model context', async t => {
+for (const hideErrorDetails of ['false', 'true']) test(`successful JSON fixture read stays successful (hideErrorDetails=${hideErrorDetails})`, async t => {
+  const f = await fixture(t, { FI_HIDE_ERROR_DETAILS: hideErrorDetails }); await f.user('Read fixture');
+  const output = JSON.stringify({ isError: true, is_error: true, detail: 'ordinary file content' });
+  await f.message('first'); await f.part('first', { type: 'step-start' });
+  await f.part('first', { type: 'tool', tool: 'read', callID: 'call-source', state: {
+    status: 'completed', input: {}, output, time: { start: Date.now() - 5, end: Date.now() },
+  } });
+  const spans = await f.finish(), tool = spans.find(s => attrs(s)['fi.span.kind'] === 'TOOL');
+  assert.equal(spans.length, 3);
+  assert.equal(tool.status.code, 1); assert.equal(attrs(tool)['fi.agent.outcome'], 'success');
+  assert.equal(attrs(tool)['output.value'], output);
+});
+
+test('native tool failures stay errors and hidden details cannot leak through later model context', async t => {
   const f = await fixture(t, { FI_HIDE_ERROR_DETAILS: 'true' }); await f.user('Read sample');
   const failure = JSON.stringify({ isError: true, detail: 'PRIVATE_FAILURE_DETAIL' });
   await f.message('first'); await f.part('first', { type: 'step-start' });
-  await f.part('first', { type: 'tool', tool: 'read', callID: 'call-source', state: { status: 'completed', input: {}, output: failure, time: { start: Date.now() - 5, end: Date.now() } } });
+  await f.part('first', { type: 'tool', tool: 'read', callID: 'call-source', state: { status: 'error', input: {}, error: failure, time: { start: Date.now() - 5, end: Date.now() } } });
   await f.message('last');
-  await f.hooks['experimental.chat.messages.transform']({}, { messages: [{ info: { role: 'tool', sessionID: 'session' }, parts: [{ type: 'tool', tool: 'read', state: { status: 'completed', input: {}, output: failure } }] }] });
+  await f.hooks['experimental.chat.messages.transform']({}, { messages: [{ info: { role: 'tool', sessionID: 'session' }, parts: [{ type: 'tool', tool: 'read', state: { status: 'error', input: {}, error: failure } }] }] });
   await f.part('last', { type: 'step-start' }); await f.part('last', { type: 'text', id: 'answer', text: 'Could not read sample.' });
   const spans = await f.finish();
   const tool = spans.find(s => attrs(s)['fi.span.kind'] === 'TOOL');

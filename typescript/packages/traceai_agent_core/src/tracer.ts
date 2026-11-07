@@ -283,16 +283,9 @@ export function createTurnTracer(options: {
       span.setAttribute(SC.FI_AGENT_GAP, "UNRESOLVED_USAGE");
     }
   }
-  function endOutcome(value: EndInput, nativeTool = false): TurnOutcome {
-    if (value.outcome && value.outcome !== "success") return value.outcome;
-    // The native MCP tool-result contract uses an explicit isError flag.
-    // Never interpret generated JSON status/success/type fields as lifecycle signals.
-    if (nativeTool && typeof value.output === "string" && value.output.length <= 256 * 1024) {
-      try {
-        const result = JSON.parse(value.output);
-        if (result && (result.isError === true || result.is_error === true)) return "error";
-      } catch { /* ordinary tool text */ }
-    }
+  function endOutcome(value: EndInput): TurnOutcome {
+    // Adapters interpret native result envelopes and supply the outcome. Output
+    // is opaque content: a successful file read can itself contain isError=true.
     return value.outcome ?? "success";
   }
   function finish(
@@ -558,7 +551,7 @@ export function createTurnTracer(options: {
                 if (state.done) return;
                 state.done = true;
                 try {
-                  state.outcome = endOutcome(end, child.kind === "tool");
+                  state.outcome = endOutcome(end);
                   if (state.skipped) return;
                   if (isModel && canCollect()) {
                     if (label(end.model))
