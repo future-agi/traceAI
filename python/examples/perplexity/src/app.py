@@ -14,6 +14,8 @@ DEFAULT_BASE_URL = "https://api.perplexity.ai/v1"
 API_KEY_ENV = "PERPLEXITY_API_KEY"
 BASE_URL_ENV = "PERPLEXITY_BASE_URL"
 MODEL_ENV = "PERPLEXITY_MODEL"
+# Identifies this recipe's traffic to Perplexity; sent only to api.perplexity.ai.
+INTEGRATION_HEADERS = {"X-Pplx-Integration": "traceai"}
 
 
 def check_base_url(url: str) -> str:
@@ -80,10 +82,13 @@ def make_client(
 ) -> OpenAI:
     if base_url is None:
         base_url = os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL
+    base_url = check_base_url(base_url)
+    host = (urlsplit(base_url).hostname or "").lower().rstrip(".")
     return OpenAI(
-        base_url=check_base_url(base_url),
+        base_url=base_url,
         api_key=os.environ[API_KEY_ENV] if api_key is None else api_key,
         http_client=http_client,
+        default_headers=INTEGRATION_HEADERS if host == "api.perplexity.ai" else None,
     )
 
 
