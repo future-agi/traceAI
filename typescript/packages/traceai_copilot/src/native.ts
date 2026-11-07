@@ -167,6 +167,31 @@ function failedResult(value: unknown): boolean {
   }
 }
 
+/** Canonical aliases are shared by native requests and root-only usage fallback. */
+function canonicalUsage(attributes: Attributes): void {
+  // github.copilot.cost is a billing multiplier, not a dollar amount.
+  if (attributes[SC.GEN_AI_COST_TOTAL] === undefined &&
+      attributes["gen_ai.usage.cost_usd"] !== undefined)
+    attributes[SC.GEN_AI_COST_TOTAL] = attributes["gen_ai.usage.cost_usd"];
+  if (attributes[SC.GEN_AI_COST_TOTAL] !== undefined) {
+    attributes[SC.FI_COST_KIND] = "provider_reported";
+    attributes[SC.FI_AGENT_COST_SOURCE] = "reported";
+  }
+  for (const [from, to] of [
+    ["gen_ai.usage.input_tokens", SC.LLM_TOKEN_COUNT_PROMPT],
+    ["gen_ai.usage.output_tokens", SC.LLM_TOKEN_COUNT_COMPLETION],
+    ["gen_ai.usage.total_tokens", SC.LLM_TOKEN_COUNT_TOTAL],
+    ["gen_ai.usage.cache_read.input_tokens", SC.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ],
+    ["gen_ai.usage.cache_write.input_tokens", SC.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE],
+    ["gen_ai.usage.reasoning.output_tokens", SC.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING],
+  ])
+    if (attributes[from] !== undefined) attributes[to] = attributes[from];
+  const input = attributes["gen_ai.usage.input_tokens"],
+    output = attributes["gen_ai.usage.output_tokens"];
+  if (typeof input === "number" && typeof output === "number")
+    attributes[SC.LLM_TOKEN_COUNT_TOTAL] = input + output;
+}
+
 /** Rebuild native spans. No second tracer, invented ancestry, usage estimates, or durable content. */
 export function nativeSpan(
   value: unknown,
@@ -240,18 +265,6 @@ export function nativeSpan(
     attributes[SC.TOOL_NAME] = attributes["gen_ai.tool.name"];
   if (isTool && attributes["gen_ai.tool.call.id"])
     attributes[SC.TOOL_CALL_ID] = attributes["gen_ai.tool.call.id"];
-  // Only explicitly dollar-denominated request costs enter the canonical cost
-  // field. github.copilot.cost is a billing multiplier, not a dollar amount.
-  if (
-    operation === "chat" &&
-    attributes["gen_ai.cost.total"] === undefined &&
-    attributes["gen_ai.usage.cost_usd"] !== undefined
-  )
-    attributes["gen_ai.cost.total"] = attributes["gen_ai.usage.cost_usd"];
-  if (operation === "chat" && attributes[SC.GEN_AI_COST_TOTAL] !== undefined) {
-    attributes[SC.FI_COST_KIND] = "provider_reported";
-    attributes[SC.FI_AGENT_COST_SOURCE] = "reported";
-  }
   // Native Copilot reports measured request latency in seconds; FI consumes ms.
   const firstChunk = attributes["gen_ai.response.time_to_first_chunk"];
   if (
@@ -293,30 +306,10 @@ export function nativeSpan(
     attributes[isTool ? "gen_ai.tool.call.result" : "gen_ai.output.messages"];
   if (input !== undefined) attributes[SC.INPUT_VALUE] = input;
   if (output !== undefined) attributes[SC.OUTPUT_VALUE] = output;
-  // Only model requests contribute canonical FI usage counters.
-  if (operation === "chat") {
-    for (const [from, to] of [
-      ["gen_ai.usage.input_tokens", SC.LLM_TOKEN_COUNT_PROMPT],
-      ["gen_ai.usage.output_tokens", SC.LLM_TOKEN_COUNT_COMPLETION],
-      [
-        "gen_ai.usage.cache_read.input_tokens",
-        SC.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
-      ],
-      [
-        "gen_ai.usage.cache_write.input_tokens",
-        SC.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE,
-      ],
-      [
-        "gen_ai.usage.reasoning.output_tokens",
-        SC.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
-      ],
-    ])
-      if (attributes[from] !== undefined) attributes[to] = attributes[from];
-    const inputTokens = attributes["gen_ai.usage.input_tokens"],
-      outputTokens = attributes["gen_ai.usage.output_tokens"];
-    if (typeof inputTokens === "number" && typeof outputTokens === "number")
-      attributes[SC.LLM_TOKEN_COUNT_TOTAL] = inputTokens + outputTokens;
-  }
+  // NativeSpans decides whether a turn needs root-only fallback after its children.
+  if (operation === "chat") canonicalUsage(attributes);
+  if (operation === "invoke_agent")
+    attributes[SC.FI_AGENT_OUTCOME] = failed ? "error" : "success";
   const context: SpanContext = {
     traceId: raw.traceId,
     spanId: raw.spanId,
@@ -441,11 +434,29 @@ export function nativeSpan(
   };
 }
 
-/** Native requests end before their enclosing turn. Keep only bounded structural
- * parent IDs so a request's verified cancellation also labels that exact turn. */
+interface PendingParent {
+  context: SpanContext;
+  startTime: HrTime;
+  endTime: HrTime;
+  session?: string;
+  version?: string;
+  hasUsage: boolean;
+  interrupted: boolean;
+  finalRequest?: { startTime: HrTime; failed: boolean };
+}
+const compareTime = (a: HrTime, b: HrTime): number =>
+  a[0] - b[0] || a[1] - b[1];
+const hasUsage = (attributes: Attributes): boolean =>
+  Object.keys(attributes).some((key) =>
+    (key.startsWith("gen_ai.usage.") || key === SC.GEN_AI_COST_TOTAL) &&
+    typeof attributes[key] === "number");
+
+/** Native requests end before their enclosing turn. Retain bounded structural
+ * metadata only, never content. Finalize missing parents only when the native
+ * stream closes, not on an export flush or a timer that could race a late root. */
 export class NativeSpans {
-  private readonly interruptedTurns = new Set<string>();
-  private readonly finalRequests = new Map<string, { startTime: HrTime; failed: boolean }>();
+  private readonly parents = new Map<string, PendingParent>();
+  private readonly observed = new Set<string>();
   constructor(private readonly config: ResolvedConfig) {}
   accept(record: unknown): ReadableSpan | undefined {
     const span = nativeSpan(record, this.config);
@@ -453,20 +464,15 @@ export class NativeSpans {
     const context = span.spanContext();
     const key = `${context.traceId}:${context.spanId}`;
     const operation = span.attributes["gen_ai.operation.name"];
-    if (operation === "chat" && span.parentSpanContext) {
-      const parent = `${context.traceId}:${span.parentSpanContext.spanId}`;
-      const previous = this.finalRequests.get(parent);
-      // Source request ordering, not arrival order, determines whether a retry recovered.
-      if (!previous || span.startTime[0] > previous.startTime[0] ||
-          (span.startTime[0] === previous.startTime[0] && span.startTime[1] >= previous.startTime[1])) {
-        this.finalRequests.set(parent, { startTime: span.startTime, failed: span.status.code === 2 });
-      }
-      if (this.finalRequests.size > 1024)
-        this.finalRequests.delete(this.finalRequests.keys().next().value!);
-    } else if (operation === "invoke_agent") {
-      const final = this.finalRequests.get(key);
-      this.finalRequests.delete(key);
-      if (final?.failed) {
+    const children = this.parents.get(key);
+    this.parents.delete(key);
+    this.observed.add(key);
+    if (this.observed.size > 4096)
+      this.observed.delete(this.observed.values().next().value!);
+
+    if (operation === "invoke_agent") {
+      const interrupted = span.attributes[SC.FI_AGENT_OUTCOME] === "interrupted";
+      if (children?.finalRequest?.failed) {
         span.status.code = 2;
         span.attributes[SC.FI_AGENT_OUTCOME] = "error";
         if (this.config.hideErrorDetails) {
@@ -474,26 +480,93 @@ export class NativeSpans {
           delete span.attributes[SC.OUTPUT_VALUE];
         }
       }
+      if (interrupted || children?.interrupted)
+        span.attributes[SC.FI_AGENT_OUTCOME] = "interrupted";
+      // Native aggregate totals must count once when no descendant owns usage.
+      // Keep the summary too, but never promote billing multipliers to dollars.
+      if (!children?.hasUsage) {
+        const prefix = "fi.agent.aggregate.";
+        for (const [field, value] of Object.entries(span.attributes)) {
+          const original = field.slice(prefix.length);
+          if (field.startsWith(prefix) &&
+              (original.startsWith("gen_ai.usage.") || original === SC.GEN_AI_COST_TOTAL))
+            span.attributes[original] = value;
+        }
+        if (hasUsage(span.attributes)) {
+          canonicalUsage(span.attributes);
+          span.attributes[SC.FI_USAGE_CONTRIBUTION] = "additive";
+          span.attributes["fi.agent.usage.additive"] = true;
+          span.attributes[SC.FI_AGENT_USAGE_PLAN] = "turn";
+        }
+      }
     }
-    if (
-      span.attributes["gen_ai.operation.name"] === "invoke_agent" &&
-      this.interruptedTurns.delete(key)
-    )
-      span.attributes[SC.FI_AGENT_OUTCOME] = "interrupted";
-    if (
-      span.attributes["gen_ai.operation.name"] === "chat" &&
-      span.attributes[SC.FI_AGENT_OUTCOME] === "interrupted" &&
-      span.parentSpanContext
-    ) {
-      this.interruptedTurns.add(
-        `${context.traceId}:${span.parentSpanContext.spanId}`,
-      );
-      if (this.interruptedTurns.size > 1024)
-        this.interruptedTurns.delete(
-          this.interruptedTurns.values().next().value!,
-        );
+
+    if (span.parentSpanContext) {
+      const parentKey = `${context.traceId}:${span.parentSpanContext.spanId}`;
+      if (!this.observed.has(parentKey)) {
+        let parent = this.parents.get(parentKey);
+        if (!parent) {
+          parent = {
+            context: span.parentSpanContext,
+            startTime: span.startTime,
+            endTime: span.endTime,
+            session: typeof span.attributes["session.id"] === "string"
+              ? span.attributes["session.id"] : undefined,
+            version: span.instrumentationScope.version,
+            hasUsage: false,
+            interrupted: false,
+          };
+          this.parents.set(parentKey, parent);
+          if (this.parents.size > 1024)
+            this.parents.delete(this.parents.keys().next().value!);
+        }
+        const session = span.attributes["session.id"];
+        if (!parent.session && typeof session === "string") parent.session = session;
+        if (compareTime(span.startTime, parent.startTime) < 0)
+          parent.startTime = span.startTime;
+        if (compareTime(span.endTime, parent.endTime) > 0)
+          parent.endTime = span.endTime;
+        parent.hasUsage ||= hasUsage(span.attributes) || !!children?.hasUsage;
+        if (operation === "chat") {
+          // Source ordering, not receipt ordering, determines retry recovery.
+          if (!parent.finalRequest || compareTime(span.startTime, parent.finalRequest.startTime) >= 0)
+            parent.finalRequest = { startTime: span.startTime, failed: span.status.code === 2 };
+          parent.interrupted ||= span.attributes[SC.FI_AGENT_OUTCOME] === "interrupted";
+        }
+      }
     }
     return span;
+  }
+
+  /** A child supplies an exact missing parent ID, not its outcome, prompt or totals.
+   * Surface that gap without inventing success, cancellation, content or usage. */
+  end(): ReadableSpan[] {
+    const incomplete: ReadableSpan[] = [];
+    for (const parent of this.parents.values()) {
+      const span = nativeSpan({
+        type: "span",
+        traceId: parent.context.traceId,
+        spanId: parent.context.spanId,
+        startTime: parent.startTime,
+        endTime: parent.endTime,
+        attributes: {
+          "gen_ai.operation.name": "invoke_agent",
+          "gen_ai.conversation.id": parent.session,
+        },
+        status: { code: 0 },
+        instrumentationScope: { version: parent.version },
+      }, this.config)!;
+      span.attributes[SC.FI_AGENT_OUTCOME] = "incomplete";
+      span.attributes["fi.agent.source"] = "reconstructed";
+      span.attributes[SC.FI_AGENT_FIDELITY] = "unknown";
+      span.attributes[SC.FI_AGENT_TIMING] = "reconstructed";
+      span.attributes[SC.FI_AGENT_USAGE_PLAN] = "unknown";
+      span.attributes[SC.FI_AGENT_GAP] = "NATIVE_TERMINAL_RECORD_MISSING";
+      incomplete.push(span);
+    }
+    this.parents.clear();
+    this.observed.clear();
+    return incomplete;
   }
 }
 

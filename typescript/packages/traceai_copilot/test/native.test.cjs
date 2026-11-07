@@ -459,7 +459,7 @@ test("only native user aborts mark a request and its exact enclosing turn interr
       normalizer.accept({ ...parent, traceId: "d".repeat(32) }).attributes[
         SC.FI_AGENT_OUTCOME
       ],
-      undefined,
+      "success",
     );
     assert.equal(
       normalizer.accept(parent).attributes[SC.FI_AGENT_OUTCOME],
@@ -467,7 +467,7 @@ test("only native user aborts mark a request and its exact enclosing turn interr
     );
     assert.equal(
       normalizer.accept(parent).attributes[SC.FI_AGENT_OUTCOME],
-      undefined,
+      "success",
       "consume parent correlation once",
     );
     for (const reason of [undefined, "PRIVATE_ABORT_REASON", "timeout"]) {
@@ -535,7 +535,7 @@ test("final source model failure marks its root ERROR but a later retry recovers
     assert.equal(unrelated.status.code, 0);
     const result = normalizer.accept(parent);
     assert.equal(result.status.code, recovered ? 0 : 2);
-    assert.equal(result.attributes[SC.FI_AGENT_OUTCOME], recovered ? undefined : "error");
+    assert.equal(result.attributes[SC.FI_AGENT_OUTCOME], recovered ? "success" : "error");
     assert.equal(normalizer.accept(parent).status.code, 0, "correlation consumed at finalization");
   }
 });
