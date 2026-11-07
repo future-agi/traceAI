@@ -19,7 +19,9 @@ const { createVSIX } = require('@vscode/vsce');
     engines: { vscode: '^1.100.0' }, main: './extension.js', extensionKind: ['ui'], files: ['extension.js', 'LICENSE'],
     categories: ['Other'],
     activationEvents: ['onStartupFinished'],
-    capabilities: { untrustedWorkspaces: { supported: false }, virtualWorkspaces: { supported: false } },
+    // The relay reads only Future AGI's user-level installation record and never workspace files or
+    // workspace settings, so Restricted Mode must not silently stop tracing.
+    capabilities: { untrustedWorkspaces: { supported: true }, virtualWorkspaces: { supported: true } },
     contributes: { commands: [
       { command: 'futureagi.tracing.status', title: 'Future AGI: Show tracing status' },
       { command: 'futureagi.tracing.toggle', title: 'Future AGI: Disable/Enable tracing' }

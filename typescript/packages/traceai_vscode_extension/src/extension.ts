@@ -6,7 +6,9 @@ import { installationPath, heartbeatPath, readBootstrap, readInstallation, synch
 
 let stop: (() => Promise<void>) | undefined;
 export async function activate(context: vscode.ExtensionContext) {
-  if (vscode.env.remoteName || !vscode.workspace.isTrusted) return;
+  // Remote windows run Copilot's exporter on the remote host, which cannot reach this loopback relay.
+  // Workspace trust is not a condition: the relay reads no workspace files or workspace settings.
+  if (vscode.env.remoteName) return;
   const bootstrap = await readBootstrap().catch(() => undefined);
   const env = { ...process.env, ...(bootstrap ? { FI_AGENT_CONFIG_DIR: bootstrap.configDir, XDG_STATE_HOME: dirname(dirname(bootstrap.stateDir)) } : {}) };
   const path = installationPath({ env }), heartbeat = bootstrap ? join(bootstrap.stateDir, 'copilot-vscode-relay.json') : heartbeatPath({ env });
@@ -63,11 +65,20 @@ export async function activate(context: vscode.ExtensionContext) {
         (active ? (capture ? 'Content capture on. Click for tracing status.' : 'Structure-only tracing. Click for tracing status.') : 'Tracing disabled.');
       await updateJson<Heartbeat>(heartbeat, () => ({ id: record.id, at: new Date().toISOString(), active,
         exported: state.exported, dropped: state.dropped, lastExport: state.lastExport, lastError: state.lastError }));
-    } catch {
-      active = false;
-      bar.text = 'Future AGI: unavailable';
-      await relay?.stop();
-      relay = undefined;
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z][A-Z0-9_]{0,80}$/.test(error.message) ? error.message : 'TICK_FAILED';
+      if (code === 'INSTALLATION_CHANGED') {
+        active = false;
+        bar.text = 'Future AGI: unavailable';
+        await relay?.stop();
+        relay = undefined;
+      } else {
+        // The relay checks enablement, destination and privacy for every export, so a transient
+        // lifecycle error (e.g. enable/disable holding the settings lock) must not close the
+        // listener: Copilot would get connection refused and drop spans until the next tick.
+        console.warn(`Future AGI tracing check failed (${code}); retrying.`);
+        bar.tooltip = 'Tracing check failed; retrying. Run fi-agent doctor copilot-vscode if this persists.';
+      }
     } finally { busy = false; }
   };
   context.subscriptions.push(vscode.commands.registerCommand('futureagi.tracing.status', () => {
