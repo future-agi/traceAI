@@ -175,7 +175,8 @@ no_node.mkdir(exist_ok=True)
 runtime["PATH"] = str(no_node) + ":" + runtime["PATH"]
 chat = ["hermes", "chat", "--oneshot", "-Q", "--provider", "custom", "--base-url", base + "/v1", "-m", "hermes-test",
     "-t", "file", "--max-turns", "4", "--run-budget", "30"]
-run(chat + ["-q", "Read README.txt and summarize it."], "turn-one", runtime)
+synthetic_credential = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+run(chat + ["-q", "Read README.txt and summarize it. Synthetic redaction marker: " + synthetic_credential], "turn-one", runtime)
 run(chat + ["--resume", "latest", "-q", "Read README.txt again and summarize it."], "turn-two", runtime)
 # Shutdown is a real terminal boundary; no third prompt is needed to export.
 assert len(spans) >= 8, f"only {len(spans)} spans; inspect turn logs"
@@ -204,6 +205,12 @@ assert all("gen_ai.server.time_to_first_token" not in attrs(s) for s in models i
 status = run(["node", cli, "status", "hermes", "--check", "--json"], "status")
 assert "dummy-fi" not in status.stdout
 assert json.loads(status.stdout)["delivery"]["exported"] > 0
+assert json.loads(status.stdout)["activation"] == "OBSERVED"
+doctor = run(["node", cli, "doctor", "hermes", "--json"], "doctor")
+assert json.loads(doctor.stdout)["exitCode"] == 0
+assert json.loads(doctor.stdout)["activation"] == "OBSERVED"
+assert synthetic_credential not in json.dumps(spans)
+assert "[REDACTED]" in attrs(roots[0])["input.value"]
 # Explicit iteration exhaustion is neither successful completion nor an error.
 budget_start = len(spans)
 budget_chat = list(chat)

@@ -38,6 +38,8 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode
 
+from ._privacy import private_history, redact
+
 logger = logging.getLogger(__name__)
 
 SPAN_KIND = "gen_ai.span.kind"
@@ -54,6 +56,20 @@ TEXT_MIME = "text/plain"
 TURN_SPAN_NAME = "hermes.turn"
 # Tool statuses Hermes reports on post_tool_call that are not a success.
 _FAILED_TOOL_STATUSES = frozenset({"error", "blocked", "timeout", "cancelled"})
+# Native reasons are categories, but unknown hosts/hooks may supply arbitrary
+# exception text instead. A syntactically valid identifier is not proof that a
+# value is safe metadata (it could itself be a private error marker).
+_EXIT_CATEGORIES = frozenset({
+    "error", "text_response", "keyboard_interrupt", "interpreter_shutdown",
+    "repeated_outer_errors", "local_processing_error", "error_near_max_iterations",
+    "max_iterations_reached", "context_compression_exhausted", "context_compression_timeout",
+    "compaction_handoff_not_actionable", "session_persistence_failed", "guardrail_halt",
+    "pending_tool_result", "ollama_runtime_context_too_small", "partial_stream_recovery",
+    "fallback_prior_turn_content", "empty_response_exhausted", "interrupted_by_system",
+    "interrupted_by_user", "interrupted_during_api_call", "review_input_budget_exhausted",
+    "budget_exhausted", "redirect_restart_limit_exceeded", "rebuilt_restart_limit_exceeded",
+    "all_retries_exhausted_no_response", "blocked_by_plugin_pre_llm_call",
+})
 _TRUNCATED = "...[truncated {0} chars]"
 
 
@@ -157,6 +173,7 @@ class HermesSpanRecorder:
     def _text(self, value: Any) -> Optional[str]:
         if value is None:
             return None
+        value = redact(value, self._secrets)
         if isinstance(value, str):
             text = value
         else:
@@ -164,8 +181,7 @@ class HermesSpanRecorder:
                 text = json.dumps(value, ensure_ascii=False, default=str)
             except (TypeError, ValueError):
                 text = str(value)
-        for secret in self._secrets:
-            text = text.replace(secret, "[REDACTED]")
+            text = redact(text, self._secrets)
         if len(text) > self._max_chars:
             text = text[: self._max_chars] + _TRUNCATED.format(len(text) - self._max_chars)
         return text
@@ -387,7 +403,8 @@ class HermesSpanRecorder:
         reason = _str(raw).strip()
         if (self._capture and not self._hide_errors) or not reason:
             return self._text(reason) or ""
-        return reason.split("(", 1)[0].strip()
+        category = reason.split("(", 1)[0].strip()
+        return category if category in _EXIT_CATEGORIES else "other"
 
     def _session_end(self, kw: Mapping[str, Any]) -> None:
         failed = kw.get("failed") is True
@@ -525,7 +542,9 @@ class HermesSpanRecorder:
             if isinstance(message, Mapping) and message.get("role") in ("system", "developer"):
                 system_chars += len(_str(message.get("content")))
             else:
-                rest.append(message)
+                clean = private_history(message, hide_outputs=self._hide_outputs, hide_errors=self._hide_errors)
+                if clean is not None:
+                    rest.append(clean)
         if isinstance(body, Mapping) and isinstance(body.get("system"), (str, list)):
             system_chars += len(_str(body.get("system")))
         tail: List[Any] = []
