@@ -45,7 +45,7 @@ test('durable terminal-only hook records EMPTY_SESSION in diagnostics without ex
   const runtime = await installRuntime(f.context);
   await register(f.context, runtime);
   const hook = commands(runtime, f.config.paths.configDir).sessionEnd.command;
-  const result = await child(hook, terminal, { HOME: f.home, PATH: '/missing' });
+  const result = await child(hook, { ...terminal, workspace_roots: [f.home], transcript_path: null }, { HOME: f.home, PATH: '/missing' });
   assert.equal(result.code, 0);
   assert.equal(result.stderr, '');
   assert.equal(spans(f.requests).length, 0);
