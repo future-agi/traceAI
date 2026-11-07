@@ -22,7 +22,7 @@ from opentelemetry.util.types import AttributeValue
 from ._chat_input import ChatInput, mask_chat_input
 from ._errors import is_error_detail_key
 from .logging import logger
-from .pii_redaction import redact_pii_in_value
+from .pii_redaction import key_carries_free_text, redact_pii_in_value
 
 
 class suppress_tracing:
@@ -467,7 +467,14 @@ class TraceConfig:
         ):
             return None
         resolved = value() if callable(value) else value
-        if self.pii_redaction and resolved is not None:
+        if (
+            self.pii_redaction
+            and resolved is not None
+            # Only free-text attributes get scanned — identifiers like
+            # session.id/user.id/metadata are structured values where a
+            # regex hit corrupts correlation, not a secret (#195).
+            and key_carries_free_text(key)
+        ):
             resolved = redact_pii_in_value(resolved)
         return resolved
 
