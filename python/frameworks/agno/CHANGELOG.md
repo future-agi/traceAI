@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1] - pending release
+### Changed
+- Images are no longer exported by default as base64 payloads. To allow them within a positive cap, set `FI_BASE64_IMAGE_MAX_LENGTH` or supply `base64_image_max_length` on an OpenInference config. The cap rules below and content-hiding flags still apply.
+
+### Fix
+- With no supplied OpenInference config, the cap comes from `FI_BASE64_IMAGE_MAX_LENGTH`, or 0 when unset. `OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH` is not read for this cap.
+- A supplied config's cap is limited to the smaller of its value and the FI cap when `OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH` is unset and the value equals OpenInference's default. With that environment variable unset, the same limit applies if OpenInference's default cannot be read. Otherwise, the supplied cap is kept unless `FI_BASE64_IMAGE_MAX_LENGTH` tightens it.
+- Invalid base64 image caps resolve to 0. A set `FI_BASE64_IMAGE_MAX_LENGTH` can only lower a supplied cap.
+
+### Dependencies
+- Requires fi-instrumentation-otel>=1.3.0.
+
 ## [0.2.0](https://github.com/future-agi/traceAI/compare/traceai-agno-v0.1.0...traceai-agno-v0.2.0) (2026-11-05)
 
 
