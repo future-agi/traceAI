@@ -1112,6 +1112,14 @@
       "extra-files": [
         "traceai_transformers/version.py"
       ]
+    },
+    "typescript/packages/traceai_n8n": {
+      "release-type": "node",
+      "component": "npm-traceai-n8n",
+      "package-name": "@traceai/n8n",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     }
   }
 }
