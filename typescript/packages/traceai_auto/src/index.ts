@@ -4,14 +4,16 @@ import { ExportResultCode, W3CTraceContextPropagator, W3CBaggagePropagator, Comp
 import { ParentBasedSampler, TraceIdRatioBasedSampler, SpanProcessor, SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { getAttributesFromContext, ProjectType, register, createSpanExporter, registerSecret, seedSecrets, markSecretDiscoveryFailed, BatchSpanProcessor, hasExportPrivacyBoundary, FITracer, rememberSpanValueLimit } from "@traceai/fi-core";
 import { autoModelResponsibility, autoModelWireAllowed, createAutoSpanDelivery, hasAutoSpanSink, rememberAutoSpanSink, type AutoSpanDelivery } from "@traceai/fi-core";
-import { Config, credentialsForConfig, enabled, maskConfig, Options, resolveConfig } from "./config";
+import { Config, credentialsForConfig, enabled, maskConfig, Options, resolveConfig, outgoingPolicyForConfig } from "./config";
+import { createOutgoingPrivacy, noteOutgoingSpanStart } from "./outgoing-privacy";
+import { installOutgoingPropagation } from "./outgoing-node";
 import { enableLibraries, IntegrationStatus, inventory } from "./libraries";
 import { FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
 import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
 
-const VERSION = "0.1.2"; // x-release-please-version
+const VERSION = "0.1.3"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";
@@ -26,7 +28,7 @@ interface AgentState {
   processor?: SpanProcessor; processorIsObserver?: boolean; convertedSpanDestination?: ConvertedSpanDestination;
   detach?: () => void; removeLibraries?: () => void; fetch?: FetchHook;
   collector: string; shutdown?: Promise<void>; beforeExit?: () => void; removeSignals?: () => void;
-  removeObservation?: () => void; ownsGlobalProvider?: boolean; contextManager?: AsyncLocalStorageContextManager; propagator?: CompositePropagator;
+  removeOutgoing?: () => void; removeObservation?: () => void; ownsGlobalProvider?: boolean; contextManager?: AsyncLocalStorageContextManager; propagator?: CompositePropagator;
 }
 const STATE_KEY = Symbol.for("traceai.auto.agent.v1");
 let state: AgentState | undefined;
@@ -85,7 +87,7 @@ function removeHooks(agent: AgentState): void {
   for (const remove of [
     () => { if (agent.beforeExit) process.removeListener("beforeExit", agent.beforeExit); },
     () => agent.removeSignals?.(),
-    () => agent.fetch?.remove(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
+    () => agent.removeOutgoing?.(), () => agent.fetch?.remove(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
   ]) { try { remove(); } catch { /* A broken cleanup must not skip the others. */ } }
 }
 export interface Report { active: boolean; config: Record<string, unknown>; integrations: IntegrationStatus[]; collector: string }
@@ -102,7 +104,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     const fiCredentials = !!config.apiKey && !!config.secretKey;
     if (config.sdkDisabled || !fiCredentials && !options.exporter && !options.spanProcessor && !hostProvider) {
       for (const status of agent.statuses) { status.status = "disabled"; status.reason = config.sdkDisabled ? "OTEL_SDK_DISABLED" : "Missing credentials"; }
-      agent.statuses.push({ name: "wire", status: "disabled" }, { name: "http", status: "disabled" });
+      agent.statuses.push({ name: "wire", status: "disabled" }, { name: "http", status: "disabled" }, { name: "outgoing-http", status: "disabled" });
       if (!config.sdkDisabled) warn("credentials", "FI_API_KEY and FI_SECRET_KEY are required; auto-instrumentation is disabled.");
       if (config.debug) console.info(JSON.stringify(report(), null, 2));
       return undefined;
@@ -130,7 +132,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     }
     agent.processor = processor;
     const onStart = processor.onStart.bind(processor);
-    processor.onStart = (span, parent) => { rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
+    processor.onStart = (span, parent) => { noteOutgoingSpanStart(span, parent); rememberSpanValueLimit(span); trackCoverage(span, parent); onStart(span, parent); };
     const existing = hostProvider;
     if (existing) {
       agent.detach = attach(existing, processor);
@@ -213,6 +215,9 @@ export function init(options: Options = {}): TracerProvider | undefined {
       } catch { /* Internal failures are not application failures. */ }
       finally { operation?.finishWire(submitted); }
     };
+    // HTTP/HTTPS propagation is independent of wire/body capture and HTTP spans.
+    // Adapters stay off unless explicitly selected; destination policy is not activation.
+    agent.removeOutgoing = installOutgoingPropagation(outgoingPolicyForConfig(config), createOutgoingPrivacy(config.traceConfig, credentialsForConfig(config)), agent.statuses, warn, config.propagateOutgoingAdapters);
     if (config.wireCapture && enabled("wire", config)) agent.removeObservation = observeTransports();
     agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor);
     // Stay outside the installed mapping adapters: Genkit can shorten an SDK-

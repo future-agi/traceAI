@@ -241,6 +241,8 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
     try {
       const path = appRequire().resolve("@opentelemetry/instrumentation-http");
       const { HttpInstrumentation } = appRequire()(path);
+      // Outgoing propagation has its own privacy/policy boundary; it creates no
+      // HTTP CLIENT spans and must not be enabled by this incoming-only package.
       const instance = new HttpInstrumentation({ enabled: false, disableOutgoingRequestInstrumentation: true });
       removers.push(registerInstrumentations({ tracerProvider: provider, instrumentations: [instance] }));
       statuses.push({ name: "http", status: "instrumented", reason: esm ? "Incoming SERVER spans only" : "Incoming SERVER spans, CommonJS only; ESM loader unavailable" });

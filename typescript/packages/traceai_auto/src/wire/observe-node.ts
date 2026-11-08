@@ -19,13 +19,27 @@ export function observeOutgoing(req: RequestData): void {
     for (const secret of discoverSecrets([req.url, req.fields, req.fields === undefined && req.body && !isBinary(header(req.headers, "content-type")) ? decodeBytes(req.body) : undefined])) registerSecret(secret);
   });
 }
-function observe(work: () => void): void {
-  try { work(); }
+function observe(work: () => void): boolean {
+  try { work(); return true; }
   catch {
     // A transport has seen credentials we cannot safely enumerate. Dropping only
     // its wire span would still leak echoes in unrelated/later application spans.
     try { markSecretDiscoveryFailed(); } catch { /* Never throw or log credential data. */ }
+    return false;
   }
+}
+/** Complete metadata discovery before admitting newly generated egress headers. */
+export function observePropagationHead(url: string, headerPairs: Iterable<readonly [string, string]>): boolean {
+  return observe(() => {
+    let bytes = Buffer.byteLength(url, "utf8"), count = 0;
+    if (bytes > 65536) throw new Error("Propagation discovery budget");
+    for (const [name, value] of headerPairs) {
+      if (typeof name !== "string" || typeof value !== "string" || ++count > 1024 || (bytes += Buffer.byteLength(name) + Buffer.byteLength(value)) > 65536) throw new Error("Propagation discovery budget");
+      for (const secret of credentialSecrets({ [name]: value })) registerSecret(secret);
+      for (const secret of discoverSecrets([{ [name]: value }])) registerSecret(secret);
+    }
+    for (const secret of discoverSecrets([url])) registerSecret(secret);
+  });
 }
 function observeHeaders(url: string, headers: unknown): void {
   // Undici versions use either a CRLF block or a flat name/value array. Preserve

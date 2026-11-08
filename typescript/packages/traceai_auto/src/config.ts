@@ -4,8 +4,15 @@ import { homedir } from "node:os";
 import type { SpanExporter, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { TracerProvider } from "@opentelemetry/api";
 import type { PrivacyOptions as TraceConfigOptions } from "./export-privacy";
+import { compileOutgoingPolicy, type OutgoingPolicy, type OutgoingPropagationMode } from "./outgoing-policy";
 
 export interface Options {
+  /** Experimental node:http/node:https propagation; off until explicitly selected. */
+  propagateOutgoingAdapters?: boolean;
+  /** default/all retain mandatory vendor-host, provider-port and redirect vetoes. */
+  propagateOutgoing?: OutgoingPropagationMode;
+  /** Positive rules only narrow admission; no rule can waive the safety vetoes. */
+  propagateHosts?: string[];
   apiKey?: string; secretKey?: string; baseUrl?: string; projectName?: string;
   projectType?: "observe" | "experiment"; instrumentations?: string[];
   disabledInstrumentations?: string[]; wireCapture?: boolean; wireMaxBodyBytes?: number;
@@ -18,6 +25,8 @@ export interface Options {
   mastraSpanProducer?: "exporter" | "bridge";
 }
 export interface Config {
+  propagateOutgoingAdapters: boolean;
+  propagateOutgoing: OutgoingPropagationMode;
   apiKey?: string; secretKey?: string; baseUrl: string; projectName: string;
   projectType: "observe" | "experiment"; instrumentations: string[];
   disabledInstrumentations: string[]; wireCapture: boolean; wireMaxBodyBytes: number;
@@ -37,11 +46,18 @@ export function parseConfigFile(text: string, profile?: string): Record<string, 
       continue;
     }
     if (!clean || !active) continue;
-    const found = /^([a-zA-Z_][\w]*)\s*=\s*(.+)$/.exec(clean); if (!found) continue;
+    const outgoingKey = /^(propagate_outgoing_adapters|propagate_outgoing|propagate_hosts)\s*=/.exec(clean)?.[1];
+    const found = /^([a-zA-Z_][\w]*)\s*=\s*(.+)$/.exec(clean);
+    if (!found) { if (outgoingKey) values[outgoingKey] = false; continue; }
     try {
       const value = /^'[^']*'$/.test(found[2]) ? found[2].slice(1, -1) : JSON.parse(found[2]);
       if (typeof value === "string" || typeof value === "boolean" || typeof value === "number" || (Array.isArray(value) && value.every(v => typeof v === "string"))) values[found[1]] = value;
-    } catch { /* Unsupported TOML is ignored, not executed. */ }
+      else if (outgoingKey) values[outgoingKey] = false;
+    } catch {
+      // Do not silently drop a malformed deny list and fall back to a wider policy.
+      // Other unsupported TOML retains the existing ignored/not-executed behavior.
+      if (outgoingKey) values[outgoingKey] = false;
+    }
   }
   return values;
 }
@@ -64,6 +80,12 @@ function fiProfiles(profile: string, env: NodeJS.ProcessEnv): Record<string, unk
 }
 // Ignored FI halves are still secrets. Keep them out of serializable config/report data.
 const configCredentials = new WeakMap<Config, readonly unknown[]>();
+// Host rules describe private topology: never spread them into config/report/debug.
+const outgoingPolicies = new WeakMap<Config, OutgoingPolicy>();
+let warnedOutgoingPolicy = false;
+export function outgoingPolicyForConfig(config: Config): OutgoingPolicy {
+  return outgoingPolicies.get(config) ?? compileOutgoingPolicy("none", undefined);
+}
 export function credentialsForConfig(config: Config): readonly unknown[] { return configCredentials.get(config) ?? []; }
 function credentialPair(sources: { source: string; apiKey: unknown; secretKey: unknown }[]): { apiKey?: string; secretKey?: string } {
   for (const { source, apiKey, secretKey } of sources) {
@@ -109,7 +131,20 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
       } else traceConfig[key] = bool(raw, false);
     }
   }
+  const rawHosts = value("propagateHosts", "propagate_hosts", "TRACEAI_PROPAGATE_HOSTS");
+  const envHosts = options.propagateHosts == null && env.TRACEAI_PROPAGATE_HOSTS != null;
+  // Only the environment uses CSV; code/file options require a string array.
+  const hostInput = rawHosts === undefined || (envHosts ? typeof rawHosts === "string" : Array.isArray(rawHosts)) ? rawHosts : false;
+  const outgoing = compileOutgoingPolicy(value("propagateOutgoing", "propagate_outgoing", "TRACEAI_PROPAGATE_OUTGOING"), hostInput);
+  if (!outgoing.valid && !warnedOutgoingPolicy) {
+    warnedOutgoingPolicy = true;
+    try { console.warn("[traceai:auto] Invalid outgoing propagation policy; agent additions are disabled."); } catch { /* No raw values in diagnostics. */ }
+  }
+  // Strict opt-in, separate from destination policy: "all" is not activation.
+  const rawAdapters = value("propagateOutgoingAdapters", "propagate_outgoing_adapters", "TRACEAI_PROPAGATE_OUTGOING_ADAPTERS");
   const config: Config = {
+    propagateOutgoingAdapters: rawAdapters === true || rawAdapters === "true",
+    propagateOutgoing: outgoing.mode,
     ...pair,
     baseUrl: value("baseUrl", "base_url") ?? profiles.find(p => typeof p.base_url === "string")?.base_url ?? "https://api.futureagi.com",
     projectName: value("projectName", "project_name") ?? env.OTEL_SERVICE_NAME ?? profiles.find(p => typeof p.project === "string")?.project ?? (basename(process.cwd()) || "DEFAULT_PROJECT_NAME"),
@@ -122,6 +157,7 @@ export function resolveConfig(options: Options = {}, env: NodeJS.ProcessEnv = pr
     debug: bool(value("debug", "debug", "FI_AUTO_DEBUG"), false), configFile,
     sdkDisabled: bool(env.OTEL_SDK_DISABLED, false), traceConfig,
   };
+  outgoingPolicies.set(config, outgoing);
   configCredentials.set(config, credentialSources.flatMap(source => [source.apiKey, source.secretKey]));
   return config;
 }
@@ -131,5 +167,7 @@ export function enabled(name: string, config: Config): boolean {
 export function maskConfig(config: Config): Record<string, unknown> {
   let baseUrl = config.baseUrl;
   try { const url = new URL(baseUrl); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; baseUrl = url.toString(); } catch { baseUrl = "<invalid URL>"; }
-  return { ...config, baseUrl, apiKey: config.apiKey ? "***" : undefined, secretKey: config.secretKey ? "***" : undefined };
+  const outgoing = outgoingPolicyForConfig(config);
+  return { ...config, baseUrl, apiKey: config.apiKey ? "***" : undefined, secretKey: config.secretKey ? "***" : undefined,
+    outgoingPropagation: { mode: outgoing.mode, valid: outgoing.valid, allowRules: outgoing.allowRules, denyRules: outgoing.denyRules } };
 }

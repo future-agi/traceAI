@@ -22,18 +22,22 @@ export interface Match {
   endpoint: Endpoint; provider: string; host: string; port: number;
   groups: Record<string, string>; query: URLSearchParams; knownProvider: boolean;
 }
+/** Shared host recognition; endpoint/protocol fallbacks are not destination ownership. */
+export function providerForDestination(host: string, port: number): string | undefined {
+  const candidates = loadCatalog().providers.map(provider => ({ provider, checks: [
+    provider.hosts?.length ? provider.hosts.includes(host) : undefined,
+    provider.host_suffixes?.length ? provider.host_suffixes.some(s => host.endsWith(s)) : undefined,
+    provider.host_prefixes?.length ? provider.host_prefixes.some(s => host.startsWith(s)) : undefined,
+    provider.ports?.length ? provider.ports.includes(port) : undefined,
+  ] })).filter(({ provider, checks }) => provider.match !== "all" || checks.filter(value => value !== undefined).every(Boolean));
+  // Exact hosts outrank suffixes, prefixes and generic local ports, regardless of catalog order.
+  return [0, 1, 2, 3].map(tier => candidates.find(({ checks }) => checks[tier])?.provider.name).find(Boolean);
+}
 export function match(method: string, url: string): Match | undefined {
   try {
     const u = new URL(url), cat = loadCatalog();
     const host = u.hostname.toLowerCase(), port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
-    const candidates = cat.providers.map(provider => ({ provider, checks: [
-      provider.hosts?.length ? provider.hosts.includes(host) : undefined,
-      provider.host_suffixes?.length ? provider.host_suffixes.some(s => host.endsWith(s)) : undefined,
-      provider.host_prefixes?.length ? provider.host_prefixes.some(s => host.startsWith(s)) : undefined,
-      provider.ports?.length ? provider.ports.includes(port) : undefined,
-    ] })).filter(({ provider, checks }) => provider.match !== "all" || checks.filter(value => value !== undefined).every(Boolean));
-    // Exact hosts outrank suffixes, prefixes and generic local ports, regardless of catalog order.
-    const hostProvider = [0, 1, 2, 3].map(tier => candidates.find(({ checks }) => checks[tier])?.provider.name).find(Boolean);
+    const hostProvider = providerForDestination(host, port);
     for (const endpoint of cat.endpoints) {
       const provider = hostProvider ?? endpoint.default_provider ?? cat.default_provider;
       if (!endpoint.methods.includes(method.toUpperCase()) ||
