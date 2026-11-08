@@ -193,6 +193,87 @@ The most-used settings are below. Set them **before** loading the agent; later `
 
 [Full configuration reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md) covers every `init()` option, environment setting, config/profile precedence, privacy flag and CLI command.
 
+### Outgoing W3C propagation (HTTP/HTTPS only)
+
+Experimental propagation for **`node:http` and `node:https` only** is **off by default**.
+It adds eligible W3C `traceparent`, `tracestate` and existing Context baggage without
+creating HTTP CLIENT spans. It is independent of wire/body capture and optional
+incoming HTTP instrumentation.
+
+**Outbound propagation for fetch/Undici is not supported yet:** global `fetch`,
+`undici.fetch` and `undici.request` receive no propagation adapter from F4. Existing
+AI global-fetch wire capture and transport credential observation are separate
+features and remain unchanged. No fetch/Undici redirect-propagation support is claimed.
+
+Enable native propagation explicitly, before preload:
+
+```sh
+export TRACEAI_PROPAGATE_OUTGOING_ADAPTERS=true
+export TRACEAI_PROPAGATE_OUTGOING=default
+export TRACEAI_PROPAGATE_HOSTS='+orders.internal,+*.svc.example,-payments.svc.example'
+node --import @traceai/auto/register app.mjs
+```
+
+| Code option | Environment variable | Config-file key | Default |
+| --- | --- | --- | --- |
+| `propagateOutgoingAdapters` | `TRACEAI_PROPAGATE_OUTGOING_ADAPTERS` | `propagate_outgoing_adapters` | `false` |
+| `propagateOutgoing` | `TRACEAI_PROPAGATE_OUTGOING` | `propagate_outgoing` | `default` |
+| `propagateHosts` | `TRACEAI_PROPAGATE_HOSTS` | `propagate_hosts` | No explicit rules |
+
+Policy alone, even `all`, never activates the adapter. Shared-catalog vendor hosts
+and provider ports (including Ollama's `11434`) are **unconditionally excluded**,
+regardless of request path, mode or matching positive rule. `none` disables all agent
+additions; explicit denies win. Positive rules only narrow the eligible destinations.
+`all` is retained as a compatibility spelling with the same mandatory exclusions as
+`default`; neither mode bypasses privacy or redirect checks. Host rules and catalog
+checks share lowercase/WHATWG IDNA normalization with exactly one terminal DNS dot
+removed; case, Unicode full-stop and trailing-dot variants do not bypass exclusions.
+Unknown compatible proxies cannot be recognized as vendors; prefer a positive allowlist.
+See [policy grammar, precedence and limits](docs/CONFIGURATION.md#outgoing-httphttps-propagation).
+
+Headers are prepared with local W3C serializers and the existing FI privacy filter,
+not the application's custom global propagator. No root trace IDs or new baggage
+are invented. Existing traceparent (even empty/invalid), suppression and an observed
+CLIENT span veto additions. Existing application headers are never rewritten; opaque
+local contexts and ambiguous/custom transport authorities conservatively skip.
+Baggage keys/values are percent-encoded and validated as W3C tokens/octet sequences;
+metadata must already be ASCII-safe W3C properties. Invalid members are omitted,
+not repaired into headers. Every final field is checked before normal or early writes.
+
+Native admission binds Host and the request target to stock agent connection options,
+including the effective port, not a port inferred from Host. Early raw/Expect headers
+wait for that authority proof; only a pristine, unsent Expect header queue can be
+amended, preserving body bytes, callbacks and accounting.
+
+**Attributable cross-origin redirect chains never receive fresh agent headers.**
+Before native response listeners run, Location is resolved by WHATWG URL relative
+to the proven serialized request URL. Same-origin requires both normalized authority
+agreement and strict WHATWG origin identity (scheme, platform hostname and effective
+port). DNS equivalence alone is insufficient: dotted and undotted hostnames are
+separate HTTP origins, even though policy checks exclude both spellings alike.
+Ambiguous references such as `http:host/path` or `http:/host/path`, malformed Location
+and unproven request targets fail closed. A cross-origin or unprovable redirect
+closes the captured request Context/span/baggage identities,
+observed descendant spans (even precreated ones), and async work inheriting the
+response listener Context. This covers callback and retained-context `await`
+follow-ups and remains closed if a chain returns to its first origin. Reusing the
+same identities for unrelated traffic is conservatively closed too; fresh unrelated
+contexts remain eligible. Application-owned propagation headers are not removed.
+
+Attribution requires observing the native response and a retained Context, span,
+baggage identity or observed span ancestry. Explicitly detached/reconstructed root
+contexts, other workers/processes and responses bypassing the native hook cannot be
+correlated; no URL/trace-ID guessing is performed. HTTP/HTTPS and F4 never follow
+redirects themselves or create follow-up requests. Agent fields are never copied
+into caller-owned reusable options. See the [precise boundary](docs/CONFIGURATION.md#native-redirect-boundary).
+
+`report()` exposes only `outgoing-http`: disabled without opt-in, pending with a valid
+enabled policy, and instrumented only after a header batch is committed. Shutdown
+removes owned hooks and makes retained wrappers inert. No header values are added to
+telemetry. Private Node header/agent shapes are guarded, not a promise of arbitrary
+runtime, proxy, HTTP/2, worker, browser or custom-agent coverage; qualify native
+HTTP/HTTPS receipt, TLS, body/error parity and lifecycle on your deployed Node version.
+
 ## Frameworks and deployment
 
 | Environment | Start here |
