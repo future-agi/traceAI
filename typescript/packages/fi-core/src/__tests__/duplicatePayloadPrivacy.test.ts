@@ -5,6 +5,8 @@ import { TraceConfigOptions } from "../trace/trace-config/types";
 import { ROOT_CONTEXT } from "@opentelemetry/api";
 import { getPromptTemplate, setPromptTemplate } from "../trace/contextAttributes";
 import { REDACTED_VALUE } from "../trace/trace-config/constants";
+import { maskAttributes } from "../trace/trace-config/maskingRules";
+import { generateTraceConfig } from "../trace/trace-config/traceConfig";
 
 const retrievalKeys = ["retrieval.documents", "retrieval.documents.0.document.content", "retrieval.documents.0.document.metadata", "retrieval.documents.12.document.content", "retrieval.documents.12.document.metadata"];
 const toolSchemaKeys = [SC.LLM_TOOLS, SC.LLM_INVOCATION_PARAMETERS];
@@ -103,11 +105,16 @@ describe("privacy covers duplicate payload attributes", () => {
         };
         const tracer = new FITracer({ tracer: provider.getTracer("opaque-privacy"), traceConfig: { [flag]: true } });
         tracer.startSpan("opaque", { attributes }).end();
-        expect(exporter.getFinishedSpans()[0].attributes).toEqual({
+        // PENDING I1xF2-PRECEDENCE: I1 drops opaque tool payloads under input/output hiding.
+        const masked = maskAttributes({ config: generateTraceConfig({ [flag]: true }), attributes });
+        expect(masked).toEqual({
           ...attributes,
           [SC.PROMPT_TEMPLATE_TEMPLATE]: hidesInput ? REDACTED_VALUE : payload,
           [SC.LLM_FUNCTION_CALL]: hidesInput ? payload : REDACTED_VALUE,
         });
+        const expected = { ...masked };
+        if (flag !== "hideInputImages" && flag !== "hideEmbeddingVectors") delete expected[SC.LLM_FUNCTION_CALL];
+        expect(exporter.getFinishedSpans()[0].attributes).toEqual(expected);
         expect(attributes[SC.PROMPT_TEMPLATE_TEMPLATE]).toBe(payload);
         expect(attributes[SC.LLM_FUNCTION_CALL]).toBe(payload);
       });

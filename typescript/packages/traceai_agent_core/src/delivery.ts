@@ -11,17 +11,36 @@ import { deliveryStatePath, type ResolvedConfig } from "./config.js";
 import type { DeliveryState } from "./lifecycle.js";
 import { updateJson } from "./files.js";
 import { postOtlp, type DeliveryResult } from "./validation.js";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 
 export { collectionEnabled } from "./collection.js";
 import { collectionEnabled } from "./collection.js";
 type Protocol = "http/json" | "http/protobuf";
+// fi-core merges OpenTelemetry's process detector into every provider resource
+// (pid, executable path, command-line arguments, OS user). Coding-agent hooks run
+// inside the user's shell and never export local process or host identity.
+const LOCAL_IDENTITY = /^(?:host|process)\./;
+function withoutLocalIdentity(span: ReadableSpan): ReadableSpan {
+  const attributes = span.resource.attributes;
+  if (!Object.keys(attributes).some((key) => LOCAL_IDENTITY.test(key)))
+    return span;
+  const resource = resourceFromAttributes(
+    Object.fromEntries(
+      Object.entries(attributes).filter(([key]) => !LOCAL_IDENTITY.test(key)),
+    ),
+  );
+  return new Proxy(span, {
+    get: (target, property) =>
+      property === "resource" ? resource : Reflect.get(target, property, target),
+  });
+}
 function encode(
   spans: ReadableSpan[],
   protocol: Protocol = "http/json",
 ): Uint8Array {
   return (
     protocol === "http/protobuf" ? ProtobufTraceSerializer : JsonTraceSerializer
-  ).serializeRequest(spans)!;
+  ).serializeRequest(spans.map(withoutLocalIdentity))!;
 }
 async function within<T>(
   operation: Promise<T>,

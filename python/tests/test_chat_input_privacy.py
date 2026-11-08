@@ -68,16 +68,22 @@ def attributes(records):
 
 @pytest.mark.parametrize("key", ["input.value", "raw.input"])
 @pytest.mark.parametrize("options,hidden", [
-    ({}, []),
+    # F2 (RL 2310bu): the default image cap is 0, so the data: image is hidden unless a
+    # positive cap is set; each default row keeps a twin at the previous default cap.
+    ({}, [IMAGE]),
+    ({"base64_image_max_length": 32_000}, []),
     ({"hide_input_images": True}, [IMAGE]),
-    ({"hide_input_text": True}, [TEXT]),
+    ({"hide_input_text": True}, [TEXT, IMAGE]),
+    ({"hide_input_text": True, "base64_image_max_length": 32_000}, [TEXT]),
     ({"hide_inputs": True}, [TEXT, IMAGE]),
     ({"hide_input_messages": True}, [TEXT, IMAGE]),
     ({"hide_input_images": True, "hide_input_text": True}, [TEXT, IMAGE]),
     ({"base64_image_max_length": len(IMAGE) - 1}, [IMAGE]),
     ({"base64_image_max_length": len(IMAGE)}, []),
-    ({"hide_outputs": True}, []),
-    ({"hide_llm_invocation_parameters": True}, []),
+    ({"hide_outputs": True}, [IMAGE]),
+    ({"hide_outputs": True, "base64_image_max_length": 32_000}, []),
+    ({"hide_llm_invocation_parameters": True}, [IMAGE]),
+    ({"hide_llm_invocation_parameters": True, "base64_image_max_length": 32_000}, []),
 ])
 def test_typed_modalities_in_actual_otlp(key, options, hidden):
     original = payload()

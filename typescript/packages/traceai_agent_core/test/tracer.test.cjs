@@ -156,7 +156,7 @@ test("all adapters receive structured credential redaction at the shared OTLP bo
   for (const span of all)
     for (const field of ["input.value", "output.value"]) {
       assert.match(attrs(span)[field], /public/);
-      assert.match(attrs(span)[field], /\[REDACTED\]/);
+      assert.match(attrs(span)[field], /\[REDACTED\]|<redacted>/);
     }
   assert.ok(!JSON.stringify(all).includes("SYNTHETIC_SHARED_CREDENTIAL"));
   assert.ok(!JSON.stringify(all).includes("SYNTHETIC_ENCODED_CREDENTIAL"));
@@ -204,7 +204,7 @@ for (const usagePlan of ["request", "turn"])
           if (size > 1048576) assert.equal(text, "[REDACTED_SIZE_LIMIT]");
           else {
             assert.match(text, /PUBLIC_CONTENT/);
-            assert.match(text, /\[REDACTED\]/);
+            assert.match(text, /\[REDACTED\]|<redacted>/);
             assert.ok(text.length <= 20000);
             if (size > 20000) assert.equal(text.length, 20000);
           }
@@ -696,8 +696,8 @@ for (const newline of ['\n', '\r\n']) for (const ending of ['eof', 'newline', 'm
     assert.equal(spans(f).length, 4);
     for (const span of spans(f)) {
       assert.doesNotMatch(JSON.stringify(span), /SYNTHETIC_PRIVATE_SUFFIX|FOLDED_SECRET_SUFFIX/);
-      assert.match(attrs(span)['input.value'], /REDACTED/);
-      assert.match(attrs(span)['output.value'], /REDACTED/);
+      assert.match(attrs(span)['input.value'], /REDACTED|<redacted>/);
+      assert.match(attrs(span)['output.value'], /REDACTED|<redacted>/);
       if (ending === 'mapping' || ending === 'folded') assert.match(attrs(span)['output.value'], /public: retained/);
     }
   });

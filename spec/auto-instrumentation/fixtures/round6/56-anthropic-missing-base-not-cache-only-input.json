@@ -1,0 +1,50 @@
+{
+  "name": "anthropic-missing-base-not-cache-only-input",
+  "request": {
+    "method": "POST",
+    "url": "https://api.anthropic.com/v1/messages",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "claude-fixture",
+      "max_tokens": 100,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "content": [],
+      "usage": {
+        "output_tokens": 4,
+        "cache_read_input_tokens": 100,
+        "cache_creation_input_tokens": 20
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat claude-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.usage.output_tokens": 4,
+      "gen_ai.usage.cache_read_tokens": 100,
+      "gen_ai.usage.cache_write_tokens": 20
+    },
+    "absent": [
+      "gen_ai.usage.input_tokens",
+      "gen_ai.usage.total_tokens",
+      "gen_ai.usage.output_tokens.reasoning",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

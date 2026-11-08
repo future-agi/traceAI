@@ -1,3 +1,29 @@
+## [1.2.0] - pending release
+### Changed
+- 1.2.0 exports the typed session.id set with setSession; other session-named attributes remain masked.
+- With hideEmbeddingVectors, the legacy embedding.model_name attribute is also hidden.
+- **Base64 images are no longer exported.** fi-core never exports base64 image payloads; they become `<omitted: N base64 chars>` at any cap. Before, the default cap of 32000 exported images up to 32000 characters.
+- Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
+- The replacement is `[image-redacted]`, for the whole value or JSON string token.
+- `base64ImageMaxLength` and `FI_BASE64_IMAGE_MAX_LENGTH` keep working, with one shared default constant, `DEFAULT_BASE64_IMAGE_MAX_LENGTH` (0). With a positive value, image payloads are still omitted, and are replaced in place by the media markers rather than replacing the whole value.
+- An invalid cap resolves to 0 and logs `Invalid base64 image cap; using 0.`
+- The TypeScript SDK is stricter: it never exports base64 images at any cap.
+
+### Feature
+- The shared export-privacy runtime and `registerSecret(value)` that the new zero-code agent `@traceai/auto` uses. See the README.
+
+### Fix
+- Non-HTTP(S) URLs in text, such as `wss://`, `redis://` or `s3://`, are no longer mistaken for base64 audio and partly omitted. Media payload and credential masking are unchanged.
+- A manual `batch: false`, set explicitly or by default, keeps a simple span processor. Only the zero-code agent batches, on its own export route.
+- Safe URL query parameters are kept byte-exact, and credential values in URLs are masked by the shared sanitizer. Masking of assignments in prose and headers is unchanged.
+- Hidden embedding-vector fallbacks use the `__REDACTED__` marker consistently.
+- Native SDK count-limit evidence is kept for late library projection, and Genkit native loss evidence is kept before mapping rewrites.
+
+### Known limitations
+- embedding.model_name may be omitted from FI exports of very large embedding batches; use gen_ai.request.model.
+- The image cap does not detect headerless base64 images (PNG, JPEG, GIF, WebP without a data: URL) unless they are the whole value or a whole JSON string token, nor a declared image payload whose base64 contains spaces; the media policy may still omit them.
+- An over-cap image payload stored under a key outside the payload fields (data, bytes, content, image, image_url, url, base64, b64_json) of an image-declaring object, without a data: URL, is not detected by the image cap (e.g. {"type":"image","mime_type":"image/heic","blob":"<base64>"}); other media policy may still withhold it.
+
 ## [1.1.1] - pending release
 ### Fix
 - Export the shared PII policy for native exporters. `@traceai/mastra` requires at least this version; publish fi-core before publishing Mastra.

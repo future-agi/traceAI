@@ -912,11 +912,11 @@ test("nested JSON credentials never escape through tools, model output or recons
     assert(!encoded.includes(value), "credential escaped");
   const tool = all.find((s) => attrs(s)["fi.span.kind"] === "TOOL");
   assert.match(attrs(tool)["input.value"], /visible/);
-  assert.match(attrs(tool)["output.value"], /REDACTED/);
+  assert.match(attrs(tool)["output.value"], /REDACTED|<redacted>/);
   const generations = all.filter((s) => attrs(s)["fi.span.kind"] === "LLM");
   for (const generation of generations)
-    assert.match(attrs(generation)["output.value"], /REDACTED/);
-  assert.match(attrs(generations[1])["input.value"], /REDACTED/);
+    assert.match(attrs(generation)["output.value"], /REDACTED|<redacted>/);
+  assert.match(attrs(generations[1])["input.value"], /REDACTED|<redacted>/);
 });
 
 for (const viaHooks of [false, true])

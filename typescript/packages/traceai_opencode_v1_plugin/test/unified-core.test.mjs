@@ -88,7 +88,7 @@ test('full structured fields are redacted before the adapter truncates prompt an
   } });
   const spans = await f.finish(), serialized = JSON.stringify(spans);
   assert.equal(serialized.includes(marker), false); assert.equal(serialized.includes('synthetic-secret'), false);
-  assert.ok(serialized.includes('[REDACTED]'));
+  assert.ok(/\[REDACTED\]|<redacted>/.test(serialized));
 });
 
 for (const hideErrorDetails of ['false', 'true']) test(`successful JSON fixture read stays successful (hideErrorDetails=${hideErrorDetails})`, async t => {

@@ -1,0 +1,34 @@
+{
+  "name": "deepgram-speak",
+  "request": {
+    "method": "POST",
+    "url": "https://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "text": "Your table is booked."
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "audio/mpeg"
+    },
+    "binary": {
+      "size": 1500,
+      "content_type": "audio/mpeg"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_to_speech aura-2-thalia-en",
+    "status": "OK",
+    "attributes": {
+      "input.value": "Your table is booked.",
+      "gen_ai.audio.transcript": "Your table is booked.",
+      "traceai.audio.output_bytes": 1500,
+      "gen_ai.audio.mime_type": "audio/mpeg"
+    }
+  }
+}

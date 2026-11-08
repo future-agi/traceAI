@@ -1,0 +1,78 @@
+{
+  "name": "milestone-a10-bedrock-tool-start-positive",
+  "description": "Only the nonempty output at 30ms qualifies; later ordinary text at 70ms cannot replace it. Synthetic SSE carrier for decoded Bedrock payload semantics only; this does not qualify AWS binary event-stream decoding.",
+  "request": {
+    "method": "POST",
+    "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-fixture/converse-stream",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "messageStart": {
+          "role": "assistant"
+        }
+      },
+      {
+        "contentBlockStart": {
+          "start": {
+            "toolUse": {
+              "name": ""
+            }
+          }
+        }
+      },
+      {
+        "contentBlockStart": {
+          "start": {
+            "toolUse": {
+              "name": "lookup"
+            }
+          }
+        }
+      },
+      {
+        "contentBlockDelta": {
+          "delta": {
+            "text": "Later"
+          }
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat anthropic.claude-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

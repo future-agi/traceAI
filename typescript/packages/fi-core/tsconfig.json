@@ -5,9 +5,10 @@
     "target": "ES2017",
     "outDir": "dist",
     "rootDir": ".",
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.json", "test/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
   "references": []
 }

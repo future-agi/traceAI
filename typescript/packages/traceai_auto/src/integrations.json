@@ -1,0 +1,529 @@
+[
+  {
+    "name": "anthropic",
+    "package": "@traceai/anthropic",
+    "targets": [
+      "@anthropic-ai/sdk"
+    ],
+    "className": "AnthropicInstrumentation",
+    "modules": [
+      "@anthropic-ai/sdk"
+    ]
+  },
+  {
+    "name": "bedrock",
+    "package": "@traceai/bedrock",
+    "targets": [
+      "@aws-sdk/client-bedrock-runtime"
+    ],
+    "className": "BedrockInstrumentation",
+    "modules": [
+      "@aws-sdk/client-bedrock-runtime"
+    ]
+  },
+  {
+    "name": "beeai",
+    "package": "@traceai/beeai",
+    "targets": [
+      "beeai-framework"
+    ],
+    "className": "BeeAIInstrumentation",
+    "modules": [
+      "beeai-framework"
+    ]
+  },
+  {
+    "name": "cerebras",
+    "package": "@traceai/cerebras",
+    "targets": [
+      "@cerebras/cerebras_cloud_sdk"
+    ],
+    "className": "CerebrasInstrumentation",
+    "modules": [
+      "@cerebras/cerebras_cloud_sdk"
+    ]
+  },
+  {
+    "name": "chromadb",
+    "package": "@traceai/chromadb",
+    "targets": [
+      "chromadb"
+    ],
+    "className": "ChromaDBInstrumentation",
+    "modules": [
+      "chromadb"
+    ]
+  },
+  {
+    "name": "claude-agent-sdk",
+    "package": "@traceai/claude-agent-sdk",
+    "targets": [
+      "@anthropic-ai/claude-agent-sdk"
+    ],
+    "className": "ClaudeAgentSDKInstrumentation",
+    "manual": "Requires wrapping query() explicitly.",
+    "modules": []
+  },
+  {
+    "name": "codex-sdk",
+    "package": "@traceai/codex-sdk",
+    "targets": [
+      "@openai/codex-sdk"
+    ],
+    "className": "CodexSDKInstrumentation",
+    "manual": "Requires manuallyInstrument()/wrapCodex().",
+    "modules": []
+  },
+  {
+    "name": "cohere",
+    "package": "@traceai/cohere",
+    "targets": [
+      "cohere-ai"
+    ],
+    "className": "CohereInstrumentation",
+    "modules": [
+      "cohere-ai"
+    ]
+  },
+  {
+    "name": "cursor-sdk",
+    "package": "@traceai/cursor-sdk",
+    "targets": [
+      "@cursor/sdk"
+    ],
+    "className": "CursorSDKInstrumentation",
+    "modules": [
+      "@cursor/sdk"
+    ]
+  },
+  {
+    "name": "deepseek",
+    "package": "@traceai/deepseek",
+    "targets": [
+      "openai"
+    ],
+    "className": "DeepSeekInstrumentation",
+    "modules": [
+      "openai"
+    ]
+  },
+  {
+    "name": "elevenlabs",
+    "package": "@traceai/elevenlabs",
+    "targets": [
+      "@elevenlabs/elevenlabs-js"
+    ],
+    "className": "ElevenLabsInstrumentation",
+    "manual": "Requires wrapClient() or manuallyInstrument(); init() installs no import hooks.",
+    "modules": []
+  },
+  {
+    "name": "fireworks",
+    "package": "@traceai/fireworks",
+    "targets": [
+      "openai"
+    ],
+    "className": "FireworksInstrumentation",
+    "modules": [
+      "openai"
+    ]
+  },
+  {
+    "name": "genkit",
+    "package": "@traceai/genkit",
+    "targets": [
+      "genkit"
+    ],
+    "enable": "enable",
+    "manual": "Installed version requires a Genkit telemetry span processor when enable() is absent.",
+    "modules": []
+  },
+  {
+    "name": "google-adk",
+    "package": "@traceai/fi-instrumentation-google-adk",
+    "targets": [
+      "@google/adk"
+    ],
+    "className": "GoogleADKInstrumentation",
+    "modules": [
+      "@google/adk"
+    ]
+  },
+  {
+    "name": "google-genai",
+    "package": "@traceai/google-genai",
+    "targets": [
+      "@google/generative-ai"
+    ],
+    "className": "GoogleGenAIInstrumentation",
+    "modules": [
+      "@google/generative-ai"
+    ]
+  },
+  {
+    "name": "google-genai-sdk",
+    "package": "@traceai/google-genai-sdk",
+    "targets": [
+      "@google/genai"
+    ],
+    "manual": "Requires instrumentGoogleGenAI(client); this is a per-client API, not a loader instrumentation class or auto enable hook.",
+    "modules": []
+  },
+  {
+    "name": "groq",
+    "package": "@traceai/groq",
+    "targets": [
+      "groq-sdk"
+    ],
+    "className": "GroqInstrumentation",
+    "modules": [
+      "groq-sdk"
+    ]
+  },
+  {
+    "name": "guardrails",
+    "package": "@traceai/guardrails",
+    "targets": [
+      "@guardrails-ai/core"
+    ],
+    "className": "GuardrailsInstrumentation",
+    "modules": [
+      "@guardrails-ai/core"
+    ]
+  },
+  {
+    "name": "huggingface",
+    "package": "@traceai/huggingface",
+    "targets": [
+      "@huggingface/inference"
+    ],
+    "className": "HuggingFaceInstrumentation",
+    "modules": [
+      "@huggingface/inference"
+    ]
+  },
+  {
+    "name": "huggingface-transformers",
+    "package": "@traceai/huggingface-transformers",
+    "targets": [
+      "@huggingface/transformers"
+    ],
+    "className": "TransformersInstrumentation",
+    "manual": "Requires wrapModule() or wrapPipeline(); no import hooks are installed.",
+    "modules": []
+  },
+  {
+    "name": "instructor",
+    "package": "@traceai/instructor",
+    "targets": [
+      "@instructor-ai/instructor"
+    ],
+    "className": "InstructorInstrumentation",
+    "modules": [
+      "@instructor-ai/instructor"
+    ]
+  },
+  {
+    "name": "lancedb",
+    "package": "@traceai/lancedb",
+    "targets": [
+      "@lancedb/lancedb"
+    ],
+    "className": "LanceDBInstrumentation",
+    "modules": [
+      "@lancedb/lancedb"
+    ]
+  },
+  {
+    "name": "langchain",
+    "package": "@traceai/langchain",
+    "targets": [
+      "@langchain/core"
+    ],
+    "className": "LangChainInstrumentation",
+    "modules": [
+      "@langchain/core/dist/callbacks/manager.cjs"
+    ]
+  },
+  {
+    "name": "livekit",
+    "package": "@traceai/fi-instrumentation-livekit",
+    "targets": [
+      "livekit-client",
+      "@livekit/rtc-node"
+    ],
+    "className": "LiveKitInstrumentation",
+    "modules": [
+      "livekit-client",
+      "@livekit/rtc-node"
+    ]
+  },
+  {
+    "name": "llamaindex",
+    "package": "@traceai/llamaindex",
+    "targets": [
+      "llamaindex",
+      "@llamaindex/openai"
+    ],
+    "className": "LlamaIndexInstrumentation",
+    "modules": [
+      "llamaindex",
+      "@llamaindex/openai"
+    ]
+  },
+  {
+    "name": "mastra",
+    "package": "@traceai/mastra",
+    "targets": [
+      "@mastra/core",
+      "@mastra/observability",
+      "@mastra/otel-exporter"
+    ],
+    "manual": "Mastra zero-code bridge follows after 11-11; use createFIObservability / createFIMastraExporter from @traceai/mastra",
+    "modules": []
+  },
+  {
+    "name": "mcp",
+    "package": "@traceai/mcp",
+    "targets": [
+      "@modelcontextprotocol/sdk"
+    ],
+    "className": "MCPInstrumentation",
+    "modules": [
+      "@modelcontextprotocol/sdk/client/sse.js",
+      "@modelcontextprotocol/sdk/server/sse.js",
+      "@modelcontextprotocol/sdk/client/stdio.js",
+      "@modelcontextprotocol/sdk/server/stdio.js",
+      "@modelcontextprotocol/sdk/client/streamableHttp.js",
+      "@modelcontextprotocol/sdk/server/streamableHttp.js"
+    ]
+  },
+  {
+    "name": "milvus",
+    "package": "@traceai/milvus",
+    "targets": [
+      "@zilliz/milvus2-sdk-node"
+    ],
+    "className": "MilvusInstrumentation",
+    "modules": [
+      "@zilliz/milvus2-sdk-node"
+    ]
+  },
+  {
+    "name": "mistral",
+    "package": "@traceai/mistral",
+    "targets": [
+      "@mistralai/mistralai"
+    ],
+    "className": "MistralInstrumentation",
+    "modules": [
+      "@mistralai/mistralai"
+    ]
+  },
+  {
+    "name": "mongodb",
+    "package": "@traceai/mongodb",
+    "targets": [
+      "mongodb"
+    ],
+    "className": "MongoDBInstrumentation",
+    "modules": [
+      "mongodb"
+    ]
+  },
+  {
+    "name": "ollama",
+    "package": "@traceai/ollama",
+    "targets": [
+      "ollama"
+    ],
+    "className": "OllamaInstrumentation",
+    "modules": [
+      "ollama"
+    ]
+  },
+  {
+    "name": "openai",
+    "package": "@traceai/openai",
+    "targets": [
+      "openai"
+    ],
+    "className": "OpenAIInstrumentation",
+    "modules": [
+      "openai"
+    ]
+  },
+  {
+    "name": "openai-agents",
+    "package": "@traceai/openai-agents",
+    "targets": [
+      "@openai/agents"
+    ],
+    "className": "OpenAIAgentsInstrumentation",
+    "modules": [
+      "@openai/agents"
+    ]
+  },
+  {
+    "name": "pgvector",
+    "package": "@traceai/pgvector",
+    "targets": [
+      "pg",
+      "pgvector"
+    ],
+    "className": "PgVectorInstrumentation",
+    "modules": [
+      "pg"
+    ]
+  },
+  {
+    "name": "pi-coding-agent",
+    "package": "@traceai/pi-coding-agent",
+    "targets": [
+      "@mariozechner/pi-coding-agent"
+    ],
+    "className": "PiCodingAgentInstrumentation",
+    "manual": "Requires wrapping createAgentSession().",
+    "modules": []
+  },
+  {
+    "name": "pinecone",
+    "package": "@traceai/pinecone",
+    "targets": [
+      "@pinecone-database/pinecone"
+    ],
+    "className": "PineconeInstrumentation",
+    "modules": [
+      "@pinecone-database/pinecone"
+    ]
+  },
+  {
+    "name": "pipecat",
+    "package": "@traceai/fi-instrumentation-pipecat",
+    "targets": [
+      "@pipecat-ai/client-js"
+    ],
+    "className": "PipecatInstrumentation",
+    "modules": [
+      "@pipecat-ai/client-js"
+    ]
+  },
+  {
+    "name": "portkey",
+    "package": "@traceai/portkey",
+    "targets": [
+      "portkey-ai"
+    ],
+    "className": "PortkeyInstrumentation",
+    "modules": [
+      "portkey-ai"
+    ]
+  },
+  {
+    "name": "qdrant",
+    "package": "@traceai/qdrant",
+    "targets": [
+      "@qdrant/js-client-rest"
+    ],
+    "className": "QdrantInstrumentation",
+    "modules": [
+      "@qdrant/js-client-rest"
+    ]
+  },
+  {
+    "name": "redis",
+    "package": "@traceai/redis",
+    "targets": [
+      "redis"
+    ],
+    "className": "RedisInstrumentation",
+    "modules": [
+      "redis"
+    ]
+  },
+  {
+    "name": "strands",
+    "package": "@traceai/strands",
+    "targets": [
+      "@strands-agents/sdk"
+    ],
+    "className": "StrandsInstrumentation",
+    "modules": [
+      "@strands-agents/sdk"
+    ]
+  },
+  {
+    "name": "together",
+    "package": "@traceai/together",
+    "targets": [
+      "together-ai"
+    ],
+    "className": "TogetherInstrumentation",
+    "modules": [
+      "together-ai"
+    ]
+  },
+  {
+    "name": "vercel",
+    "package": "@traceai/vercel",
+    "targets": [
+      "ai"
+    ],
+    "enable": "enableVercelInstrumentation",
+    "manual": "Installed version requires experimental_telemetry when enable() is absent.",
+    "modules": []
+  },
+  {
+    "name": "vertexai",
+    "package": "@traceai/fi-instrumentation-vertexai",
+    "targets": [
+      "@google-cloud/vertexai"
+    ],
+    "className": "VertexAIInstrumentation",
+    "modules": [
+      "@google-cloud/vertexai"
+    ]
+  },
+  {
+    "name": "vllm",
+    "package": "@traceai/vllm",
+    "targets": [
+      "openai"
+    ],
+    "className": "VLLMInstrumentation",
+    "modules": [
+      "openai"
+    ]
+  },
+  {
+    "name": "voltagent",
+    "package": "@traceai/voltagent",
+    "targets": [
+      "@voltagent/core"
+    ],
+    "manual": "Requires a framework span processor.",
+    "modules": []
+  },
+  {
+    "name": "weaviate",
+    "package": "@traceai/weaviate",
+    "targets": [
+      "weaviate-client"
+    ],
+    "className": "WeaviateInstrumentation",
+    "modules": [
+      "weaviate-client"
+    ]
+  },
+  {
+    "name": "xai",
+    "package": "@traceai/xai",
+    "targets": [
+      "openai"
+    ],
+    "className": "XAIInstrumentation",
+    "modules": [
+      "openai"
+    ]
+  }
+]

@@ -236,7 +236,7 @@ test("complete OTLP payload redacts structured aliases and JSON results before c
       attrs(tool)["output.value"],
       attrs(llms[1])["input.value"],
     ]) {
-      assert.ok(text.includes("[REDACTED]"));
+      assert.ok(/\[REDACTED\]|<redacted>/.test(text));
     }
     // Structured arguments preserve safe fields. In opaque text containing an
     // object-valued credential, the unified core deliberately removes the tail

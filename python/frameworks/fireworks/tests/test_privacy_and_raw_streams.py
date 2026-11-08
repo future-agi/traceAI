@@ -5,6 +5,7 @@ import copy
 import gc
 import inspect
 import json
+import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -19,6 +20,20 @@ from opentelemetry.trace import StatusCode
 
 from traceai_fireworks import FireworksInstrumentor
 from traceai_fireworks._stream import _AsyncStream, _Stream
+
+
+def _resolved_default_image_cap():
+    """The installed core's default cap. The core-floor job installs the oldest supported
+    fi-instrumentation-otel, whose default is 32000; F2 (RL 2310bu) cores default to 0."""
+    saved = os.environ.pop("FI_BASE64_IMAGE_MAX_LENGTH", None)
+    try:
+        return TraceConfig().base64_image_max_length
+    finally:
+        if saved is not None:
+            os.environ["FI_BASE64_IMAGE_MAX_LENGTH"] = saved
+
+
+DEFAULT_CAP_IS_ZERO = _resolved_default_image_cap() == 0
 
 from .test_sdk_lifecycle import (
     BASE_URL, MODEL, PARAMS, TOKEN, AsyncBody, SyncBody, assert_finished,
@@ -57,9 +72,10 @@ def async_client(body):
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("env", [False, True])
-@pytest.mark.parametrize("policy", ["hide", "limit", "boundary", "visible"])
+@pytest.mark.parametrize("policy", ["hide", "limit", "boundary", "visible", "default"])
 @pytest.mark.parametrize("image_kind", ["base64", "remote"])
 def test_image_privacy_every_exported_copy(monkeypatch, asynchronous, env, policy, image_kind):
+    monkeypatch.delenv("FI_BASE64_IMAGE_MAX_LENGTH", raising=False)
     sentinel = "SYNTHETIC-PRIVATE-IMAGE"
     url = ("data:image/png;base64," if image_kind == "base64" else "https://example.invalid/") + sentinel
     params = {"model": MODEL, "messages": [{"role": "user", "content": [
@@ -72,6 +88,9 @@ def test_image_privacy_every_exported_copy(monkeypatch, asynchronous, env, polic
         config["hide_input_images"] = True
     elif policy in ("limit", "boundary"):
         config["base64_image_max_length"] = len(url) - (policy == "limit")
+    elif policy == "visible":
+        # F2 (RL 2310bu): the former default is now an explicit opt-in twin.
+        config["base64_image_max_length"] = 32_000
     if env:
         for key, value in config.items():
             monkeypatch.setenv("FI_" + key.upper(), str(value).lower())
@@ -108,12 +127,16 @@ def test_image_privacy_every_exported_copy(monkeypatch, asynchronous, env, polic
         attrs = spans[0].attributes
         assert "Describe this image" in attrs["input.value"]
         assert "Describe this image" in attrs["gen_ai.input.messages.0.message.content"]
-        hidden = policy == "hide" or (policy == "limit" and image_kind == "base64")
+        hidden = policy == "hide" or (image_kind == "base64" and (policy == "limit" or (policy == "default" and DEFAULT_CAP_IS_ZERO)))
         if hidden:
             assert not [key for key, value in attrs.items() if sentinel in str(value)]
         else:
             assert sentinel in attrs["input.value"]
             assert sentinel in attrs["gen_ai.input.messages.0.message.content"]
+        if policy == "default" and image_kind == "base64" and DEFAULT_CAP_IS_ZERO:
+            content = json.loads(attrs["input.value"])["messages"][0]["content"]
+            assert content[1]["image_url"]["url"] == "[image-redacted]"
+            assert "[image-redacted]" in attrs["gen_ai.input.messages.0.message.content"]
 
 
 @pytest.mark.parametrize("consumed", [False, True])

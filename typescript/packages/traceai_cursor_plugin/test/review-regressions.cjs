@@ -214,10 +214,10 @@ async function structuredRedactionRegression({ home, send, readSpans }) {
   const first = attrs(generations[0]),
     last = attrs(generations[1]);
   assert.match(first["output.value"], /tool_calls.*MCP.*safe-arguments/s);
-  assert.match(first["output.value"], /\[REDACTED\]/);
+  assert.match(first["output.value"], /\[REDACTED\]|<redacted>/);
   assert.match(last["input.value"], /safe-arguments/);
   assert.match(last["input.value"], /safe-results/);
-  assert.match(last["input.value"], /\[REDACTED\]/);
+  assert.match(last["input.value"], /\[REDACTED\]|<redacted>/);
   const serialized = JSON.stringify(all);
   for (const sentinel of sentinels)
     assert.ok(

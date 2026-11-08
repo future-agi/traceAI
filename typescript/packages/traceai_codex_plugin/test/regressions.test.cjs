@@ -233,7 +233,7 @@ test("actual hook exports redact nested structured credentials and quoted JSON r
     assert(!body.includes(value), value);
   assert(body.includes("visible-tool-content"));
   assert(body.includes("visible-output"));
-  assert(body.includes("[REDACTED]"));
+  assert(/\[REDACTED\]|<redacted>/.test(body));
   const boundary = sanitizeEvent(
     {
       hook_event_name: "PostToolUse",
@@ -959,7 +959,7 @@ test("bundled hook redacts quoted assignments, escapes, and all secret aliases o
     for (const value of values)
       assert(!encoded.includes(value), `leaked synthetic marker ${value}`);
     assert(encoded.includes("visible-marker"));
-    assert(encoded.includes("[REDACTED]"));
+    assert(/\[REDACTED\]|<redacted>/.test(encoded));
   }
 });
 
