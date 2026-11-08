@@ -25,6 +25,7 @@ export function redactEmbeddingValues(value: string): string {
       return Object.fromEntries(Object.entries(item).map(([key, child]) => [
         key,
         visit(child, depth + 1, /^(?:embedding|embeddings|vector|vectors)$/i.test(key) ||
+          key === "data" && (item as Record<string, unknown>).object === "embedding" ||
           vector && !/^(?:text|input|input_text|model|index|dimensions?|count|type|mime_type)$/i.test(key)),
       ]));
     }

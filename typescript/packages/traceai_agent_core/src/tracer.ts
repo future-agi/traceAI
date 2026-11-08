@@ -7,7 +7,7 @@ import {
   type SpanContext,
   type TimeInput,
 } from "@opentelemetry/api";
-import { FITracer, FITracerProvider, ProjectType } from "@traceai/fi-core";
+import { FITracer, FITracerProvider, ProjectType, generateTraceConfig } from "@traceai/fi-core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { SemanticConventions as SC } from "@traceai/fi-semantic-conventions";
 import {
@@ -24,7 +24,7 @@ import {
   opaqueId,
 } from "./identity.js";
 import { normalizeUsage, type Counters, type UsagePlan } from "./usage.js";
-import { redact } from "./privacy.js";
+import { createContentSanitizer } from "./content.js";
 import { contentHash } from "./files.js";
 import { VERSION } from "./version.js";
 import type { DeliveryResult } from "./validation.js";
@@ -128,19 +128,6 @@ const label = (value: string | undefined): string | undefined =>
   value && /^[a-zA-Z0-9_.:/-]{1,128}$/.test(value) && !value.includes("://")
     ? value
     : undefined;
-function content(
-  value: string | undefined,
-  credentials?: ResolvedConfig["credentials"],
-): string | undefined {
-  if (typeof value !== "string") return undefined;
-  // redact() inspects complete structured content within its processing bound.
-  // Display truncation must never remove JSON structure before that inspection.
-  let clean = redact(value);
-  for (const key of [credentials?.apiKey, credentials?.secretKey])
-    if (key) clean = clean.split(key).join("[REDACTED]");
-  return clean.slice(0, 20000);
-}
-
 /** A private FI provider: no global tracer/context registration, host/process detectors or model gateway. */
 export function createTurnTracer(options: {
   config: ResolvedConfig;
@@ -160,6 +147,17 @@ export function createTurnTracer(options: {
       : undefined,
     identityKey: options.config.identityKey,
   };
+  const traceConfig = generateTraceConfig({
+    hideInputs: config.hideInputs,
+    hideOutputs: config.hideOutputs,
+    hideErrorDetails: config.hideErrorDetails,
+  });
+  const sanitize = createContentSanitizer(
+    config.credentials ? [config.credentials.apiKey, config.credentials.secretKey] : [],
+    traceConfig,
+  );
+  const content = (value: string | undefined): string | undefined =>
+    typeof value === "string" ? sanitize(value) : undefined;
   const processor = new BoundedSpanProcessor(
     config,
     options.onDelivery,
@@ -199,11 +197,7 @@ export function createTurnTracer(options: {
   });
   const tracer = new FITracer({
     tracer: provider.getTracer("@traceai/agent-core", VERSION),
-    traceConfig: {
-      hideInputs: config.hideInputs,
-      hideOutputs: config.hideOutputs,
-      hideErrorDetails: config.hideErrorDetails,
-    },
+    traceConfig,
   });
   const active = new Map<string, TurnHandle>();
   const completed = new Set<string>();
@@ -299,7 +293,7 @@ export function createTurnTracer(options: {
     const outcome = endOutcome(value);
     const out =
       !config.hideOutputs && !(config.hideErrorDetails && outcome === "error")
-        ? content(value.output, config.credentials)
+        ? content(value.output)
         : undefined;
     if (out !== undefined && canCollect())
       span.setAttribute(SC.OUTPUT_VALUE, out);
@@ -381,7 +375,7 @@ export function createTurnTracer(options: {
       if (config.environment)
         attributes["deployment.environment.name"] = config.environment;
       const input = !config.hideInputs
-        ? content(value.input, config.credentials)
+        ? content(value.input)
         : undefined;
       if (input !== undefined) attributes[SC.INPUT_VALUE] = input;
       const root = tracer.startSpan(
@@ -429,7 +423,7 @@ export function createTurnTracer(options: {
             return;
           try {
             const input = !config.hideInputs
-              ? content(event.input, config.credentials)
+              ? content(event.input)
               : undefined;
             root.addEvent(
               event.name,
@@ -514,7 +508,7 @@ export function createTurnTracer(options: {
                 attrs[SC.TOOL_CALL_ID] = child.toolCallId!;
             }
             const text = !config.hideInputs
-              ? content(child.input, config.credentials)
+              ? content(child.input)
               : undefined;
             if (text !== undefined) attrs[SC.INPUT_VALUE] = text;
             const span = tracer.startSpan(
@@ -571,7 +565,7 @@ export function createTurnTracer(options: {
                         config.hideOutputs ||
                         (config.hideErrorDetails && state.outcome === "error")
                           ? undefined
-                          : content(end.output, config.credentials),
+                          : content(end.output),
                       usage: end.usage ? { ...end.usage } : undefined,
                       endTime: end.endTime ?? Date.now(),
                     };

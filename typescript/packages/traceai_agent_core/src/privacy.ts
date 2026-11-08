@@ -28,21 +28,31 @@ export const isSensitiveKey = isSensitiveField;
 export const redactValue = (value: unknown, depth = 0): unknown =>
   redactStructured(value, depth);
 /** Defense in depth for content-on-by-default. Structure-only omits content entirely. */
-export function redact(text: string): string {
-  return redactStructured(text) as string;
+export function redact(text: string, secrets: readonly string[] = []): string {
+  return redactStructured(text, 0, secrets) as string;
+}
+/** Callers supply longest-first credentials. Keep inserted markers out of later
+ * matches. This runs on complete text and again on decoded JSON leaves, before
+ * assignments/PII can change a credential that overlaps their syntax. */
+function exactSecrets(text: string, secrets: readonly string[]): string {
+  for (const secret of secrets) {
+    if (!secret || !text.includes(secret)) continue;
+    text = text.split("[REDACTED]").map(part => part.split(secret).join("[REDACTED]")).join("[REDACTED]");
+  }
+  return text;
 }
 /** Check normalized keys before serialization, including nested JSON-encoded strings. */
-export function redactStructured(value: unknown, depth = 0): unknown {
+export function redactStructured(value: unknown, depth = 0, secrets: readonly string[] = []): unknown {
   if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
   if (Array.isArray(value))
-    return value.map((item) => redactStructured(item, depth + 1));
+    return value.map((item) => redactStructured(item, depth + 1, secrets));
   if (value !== null && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
-        key,
+        exactSecrets(key, secrets),
         isSensitiveField(key)
           ? "[REDACTED]"
-          : redactStructured(item, depth + 1),
+          : redactStructured(item, depth + 1, secrets),
       ]),
     );
   if (typeof value === "string") {
@@ -53,14 +63,15 @@ export function redactStructured(value: unknown, depth = 0): unknown {
       Buffer.byteLength(value) > LIMITS.ingress
     )
       return "[REDACTED_SIZE_LIMIT]";
-    if (/^\s*[\[{"]/.test(value)) {
+    const text = exactSecrets(value, secrets);
+    if (/^\s*[\[{"]/.test(text)) {
       try {
-        return JSON.stringify(redactStructured(JSON.parse(value), depth + 1));
+        return JSON.stringify(redactStructured(JSON.parse(text), depth + 1, secrets));
       } catch {
         /* Opaque text still receives the free-text policy. */
       }
     }
-    return redactText(value, depth);
+    return redactText(text, depth, secrets);
   }
   return value;
 }
@@ -163,7 +174,7 @@ function redactAssignments(text: string): string {
   }
   return result + text.slice(offset);
 }
-function redactEmbeddedJson(text: string, depth: number): string {
+function redactEmbeddedJson(text: string, depth: number, secrets: readonly string[]): string {
   if (text.length > LIMITS.ingress || Buffer.byteLength(text) > LIMITS.ingress)
     return "[REDACTED_SIZE_LIMIT]";
   let start = -1,
@@ -200,7 +211,7 @@ function redactEmbeddedJson(text: string, depth: number): string {
       if (!stack.length) {
         try {
           const parsed = JSON.parse(text.slice(start, i + 1));
-          const clean = redactStructured(parsed, depth + 1);
+          const clean = redactStructured(parsed, depth + 1, secrets);
           const sanitized = JSON.stringify(clean);
           // Do not rewrite harmless JSON-looking code or change prompt correlation.
           result += text.slice(offset, start) + (sanitized === JSON.stringify(parsed)
@@ -215,8 +226,8 @@ function redactEmbeddedJson(text: string, depth: number): string {
   }
   return result + text.slice(offset);
 }
-function redactText(text: string, depth = 0): string {
-  return redactAssignments(redactEmbeddedJson(text, depth))
+function redactText(text: string, depth = 0, secrets: readonly string[] = []): string {
+  return redactAssignments(redactEmbeddedJson(text, depth, secrets))
     // URI userinfo is credential-bearing for every scheme, including local databases.
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>]*@/gi, (uri) => uri.slice(0, uri.indexOf("://") + 3) + "[REDACTED]@")
     .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")
