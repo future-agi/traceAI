@@ -23,6 +23,13 @@ class NpmTests(unittest.TestCase):
             for dep in package['workspace_dependencies']:
                 self.assertLess(ordered.index(dep), ordered.index(package['name']))
 
+    def test_hermes_companion_is_released_before_unified_cli(self):
+        packages = release_plan.typescript_packages()
+        cli = next(p for p in packages if p['name'] == '@traceai/agents')
+        closure = [p['name'] for p in npm_release.dependency_closure([cli], packages)]
+        self.assertLess(closure.index('@traceai/agent-core'), closure.index('@traceai/hermes-agent'))
+        self.assertLess(closure.index('@traceai/hermes-agent'), closure.index('@traceai/agents'))
+
     def test_internal_semver_optional_and_peer_edges_are_detected_not_dev_edges(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

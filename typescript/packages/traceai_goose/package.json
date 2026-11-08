@@ -1,0 +1,46 @@
+{
+  "name": "@traceai/goose",
+  "version": "0.1.0",
+  "description": "Daemon-free Future AGI tracing through Goose's native lifecycle hooks",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/hook.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/hook.cjs",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "proper-lockfile": "^4.1.2",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "@types/proper-lockfile": "^4.1.4",
+    "esbuild": "^0.25.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_goose"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  }
+}
