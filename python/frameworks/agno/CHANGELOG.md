@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] - pending release
+### Fix
+- For supplied configs whose cap equals OpenInference's dataclass-declared default, an unset, blank, `-1`, or non-integer `OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH` no longer bypasses the FI ceiling: the cap is the smaller of that default and the FI cap (0 when FI is unset). This includes explicitly supplying the default value; the reference default is read without constructing another environment-dependent config.
+- Nondefault nonnegative caller caps and valid nonnegative decimal OpenInference environment caps retain their existing behavior; a set FI cap can only tighten them. Without a supplied config, the cap still comes only from FI, or 0 when unset.
+- The wheel and sdist now include the Apache-2.0 `LICENSE` file.
+
 ## [0.2.1] - pending release
 ### Changed
 - Images are no longer exported by default as base64 payloads. To allow them within a positive cap, set `FI_BASE64_IMAGE_MAX_LENGTH` or supply `base64_image_max_length` on an OpenInference config. The cap rules below and content-hiding flags still apply.
