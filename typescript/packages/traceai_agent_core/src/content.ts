@@ -3,6 +3,42 @@ import { generateTraceConfig, privacyFilter, seedSecrets, getRegisteredSecrets, 
 import { redact } from "./privacy.js";
 import { LIMITS } from "./schema.js";
 
+/** Private, bounded originals for spans that have not finalized yet. No original
+ * is attached to an OTel span: finalization runs complete-value privacy with the
+ * current registry, then truncates, then goes through FITracer admission/export.
+ * A tracer-wide bound prevents many concurrently open turns retaining unbounded
+ * source content. Consumed/discarded entries release their original immediately. */
+export function createContentBuffer(credentials: readonly string[] = [], maxBytes = 8 * LIMITS.ingress) {
+  const pending = new Map<number, string>();
+  let next = 0, size = 0;
+  return {
+    capture(value: string | undefined): number | undefined {
+      if (typeof value !== "string") return undefined;
+      const length = value.length > LIMITS.ingress ? Infinity : Buffer.byteLength(value);
+      if (length > LIMITS.ingress || size + length > maxBytes) return -1;
+      // Keep capture-time discovery too: an environment credential may be removed
+      // before finalization, but must remain protected by the shared registry.
+      try { seedSecrets(process.env, credentials); } catch { return -2; }
+      const id = next++;
+      pending.set(id, value);
+      size += length;
+      return id;
+    },
+    take(id: number | undefined): string | undefined {
+      if (id === -1) return "[REDACTED_SIZE_LIMIT]";
+      if (id === -2) return "[REDACTED_PRIVACY_FAILURE]";
+      if (id === undefined) return undefined;
+      const value = pending.get(id);
+      if (value !== undefined) {
+        size -= Buffer.byteLength(value);
+        pending.delete(id);
+      }
+      return value;
+    },
+    clear(): void { pending.clear(); size = 0; },
+  };
+}
+
 const TRUNCATED = "[TRUNCATED]";
 const bytes = (text: string): number => Buffer.byteLength(text);
 // Keep fi-core recognition at the tracer boundary, not in lightweight hook code.

@@ -70,7 +70,7 @@
   "python/frameworks/weaviate": "0.1.2",
   "python/frameworks/xai": "0.1.1",
   "python/traceai": "0.1.0",
-  "typescript/packages/fi-core": "1.2.2",
+  "typescript/packages/fi-core": "1.2.3",
   "typescript/packages/fi-semantic-conventions": "1.1.0",
   "typescript/packages/traceai_anthropic": "0.1.5",
   "typescript/packages/traceai_auto": "0.1.0",

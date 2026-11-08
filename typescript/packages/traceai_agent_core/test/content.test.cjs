@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createContentSanitizer } = require('../dist/src/content.js');
+const { createContentBuffer, createContentSanitizer } = require('../dist/src/content.js');
 const { registerSecret } = require('@traceai/fi-core');
 
 for (const shape of ['text', 'json', 'encoded', 'double']) {
@@ -79,6 +79,36 @@ test('processing limits fail closed and short configured keys retain their prote
   const key = 'a"b\\c';
   const clean = createContentSanitizer([key])(JSON.stringify({ public: 'PUBLIC', echo: key }));
   assert.equal(JSON.parse(clean).echo, '[REDACTED]');
+});
+
+test('bounded originals are consumed once and cleared on discard', () => {
+  const buffer = createContentBuffer([], 16);
+  const first = buffer.capture('😀'.repeat(4));
+  assert.equal(buffer.take(buffer.capture('overflow')), '[REDACTED_SIZE_LIMIT]');
+  assert.equal(buffer.take(first), '😀'.repeat(4));
+  assert.equal(buffer.take(first), undefined);
+  const next = buffer.capture('PUBLIC');
+  buffer.clear();
+  assert.equal(buffer.take(next), undefined);
+  assert.equal(buffer.take(buffer.capture('PUBLIC')), 'PUBLIC');
+  assert.equal(buffer.take(buffer.capture('x'.repeat(1048577))), '[REDACTED_SIZE_LIMIT]');
+});
+
+test('JSON-looking punctuation inside prose credentials does not erase public text', () => {
+  for (const secret of ['SYNTHETIC_[1,2]_END', 'SYNTHETIC_{"x":"y"}_END', 'SYNTHETIC_[PASSWORD]_END']) {
+    const clean = createContentSanitizer([secret])('PUBLIC ' + secret + ' public suffix');
+    assert.equal(clean, 'PUBLIC [REDACTED] public suffix');
+  }
+});
+
+test('cross-string matches cannot silently remove privacy framing', () => {
+  const secret = 'end","mime_type":"audio/x-wav","after":"start';
+  const json = '{"before":"end","mime_type":"audio/x-wav","after":"start","data":[987654,876543]}';
+  for (const value of [json, 'tool says ' + json, JSON.stringify({ encoded: json })]) {
+    const clean = createContentSanitizer([secret])(value);
+    assert.doesNotMatch(clean, /987654|876543/);
+    assert.match(clean, /REDACTED/);
+  }
 });
 
 test('credential matches cannot erase media context or damage JSON framing', () => {

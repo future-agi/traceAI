@@ -41,6 +41,38 @@ function exactSecrets(text: string, secrets: readonly string[]): string {
   }
   return text;
 }
+/** A match inside a JSON string is not framing, even if it contains brackets.
+ * Inspect a successfully parsed container at its original offsets, before any
+ * embedded rewrite can split a credential. Matches overlapping delimiters (or
+ * entering/leaving an embedded container) own that whole text instead. */
+function crossesJsonFraming(text: string, start: number, end: number, secrets: readonly string[]): boolean {
+  if (!secrets.some(secret => secret && text.includes(secret))) return false;
+  const strings: [number, number][] = [];
+  let open = -1, escaped = false;
+  for (let i = start; i < end; i++) {
+    if (open < 0) { if (text[i] === '"') open = i + 1; }
+    else if (escaped) escaped = false;
+    else if (text[i] === "\\") escaped = true;
+    else if (text[i] === '"') { strings.push([open, i]); open = -1; }
+  }
+  for (const secret of secrets) {
+    if (!secret) continue;
+    let at = text.indexOf(secret, Math.max(0, start - secret.length + 1));
+    while (at >= 0 && at < end) {
+      // Binary search the string token starting at or before this occurrence.
+      let lo = 0, hi = strings.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (strings[mid][0] <= at) lo = mid + 1; else hi = mid;
+      }
+      const token = strings[lo - 1];
+      if (!token || at + secret.length > token[1]) return true;
+      at = text.indexOf(secret, at + 1);
+    }
+  }
+  return false;
+}
+
 /** Check normalized keys before serialization, including nested JSON-encoded strings. */
 export function redactStructured(value: unknown, depth = 0, secrets: readonly string[] = [], contextKey: (key: string) => boolean = () => false): unknown {
   if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
@@ -71,19 +103,10 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
       Buffer.byteLength(value) > LIMITS.ingress
     )
       return "[REDACTED_SIZE_LIMIT]";
-    // A literal credential spanning JSON framing owns the whole text. Handle it
-    // before parsing embedded islands can rewrite one part of the exact match.
-    if (secrets.some(secret => secret && /[{}\[\]"]/.test(secret) && value.includes(secret)))
-      return "[REDACTED]";
-    const text = exactSecrets(value, secrets);
     if (/^\s*[\[{"]/.test(value)) {
       let parsed: unknown;
       try { parsed = JSON.parse(value); } catch { return redactText(value, depth, secrets, contextKey); }
-      if (text !== value) {
-        // A source match crossing JSON syntax owns the complete container. Do
-        // not reinterpret its damaged prefix as prose after removing the match.
-        try { JSON.parse(text); } catch { return "[REDACTED]"; }
-      }
+      if (crossesJsonFraming(value, 0, value.length, secrets)) return "[REDACTED]";
       return JSON.stringify(redactStructured(parsed, depth + 1, secrets, contextKey));
     }
     return redactText(value, depth, secrets, contextKey);
@@ -226,6 +249,16 @@ function redactEmbeddedJson(text: string, depth: number, secrets: readonly strin
       if (!stack.length) {
         try {
           const parsed = JSON.parse(text.slice(start, i + 1));
+          // A complete JSON-looking island wholly inside a prose credential is
+          // part of that credential, not surrounding framing. Leave it intact
+          // until exactSecrets removes the complete match below.
+          const covered = secrets.some(secret => {
+            if (!secret) return false;
+            const at = text.lastIndexOf(secret, start);
+            return at >= 0 && at + secret.length >= i + 1;
+          });
+          if (covered) { start = -1; continue; }
+          if (crossesJsonFraming(text, start, i + 1, secrets)) return "[REDACTED]";
           const clean = redactStructured(parsed, depth + 1, secrets, contextKey);
           const sanitized = JSON.stringify(clean);
           // Do not rewrite harmless JSON-looking code or change prompt correlation.
