@@ -1,3 +1,4 @@
+import { indexPrivacyHints, normalizePrivacyName } from "@traceai/fi-core/privacy";
 import {
   CATEGORIES,
   LIMITS,
@@ -46,7 +47,13 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
   if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
   if (Array.isArray(value))
     return value.map((item) => redactStructured(item, depth + 1, secrets));
-  if (value !== null && typeof value === "object")
+  if (value !== null && typeof value === "object") {
+    // A credential may itself be a key or media/embedding discriminator. Removing
+    // it must not erase the context that protects its siblings in later FI passes.
+    if (secrets.length && Object.entries(value).some(([key, item]) =>
+      exactSecrets(key, secrets) !== key || typeof item === "string" && exactSecrets(item, secrets) !== item &&
+        (["type", "object"].includes(normalizePrivacyName(key)) || indexPrivacyHints([[key, undefined]]).size > 0),
+    )) return "[REDACTED]";
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         exactSecrets(key, secrets),
@@ -55,6 +62,7 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
           : redactStructured(item, depth + 1, secrets),
       ]),
     );
+  }
   if (typeof value === "string") {
     // Inspect complete strings before any display truncation. Refuse oversized
     // content rather than treating a truncated JSON prefix as ordinary text.
@@ -64,12 +72,15 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
     )
       return "[REDACTED_SIZE_LIMIT]";
     const text = exactSecrets(value, secrets);
-    if (/^\s*[\[{"]/.test(text)) {
-      try {
-        return JSON.stringify(redactStructured(JSON.parse(text), depth + 1, secrets));
-      } catch {
-        /* Opaque text still receives the free-text policy. */
+    if (/^\s*[\[{"]/.test(value)) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(value); } catch { return redactText(text, depth, secrets); }
+      if (text !== value) {
+        // A source match crossing JSON syntax owns the complete container. Do
+        // not reinterpret its damaged prefix as prose after removing the match.
+        try { JSON.parse(text); } catch { return "[REDACTED]"; }
       }
+      return JSON.stringify(redactStructured(parsed, depth + 1, secrets));
     }
     return redactText(text, depth, secrets);
   }

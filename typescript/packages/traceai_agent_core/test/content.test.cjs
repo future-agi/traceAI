@@ -80,3 +80,15 @@ test('processing limits fail closed and short configured keys retain their prote
   const clean = createContentSanitizer([key])(JSON.stringify({ public: 'PUBLIC', echo: key }));
   assert.equal(JSON.parse(clean).echo, '[REDACTED]');
 });
+
+test('credential matches cannot erase media context or damage JSON framing', () => {
+  for (const [secret, value] of [
+    ['audio/x-wav', JSON.stringify({ mime_type: 'audio/x-wav', data: [987654, 876543] })],
+    ['"mime_type":"audio/x-wav"', '{"mime_type":"audio/x-wav","data":[987654,876543]}'],
+    ['opaque-audio-marker', JSON.stringify({ 'opaque-audio-marker': [987654, 876543] })],
+  ]) {
+    const clean = createContentSanitizer([secret])(value);
+    assert.doesNotMatch(clean, /987654|876543/);
+    assert.match(clean, /REDACTED/);
+  }
+});
