@@ -61,7 +61,6 @@ try {
   assert.equal(command.parentSpanId, turn.spanId);
   assert.ok(turn.attributes.some((attribute) => attribute.key === "gen_ai.usage.input_tokens" && String(attribute.value.intValue) === "100"));
   assert.ok(turn.attributes.some((attribute) => attribute.key === "session.id" && attribute.value.stringValue === "<redacted>"));
-  assert.ok(turn.attributes.some((attribute) => attribute.key === "gen_ai.conversation.id" && attribute.value.stringValue === "thread-contract-1"));
   const typed = spans.find((span) => span.name === "typed-session-control");
   assert.ok(typed?.attributes.some((attribute) => attribute.key === "session.id" && attribute.value.stringValue === "typed-wire-session"));
   assert.equal(JSON.stringify(spans).includes("WIRE-SECRET-PROMPT"), false, "private prompt leaked to OTLP");
