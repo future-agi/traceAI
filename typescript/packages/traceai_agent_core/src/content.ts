@@ -1,9 +1,13 @@
+import { indexPrivacyHints, normalizePrivacyName } from "@traceai/fi-core/privacy";
 import { generateTraceConfig, privacyFilter, seedSecrets, getRegisteredSecrets, type TraceConfigOptions } from "@traceai/fi-core";
 import { redact } from "./privacy.js";
 import { LIMITS } from "./schema.js";
 
 const TRUNCATED = "[TRUNCATED]";
 const bytes = (text: string): number => Buffer.byteLength(text);
+// Keep fi-core recognition at the tracer boundary, not in lightweight hook code.
+const contextKey = (key: string): boolean => ["type", "object"].includes(normalizePrivacyName(key)) ||
+  indexPrivacyHints([[key, undefined]]).size > 0;
 
 /** Resolve policy once, just like FITracer. Never shorten a value before the
  * complete credential, media, PII and embedding inspection has succeeded.
@@ -21,7 +25,7 @@ export function createContentSanitizer(
       seedSecrets(process.env, keys);
       const key = "fi.agent.content";
       const secrets = [...new Set([...keys, ...getRegisteredSecrets()])].sort((a, b) => b.length - a.length);
-      text = redact(text, secrets);
+      text = redact(text, secrets, contextKey);
       // Exact-value matching just consumed the complete registry snapshot above.
       // Apply the remaining FI policies without repeatedly charging every absent
       // credential against every quoted prose token. The actual FITracer still

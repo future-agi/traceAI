@@ -1,4 +1,3 @@
-import { indexPrivacyHints, normalizePrivacyName } from "@traceai/fi-core/privacy";
 import {
   CATEGORIES,
   LIMITS,
@@ -29,8 +28,8 @@ export const isSensitiveKey = isSensitiveField;
 export const redactValue = (value: unknown, depth = 0): unknown =>
   redactStructured(value, depth);
 /** Defense in depth for content-on-by-default. Structure-only omits content entirely. */
-export function redact(text: string, secrets: readonly string[] = []): string {
-  return redactStructured(text, 0, secrets) as string;
+export function redact(text: string, secrets: readonly string[] = [], contextKey: (key: string) => boolean = () => false): string {
+  return redactStructured(text, 0, secrets, contextKey) as string;
 }
 /** Callers supply longest-first credentials. Keep inserted markers out of later
  * matches. This runs on complete text and again on decoded JSON leaves, before
@@ -43,16 +42,16 @@ function exactSecrets(text: string, secrets: readonly string[]): string {
   return text;
 }
 /** Check normalized keys before serialization, including nested JSON-encoded strings. */
-export function redactStructured(value: unknown, depth = 0, secrets: readonly string[] = []): unknown {
+export function redactStructured(value: unknown, depth = 0, secrets: readonly string[] = [], contextKey: (key: string) => boolean = () => false): unknown {
   if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
   if (Array.isArray(value))
-    return value.map((item) => redactStructured(item, depth + 1, secrets));
+    return value.map((item) => redactStructured(item, depth + 1, secrets, contextKey));
   if (value !== null && typeof value === "object") {
     // A credential may itself be a key or media/embedding discriminator. Removing
     // it must not erase the context that protects its siblings in later FI passes.
     if (secrets.length && Object.entries(value).some(([key, item]) =>
       exactSecrets(key, secrets) !== key ||
-        (["type", "object"].includes(normalizePrivacyName(key)) || indexPrivacyHints([[key, undefined]]).size > 0) &&
+        contextKey(key) &&
         (Array.isArray(item) ? item : [item]).some(v => typeof v === "string" && exactSecrets(v, secrets) !== v),
     )) return "[REDACTED]";
     return Object.fromEntries(
@@ -60,7 +59,7 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
         exactSecrets(key, secrets),
         isSensitiveField(key)
           ? "[REDACTED]"
-          : redactStructured(item, depth + 1, secrets),
+          : redactStructured(item, depth + 1, secrets, contextKey),
       ]),
     );
   }
@@ -79,15 +78,15 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
     const text = exactSecrets(value, secrets);
     if (/^\s*[\[{"]/.test(value)) {
       let parsed: unknown;
-      try { parsed = JSON.parse(value); } catch { return redactText(value, depth, secrets); }
+      try { parsed = JSON.parse(value); } catch { return redactText(value, depth, secrets, contextKey); }
       if (text !== value) {
         // A source match crossing JSON syntax owns the complete container. Do
         // not reinterpret its damaged prefix as prose after removing the match.
         try { JSON.parse(text); } catch { return "[REDACTED]"; }
       }
-      return JSON.stringify(redactStructured(parsed, depth + 1, secrets));
+      return JSON.stringify(redactStructured(parsed, depth + 1, secrets, contextKey));
     }
-    return redactText(value, depth, secrets);
+    return redactText(value, depth, secrets, contextKey);
   }
   return value;
 }
@@ -190,7 +189,7 @@ function redactAssignments(text: string): string {
   }
   return result + text.slice(offset);
 }
-function redactEmbeddedJson(text: string, depth: number, secrets: readonly string[]): string {
+function redactEmbeddedJson(text: string, depth: number, secrets: readonly string[], contextKey: (key: string) => boolean): string {
   if (text.length > LIMITS.ingress || Buffer.byteLength(text) > LIMITS.ingress)
     return "[REDACTED_SIZE_LIMIT]";
   let start = -1,
@@ -227,7 +226,7 @@ function redactEmbeddedJson(text: string, depth: number, secrets: readonly strin
       if (!stack.length) {
         try {
           const parsed = JSON.parse(text.slice(start, i + 1));
-          const clean = redactStructured(parsed, depth + 1, secrets);
+          const clean = redactStructured(parsed, depth + 1, secrets, contextKey);
           const sanitized = JSON.stringify(clean);
           // Do not rewrite harmless JSON-looking code or change prompt correlation.
           result += text.slice(offset, start) + (sanitized === JSON.stringify(parsed)
@@ -242,8 +241,8 @@ function redactEmbeddedJson(text: string, depth: number, secrets: readonly strin
   }
   return result + text.slice(offset);
 }
-function redactText(text: string, depth = 0, secrets: readonly string[] = []): string {
-  return redactAssignments(exactSecrets(redactEmbeddedJson(text, depth, secrets), secrets))
+function redactText(text: string, depth: number, secrets: readonly string[], contextKey: (key: string) => boolean): string {
+  return redactAssignments(exactSecrets(redactEmbeddedJson(text, depth, secrets, contextKey), secrets))
     // URI userinfo is credential-bearing for every scheme, including local databases.
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>]*@/gi, (uri) => uri.slice(0, uri.indexOf("://") + 3) + "[REDACTED]@")
     .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")
