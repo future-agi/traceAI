@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-mcp-use-v0.1.0...traceai-mcp-use-v0.1.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **mcp-use:** redact home paths in file URIs ([#600](https://github.com/future-agi/traceAI/issues/600)) ([a77a269](https://github.com/future-agi/traceAI/commit/a77a2696e68fee595c7312fe26825ee80aef0c62))
+* **release-tooling:** redact custom MCP-use homes and clarify Java planning ([#569](https://github.com/future-agi/traceAI/issues/569)) ([e070e25](https://github.com/future-agi/traceAI/commit/e070e25cc934cb476c0862876a7e9d4ab5e6b5a1))
+
 ## 0.1.0
 
 - First release. `FutureAGICallback`, a LangChain callback handler for
