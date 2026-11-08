@@ -25,6 +25,7 @@
     }
   },
   "scripts": {
+    "prepare": "pnpm run build",
     "build": "tsc -p tsconfig.json && node build.cjs",
     "test": "node --test test/*.test.cjs"
   },
