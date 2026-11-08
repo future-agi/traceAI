@@ -93,7 +93,13 @@ test.each(["api_key", "secret_key"])("S7 ignored %s from every config/profile so
 });
 test("registry covers every instrumentation package and records exported class and targets", () => {
   const packages = resolve(__dirname, "../..");
-  const paths = readdirSync(packages).filter(p => p.startsWith("traceai_") && p !== "traceai_auto");
+  // Coding-agent tracers (@traceai/agent-core and the hook plugins built on it) are set up
+  // with `npx @traceai/agents`, not loaded by the zero-code agent, so they are not listed here.
+  const codingAgent = (path: string) => {
+    const manifest = JSON.parse(readFileSync(join(packages, path, "package.json"), "utf8"));
+    return manifest.name === "@traceai/agent-core" || "@traceai/agent-core" in (manifest.dependencies ?? {});
+  };
+  const paths = readdirSync(packages).filter(p => p.startsWith("traceai_") && p !== "traceai_auto" && !codingAgent(p));
   expect(integrations).toHaveLength(paths.length);
   for (const path of paths) {
     const manifest = JSON.parse(readFileSync(join(packages, path, "package.json"), "utf8"));
