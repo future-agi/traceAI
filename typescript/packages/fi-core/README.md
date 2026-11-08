@@ -2,6 +2,12 @@
 
 Core OpenTelemetry instrumentation library for TypeScript applications with advanced evaluation capabilities for AI systems.
 
+## Choose your setup
+
+For **zero-code Node.js tracing**, start with [`@traceai/auto`](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/README.md): install one package and preload it before your app. It includes OpenAI instrumentation, recognizes supported AI traffic through global `fetch`, and enables eligible installed integrations. Its own export route is batched; prompts and responses are captured by default, with explicit hide controls.
+
+Use **`@traceai/fi-core`** when you want to configure the provider, create custom spans or register instrumentors yourself. Do not add a second provider or duplicate instrumentation to an app already using the auto preload. Application-owned OpenTelemetry exporters keep their own privacy policies.
+
 ## Overview
 
 `@traceai/fi-core` provides a comprehensive tracing solution built on OpenTelemetry that's specifically designed for AI applications. It offers custom span exporters, evaluation tags, and seamless integration with the TraceAI platform for observability and performance monitoring.
