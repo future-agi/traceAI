@@ -8,7 +8,11 @@ import { LIMITS } from "./schema.js";
  * current registry, then truncates, then goes through FITracer admission/export.
  * A tracer-wide bound prevents many concurrently open turns retaining unbounded
  * source content. Consumed/discarded entries release their original immediately. */
-export function createContentBuffer(credentials: readonly string[] = [], maxBytes = 8 * LIMITS.ingress) {
+export function createContentBuffer(credentials: readonly string[] = [], maxBytes = 8 * LIMITS.ingress): {
+  capture(value: string | undefined): number | undefined;
+  take(id: number | undefined): string | undefined;
+  clear(): void;
+} {
   const pending = new Map<number, string>();
   let next = 0, size = 0;
   return {

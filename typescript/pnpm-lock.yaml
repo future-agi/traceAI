@@ -2377,6 +2377,9 @@ importers:
       '@traceai/agent-core':
         specifier: workspace:^
         version: link:../traceai_agent_core
+      '@traceai/fi-core':
+        specifier: workspace:^
+        version: link:../fi-core
     devDependencies:
       '@opencode-ai/plugin':
         specifier: 1.19.0

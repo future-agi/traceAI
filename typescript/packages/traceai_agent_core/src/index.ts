@@ -10,4 +10,3 @@ export * from "./delivery.js";
 export * from "./tracer.js";
 export * from "./capture.js";
 export { VERSION } from "./version.js";
-export { createContentSanitizer } from "./content.js";
