@@ -207,7 +207,15 @@ else:
 plugin.build_tracer_provider = lambda **kwargs: TracerProvider()
 p = FutureAGIHermesPlugin(project=project, register_atexit=False)
 p.callback('pre_llm_call')(session_id='fifo', turn_id='fifo')
-assert p._provider is not None, ('tracer provider not built', p._config.get('issues'), sorted(k for k in p._config if not k.startswith('_')))
+if p._provider is None:
+    from traceai_hermes_agent._config import resolve
+    c = resolve(plugin._setting, project=project)
+    try:
+        built = p._build()
+        error = None
+    except Exception as exc:
+        built, error = None, repr(exc)
+    raise AssertionError(('tracer provider not built', dict(enabled=c.get('enabled'), api_key=bool(c.get('api_key')), issues=c.get('issues'), uid=os.getuid()), built, error))
 assert 'PROJECT_CONFIG_IGNORED' in p._config['issues'], p._config['issues']
 p.shutdown()
 '''
