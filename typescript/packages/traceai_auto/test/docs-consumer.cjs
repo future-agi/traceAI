@@ -1,3 +1,4 @@
+// Run only in a disposable installed consumer: this writes app/config files and replaces dist/.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -32,7 +33,7 @@ function run(command, extra={}, dir=cwd, timeout=120000) {
     const child=spawn('bash',['-c',command],{cwd:dir,env:environment(extra),stdio:['ignore','pipe','pipe']});
     let out='',err=''; child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);
     const timer=setTimeout(()=>{child.kill('SIGKILL');reject(new Error(`timeout: ${command}\n${err}`));},timeout);
-    child.on('error',reject);child.on('close',code=>{clearTimeout(timer);code===0?resolve(out):reject(new Error(`exit ${code}: ${command}\n${out}\n${err}`));});
+    child.on('error',error=>{clearTimeout(timer);reject(error);});child.on('close',code=>{clearTimeout(timer);code===0?resolve(out):reject(new Error(`exit ${code}: ${command}\n${out}\n${err}`));});
   });
 }
 function record(test,extra={}) { const result={consumer:path.basename(cwd),test,status:'PASS',...extra};output.push(result);console.log(JSON.stringify(result)); }
@@ -113,6 +114,7 @@ async function nextRecipe() {
   await run('node ../node_modules/next/dist/bin/next build',{NEXT_TELEMETRY_DISABLED:'1'},dir,240000);
   captured.length=0;
   const child=spawn(process.execPath,['../node_modules/next/dist/bin/next','start','-p','3456'],{cwd:dir,env:environment({NEXT_TELEMETRY_DISABLED:'1'})});
+  const closed = new Promise(resolve=>child.once('close',resolve));
   let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
   try {
     let ready=false;
@@ -121,7 +123,12 @@ async function nextRecipe() {
     const response=await fetch('http://127.0.0.1:3456/api/chat');assert.equal(response.status,200,logs);assert.equal((await response.json()).message,'Hello.');
     for(let i=0;i<80&&!spans().length;i++)await new Promise(r=>setTimeout(r,250));
     assertSpans('documented Next production build/start');
-  } finally {child.kill('SIGTERM');await new Promise(resolve=>child.once('close',resolve));}
+  } finally {
+    child.kill('SIGTERM');
+    const timer=setTimeout(()=>child.kill('SIGKILL'),10000);
+    await closed;
+    clearTimeout(timer);
+  }
 }
 (async()=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${server.address().port}`;
