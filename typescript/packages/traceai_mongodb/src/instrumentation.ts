@@ -16,7 +16,7 @@ import type {
   CommandFailedEvent,
 } from "mongodb";
 
-const VERSION = "0.1.1"; // x-release-please-version
+const VERSION = "0.1.2"; // x-release-please-version
 
 // Only application commands: never authentication, handshakes or session payloads.
 const COMMANDS = new Set([

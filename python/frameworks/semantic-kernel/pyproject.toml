@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-semantic-kernel"
-version = "0.1.1"
+version = "0.1.2"
 description = "Future AGI tracing for Semantic Kernel (Python) through its native OpenTelemetry diagnostics"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "Apache-2.0"
