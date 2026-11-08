@@ -207,7 +207,7 @@ else:
 plugin.build_tracer_provider = lambda **kwargs: TracerProvider()
 p = FutureAGIHermesPlugin(project=project, register_atexit=False)
 p.callback('pre_llm_call')(session_id='fifo', turn_id='fifo')
-assert p._provider is not None, 'tracer provider not built'
+assert p._provider is not None, ('tracer provider not built', p._config.get('issues'), sorted(k for k in p._config if not k.startswith('_')))
 assert 'PROJECT_CONFIG_IGNORED' in p._config['issues'], p._config['issues']
 p.shutdown()
 '''
