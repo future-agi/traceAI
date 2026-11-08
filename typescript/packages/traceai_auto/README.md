@@ -1,736 +1,249 @@
 # @traceai/auto
 
-Zero-code AI tracing for Node.js 20.6+ (ESM and CommonJS). Two complementary
-layers cover installed traceAI integrations and recognized AI HTTP wire protocols.
-This is broad process-level coverage, **not a claim that every possible AI client,
-transport, or framework is supported**. See the limitations below.
+**Trace your Node.js AI calls without changing your application code.** Preload once to capture supported model requests, responses, token usage and timing as OpenTelemetry spans.
 
-## Install and run
+[Quick start](#quick-start) · [Coverage](#supported-libraries-and-protocols) · [Privacy](#privacy-defaults) · [Frameworks](#frameworks-and-deployment) · [Troubleshooting](#troubleshooting)
+
+## Quick start
+
+You need **Node.js 20.6+**, an existing Node application, and a [Future AGI](https://app.futureagi.com) API key / secret key pair. Keep your model provider's credentials configured as usual; traceAI does not supply a model key.
+
+Install in your application's directory:
 
 ```sh
-npm install @traceai/auto
-export FI_API_KEY=your-api-key
-export FI_SECRET_KEY=your-secret-key
+npm install @traceai/auto@0.1.0
+```
+
+Set both FI keys through your deployment's secret manager or shell environment, then start the app with one preload:
+
+```sh
+FI_API_KEY="your-api-key" FI_SECRET_KEY="your-secret-key" \
+FI_PROJECT_NAME="my-ai-app" \
 node --import @traceai/auto/register app.mjs
 ```
 
-Other entry points use the same singleton:
+Replace `app.mjs` with your entry file. **Prompts and responses are captured by default.** To hide them, set `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true FI_HIDE_ERROR_DETAILS=true` before startup. See [privacy defaults](#privacy-defaults) before deploying with sensitive data.
+
+Make an AI request, consume the response, then open **Observe → my-ai-app** in Future AGI. For supported calls, the trace includes the provider/model, input and output, duration, and any usage the provider returned. Streaming timing is available when the transport exposes it; missing usage is not invented.
+
+### Keep your existing start command
+
+With the FI variables above already set, use `NODE_OPTIONS` for an npm script or process launcher:
 
 ```sh
-NODE_OPTIONS="--import @traceai/auto/register" node app.js
-node -r @traceai/auto/register app.cjs
+NODE_OPTIONS="--import @traceai/auto/register" npm start
 ```
 
-Or initialize before importing AI libraries:
-
-```ts
-import { init } from "@traceai/auto";
-init();
-```
-
-`init(options)` configures the process **once**. It retains the existing provider,
-configuration and hooks on every later call, logging one diagnostic line. It returns
-the **same tracer provider object**, or `undefined` when initialization is disabled or
-failed. Diagnostics are returned by `report()`, not `init()`. Other exports are
-`forceFlush(): Promise<void>`, `shutdown(): Promise<void>`, and
-`registerSecret(value: unknown): void` (also exported additively by `@traceai/fi-core`).
-Integrations can register credentials observed outside a transport without supplying
-span context or retaining per-trace credential groups. Non-string values and strings
-shorter than eight characters are ignored; registration never coerces user objects.
-Shutdown removes this agent's hooks/processors but never shuts down an
-application-owned global OTel provider. Reinitialization after shutdown or failed
-startup, changing privacy/exporter settings, and disabling an enabled integration
-by calling `init()` again are unsupported: restart the process to change configuration.
-For short-lived programs, finish reading responses, then `await forceFlush()` or
-`await shutdown()`.
-
-The preload does not perform network I/O. The first real completed span initiates
-a bounded batch export, or `doctor` can explicitly send a test span. FI credentials
-are required only for the default FI destination. `init({ exporter })`,
-`init({ spanProcessor })`, `init({ provider })`, or an existing application OTel provider
-activates instrumentation without FI credentials and without creating an FI export route.
-With neither a destination nor a complete FI pair, both layers are disabled with one warning.
-FI project routing never replaces application `service.name` or environment resource
-identity. Export/integration failures warn once per
-failure category, do not log credentials/provider bodies, and leave the app running.
-A one-shot `beforeExit` handler flushes completed spans. The agent adds no SIGINT
-handler. Its SIGTERM listener starts a bounded flush and preserves app-owned listeners;
-without one, it restores the default action and re-raises SIGTERM (preserving the signal
-exit). Explicit flush/shutdown have a five-second deadline. Shutdown reserves up to
-2.5 seconds for flush and then invokes exporter shutdown with the remaining 2.5 seconds,
-even if flush never resolves. A failed initialization rolls back this agent's hooks,
-processor and newly installed globals; app-owned globals are retained. The first
-configuration remains terminal, so a later `init()` cannot retry or rewire the
-process. SIGKILL/forced termination cannot guarantee delivery.
-
-### Relocatable launcher payload
-
-The build also produces `dist/agent/`. Copy the **whole directory**, including
-`runtime.cjs`, `hook.mjs`, `hook-register.cjs` and linked `.LEGAL.txt` notices.
-Also copy `dist/THIRD-PARTY-NOTICES` and `dist/third-party-manifest.json` alongside
-the relocated payload; the linked comments alone are not the full license texts:
+Preserve any other Node flags your deployment already needs. For CommonJS, either use the same `--import` preload or:
 
 ```sh
-node --require "/absolute/agent directory/preload.cjs" app.mjs
-NODE_OPTIONS='--require "/absolute/agent directory/preload.cjs"' node app.cjs
+node --require @traceai/auto/register app.cjs
 ```
 
-Use `--require`, not `--import`, for launcher injection. No `@traceai/auto` install in
-the application is needed. The payload embeds OpenAI instrumentation, including support
-for OpenAI v4's default node-fetch transport; app-installed instrumentors take precedence.
-The ES5-only preload skips Node <18 without loading/parsing the modern payload. Node
-without `module.register` keeps CJS/fetch capture, not ESM library hooks. Historical
-binaries were not exercised: the unsupported-version guard is VM-tested, and a missing
-`module.register` is tested in a real child process. The supported package engine is
-Node >=20.6.
+Run from the application's directory so target libraries and optional instrumentors can be resolved. Do not add a second preload or manually patch the same client.
 
-## Capture layers
+### Try it with OpenAI
 
-### Wire layer
-
-The runtime reads a byte-identical packaged copy of the shared
-`spec/auto-instrumentation/wire-protocols.json` catalog. It patches `globalThis.fetch`,
-preserving the fetch function's name, length and custom properties via a Proxy.
-
-Recognized formats include:
-
-- OpenAI-compatible chat/completions, Responses, embeddings, image generation,
-  moderation, transcription/translation and speech generation; compatible gateways
-  and providers are recognized by the catalog. Unknown hosts use the endpoint's
-  protocol-specific fallback (`openai_compatible`, `anthropic_compatible`,
-  `gemini_compatible`, or `cohere_compatible`).
-- Anthropic messages, Gemini/Vertex generate-content and embeddings, Cohere chat,
-  embed and rerank, Bedrock converse/invoke, Ollama chat/generate/embed.
-- Deepgram listen/speak, ElevenLabs TTS/STT, AssemblyAI transcript submission and
-  completed polling, and Cartesia bytes/SSE TTS.
-
-Request-body validation prevents unrelated application endpoints from being claimed.
-Request streams, opaque Request objects and over-limit bodies are captured **only for
-catalog providers**, without request content and with `traceai.wire.body_unavailable`
-or `traceai.wire.truncated`. Unknown proxies need a validated materialized request.
-The actual fetch is invoked before inspecting materialized bodies: no request cloning,
-stream read-ahead or request-side wait is added.
-
-Wire spans are OTel CLIENT spans with the saved parent context. Start time is the
-transport handoff, before URL validation or request inspection; end time is the last
-observed byte/error, captured **before** copying, decoding or parsing. Parsing is
-excluded from duration. Streams are observed by tapping the existing readers and
-iterators, not by replacing the body. The caller receives the **original fetch
-Promise and original Response**, including subclass/helper methods and native headers,
-URL/type, clone, tee, BYOB support (or its original rejection), cancellation promises,
-and chunk identities. Capture copies bytes into its own bounded buffers without
-transferring/detaching app storage. No read, reader lock, synthetic Response, automatic
-clone or eager tee is created for an unread body. Export is never awaited between
-chunks; reading multiple clone/tee branches produces at most one wire span.
-
-Text/JSON/SSE/NDJSON capture stops at the configured byte cap, discards buffered
-content, and sets `traceai.wire.truncated`. Audio/binary responses are counted, not
-buffered. JSON/SSE TTS base64 audio is counted with a bounded streaming scanner,
-without accumulating or decoding audio. If a custom fetch exposes compressed JSON/SSE
-TTS bytes, the compressed capture is bounded by the body cap and decoded asynchronously
-after consumption; decoded chunks go straight to that scanner, not a retained audio
-buffer. The decoded-work cap also applies; exceeding it sets `traceai.wire.truncated`.
-FormData text fields are read independently
-of upload size, each capped at 64 KiB; file bytes are never read, and only their
-size/MIME/filename are retained. Catalog embedding formats record dimensions, not
-vectors. Use `traceConfig.hideEmbeddingVectors` (or `FI_HIDE_EMBEDDING_VECTORS=true`)
-to also hide vectors in generic JSON fallbacks and forwarded library/application spans.
-
-Native fetch normally decompresses responses. When a custom fetch exposes encoded
-bytes, bounded asynchronous Node decoders handle gzip/deflate/Brotli before parsing,
-plus zstd when Node exposes it. The Node-free layer uses Web `DecompressionStream`
-for the codecs its runtime supports. Unavailable decoders
-keep request-side metadata and set `traceai.wire.undecoded_encoding`. Already-decoded
-JSON/SSE is not decoded twice. A transport failure mid-stream is ERROR with parsed
-partial output; consumer cancellation is OK with `traceai.wire.incomplete = true`.
-
-Wire **span creation** is skipped for OTel-suppressed contexts, nested captures, and
-LLM/EMBEDDING/RERANKER/GUARDRAIL ancestors, even through intermediate native SDK
-spans. Outgoing credential observation is never skipped by these rules: fetch reads
-headers/URL without inspecting suppressed request bodies. Node HTTP and Undici
-diagnostic-channel subscribers also observe outgoing headers/URLs (including direct,
-cached clients and non-AI routes); they do not create additional wire spans. The FI processor keeps weak live ancestry, so a model kind set after span
-creation is also respected. Both `gen_ai.span.kind` and older `fi.span.kind` are
-understood, including FI-wrapped spans. Uncovered CHAIN/AGENT/TOOL spans remain
-eligible parents. Session, user and other fi-core context attributes are propagated.
-
-Wire attributes pass through fi-core's TraceConfig. Additional conservative handling
-covers flattened message keys, audio transcripts, and raw body copies when content
-hiding is enabled. `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`,
-`FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
-`FI_HIDE_INPUT_IMAGES`, `FI_HIDE_ERROR_DETAILS`, and `FI_PII_REDACTION` are supported.
-TTS `gen_ai.audio.transcript` obeys input-hide flags; STT obeys output-hide flags.
-Hidden transcripts use `[REDACTED]`, exactly like hidden input/output values.
-
-### Privacy
-
-One export-time boundary sanitizes **every span sent through the agent's exporter**:
-wire spans, dedicated-library spans and forwarded application spans. It builds a
-detached snapshot of the ended native span; other exporters keep the original
-span/resource/context unchanged by that export policy. In auto destination mode,
-foreign attributes are never rewritten by FI policy. FI-authored attributes still
-receive write-time hide flags, image caps, PII and known-secret protection, so
-other exporters never receive authored content that those protections hid.
-Application active context uses the native span; instrumentor writes use a separate
-FI wrapper. Explicit standalone `FITracer` retains its active-wrapper behavior.
-This is an **interim export-built view**, not complete capture: data the host SDK
-already dropped or truncated may be omitted or marked unknown, never reconstructed.
-Attributes (arrays element-wise), status descriptions, event names/attributes,
-link attributes/contexts, resources, instrumentation scope name/version/attributes
-and tracestate values all pass through this boundary. Nonfinite numbers become
-`"NaN"`, `"Infinity"` or `"-Infinity"`. Unsupported attribute objects become type
-names; user attribute getters, `toString` and `toJSON` are never called. The standard
-ReadableSpan context method is supported for library-generated snapshots.
-
-Work is bounded across each snapshot (20,000 values, 8 MiB text, 32 array levels;
-credential discovery also has depth/count limits). On a sanitizer error, content,
-status descriptions, events, links, scope and resource content are dropped for that
-span while its identity and timing survive. Upstream wire scrubbing is best-effort,
-not the security boundary. Before TraceConfig masking, every recorded string is
-scrubbed:
-
-- Data URLs and long base64 media fields (`data`, `bytes`, `b64_json`, `file_data`,
-  `audio_base64`, `images` elements) become `<omitted: N base64 chars>`. Image-generation
-  `b64_json` uses the format contract's `<base64 omitted>` placeholder. Raw audio is
-  never retained, even for tiny inline audio clips: scalar/array `audio` and
-  `input_audio` JSON leaves, indexed flattened fields and `inlineData.data.0` with
-  a sibling audio MIME type all use the same no-minimum-size audio policy.
-  MIME metadata and transcripts remain subject to their own content-hide controls.
-- Credential-named keys are replaced with `<redacted>` recursively, including
-  `authorization_token` in MCP server settings. The only logprob-name exception
-  is the explicitly bound provider-root policy below; access-key identifiers
-  remain masked. Catalog credential shapes are checked independently of names.
-- Signed URL parameters, including AWS/GCP signatures and Azure SAS fields, have their
-  values replaced with `<redacted>`, including percent-encoded parameter names.
-- A single `globalThis[Symbol.for('traceai.secrets')]` registry is shared by installed,
-  embedded, CJS and ESM package copies in the process/isolate. It retains at most 1024
-  values of eight or more characters, evicting the least recently registered/observed
-  value. Immutable longest-first snapshots are cached until membership changes. At
-  initialization it is seeded with configured FI keys and credential-like environment
-  values (names containing KEY, TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL or AUTH).
-  Transport-observed header/query values, parsed credential fields and explicit
-  `registerSecret` calls augment it. Every exported span, including application-owned
-  instrumentation spans and unrelated/later traces, uses the current registry at
-  export time; there is no span-start credential inheritance or SDK-state inspection.
-  Credential headers and export-boundary credential fields use one shared list,
-  including `x-goog-api-key`, `anthropic-api-key` and `ocp-apim-subscription-key`.
-  Values never appear in diagnostics, reports or error messages. Every registered
-  value is removed from every exported string, including names, status, events,
-  links, resource/scope attributes and tracestate; other exporters remain unchanged.
-  Materialized bodies discarded by the capture cap, URLSearchParams values and
-  uncropped/duplicate FormData text fields still undergo bounded credential discovery
-  before disposal. File bytes are never inspected. Credential-discovery budget
-  exhaustion or failure while inspecting a materialized body drops all exported
-  content, not span identity, timing or status code; this also omits the truncation
-  marker on that fail-closed snapshot. Opaque, unparsed bodies instead follow the
-  scoped limitation below; their observable headers/URL still augment the registry.
-  Configured FI keys remain protected by the export policy even after LRU churn.
-
-For the closed, versioned `logprob_tokens` catalog paths, **logprob tokens are checked against registered secrets and credential shapes, not key-name rules**.
-This exception is available only from the parsed OpenAI chat response root at the
-instrumentation handoff: `choices[*].logprobs.content[*].token` and
-`choices[*].logprobs.content[*].top_logprobs[*].token`. It does not apply to nested
-JSON in user content, tool output, arbitrary attributes, or flattened key names.
-If value masking changes any choice's `message.content` or `delta.content`, its
-**entire logprobs block** is masked, including alternatives and byte arrays.
-Buffered streaming responses are scanned by choice index before export; once a
-choice is masked, earlier buffered blocks and all later blocks for that choice
-are masked too. Concatenated deltas are checked for split secrets, and affected
-delta text is masked. A masked individual token also loses its byte-array alias.
-The staged OpenAI instrumentor exports the buffered response once, not each delta.
-Other provider structures have no new exception without catalog/source evidence.
-
-Hide policies match semantic families, including `input.*`, `output.*`,
-`gen_ai.input.*`, `gen_ai.output.*`, system instructions, tools, image/file URIs and
-side-specific audio transcripts. `FI_HIDE_LLM_INVOCATION_PARAMETERS=true` additionally
-hides `gen_ai.request.parameters`, explicit invocation parameters and tool schemas.
-`hideEmbeddingVectors` also covers JSON fallbacks such as generic Bedrock invoke,
-not only spans classified as EMBEDDING. Image hiding conservatively hides raw input
-and input-message families to prevent URI aliases escaping the image policy.
-
-Do not put arbitrary secrets in prompts: unknown free-text secrets cannot always be
-recognized. These policies cover dedicated-instrumentor spans only when they pass
-through **this agent's** exporter; unrelated exporters retain their own policy.
-
-### Batching and Lambda lifecycle
-
-| Entry | Processor policy | Lifecycle |
-| --- | --- | --- |
-| Manual fi-core `register()` / `FITracerProvider`, omitted `batch` or explicit `batch: false` | `SimpleSpanProcessor`, preserving the manual dev default | Await provider flush/shutdown before process termination |
-| Manual `batch: true` | Bounded `BatchSpanProcessor` | Await provider flush/shutdown |
-| Zero-code owned provider/export route | Explicit `BatchSpanProcessor` / batch request | Auto bounded exit/signal drain; pass the returned provider to the Lambda wrapper |
-| Explicit fi-core `spanProcessors` / auto `spanProcessor` | Supplied processors retain their selected policy | No silent replacement or rebatching; retain the documented owner lifecycle |
-
-For Lambda, create/reuse the provider outside the handler and pass the returned
-provider to fi-core's `traceLambdaHandler(handler, { provider })`. The wrapper
-ends its invocation span and flushes within the invocation budget; it does **not**
-shut down a warm provider per invocation. R-C07 is superseded by **zero-code owned
-provider batches; explicit `batch: false` honoured**. Batching and a successful
-local handoff are not proof of collector acceptance.
-
-### Library layer
-
-`src/integrations.json` inventories all 45 instrumentation packages currently in the
-TypeScript workspace, with their exported classes, target libraries and actual
-module-hook entry points. OpenAI instrumentation is a dependency and is embedded in
-the launcher payload; other dedicated packages are **not** installed implicitly.
-Install the integrations you need, for example:
+If you do not have an app yet, install the supported OpenAI SDK version used in this example:
 
 ```sh
-npm install @traceai/langchain
+npm install openai@4.104.0
 ```
 
-Target/instrumentation resolution is from the application's working directory.
-Install packages in that app and run from its directory. Hook registration is eager;
-target patching occurs on import/require. The import-in-the-middle loader is registered
-before `registerInstrumentations`, restricted to target entry points rather than
-all ESM internals (which can break SDK shim live bindings). Node 26 currently emits
-a deprecation warning for upstream `module.register()` when library hooks are enabled.
-Both ESM and CJS patching are tested against the real OpenAI npm package, with and
-without app-installed instrumentation. OpenAI v4/node-fetch can additionally emit
-Node's upstream `punycode` deprecation. Neither warning is suppressed by the agent.
-Disabled integrations are never loaded or registered, including integrations sharing
-a target (for example DeepSeek and OpenAI).
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` for a model your account can use. Save this ordinary application code as `app.mjs`, then use the quick-start run command. There are **no tracing imports** in the application:
 
-| Framework integration | 11-11 support | Entry point |
-| --- | --- | --- |
-| Mastra | Manual tracing only; no zero-code bridge at 11-11 | `createFIObservability` / `createFIMastraExporter` from `@traceai/mastra` |
+```js
+import OpenAI from "openai";
 
-The Mastra zero-code bridge follows after 11-11. The registry reports installed
-Mastra targets as `manual` and does not load `@traceai/mastra/auto` or call an enable hook.
-
-For Genkit and Vercel AI SDK, the registry calls an installed `enable`
-entry (also accepting the integration's named enable function). It prefers the
-optional `/auto` subpath. Versions without that entry are reported `manual`, not
-forced into an incompatible constructor; a broken entry fails open. The entry
-receives `{ tracerProvider, spanProcessor, traceConfig }` for the selected agent
-branch; older no-argument entries can ignore these optional arguments and use the
-initialized agent. An instrumentor returned by the entry is explicitly bound to
-that provider, not an unrelated global provider. This does not replace any global
-provider or synthesize FI credentials.
-Manual-only integrations remain Claude Agent SDK (`wrapQuery`), Codex SDK
-(`wrapCodex`/`manuallyInstrument`), Pi Coding Agent (session wrapper), and VoltAgent
-(processor). Their underlying fetch AI calls can still be traced.
-Existing dedicated instrumentations retain their supported-version and method
-coverage constraints; registration does not expand those APIs. OpenAI Agents uses
-additive processor registration (`exclusiveProcessor:false`), preserving application
-processors. Shutdown recognizes processor/class-registry ownership as well as
-shimmer wrappers, and leaves application-owned patches intact.
-
-If `@opentelemetry/instrumentation-http` is resolvable in the app, it is enabled for
-incoming SERVER spans only. Outgoing non-AI HTTP calls are not traced by default:
-
-```sh
-npm install @opentelemetry/instrumentation-http
-```
-
-### Existing OTel SDKs
-
-An existing global SDK provider is retained, with the FI processor added beside its
-existing processors. Its sampler/context manager remain authoritative. OTel JS 2.x
-has no public late-add-processor API, so this uses the live MultiSpanProcessor list;
-the public 1.x API is also recognized. FI project resource attributes are enriched
-only on the FI export copy. If a custom provider does not expose either supported
-attachment mechanism, the agent warns and uses an isolated AI provider without
-replacing the global provider. This is a degraded fallback, not a promise of
-processor attachment to arbitrary OTel implementations.
-
-## Server bundlers
-
-Exported adapters inject the built preload into **Node server entries only**:
-
-```ts
-// esbuild: { platform: 'node', plugins: [traceAI()] }
-import { traceAI } from '@traceai/auto/esbuild';
-// Vite: plugins: [traceAI()] — production Node SSR only, not client/webworker SSR
-import { traceAI } from '@traceai/auto/vite';
-// Rollup: plugins: [traceAI({ server: true })] — explicit target required
-import { traceAI } from '@traceai/auto/rollup';
-// webpack 5: { target: 'node', plugins: [new TraceAIPlugin()] }
-import { TraceAIPlugin } from '@traceai/auto/webpack';
-```
-
-These are separate config examples, not imports to combine in one file. Adapters are
-idempotent, preserve shebangs, and leave browser outputs alone. Real esbuild, Rollup,
-Vite and webpack builds are tested, including plugin-only builds using external OpenAI
-v4's default node-fetch transport (not just global fetch). Symlinked esbuild entries
-are matched by their canonical paths; aliases, installed package entries,
-extensionless entries, directory indexes and custom extensions use esbuild's own
-entry-point resolver before path canonicalization. esbuild split/dynamic chunks do not get extra
-preloads. CJS entries require the preload before their code while retaining strict-mode
-directives (webpack uses its source-aware insertion API). A missing/broken preload warns
-and leaves the application running rather than turning a deployment mistake into a crash.
-
-**ESM executable entries** get a tiny bootstrap at the original output path, which
-initializes the agent and then dynamically imports a sibling `*.traceai-app.mjs` payload.
-A static preload import alone is too late: Node has already linked the application's
-static dependencies before executing it. Deploy the payload and its sourcemaps/chunks
-alongside the bootstrap. The payload retains its code and mappings without an injected
-line; CJS sourcemaps account for the inserted preload.
-
-This ESM bootstrap is for executable server entries, not library/handler modules:
-exported ESM entries are rejected rather than silently losing live exports. The executing
-entry's `import.meta.url` names the payload, not the bootstrap; programs relying on an
-exact entry filename/main-module identity must instead use `node --require` externally.
-For Next handlers, prefer `instrumentation.ts` below. Runtime/chunk code still lives in
-the same directory. Bundler-specific advanced packaging modes beyond the tested cases
-are unverified.
-
-The injected absolute path must exist at runtime: deploy `dist/agent/` to the same
-path or pass `{ agentPath: '/deployed/agent/preload.cjs' }`. Do not omit sibling files.
-
-Preloading cannot recover package import boundaries erased by bundling. Keep AI SDKs
-external for dedicated library hooks; bundled global-fetch calls still use wire capture.
-Do not use these adapters for browser/edge outputs.
-
-### Next.js
-
-Prefer Next's `instrumentation.ts` with a runtime guard (works independently of the
-selected Next bundler). Keep `@traceai/auto` external via `serverExternalPackages`
-where your Next version supports it:
-
-```ts
-export async function register() {
-  if (process.env.NEXT_RUNTIME === 'nodejs') {
-    await import('@traceai/auto/register');
-  }
-}
-```
-
-`withTraceAI(config)` from `@traceai/auto/next` is an optional **webpack-only** fallback;
-it skips client/edge configs and preserves an existing webpack callback. The callback
-wrapper, generated real-webpack config, and register snippet are tested. An actual
-Next server build/start and Turbopack lifecycle are **unverified**; the webpack wrapper
-does not cover Turbopack. Never import the Node agent in an edge instrumentation path.
-
-## Edge runtime
-
-`@traceai/auto/edge` is an explicit fetch observer, not a zero-code Node agent:
-
-```ts
-import { patchFetch } from '@traceai/auto/edge';
-const hook = patchFetch(4 * 1024 * 1024, (result, start, end) => {
-  // Adapt to the isolate's own tracer/exporter, parent context and content policy.
+const response = await new OpenAI().chat.completions.create({
+  model: process.env.OPENAI_MODEL,
+  messages: [{ role: "user", content: "Say hello in one word." }],
 });
-// hook.remove() restores fetch. hook.pending contains completed-response decoding only.
+console.log(response.choices[0].message.content);
 ```
 
-Its ESM bundle has no Node APIs, Buffer, process/env access or OTel dependency. Isolated
-VM tests prove JSON, rejection and streaming capture without those globals. It uses
-the same catalog and privacy scrubbing. It does not install an exporter, read FI keys,
-apply fi-core TraceConfig, propagate OTel context, or provide Node's suppression/dedup
-layer: the adapter must supply those policies. Real Cloudflare/Vercel/Deno isolate
-deployment is **unverified**. Native DecompressionStream availability is runtime-specific.
+The preload flushes completed spans when Node exits naturally. If your app explicitly terminates or runs inside a serverless invocation, use the [lifecycle guidance](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/FRAMEWORKS.md#aws-lambda-and-short-lived-processes).
+
+## What you get
+
+- **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
+- **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.
+- **One trace, not two copies of each call.** Wire capture yields to covered model spans and respects OpenTelemetry suppression. Existing providers keep their sampler, context and application processors.
+- **Standard OpenTelemetry.** Send to Future AGI by default, or use an [application-owned provider/exporter](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#bring-your-own-opentelemetry-destination) without FI credentials.
+
+This is AI instrumentation, not a general-purpose APM agent. Outgoing non-AI HTTP calls, arbitrary application functions and every possible AI transport are not automatically traced.
+
+## Supported libraries and protocols
+
+**Included:** OpenAI library hooks and the global-fetch wire observer. **Optional:** other dedicated instrumentors must be installed alongside their target library. The app always owns installation of its AI SDKs.
+
+To see what your app needs, without installing anything:
+
+```sh
+npx --no-install traceai-auto bootstrap
+```
+
+Bootstrap lists detected libraries, their status, and suggested install commands. It can also install missing instrumentors with an explicit `--install` flag; see the [CLI reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#cli).
+
+### Library coverage
+
+The table below is generated from [`src/integrations.json`](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/src/integrations.json), the runtime registry. **Import hook** means the package registers hooks for supported target versions. **Enable entry** means automatic setup depends on the installed integration exposing its enable API. **Manual** means framework-level tracing still requires that package's explicit API; eligible underlying global-fetch calls can still be captured.
+
+<details>
+<summary>All registered libraries and framework adapters</summary>
+
+<!-- BEGIN GENERATED INTEGRATIONS -->
+| Configuration name | Target library | Instrumentation package | Setup |
+| --- | --- | --- | --- |
+| `anthropic` | `@anthropic-ai/sdk` | `@traceai/anthropic` | Import hook |
+| `bedrock` | `@aws-sdk/client-bedrock-runtime` | `@traceai/bedrock` | Import hook |
+| `beeai` | `beeai-framework` | `@traceai/beeai` | Import hook |
+| `cerebras` | `@cerebras/cerebras_cloud_sdk` | `@traceai/cerebras` | Import hook |
+| `chromadb` | `chromadb` | `@traceai/chromadb` | Import hook |
+| `claude-agent-sdk` | `@anthropic-ai/claude-agent-sdk` | `@traceai/claude-agent-sdk` | Manual |
+| `codex-sdk` | `@openai/codex-sdk` | `@traceai/codex-sdk` | Manual |
+| `cohere` | `cohere-ai` | `@traceai/cohere` | Import hook |
+| `cursor-sdk` | `@cursor/sdk` | `@traceai/cursor-sdk` | Import hook |
+| `deepseek` | `openai` | `@traceai/deepseek` | Import hook |
+| `elevenlabs` | `@elevenlabs/elevenlabs-js` | `@traceai/elevenlabs` | Manual |
+| `fireworks` | `openai` | `@traceai/fireworks` | Import hook |
+| `genkit` | `genkit` | `@traceai/genkit` | Enable entry |
+| `google-adk` | `@google/adk` | `@traceai/fi-instrumentation-google-adk` | Import hook |
+| `google-genai` | `@google/generative-ai` | `@traceai/google-genai` | Import hook |
+| `google-genai-sdk` | `@google/genai` | `@traceai/google-genai-sdk` | Manual |
+| `groq` | `groq-sdk` | `@traceai/groq` | Import hook |
+| `guardrails` | `@guardrails-ai/core` | `@traceai/guardrails` | Import hook |
+| `huggingface` | `@huggingface/inference` | `@traceai/huggingface` | Import hook |
+| `huggingface-transformers` | `@huggingface/transformers` | `@traceai/huggingface-transformers` | Manual |
+| `instructor` | `@instructor-ai/instructor` | `@traceai/instructor` | Import hook |
+| `lancedb` | `@lancedb/lancedb` | `@traceai/lancedb` | Import hook |
+| `langchain` | `@langchain/core` | `@traceai/langchain` | Import hook |
+| `livekit` | `livekit-client`, `@livekit/rtc-node` | `@traceai/fi-instrumentation-livekit` | Import hook |
+| `llamaindex` | `llamaindex`, `@llamaindex/openai` | `@traceai/llamaindex` | Import hook |
+| `mastra` | `@mastra/core`, `@mastra/observability`, `@mastra/otel-exporter` | `@traceai/mastra` | Manual |
+| `mcp` | `@modelcontextprotocol/sdk` | `@traceai/mcp` | Import hook |
+| `milvus` | `@zilliz/milvus2-sdk-node` | `@traceai/milvus` | Import hook |
+| `mistral` | `@mistralai/mistralai` | `@traceai/mistral` | Import hook |
+| `mongodb` | `mongodb` | `@traceai/mongodb` | Import hook |
+| `ollama` | `ollama` | `@traceai/ollama` | Import hook |
+| `openai` | `openai` | `@traceai/openai` (included) | Import hook |
+| `openai-agents` | `@openai/agents` | `@traceai/openai-agents` | Import hook |
+| `pgvector` | `pg`, `pgvector` | `@traceai/pgvector` | Import hook |
+| `pi-coding-agent` | `@mariozechner/pi-coding-agent` | `@traceai/pi-coding-agent` | Manual |
+| `pinecone` | `@pinecone-database/pinecone` | `@traceai/pinecone` | Import hook |
+| `pipecat` | `@pipecat-ai/client-js` | `@traceai/fi-instrumentation-pipecat` | Import hook |
+| `portkey` | `portkey-ai` | `@traceai/portkey` | Import hook |
+| `qdrant` | `@qdrant/js-client-rest` | `@traceai/qdrant` | Import hook |
+| `redis` | `redis` | `@traceai/redis` | Import hook |
+| `strands` | `@strands-agents/sdk` | `@traceai/strands` | Import hook |
+| `together` | `together-ai` | `@traceai/together` | Import hook |
+| `vercel` | `ai` | `@traceai/vercel` | Enable entry |
+| `vertexai` | `@google-cloud/vertexai` | `@traceai/fi-instrumentation-vertexai` | Import hook |
+| `vllm` | `openai` | `@traceai/vllm` | Import hook |
+| `voltagent` | `@voltagent/core` | `@traceai/voltagent` | Manual |
+| `weaviate` | `weaviate-client` | `@traceai/weaviate` | Import hook |
+| `xai` | `openai` | `@traceai/xai` | Import hook |
+<!-- END GENERATED INTEGRATIONS -->
+
+</details>
+
+Dedicated instrumentors other than OpenAI are not installed implicitly. The bundled server-build adapters are inactive until you add their plugin to your build configuration. Genkit and Vercel versions without an enable entry report `manual`. Mastra is manual-only in this release. See each integration's README for supported methods and versions, and use doctor to inspect the version actually installed in your app.
+
+### HTTP protocol coverage
+
+The [wire catalog](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/src/wire/wire-protocols.json) recognizes OpenAI-compatible chat, Responses, embeddings and media endpoints; Anthropic messages; Gemini/Vertex content and embeddings; Cohere chat/embed/rerank; Bedrock converse/invoke; Ollama; and selected Deepgram, ElevenLabs, AssemblyAI and Cartesia endpoints.
+
+Recognition needs a matching endpoint and request shape, not just an AI-looking URL. Unknown proxy hosts can use compatible protocol fallbacks; provider-restricted endpoints still require a recognized host. Audio bytes are counted, not exported. Bedrock binary event streams are metadata-only. See [capture behavior and transport limits](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md).
+
+## Privacy defaults
+
+| Surface | Default behavior | Your control |
+| --- | --- | --- |
+| Prompts, model outputs, tool content and transcripts | Captured where supported | `FI_HIDE_INPUTS=true`, `FI_HIDE_OUTPUTS=true`; granular message/text flags are available |
+| Error details | Visible unless an input/output value, message, text or invocation-parameter hide flag implies hiding | `FI_HIDE_ERROR_DETAILS=true`; explicit `false` overrides the derived value, not secret/media masking |
+| Known credentials and signed URL values | Scrubbed in traceAI's export view | Additional exact secrets can be registered with `registerSecret()`; never rely on this to detect arbitrary free-text secrets |
+| PII pattern redaction | **Off** | `FI_PII_REDACTION=true`; pattern matching is not comprehensive PII detection |
+| Base64 media and raw audio | Recognized payloads omitted; no audio bytes exported | Image cap defaults to `0`; increasing it does not enable base64 image export |
+| Embeddings | Catalog wire formats record dimensions, not vectors | `FI_HIDE_EMBEDDING_VECTORS=true` also hides vectors on library/forwarded and generic-JSON routes |
+| Extra instrumentors / server bundler plugins | Extra instrumentors are not installed; build plugins are inactive until configured | Install the integration or explicitly add a server bundler plugin |
+
+The agent sanitizes a detached copy for its own exporter. **Other exporters retain their own privacy policies.** Explicit application-owned processors are not silently rewritten. Host SDK limits may force the FI view to withhold content as `<unknown: host-truncated>` rather than export a partial value. Unknown, transformed or unobserved secrets cannot always be recognized; use the hide flags for sensitive content.
+
+[All privacy flags and defaults](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md#privacy-options) · [Detailed privacy boundaries](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md#privacy)
 
 ## Configuration
 
-Precedence: code options > environment > config file > defaults. Code uses camelCase
-(`projectName`, `wireCapture`, `sampleRate`, `instrumentations`, etc.); privacy flags
-are under `traceConfig`. `exporter` is an optional SpanExporter override for embedding
-or offline testing. It does not bypass the credential requirement.
+The most-used settings are below. Set them **before** loading the agent; later `init()` calls do not reconfigure it.
 
-| Environment | Default / meaning |
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `FI_API_KEY` + `FI_SECRET_KEY` | Unset | Complete pair for the default Future AGI destination |
+| `FI_PROJECT_NAME` | See full reference | Project in Observe; set explicitly for stable routing |
+| `FI_BASE_URL` | `https://api.futureagi.com` | Collector base URL or full traces endpoint |
+| `FI_INSTRUMENTATIONS` | All eligible integrations | Comma-separated allowlist, e.g. `openai,wire` |
+| `FI_DISABLED_INSTRUMENTATIONS` | Empty | Denylist; takes precedence over the allowlist |
+| `FI_WIRE_CAPTURE` | `true` | Enable global-fetch capture and transport credential observation |
+| `FI_SAMPLE_RATE` | `1` | Root sampling ratio on agent-owned providers; existing providers keep their sampler |
+| `FI_AUTO_DEBUG` | `false` | Print the masked startup report |
+| `OTEL_SDK_DISABLED` | `false` | Disable auto-instrumentation |
+
+[Full configuration reference](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/CONFIGURATION.md) covers every `init()` option, environment setting, config/profile precedence, privacy flag and CLI command.
+
+## Frameworks and deployment
+
+| Environment | Start here |
 | --- | --- |
-| `FI_API_KEY`, `FI_SECRET_KEY` | Complete pair required for the default FI destination only; prefer environment, never commit keys |
-| `FI_BASE_URL` | `https://api.futureagi.com`; FI collector base or full endpoint |
-| `FI_PROJECT_NAME` | `OTEL_SERVICE_NAME`, else working-directory name, else `DEFAULT_PROJECT_NAME` |
-| `FI_PROJECT_TYPE` | `observe`; `experiment` is opt-in |
-| `FI_INSTRUMENTATIONS` | All; comma-separated allowlist, e.g. `openai,langchain,wire,http` |
-| `FI_DISABLED_INSTRUMENTATIONS` | Empty; denylist wins over allowlist |
-| `FI_WIRE_CAPTURE` | `true` |
-| `FI_WIRE_MAX_BODY_BYTES` | `4194304`; per request/response text buffering cap |
-| `FI_SAMPLE_RATE` | `1`; clamped to [0,1], parent-based root sampling for agent-owned providers |
-| `FI_AUTO_DEBUG` | `false`; print masked startup report |
-| `FI_CONFIG_FILE` | `./futureagi.toml` |
-| `OTEL_SDK_DISABLED` | `true` disables everything silently |
+| Node ESM or CommonJS | Use `--import` before app imports; CommonJS also supports `--require` |
+| Next.js Node runtime | Use guarded `instrumentation.ts` and keep the package external; do not import it into an edge path |
+| esbuild, Vite SSR, Rollup or webpack | Opt into the Node-server adapter and deploy the complete agent payload; keep AI SDKs external for library hooks |
+| AWS Lambda | Initialize once outside the handler and flush at each invocation boundary, not just process exit |
+| Edge / browser | The Node preload is not supported. The `/edge` subpath is a low-level fetch observer, not a configured tracing SDK |
+| Existing OpenTelemetry setup | Keep one global provider; configure a single export route for each destination |
 
-Example `futureagi.toml`:
+[Framework recipes and packaging requirements](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/FRAMEWORKS.md)
 
-```toml
-project_name = "checkout-agent"
-project_type = "observe"
-instrumentations = ["openai", "langchain", "wire", "http"]
-disabled_instrumentations = ["redis"]
-wire_capture = true
-wire_max_body_bytes = 4194304
-sample_rate = 0.25
-debug = false
-hide_inputs = true
-```
+## Troubleshooting
 
-This is a flat subset, not full TOML: double-quoted strings, booleans, numbers and
-single-line arrays of strings. Comments are supported, including `#` inside quoted
-strings. Table declaration lines are ignored. Unknown/unsupported values are ignored.
-File keys map to `FI_<UPPERCASE_KEY>`; `debug` maps to `FI_AUTO_DEBUG`.
-
-## Doctor, bootstrap and statuses
+Run diagnostics from the app directory with the same FI environment as the app:
 
 ```sh
-traceai-auto doctor             # sends one explicit test export when enabled
-traceai-auto doctor --no-check  # no test export; reports resolved config/status
-traceai-auto bootstrap          # list coverage and suggested install commands only
-traceai-auto bootstrap --install --package-manager=pnpm  # explicit opt-in installation
+npx --no-install traceai-auto doctor
 ```
 
-Bootstrap defaults to npm when `--package-manager` is omitted; npm/pnpm/yarn are
-supported. It never installs target application libraries, only missing instrumentors
-for detected targets. Restart the app after installing packages. The installation
-branch is implemented but is not exercised against the public registry in tests.
+Doctor sends one test span when instrumentation is enabled. Check the JSON `collector` field: `accepted`, `failed` or `not_tested (...)`. **The CLI exit code alone is not a collector-health check.** Doctor is a separate process, so its `pending` library hooks do not tell you whether your running app has imported that library.
 
-Reports are JSON, with masked credentials and collector state (`accepted`, `failed`,
-or `not_tested`). Startup never probes the collector. With zero sampling, doctor may
-have no sampled test span to send; `not_tested` is intentional in that case.
+For a configuration/status report without the test export:
 
-- `instrumented`: wire hook, server hook, or a library module's patch callback ran.
-- `pending`: hooks registered, but no compatible target patch observed yet.
-- `not_installed`: no resolvable target library.
-- `missing_instrumentor`: target is present but its dedicated package is absent.
-- `disabled`: allowlist/denylist, credentials, capture flag, or SDK disable switch.
-- `manual`: installed target needs explicit wrapping/callbacks; reason included.
-- `failed`: load, registration, patch or known unsupported-version failure; reason included.
+```sh
+npx --no-install traceai-auto doctor --no-check
+```
 
-### SDK attribute limits and streaming timing
+| Symptom | What to check |
+| --- | --- |
+| Everything is `disabled` | Supply both FI keys in the same source, or configure an application destination. Check `OTEL_SDK_DISABLED` and the allowlist/denylist. |
+| `collector: failed` | Check `FI_BASE_URL`, both keys, outbound connectivity and collector access. Initialization itself never probes the collector. |
+| `collector: not_tested` | No completed test export yet, `--no-check`, zero sampling, or an application-owned destination. It is not a success signal. |
+| `missing_instrumentor` | Install the suggested dedicated package from bootstrap, then restart. |
+| Library stays `pending` | Load the agent before the SDK; check supported versions and keep the SDK external when bundling. A registered hook is not proof a call was traced. |
+| Library reports `manual` | Use its explicit wrapper/processor API; automatic framework-level tracing is unavailable for that installed version. |
+| No wire span | Consume or cancel the response; check the catalog and transport. Direct `undici.fetch`, `node-fetch`, WebSocket and gRPC are not global-fetch wire capture. |
+| Output is missing or unknown | Check hide flags, body cap and host OTel attribute limits. Dropped/truncated host data cannot be reconstructed. |
+| Duplicate spans | Remove duplicate manual instrumentation/preloads; avoid layering an invocation wrapper over another Lambda tracing layer. |
 
-In **auto destination mode**, host SDK count/value limits govern native admission.
-FI does not clear native attribute storage, re-order it for FI projection, or replay
-earlier attributes over later application writes. FI-authored values are protected
-before admission; the FI snapshot is built only at export with a late-secret recheck.
-Late output or usage dropped by the host is not recovered. Absent optional usage
-details are omitted rather than converted to the string `"undefined"`.
+## Limits to plan for
 
-Observed host-dropped attributes, events or links, strings at the configured value
-limit (including exact equality), string arrays containing such a value, and
-explicit `<truncated>` / `[truncated]` suffixes trigger lineage-wide withholding.
-Every FI content surface becomes `<unknown: host-truncated>`; `session.id` stays
-`<redacted>`, and `traceai.capture.host_data_unknown=true` marks every FI view.
-Native SDK dropped counts are retained. Only a closed, typed non-content allowlist
-is exempt from withholding, never from secret masking. The decision is sticky for
-the native span and identity-retaining mapped/copied FI views, including later views.
-There is no partial FI content view or content-derived prefix, length or digest.
-Truncated MIME values never establish safe text. Values exported before a loss was
-observed are not retracted; already returned snapshots are not mutated retroactively.
+- **Per process/isolate:** preload every Node worker or child process you want to observe; globals are not shared between isolates.
+- **Bounded capture:** the default text body cap is 4 MiB. Request streams and opaque `Request` bodies are not consumed for inspection. Native `pipeTo`/`pipeThrough` can provide metadata-only completion.
+- **Response-driven completion:** unread and never-ending responses do not produce completed wire spans. Flush does not consume them for you. Cancelling a clone can end the shared capture before another branch finishes.
+- **Provider error semantics:** an error inside an HTTP 200 stream can retain HTTP-derived OK status; inspect finish reasons as well.
+- **Best-effort delivery:** natural-exit/SIGTERM flushes are bounded. Hard termination, Lambda freezing and collector failures can lose spans. The agent never makes app success depend on export success.
 
-Explicit standalone `FITracer` retains deterministic pre-admission projection
-(spec A7), including late library output/usage priority, atomic content groups,
-`traceai.capture.dropped_content_count`, and the separate SDK dropped count.
-The former `traceai.attribute_projection.metadata` capsule is not produced; older
-capsules are still re-sanitized by original keys at export. Host limits are not
-raised in either mode. The auto interim is not a guarantee of complete capture or
-of retaining canonical output at small host limits.
-
-`gen_ai.response.time_to_first_chunk` measures the first observed response bytes;
-`gen_ai.response.time_to_first_text` separately measures the first nonempty
-text/reasoning/tool/audio delta. `traceai.stream.event_arrival_seconds` records event
-arrival offsets from request handoff, using byte-boundary timestamps rather than
-parse completion time. Content detection includes Cohere tool chunks/reasoning,
-nested Mistral content, Responses tool/code deltas, model-requested server/MCP tools
-and Gemini executable code. Successful NDJSON EOF accepts a complete final JSON
-record without a newline; interrupted or capture-truncated tails still require the
-record delimiter, and partial JSON is never promoted to a completed frame.
-
-## Known limitations
-
-- **2026-11-05 (Q9 no auto-mode projection; Q8b):** In auto destination mode,
-  a span whose attributes exceed the host attribute count limit exports the
-  value-free `<unknown: host-truncated>` marker for FI content once the host drop
-  is observed. FI does not project or reconstruct a partial content view. The same
-  withholding applies to names, status, resource/scope, events and links throughout
-  the identity-retaining lineage; `session.id` stays `<redacted>` and every FI view
-  carries `traceai.capture.host_data_unknown=true`. A closed typed non-content
-  allowlist retains only its validated values, still subject to secret masking.
-  Values exported before a loss was observed are not retracted (Q8b residual).
-  Exact equality with an observed value limit is uncertain too. Native host spans
-  and unrelated exporters are unchanged by this export-time policy. This is not
-  complete capture; larger host limits reduce omissions but do not guarantee it.
-  To keep FI content on spans with many attributes, raise the standard
-  OpenTelemetry limit `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` (or `OTEL_ATTRIBUTE_COUNT_LIMIT`);
-  the OpenTelemetry default is 128.
-- **2026-10-31 (lossy media context; updated by Q8b):** Observed SDK loss now
-  withholds all FI content, including ordinary text, base64, embedded/nested JSON,
-  URL queries and error prose, with the generic unknown marker rather than a
-  content-derived media-length marker. Malformed JSON tails still fail closed.
-  Auto records native limit and value-free loss facts before mapping; copied spans
-  retaining that lineage withhold all non-NON_CONTENT values rather than exporting
-  a mapper-shortened prefix. Native spans and host exporters
-  are unchanged by this export policy. Copies without source evidence consult global
-  SDK limits before environment settings; an unrelated global provider can cause
-  over-omission. Custom processors that erase identity, limits and loss evidence
-  can still hide loss. Use `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` /
-  `FI_HIDE_ERROR_DETAILS` for such routes; no lossless guarantee is made.
-- **2026-10-31 (unterminated quoted prose; updated by I1 C3):** Detected SDK
-  truncation is now withheld before prose parsing. An upstream cut with no marker
-  or observable SDK limit remains ambiguous: free text with no enclosing JSON,
-  such as quoted `data`/`mimeType` after `upload failed:`, may lack the closing
-  delimiter needed by structural recognition. Complete long `data` values retain
-  catalog omission. Use `FI_HIDE_ERROR_DETAILS` for errors and `FI_HIDE_INPUTS` /
-  `FI_HIDE_OUTPUTS` for captured input/output prose.
-- **2026-10-31 (credential prefixes; updated by I1 C3):** Exact registered-secret
-  matching does not recognize every unknown prefix. The FI view withholds detected
-  host-truncated content before that check, including span/event/link detail.
-  Native foreign spans intentionally keep their original bytes. Upstream/custom
-  truncation that erases all loss evidence is still not guaranteed detectable;
-  use FI hide controls and register complete credentials before authored writes.
-- **2026-11-04 (option (ii), Mastra manual-only at 11-11):** This tree retains the
-  manual `@traceai/mastra` package from #567. Use `createFIObservability` or
-  `createFIMastraExporter`; the registry has no Mastra enable hook and does not
-  resolve an `/auto` export. The zero-code bridge follows after 11-11. The earlier
-  unreleased neutral-adapter note and its credential-free/partial-pair zero-code
-  claims do not describe this tree. No zero-code Mastra support or validation is claimed.
-- **2026-10-30 (stream timing bounds):** Timing retains at most 4096 transport byte
-  boundaries/events. The audio byte-count path retains at most 64 KiB of timing
-  prefix; missing later event timings are not fabricated. Compressed custom fetch
-  responses without runtime decoding cannot map compressed offsets onto decoded
-  events. These cases set `traceai.wire.timing_incomplete`; first-chunk timing remains
-  available. Response content capture limits and opaque/pipe limitations still apply.
-- **2026-11-05 (Q9 supersedes auto-mode A7 small-limit projection):** The host
-  SDK decides which native attributes it admits; FI does not reorder or reserve
-  auto-mode slots for output, provenance or usage. Once any host loss is observed,
-  Q8b withholds FI content for the lineage even when some native content survived.
-  A default limit such as 128 is not a promise that output survives a larger span.
-  Explicit standalone `FITracer` projection is separate and remains supported.
-
-Dated **2026-10-30**. These are coverage/environment limitations, not claims of
-universal instrumentation support.
-
-- **2026-10-30 (S6 recognition):** Media and credential recognition follow the shared
-  `privacy.json` catalog, not semantic inference. With complete SDK context, unknown,
-  non-magic base64 outside its payload fields is not classified as media. Exact scalar data URIs own their
-  complete value; URIs inside prose are delimiter-scanned. Catalog depth/node/text
-  exhaustion fails closed, retaining span identity/timing rather than partial content.
-  Use the `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and `FI_HIDE_ERROR_DETAILS` controls
-  when application content requires stronger protection than structural recognition.
-- **2026-10-30 (configuration):** Config/profile parsing supports flat scalar values
-  and string arrays, plus named `[profiles.name]` sections in `.fi/config.toml` and
-  `$XDG_CONFIG_HOME/fi/config.toml` (default `~/.config/fi/config.toml`). Multiline
-  TOML and arbitrary TOML expressions are not supported. Credential pairs resolve
-  atomically: explicit arguments, environment, `futureagi.toml`, fi project profile,
-  then fi user profile; incomplete sources are ignored with a value-free warning
-  naming the missing half. Ignored FI halves from every source still seed S5 and
-  cannot appear in diagnostics. `FI_PROFILE`/the `profile` option selects the profile.
-- **2026-10-30 (ROUND5 B2 scope; zero-code/one-line init):** Credentials that never cross an instrumented
-  transport and have no credential marker cannot be inferred from free text. Opaque
-  `Request`/stream bodies are never parsed or buffered; a body-only credential echoed
-  as plain text can therefore remain unknown when it is neither an environment/FI
-  value nor explicitly registered. This includes `authorization_token` inside a native
-  `Request` or `ReadableStream` body; the original credential-bearing application 401
-  remains unchanged. Those unparsed fields are outside ROUND5 B2's parsed-body scope.
-  Materialized `URLSearchParams` and native FormData text entries are harvested
-  before capture limits, including duplicate fields; opaque pre-encoded form strings
-  are not form-decoded. Suppressed calls observe headers/URL only, never bodies.
-  Application transformations (signature extraction, JSON encoded inside
-  strings, numeric re-typing, base64 or splitting) are not a general secret-detection
-  guarantee. Use `registerSecret` for additional exact values and the `FI_HIDE_INPUTS`,
-  `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` and
-  `FI_HIDE_ERROR_DETAILS` controls for sensitive content/error surfaces.
-- **2026-10-30:** One-line/manual instrumentation with transport hooks disabled has
-  only initialization FI/environment seeds and explicit registrations; credentials
-  never observed by those hooks are not automatically known. The bounded LRU can
-  evict old values after 1024 distinct credentials; re-register long-lived values
-  when reused. The same hide controls above remain available.
-- **2026-10-30:** Transport credential-discovery exhaustion (more than 1024 distinct
-  values in one observation, excessive nesting/nodes/text or an already-materialized
-  body over the 4 MiB discovery cap) fails closed process-wide: subsequent FI spans
-  keep identity/timing but drop content on every surface. Application requests,
-  responses and other exporters are unchanged. This latch lasts until process restart;
-  it cannot safely be reset while unknown credentials could still be echoed. Ordinary
-  credentials longer than 8192 characters are supported within the aggregate budgets.
-- **2026-10-30:** Unnamed in-memory esbuild ESM output (`write:false` without
-  `outfile`/`outdir`) is left byte-identical to the no-plugin build: there is no
-  deployable sibling path for the ESM bootstrap. Use an output path or external
-  `node --require` preload for instrumentation. Unnamed CJS/default outputs receive
-  their preload in memory, with no filesystem output access. Custom JavaScript output
-  extensions are supported for named CJS and ESM outputs.
-- **2026-10-30 (zero-code/one-line init):** Cancelling an unused clone can finalize the shared capture before the original
-  branch is consumed. Cancelling a released reader can likewise finalize capture
-  even when the native cancellation promise rejects. Application bytes, promises
-  and errors remain unchanged, but the one span can be incomplete, omit later output/
-  usage and end too early. These two cases were independently reproduced even when
-  later consumption returns the complete answer and usage. Branch-aware cancellation
-  finalization is deferred.
-- **2026-10-30 (zero-code/one-line init):** A provider failure carried inside an HTTP 200 stream (for example OpenAI Responses
-  `response.failed`) can retain HTTP-derived OK status without the provider error
-  description, even when `gen_ai.response.finish_reasons` records `failed`. HTTP
-  success is not currently overridden by that in-stream provider failure.
-- Native `pipeTo`/`pipeThrough` algorithms bypass instance reader methods. These
-  paths retain metadata-only completion (`traceai.wire.body_unavailable=true`),
-  without replacing the stream/sink or fabricating output bytes. Their completion
-  timing is the pipe/downstream completion, not a byte-level transport timestamp.
-  Directly borrowing prototype methods, or freezing/non-configurably replacing
-  custom stream methods, can bypass observation entirely. Native Response helpers
-  and ordinary readers/iterators/clone/tee have byte-level regression coverage.
-- Custom lazy/non-native thenables are not a validated Node fetch implementation;
-  the Node observer does not invoke their overridden `then` to start them. Node's
-  observer uses V8 promise-parent notifications and native rejection mirrors to
-  preserve unhandled/handled rejection events and default fatal exits for ordinary
-  fetch/read promises. Pre-created custom promises consumed before agent startup
-  are not fully observable. The Node-free edge adapter lacks that Node-specific
-  rejection-lifecycle mechanism and is not a drop-in process agent.
-- An SDK without a processor-removal API can retain one inert agent processor after
-  shutdown. Agent callbacks stop, application processors remain active, and init does
-  not add another processor. Optional enable entries own their integration's hook
-  cleanup when they do not return a disable handle.
-- Covered ancestry traversal is bounded to 256 wrapper/native ancestors; esbuild glob
-  expansion is bounded to 10,000 filesystem entries and 64 recursive directory levels.
-
-- No outgoing **wire spans** for `node:http`/`node:https`, direct `undici.fetch`/
-  `undici.request`, custom fetch implementations captured before preload, WebSocket,
-  native gRPC, worker processes, browsers or arbitrary non-fetch transports. HTTP/
-  Undici diagnostics do harvest credentials independently of span creation. Preload
-  each separate Node process and worker isolate (globals/registries are not shared
-  across V8 isolates). OpenAI's included dedicated instrumentation covers its
-  supported default transport; the global fetch wire hook does not cover node-fetch.
-- URL matching is limited to the catalog. Restricted-provider endpoints on a custom
-  proxy host may not match. No speculative interception of unknown AI protocols.
-- Request objects and opaque/pre-encoded multipart streams are never cloned/read;
-  known provider endpoints retain metadata/body-unavailable capture only. Use native
-  FormData for text fields and file metadata. Binary request sizes are included only
-  when the body or declared content length exposes the size.
-- A response must be consumed or cancelled to finish capture. Unread or never-ending
-  responses do not yield completed spans. Force-flush never waits for unread responses.
-- Bedrock binary event-stream responses record request/status only. Audio streaming
-  and base64 variants count bytes but do not reconstruct audio/timestamps. No audio
-  bytes are exported.
-- Real OpenAI calls, real Agents processor coexistence and real Cursor class ownership
-  are validated here; registry completeness does not imply every one of the 45
-  packages works with every version. Optional enable-entry registry tests validate
-  the adapter contract, not each external framework deployment. Instrumentations
-  depending on obsolete module paths may remain pending.
+[Architecture, complete capture limits and redistribution notices](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md)
 
 ## Legal notices
 
-The published package includes `dist/THIRD-PARTY-NOTICES`, with the full installed
-LICENSE, LICENCE, COPYING and NOTICE files for third-party inputs to all four
-launcher/edge bundles. `dist/third-party-manifest.json` maps each bundle to its
-third-party package names and versions; first-party `@traceai/*` packages are listed
-separately in the notices. These files supplement, and do not replace, the existing
-linked `.LEGAL.txt` output. Keep them with any redistributed launcher or edge payload.
-The build fails if a bundled third-party package has no readable, nonempty license
-text file; a license identifier or linked source comment alone is not sufficient.
+Keep `dist/THIRD-PARTY-NOTICES`, `dist/third-party-manifest.json` and the linked `.LEGAL.txt` files with any redistributed launcher or edge payload. [Redistribution details](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/ARCHITECTURE.md#legal-notices).
 
-## Development and verification
+## More resources
 
-From `typescript/`:
-
-```sh
-pnpm install --ignore-scripts
-pnpm run build:deps
-pnpm --filter @traceai/auto run build   # TS references build OpenAI and Anthropic CJS prerequisites
-pnpm --filter @traceai/auto test
-pnpm --filter @traceai/fi-core test --runInBand
-```
-
-The agent builder requires the resolved OpenAI instrumentor to appear in esbuild's
-input graph and fails the build if it is missing; it cannot silently produce a
-wire-only launcher after an `--ignore-scripts` install.
-
-Tests load **all 4,985 shared S6 privacy fixtures** and discover the wire goldens
-**recursively** under `spec/auto-instrumentation/fixtures/` (340 on 2026-11-01: 47
-baseline + 293 round6 A8/A10 files, replayed with their `chunk_sizes`,
-`error_after_chunks` and per-chunk `arrival_offsets_ms`; the ten decoded-payload
-Bedrock files 157-166 go to the A10 recognizer, not the wire endpoint, per the spec),
-including unavailable requests, encoded gzip responses and mid-stream failures; they
-assert names/status descriptions/exact attribute subsets, absence/presence and
-`not_contains` privacy expectations, and compare catalog bytes. Local mock-server e2e tests spawn real Node `--import`, `-r`, and
-NODE_OPTIONS entry points, using a local OTLP collector rather than Future AGI or a
-real AI provider. Other tests cover body caps, nesting/suppression, binary/BYOB/audio,
-configuration precedence, privacy, global SDK coexistence and incoming transactions.
+[Future AGI tracing guide](https://docs.futureagi.com/docs/tracing) · [Integration guides](https://docs.futureagi.com/docs/integrations/traceai) · [Manual TypeScript SDK](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/fi-core/README.md) · [Report an issue](https://github.com/future-agi/traceAI/issues)
