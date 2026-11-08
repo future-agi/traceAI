@@ -25,7 +25,7 @@ import {
   SimpleSpanProcessor as OTelSimpleSpanProcessor,
   IdGenerator,
 } from "@opentelemetry/sdk-trace-node";
-import { Resource, resourceFromAttributes, detectResources, defaultResource, envDetector, processDetector } from "@opentelemetry/resources";
+import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
 import { privacyFilter, PrivacyOptions } from "./export-privacy";
 import { credentialSecrets } from "./privacy-runtime";
 import { seedSecrets } from "./secrets";
@@ -67,9 +67,26 @@ export function withExportPrivacy(exporter: SpanExporter, options: ExportPrivacy
   privacyDestinations.add(guarded);
   return guarded;
 }
+// The full process detector exports the command line (which can hold secrets passed as
+// flags), the OS user name and the executable path. By default only the runtime is kept.
+const runtimeDetector: ResourceDetector = {
+  detect(config) {
+    const attributes = processDetector.detect(config).attributes ?? {};
+    return { attributes: Object.fromEntries(Object.entries(attributes).filter(([key]) => key.startsWith("process.runtime."))) };
+  },
+};
+const OPT_IN_DETECTORS: Record<string, ResourceDetector> = { host: hostDetector, os: osDetector, process: processDetector };
+// OTEL_NODE_RESOURCE_DETECTORS (the OpenTelemetry Node variable) opts in to host, os and
+// process detection. OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES are always applied.
+function resourceDetectors(): ResourceDetector[] {
+  const names = (process.env.OTEL_NODE_RESOURCE_DETECTORS ?? "").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+  if (!names.length) return [envDetector, runtimeDetector];
+  const chosen = names.includes("none") ? [] : names.includes("all") ? Object.keys(OPT_IN_DETECTORS) : names;
+  return [envDetector, ...chosen.flatMap((name) => OPT_IN_DETECTORS[name] ?? [])];
+}
 function applicationResource(resource?: Resource): Resource {
   const application = resource && typeof (resource as any).getRawAttributes === "function" ? resource : resourceFromAttributes(resource?.attributes ?? {});
-  return defaultResource().merge(detectResources({ detectors: [envDetector, processDetector] })).merge(application);
+  return defaultResource().merge(detectResources({ detectors: resourceDetectors() })).merge(application);
 }
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
 
