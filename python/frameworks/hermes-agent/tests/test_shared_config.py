@@ -207,20 +207,15 @@ else:
 plugin.build_tracer_provider = lambda **kwargs: TracerProvider()
 p = FutureAGIHermesPlugin(project=project, register_atexit=False)
 p.callback('pre_llm_call')(session_id='fifo', turn_id='fifo')
-if p._provider is None:
-    from traceai_hermes_agent._config import resolve
-    c = resolve(plugin._setting, project=project)
-    try:
-        built = p._build()
-        error = None
-    except Exception as exc:
-        built, error = None, repr(exc)
-    raise AssertionError(('tracer provider not built', dict(enabled=c.get('enabled'), api_key=bool(c.get('api_key')), issues=c.get('issues'), uid=os.getuid()), built, error))
+assert p._provider is not None, 'tracer provider not built'
 assert 'PROJECT_CONFIG_IGNORED' in p._config['issues'], p._config['issues']
 p.shutdown()
 '''
     result = subprocess.run([sys.executable, '-c', code, str(root)],
-        env={**os.environ, **env}, capture_output=True, text=True, timeout=3)
+        # Isolate from the host's XDG/FI/Hermes variables (GitHub runners set
+        # XDG_CONFIG_HOME), so the child reads only this test's configuration.
+        env={**{k: v for k, v in os.environ.items() if not k.startswith(('XDG_', 'FI_', 'HERMES_'))}, **env},
+        capture_output=True, text=True, timeout=3)
     assert result.returncode == 0, result.stderr
 
 
