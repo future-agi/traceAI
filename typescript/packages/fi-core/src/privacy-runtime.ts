@@ -20,6 +20,8 @@ interface PrivacyCatalog {
     magic: { tests: { offset: number; hex: string; mask?: string }[] }[];
     data_uri: { other_replacement: string };
     mime_siblings: { names: string[]; prefixes: string[]; exact: string[]; payload_fields: string[] };
+    image: { type_names: string[]; modality_names: string[]; payload_fields: string[] };
+    video: { type_names: string[]; modality_names: string[] };
     audio: { fields: string[]; payload_fields: string[]; type_names: string[]; metadata_fields: string[] };
   };
   limits: { max_depth: number; max_nodes: number; max_text_chars: number };
@@ -142,28 +144,35 @@ const dataText = (value: string, framed = false): string => (framed ? dataURI(va
 
 // The third bit is a complete, non-media MIME discriminator. It is never set
 // for a value at the SDK's truncation boundary (even a syntactically valid prefix).
-type Hint = readonly [boolean, boolean, boolean?];
+// The fourth bit is image evidence only; it can tighten omission, never admit text.
+type Hint = readonly [boolean, boolean, boolean?, boolean?];
 export type PrivacyHints = ReadonlyMap<string, Hint>;
 function hint(name: string, value: unknown, valueLimit = Infinity): Hint {
   if (Array.isArray(value)) {
-    let m = false, a = false, safe = value.length > 0;
+    let m = false, a = false, image = false, safe = value.length > 0;
     for (const item of value) {
       if (typeof item !== "string") { safe = false; continue; }
-      const next = hint(name, item, valueLimit); m ||= next[0]; a ||= next[1]; safe &&= !!next[2];
+      const next = hint(name, item, valueLimit); m ||= next[0]; a ||= next[1]; image ||= !!next[3]; safe &&= !!next[2];
     }
-    return [m, a, safe && !m && !a];
+    return [m, a, safe && !m && !a, image];
   }
   if (typeof value !== "string") return [false, false];
   const nameLeaf = leaf(name);
   // Do not split/lowercase megabyte exception messages merely to learn that
   // their key is not a MIME/type discriminator.
-  if (!mime.names.includes(nameLeaf) && nameLeaf !== "type") return [false, false];
+  if (!mime.names.includes(nameLeaf) && nameLeaf !== "type" && nameLeaf !== "modality") return [false, false];
   const type = value.split(";", 1)[0].trim().toLowerCase();
   if (mime.names.includes(nameLeaf)) {
     const m = mime.prefixes.some(prefix => type.startsWith(prefix)) || mime.exact.includes(type);
-    return [m, type.startsWith("audio/"), !m && value.length < valueLimit && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type)];
+    return [m, type.startsWith("audio/"), !m && value.length < valueLimit && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type), type.startsWith("image/")];
   }
-  return [false, nameLeaf === "type" && audio.type_names.includes(normalizePrivacyName(value))];
+  const image = nameLeaf === "type" ? catalog.media.image.type_names.includes(normalizePrivacyName(type))
+    : nameLeaf === "modality" && catalog.media.image.modality_names.includes(type);
+  const video = nameLeaf === "type" ? catalog.media.video.type_names.includes(normalizePrivacyName(type))
+    : nameLeaf === "modality" && catalog.media.video.modality_names.includes(type);
+  // Video uses the existing MIME payload/metadata boundaries, not image-only
+  // URL fields. This bit only tightens omission, including across authored writes.
+  return [image || video, nameLeaf === "type" && audio.type_names.includes(normalizePrivacyName(value)), false, image];
 }
 /** Index all siblings once, preserving exact indexed parents and combining duplicate query hints. */
 export function indexPrivacyHints(items: Iterable<readonly [string, unknown]>, path = "", previous: PrivacyHints = new Map(), valueLimit = Infinity): PrivacyHints {
@@ -175,7 +184,7 @@ export function indexPrivacyHints(items: Iterable<readonly [string, unknown]>, p
     while (parts.length && /^\d+$/.test(parts.at(-1)!)) parts.pop();
     parts.pop(); const parent = parts.join("."), old = hints.get(parent);
     const m = next[0] || !!old?.[0], a = next[1] || !!old?.[1];
-    hints.set(parent, [m, a, !m && !a && !!next[2] && (old === undefined || !!old[2])]);
+    hints.set(parent, [m, a, !m && !a && !!next[2] && (old === undefined || !!old[2]), !!next[3] || !!old?.[3]]);
   }
   return hints;
 }
@@ -192,6 +201,23 @@ function context(path: string, hints: PrivacyHints, inheritedMedia = false, inhe
     const next = hints.get(prefix.join(".")); m ||= !!next?.[0]; a ||= !!next?.[1];
   }
   return { media: m, audio: a, payload: payload || direct };
+}
+/** Image-specific payload names supplement, never replace, the media/audio policy.
+ * In particular, url remains audio metadata and ordinary HTTP image URLs remain
+ * text. Only an encoded payload uses this extra image-declaration boundary. */
+function declaredImagePayload(path: string, hints: PrivacyHints): boolean {
+  let image = !!hints.get("")?.[3], payload = false;
+  const prefix: string[] = [];
+  for (const part of pathParts(path)) {
+    prefix.push(part); const name = normalizePrivacyName(part);
+    if (!/^\d+$/.test(part)) {
+      const field = catalog.media.image.payload_fields.includes(name);
+      if (audio.metadata_fields.includes(name) && !field) { image = false; payload = false; }
+      if (image && field) payload = true;
+    }
+    image ||= !!hints.get(prefix.join("."))?.[3];
+  }
+  return payload;
 }
 const zeroDetailDeferral: ReadonlySet<string> = new Set<string>(catalog.scalar_metrics.zero_detail_deferral.keys);
 /** Versioned A7 policy data: usage-detail keys whose exact numeric zero may yield projection capacity. */
@@ -269,6 +295,7 @@ function replaceMedia(value: unknown, path: string, hints: PrivacyHints, framed:
     if (value === replacement || omission.test(value)) return undefined;
     if (framed) { const uri = dataURI(value); if (uri !== undefined) return uri; }
     if (structural) return encoded(value) ? omitted(value) : media.other_replacement;
+    if (declaredImagePayload(path, hints) && encoded(value)) return omitted(value);
     if (magic(value)) return omitted(value);
     if (incomplete && ambiguousBase64 && value.length >= 4 && !completeNonMediaMime(path, hints) && encoded(value)) return omitted(value);
     if (value.length > media.unrecognized_base64_min_chars_exclusive && media.unrecognized_base64_fields.includes(leaf(path)) && encoded(value)) return omitted(value);

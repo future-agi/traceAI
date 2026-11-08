@@ -241,14 +241,23 @@ const ORIGINAL_BARE_MEDIA = String.raw`function bareMedia(value: string): string
   return value.replace(/[A-Za-z0-9+/_=-]{8,}/g, candidate =>
     candidate !== "__REDACTED__" && magic(candidate) ? omitted(candidate) : candidate);
 }`;
+// 1.2.1 typed-image/video fixes: restore the changed sections to their exact
+// 59fa6fa813b4877a6106f78b540a25bae0e343e6 bytes before rebuilding older oracles.
+// This is reconstruction only: candidate tests still load the current runtime
+// with the current catalog, and the existing parent/base seals stay unchanged.
+const RELEASED_RUNTIME_SHA256 = "60f077212c48817dc81ee3c1826f3945dc677ddfcff74d325d72140fa2ecad7c";
+const RELEASED_IMAGE_HINTS = "// The third bit is a complete, non-media MIME discriminator. It is never set\n// for a value at the SDK's truncation boundary (even a syntactically valid prefix).\ntype Hint = readonly [boolean, boolean, boolean?];\nexport type PrivacyHints = ReadonlyMap<string, Hint>;\nfunction hint(name: string, value: unknown, valueLimit = Infinity): Hint {\n  if (Array.isArray(value)) {\n    let m = false, a = false, safe = value.length > 0;\n    for (const item of value) {\n      if (typeof item !== \"string\") { safe = false; continue; }\n      const next = hint(name, item, valueLimit); m ||= next[0]; a ||= next[1]; safe &&= !!next[2];\n    }\n    return [m, a, safe && !m && !a];\n  }\n  if (typeof value !== \"string\") return [false, false];\n  const nameLeaf = leaf(name);\n  // Do not split/lowercase megabyte exception messages merely to learn that\n  // their key is not a MIME/type discriminator.\n  if (!mime.names.includes(nameLeaf) && nameLeaf !== \"type\") return [false, false];\n  const type = value.split(\";\", 1)[0].trim().toLowerCase();\n  if (mime.names.includes(nameLeaf)) {\n    const m = mime.prefixes.some(prefix => type.startsWith(prefix)) || mime.exact.includes(type);\n    return [m, type.startsWith(\"audio/\"), !m && value.length < valueLimit && /^[a-z0-9!#$&^_.+-]+\\/[a-z0-9!#$&^_.+-]+$/.test(type)];\n  }\n  return [false, nameLeaf === \"type\" && audio.type_names.includes(normalizePrivacyName(value))];\n}\n/** Index all siblings once, preserving exact indexed parents and combining duplicate query hints. */\nexport function indexPrivacyHints(items: Iterable<readonly [string, unknown]>, path = \"\", previous: PrivacyHints = new Map(), valueLimit = Infinity): PrivacyHints {\n  const hints = new Map(previous);\n  for (const [name, value] of items) {\n    const next = hint(name, value, valueLimit);\n    if (!next[0] && !next[1] && !mime.names.includes(leaf(name))) continue;\n    const parts = pathParts(path ? `${path}.${name}` : name);\n    while (parts.length && /^\\d+$/.test(parts.at(-1)!)) parts.pop();\n    parts.pop(); const parent = parts.join(\".\"), old = hints.get(parent);\n    const m = next[0] || !!old?.[0], a = next[1] || !!old?.[1];\n    hints.set(parent, [m, a, !m && !a && !!next[2] && (old === undefined || !!old[2])]);\n  }\n  return hints;\n}\nfunction context(path: string, hints: PrivacyHints, inheritedMedia = false, inheritedAudio = false, retainPayload = false) {\n  let m = inheritedMedia || !!hints.get(\"\")?.[0], a = inheritedAudio || !!hints.get(\"\")?.[1], payload = false, direct = false;\n  const prefix: string[] = [];\n  for (const part of pathParts(path)) {\n    prefix.push(part); const name = normalizePrivacyName(part);\n    if (!/^\\d+$/.test(part)) {\n      if (audio.metadata_fields.includes(name)) { m = false; a = false; if (!retainPayload) payload = false; }\n      direct = audio.fields.includes(name); a ||= direct;\n      if (m && mime.payload_fields.includes(name) || a && audio.payload_fields.includes(name)) payload = true;\n    }\n    const next = hints.get(prefix.join(\".\")); m ||= !!next?.[0]; a ||= !!next?.[1];\n  }\n  return { media: m, audio: a, payload: payload || direct };\n}\n";
 const PARENT_RUNTIME_SHA256 = "d4601e3aff870d917336c78510ffa0544eb62204383d8e429c7ab489fc7efc17";
 const BASE_RUNTIME_SHA256 = "411d30cc45c3cdc801a6a9e172ddd3cf41a6ffdc4b193861cec6962a067b95a9";
 // fi-core 1.2.2: rebase both runtime oracles onto scalar catalog v6. The
 // algorithm is unchanged; audioCacheCount.test.ts verifies the new typed key.
 const BASE_CATALOG_SHA256 = "9da3fef3a84741f8cbe345a44f6a2f8c6aa7737fdf3c1a91d590f271eadb138f";
 const source = readFileSync(join(__dirname, "..", "privacy-runtime.ts"), "utf8");
-const catalogSource = readFileSync(join(__dirname, "..", "privacy.json"), "utf8");
-const catalog = JSON.parse(catalogSource);
+const currentCatalogSource = readFileSync(join(__dirname, "..", "privacy.json"), "utf8");
+// Strip each additive declaration section explicitly; neither belongs to 1.2.0.
+let catalogSource = replaceSection(currentCatalogSource, '    "video": {\n', '    "audio": {\n', "");
+catalogSource = replaceSection(catalogSource, '    "image": {\n', '    "audio": {\n', "");
+const catalog = JSON.parse(currentCatalogSource);
 const MAX_TEXT: number = catalog.limits.max_text_chars;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -259,7 +268,13 @@ function replaceSection(input: string, start: string, stop: string, original: st
   }
   return input.slice(0, begin) + original + input.slice(end);
 }
-let parentSource = replaceSection(source, "// A warm identity is not proof", "function knownSecretText(", "");
+let releasedSource = replaceSection(source, "    video: {", "    audio: {", "");
+releasedSource = replaceSection(releasedSource, "    image: {", "    audio: {", "");
+// The pinned section also replaces the new video branch inside hint().
+releasedSource = replaceSection(releasedSource, "// The third bit is a complete, non-media MIME discriminator.", "const zeroDetailDeferral:", RELEASED_IMAGE_HINTS);
+releasedSource = replaceSection(releasedSource, "    if (declaredImagePayload(path, hints)", "    if (magic(value))", "");
+if (digest(releasedSource) !== RELEASED_RUNTIME_SHA256) throw new Error("Privacy oracle no longer reconstructs the 1.2.0 runtime");
+let parentSource = replaceSection(releasedSource, "// A warm identity is not proof", "function knownSecretText(", "");
 parentSource = replaceSection(parentSource, "const DISCOVERY_URLS =", "const dataText =", "");
 parentSource = replaceSection(parentSource, "function knownSecretText(", "\ninterface SourceRange", PARENT_KNOWN_SECRET_TEXT);
 parentSource = replaceSection(parentSource, "function knownSecretRanges(", "\nconst wholeSecret =", ORIGINAL_KNOWN_SECRET_RANGES);

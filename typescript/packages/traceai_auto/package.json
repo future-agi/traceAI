@@ -1,6 +1,6 @@
 {
   "name": "@traceai/auto",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fail-open, zero-code AI auto-instrumentation for Node.js",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -53,7 +53,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "prebuild": "rimraf dist",

@@ -325,17 +325,26 @@ fractional or non-number values) and invalid environment values resolve to
 a positive default or an environment cap, and there is no implicit unlimited
 setting.
 
-At cap 0, a scope (one JSON string token, or the whole value when it is not a
-complete JSON document) is replaced whole with `[image-redacted]` when its raw
-text or any decoded view contains a case-insensitive `data:`, then later
-`image/`, then later `,`. A declared image payload or a bare image signature
-found at cap 0 also replaces its scope with `[image-redacted]`.
+At cap 0, a Q1 scope (one JSON string token, or the whole value when it is not
+a complete JSON document) is replaced whole with `[image-redacted]` when its
+raw text or any decoded view contains a case-insensitive `data:`, then later
+`image/`, then later `,`, **after ASCII whitespace compaction within that view**.
+TypeScript removes exactly TAB, LF, VT, FF and CR (U+0009-U+000D), plus
+U+001C-U+001F and SPACE (U+0020): the ASCII subset of Python `str.isspace()`,
+not JavaScript `\s` or only WHATWG ASCII whitespace. This includes whitespace
+inside the fragments: `da\tta:ima\nge/png;base64,QQ==` (with TAB and LF) triggers
+whole-scope redaction. Compaction never joins JSON sibling tokens or different
+Q1 scopes. Python additionally removes non-ASCII `str.isspace()` characters;
+TypeScript does not compact those non-ASCII whitespace characters in this test.
+Both retain their existing decoded-view/ignorable-character handling. A
+declared image payload or a bare image signature found at cap 0 also replaces
+its scope with `[image-redacted]`.
 
 **Cap-0 over-redaction disclosure:**
 
 Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
 
-In the FI retained/export view, the media policy (see "Media policy and image cap for this release" below) omits base64 image payloads at any cap, as `<omitted: N base64 chars>`. The positive-cap rules below describe the value-level recognizer that runs first; they never cause an image to be exported. The TypeScript SDK is stricter than the Python SDK here: it never exports base64 images at any cap.
+In the FI retained/export view, the media policy (see "Media policy and image cap for this release" below) omits **recognized base64 image payloads in payload fields or `data:` URLs** at any cap, using markers such as `<omitted: N base64 chars>`. The positive-cap rules below describe the value-level recognizer that runs first, not permission to export those recognized payloads. For these recognized images, TypeScript media omission remains stricter than Python's positive-cap behavior. This is not universal image detection; see [Image recognition limits](#image-recognition-limits) for non-payload keys, headerless runs and spacing.
 
 With a positive cap, the image cap uses occurrence redaction with a whole-value fail-closed fallback
 in the FI retained/export view. An occurrence counts only when its length is
@@ -400,15 +409,25 @@ An over-limit damaged declared image token is redacted; a legally escaped
 non-base64 control is not reclassified as damage merely because another view
 reveals the control character.
 
+### Image recognition limits
+
 **Over-redaction disclosure:** decoys, text that only discusses data URIs, and
 some valid `;base64,`-bearing MIME parameters may be redacted, sometimes as a
 whole value. At cap 0 (the default) any value or JSON string token that mentions a
 data: image URL is replaced, including mentions that carry no payload. An image
 payload stored under a key outside the payload fields above and without a data:
-URL is not detected by this control. Native and application data are untouched.
-This is a trace privacy
-and size control, not a detector for arbitrary binary encodings or a guarantee
-about every exporter/provider path.
+URL is not detected by this control. Headerless PNG/JPEG/GIF/WebP base64
+signatures are recognized by the image cap only as a whole value or whole JSON
+string token, not as arbitrary embedded runs. The image cap also does not
+recognize a declared payload whose base64 contains spaces. Independent media
+rules may still omit these cases, but are not a universal detector: non-payload
+keys such as `blob`, unrecognized headerless runs and spacing remain bounded
+recognition limitations. Image data nested inside a JSON-encoded string field
+(for example an image url inside a JSON string) may still be exported at any
+image cap, including the default. A structural fix is planned for a later release.
+Native and application data are untouched. This is a
+trace privacy and size control, not a detector for arbitrary binary encodings
+or a guarantee about every exporter/provider path.
 
 The internal scan-admission limit is **1,048,576 UTF-16 units per string value**,
 independent of the caller's image cap. Above it, the complete value is replaced
@@ -635,10 +654,24 @@ For this release, the ratified
 `LANE-CALL-NIKM4-5A-TS-IMAGE-EXPORT-I1-DOMINATES-r1` decision makes I1 media
 omission dominant at every cap in the FI retained/export view. Recognized
 base64/media and data URLs are omitted, including images at or below a positive
-cap; base64 image payloads use markers such as `<omitted: N base64 chars>`.
+cap; recognized base64 image payloads in payload fields or `data:` URLs use
+markers such as `<omitted: N base64 chars>`. Since 1.2.3, `type: image`,
+`type: image_url`, `type: input_image`, `modality: image` and image MIME siblings
+carry image context to their payload fields even for short, below-cap images
+without a catalog magic signature. Ordinary HTTP image URLs remain text.
+The same release also carries `type: video`, `type: input_video` and
+`modality: video` into the existing generic media payload fields (such as
+`data`, `bytes` and `content`) on admission, standalone span creation/setters
+and detached export. These declared video payloads are omitted at every image
+cap, just like MIME-declared `video/mp4`, `video/webm` and `application/pdf`;
+cap 0 alone is not a workaround for the earlier typed-video gap. Video retains
+the generic media metadata boundaries, not the image-only URL payload fields.
+Audio omission and credential/secret masking are unchanged.
 At the default cap 0, the whole-value/token `[image-redacted]` rule takes
 precedence for mentions of a `data:` image URL, including mentions with no
-payload. Setting a positive cap does not restore base64 image export.
+payload. Setting a positive cap does not restore export of these recognized
+base64 image payloads. See [Image recognition limits](#image-recognition-limits)
+for the non-payload-key, headerless-run and spacing limitations.
 
 `base64ImageMaxLength` and `FI_BASE64_IMAGE_MAX_LENGTH` remain supported, with one
 shared default constant, `DEFAULT_BASE64_IMAGE_MAX_LENGTH` (**0**; see "Value-level
@@ -651,6 +684,8 @@ one event. Apart from the cap-0 rule and the whole-value fail-closed fallbacks
 described above (scan-admission limit, work exhaustion, decoding still changing
 after three passes, uncertified or decoded-only occurrences), the cap mechanism
 alone preserves at/below-limit values; the media export policy still omits
-base64 image payloads at any cap. Standalone below-cap export evidence does not
+recognized base64 image payloads in payload fields or `data:` URLs at any cap,
+subject to the [recognition limits](#image-recognition-limits). Standalone
+below-cap export evidence does not
 certify this composed behavior. This documents the decided release behavior,
 not release authorization or a change to the documented cap default.
