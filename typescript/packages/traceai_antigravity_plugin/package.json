@@ -6,7 +6,7 @@
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "files": ["dist", "plugin", "LICENSE"],
-  "scripts": {"build": "tsc -p tsconfig.json && node build.cjs", "test": "node --test test/*.test.cjs"},
+  "scripts": {"prepare": "pnpm run build", "build": "tsc -p tsconfig.json && node build.cjs", "test": "node --test test/*.test.cjs"},
   "dependencies": {"@traceai/agent-core": "workspace:^", "proper-lockfile": "4.1.2"},
   "devDependencies": {"@types/node": "^22.15.29", "typescript": "^5.8.3", "esbuild": "0.25.5"},
   "engines": {"node": ">=22.16.0"},
