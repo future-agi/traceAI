@@ -80,7 +80,8 @@ if (phase === "install") {
     } else if (request.url === "/tracer/v1/traces") {
       for (const resource of body.resourceSpans) {
         const attrs = Object.fromEntries(resource.resource.attributes.map((a) => [a.key, a.value.stringValue]));
-        assert.equal(attrs["service.name"], "your-project-name");
+        assert.equal(attrs["project_name"], "your-project-name");
+        assert.equal(attrs["service.name"], "langchain-readme-service");
         for (const scope of resource.scopeSpans) spans.push(...scope.spans);
       }
       response.end("{}");
@@ -95,7 +96,7 @@ if (phase === "install") {
     await writeFile(join(consumer, runner[1]), source + "\n");
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const child = spawn("npx", runner, { cwd: consumer, env: {
-      ...env, FI_API_KEY: "synthetic-fi-key", FI_SECRET_KEY: "synthetic-fi-secret",
+      ...env, OTEL_SERVICE_NAME: "langchain-readme-service", FI_API_KEY: "synthetic-fi-key", FI_SECRET_KEY: "synthetic-fi-secret",
       OPENAI_API_KEY: "synthetic-openai-key", FI_BASE_URL: baseUrl, OPENAI_BASE_URL: `${baseUrl}/v1`,
     }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";

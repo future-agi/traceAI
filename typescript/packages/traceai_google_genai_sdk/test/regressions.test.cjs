@@ -1009,6 +1009,7 @@ for (const streaming of [false, true]) {
         const data = await exported();
         assert.equal(Number(data["gen_ai.usage.input_tokens.audio"]), 6);
         assert.equal(Number(data["gen_ai.usage.output_tokens.image"]), 1);
+        assert.equal(Number(data["gen_ai.usage.cache_read_tokens.audio"]), 2);
         if (hidden) assert.doesNotMatch(JSON.stringify(data), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
       } finally { h.dispose(); await provider.forceFlush(); }
     }

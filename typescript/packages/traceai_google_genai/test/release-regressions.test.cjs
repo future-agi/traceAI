@@ -434,7 +434,13 @@ for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideI
             assert.doesNotMatch(JSON.stringify(exportedPayloads), /INPUT_SENTINEL|SYSTEM_PRIVATE_SENTINEL|STOP_PRIVATE_SENTINEL/);
           } else {
             assert.doesNotMatch(JSON.stringify(exportedPayloads), /OUTPUT_SENTINEL/);
-            assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), bodies[0].generationConfig);
+            // fi-core 1.2.0 projects request metadata for either input or output
+            // hiding. Only canonical configuration keys survive; provider-specific
+            // topP and content-bearing stopSequences remain fail-closed.
+            assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), {
+              temperature: 0.73, topP: '__REDACTED__', stopSequences: '__REDACTED__',
+            });
+            assert.doesNotMatch(attributes['gen_ai.request.parameters'], /STOP_PRIVATE_SENTINEL/);
           }
         });
       } finally {
