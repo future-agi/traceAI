@@ -1,0 +1,6 @@
+{
+  "name": "futureagi-tracing",
+  "version": "0.1.0",
+  "description": "Observe Codex user turns, model attempts and tool calls in Future AGI.",
+  "hooks": "./hooks/hooks.json"
+}
