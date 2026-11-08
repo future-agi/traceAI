@@ -1,6 +1,6 @@
 {
   "name": "@traceai/codex-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Native Codex CLI hooks and one-command Future AGI tracing setup",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

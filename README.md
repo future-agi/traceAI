@@ -10,7 +10,7 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 
 **79 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
 
-[Get started](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
+[Zero-code Node.js](#zero-code-tracing-for-nodejs) · [SDK quickstarts](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
 
 [![PyPI](https://img.shields.io/pypi/v/fi-instrumentation-otel?label=PyPI&color=555555)](https://pypi.org/project/fi-instrumentation-otel/)
 [![npm](https://img.shields.io/npm/v/%40traceai%2Ffi-core?label=npm&color=555555)](https://www.npmjs.com/package/@traceai/fi-core)
@@ -31,9 +31,24 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 - **Follow the request.** Connect model calls, retrieval, and tool execution with OpenTelemetry spans and context.
 - **Choose what leaves your app.** Configure content masking and export through your own OpenTelemetry pipeline.
 
+## Zero-code tracing for Node.js
+
+**See your AI calls without adding tracing code.** Install [`@traceai/auto`](typescript/packages/traceai_auto/) and preload it before your app (Node.js 20.6+, ESM or CommonJS):
+
+```bash
+npm install @traceai/auto
+FI_API_KEY="your-api-key" FI_SECRET_KEY="your-secret-key" \
+FI_PROJECT_NAME="my-ai-app" \
+node --import @traceai/auto/register app.mjs
+```
+
+Keep your provider credentials configured as usual. Make an AI request, consume the response, then open **Observe → my-ai-app** in [Future AGI](https://app.futureagi.com). OpenAI instrumentation is included; recognized AI calls through global `fetch` are captured too. Optional framework integrations retain their own coverage limits.
+
+**Prompts and responses are captured by default.** Set `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true FI_HIDE_ERROR_DETAILS=true` before startup to hide content. [Setup, supported libraries, privacy and framework recipes →](typescript/packages/traceai_auto/)
+
 ## Quickstart
 
-Pick your language. These examples send traces to [Future AGI](https://app.futureagi.com); you can also supply your own OpenTelemetry tracer provider and exporter.
+Prefer explicit instrumentation or another language? Pick your language. These examples send traces to [Future AGI](https://app.futureagi.com); you can also supply your own OpenTelemetry tracer provider and exporter.
 
 | Language | Instrumentation | Install / coordinates |
 | :--- | :--- | :--- |

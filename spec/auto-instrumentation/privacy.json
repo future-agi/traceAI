@@ -1,17 +1,17 @@
 {
   "version": 3,
   "scalar_metrics": {
-    "version": 5,
+    "version": 6,
     "canonical_decimal": {
       "ruling": "LANE-CALL-NIKM4-5A-I1-DIGIT-STRING-COUNTS-r2 with I1-R10B A-DIGIT-CONFINED",
       "regex": "^(0|[1-9][0-9]{0,15})$",
       "max_chars": 16,
       "base64_min_chars": 4,
       "keys": ["gen_ai.audio.bytes"],
-      "scope": "Only typed byte counters consult this rule. gen_ai.audio.bytes keeps full canonical decimal strings with a safe-integer numeric value unless they have base64 shape at or above base64_min_chars. elevenlabs.audio.bytes never grants a string role. The four-character shape threshold is not a special case for one count. Preserve accepted string types; no signs, leading zeros, fractions, exponents, whitespace or final newline. Other G4 core/detail keys retain their original scalar roles, including arbitrary strings and literal undefined. This rule does not change Q8b NON_CONTENT types."
+      "scope": "Only declared canonical-decimal counters consult this rule. gen_ai.audio.bytes keeps full canonical decimal strings with a safe-integer numeric value unless they have base64 shape at or above base64_min_chars. elevenlabs.audio.bytes never grants a string role. The four-character shape threshold is not a special case for one count. Preserve accepted string types; no signs, leading zeros, fractions, exponents, whitespace or final newline. Other G4 core/detail keys retain their original scalar roles, including arbitrary strings and literal undefined. This rule does not change Q8b NON_CONTENT types."
     },
     "ruling": "TRACEAI-I1-G3-G4-POLICY-SCOPE-RULING-r1-FISEC G4",
-    "scope": "Closed exact complete keys in the declared usage/metrics containers only. Case, punctuation, prefixes, suffixes and array indices are not aliases. A nested object path must equal the complete key. gen_ai.audio and elevenlabs.audio are metric containers only for their listed bytes counters, not for arbitrary audio members. Their nonnegative_safe_integer value_type grants a role to finite nonnegative safe-integer numbers; only gen_ai.audio.bytes additionally accepts strings under canonical_decimal. All other inputs on these two byte counters retain the role-free media policy. Other declared metrics keep their original number/boolean/string roles without decimal validation.",
+    "scope": "Closed exact complete keys in the declared usage/metrics containers only. Case, punctuation, prefixes, suffixes and array indices are not aliases. A nested object path must equal the complete key. gen_ai.audio and elevenlabs.audio are metric containers only for their listed bytes counters, not for arbitrary audio members. Their nonnegative_safe_integer value_type grants a role to finite nonnegative safe-integer numbers; only gen_ai.audio.bytes additionally accepts strings under canonical_decimal. gen_ai.usage.cache_read_tokens.audio also accepts only nonnegative safe-integer numbers, never strings. All other inputs on these typed counters retain the role-free media policy. Other declared metrics keep their original number/boolean/string roles without decimal validation.",
     "precedence": "Scalar role only removes structural media classification caused by the metric spelling. Explicit media/type hints on any ancestor, inherited media/audio, established media payload ancestry, credential ancestry and known numeric/string secrets take precedence. On the two typed byte counters only, base64-shaped strings at or above canonical_decimal.base64_min_chars cannot obtain a role, even when numerically safe. Magic bytes, data URIs and other independent value checks still apply. A counter leaf under established media payload ancestry cannot use the usage metadata boundary to escape omission. Private payload-role ancestry survives parsed, stringified and diagnostic JSON handoffs; resetting a JSON root never grants a metric role. Metric-looking descendants reached through this retained payload origin remain payload, including numeric/bool scalars and numeric/bool arrays; ordinary metadata text boundaries are unchanged.",
     "arrays": "Arrays never receive the scalar metric role. Nonempty numeric/bool media payload arrays are omitted; existing string/object array walking and empty-array behavior remain unchanged.",
     "containers": [
@@ -27,6 +27,11 @@
           "gen_ai.usage.output_tokens.audio",
           "gen_ai.usage.output_tokens.reasoning"
         ]
+      },
+      {
+        "path": "gen_ai.usage",
+        "keys": ["gen_ai.usage.cache_read_tokens.audio"],
+        "value_type": "nonnegative_safe_integer"
       },
       {
         "path": "gen_ai.audio",

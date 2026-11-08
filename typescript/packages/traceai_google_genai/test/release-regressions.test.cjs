@@ -434,7 +434,13 @@ for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideI
             assert.doesNotMatch(JSON.stringify(exportedPayloads), /INPUT_SENTINEL|SYSTEM_PRIVATE_SENTINEL|STOP_PRIVATE_SENTINEL/);
           } else {
             assert.doesNotMatch(JSON.stringify(exportedPayloads), /OUTPUT_SENTINEL/);
-            assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), bodies[0].generationConfig);
+            // fi-core 1.2.0 projects request metadata for either input or output
+            // hiding. Only canonical configuration keys survive; provider-specific
+            // topP and content-bearing stopSequences remain fail-closed.
+            assert.deepEqual(JSON.parse(attributes['gen_ai.request.parameters']), {
+              temperature: 0.73, topP: '__REDACTED__', stopSequences: '__REDACTED__',
+            });
+            assert.doesNotMatch(attributes['gen_ai.request.parameters'], /STOP_PRIVATE_SENTINEL/);
           }
         });
       } finally {
@@ -457,14 +463,19 @@ function toolModel() {
   });
 }
 const effectiveKeys = ['generationConfig', 'safetySettings', 'tools', 'toolConfig', 'cachedContent'];
-function assertEffectiveInput(attributes, wire) {
+function assertEffectiveInput(attributes, wire, hideToolMetadata = false) {
   for (const key of ['raw.input', 'input.value']) {
     const captured = JSON.parse(attributes[key]);
     for (const field of effectiveKeys) assert.deepEqual(captured[field], wire[field], `${key}.${field}`);
   }
   const declarations = wire.tools?.flatMap(tool => tool.functionDeclarations || []);
+  // The shared metadata projection keeps tool identity, not descriptions/schemas,
+  // whenever either direction is hidden. Raw input still follows input hiding.
+  const expected = hideToolMetadata ? declarations?.map(tool => ({
+    name: tool.name, description: '__REDACTED__', parameters: '__REDACTED__',
+  })) : declarations;
   assert.deepEqual(attributes['gen_ai.tool.definitions'] && JSON.parse(attributes['gen_ai.tool.definitions']),
-    declarations?.length ? declarations : undefined);
+    expected?.length ? expected : undefined);
 }
 
 for (const [name, input] of [['string', 'INPUT_SENTINEL'], ['strings', ['INPUT_SENTINEL']],
@@ -601,7 +612,7 @@ for (const option of ['hideInputs', 'hideInputText', 'hideInputMessages', 'hideI
           assert.equal(attributes['raw.output'], undefined);
           assert.equal(attributes['gen_ai.output.messages'], undefined);
           assert.deepEqual(JSON.parse(attributes['gen_ai.input.messages']), expectedHistory);
-          assertEffectiveInput(attributes, bodies[1]);
+          assertEffectiveInput(attributes, bodies[1], true);
         }
       });
     } finally {
