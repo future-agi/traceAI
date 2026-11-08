@@ -139,5 +139,19 @@ class NpmTests(unittest.TestCase):
             run.assert_not_called()
 
 
+class CommonJsEntryTests(unittest.TestCase):
+    def test_esm_only_packages_skip_require(self):
+        esm = {"type": "module", "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}}}
+        self.assertFalse(npm_release.has_commonjs_entry(esm))
+        self.assertFalse(npm_release.has_commonjs_entry({"type": "module", "main": "./dist/index.js"}))
+
+    def test_commonjs_and_dual_packages_keep_require(self):
+        self.assertTrue(npm_release.has_commonjs_entry({"main": "dist/index.js"}))
+        self.assertTrue(npm_release.has_commonjs_entry({"exports": {".": {"import": "./a.mjs", "require": "./a.cjs"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"type": "module", "exports": {".": {"import": "./a.js", "require": "./a.cjs"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"exports": {".": {"types": "./a.d.ts", "default": "./a.js"}}}))
+        self.assertTrue(npm_release.has_commonjs_entry({"type": "module", "exports": "./index.cjs"}))
+
+
 if __name__ == '__main__':
     unittest.main()

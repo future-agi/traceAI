@@ -76,6 +76,30 @@ def stage(root: Path, packages: list[dict], dist: Path) -> None:
         tarball(dist, package)
 
 
+def has_commonjs_entry(manifest: dict) -> bool:
+    """Whether require() of the package root is part of its published contract.
+
+    ESM-only packages ("type": "module" with only an "import" export, such as
+    plugins loaded by hosts that use ES modules) are valid and are checked with
+    import() alone; every other package must also load with require().
+    """
+    commonjs = manifest.get("type", "commonjs") != "module"
+    exports = manifest.get("exports")
+    if exports is None:
+        return commonjs or str(manifest.get("main", "")).endswith(".cjs")
+    root = exports.get(".", exports) if isinstance(exports, dict) else exports
+    if isinstance(root, str):
+        return commonjs or root.endswith(".cjs")
+    if isinstance(root, dict):
+        if "require" in root:
+            return True
+        if "node" in root and isinstance(root["node"], dict) and "require" in root["node"]:
+            return True
+        default = root.get("default")
+        return isinstance(default, str) and (commonjs or default.endswith(".cjs"))
+    return commonjs
+
+
 def verify(root: Path, packages: list[dict], dist: Path, smoke: Path, *, offline: bool = False) -> None:
     inventory = typescript_packages(root)
     for package in packages:
@@ -98,8 +122,12 @@ def verify(root: Path, packages: list[dict], dist: Path, smoke: Path, *, offline
             if installed["version"] != staged["version"]:
                 raise ValueError(f"Installed {staged['name']} != staged workspace version {staged['version']}")
         env = {**os.environ, "NAME": package["name"]}
-        subprocess.run(["node", "-e", "const m = require(process.env.NAME); console.log('require ok:', Object.keys(m).length, 'exports')"],
-                       cwd=directory, env=env, check=True)
+        installed = json.loads((directory / "node_modules" / package["name"] / "package.json").read_text())
+        if has_commonjs_entry(installed):
+            subprocess.run(["node", "-e", "const m = require(process.env.NAME); console.log('require ok:', Object.keys(m).length, 'exports')"],
+                           cwd=directory, env=env, check=True)
+        else:
+            print(f"{package['name']}@{package['version']}: ESM-only package, checking import() only", flush=True)
         subprocess.run(["node", "--input-type=module", "-e", "import(process.env.NAME).then(m => console.log('import ok:', Object.keys(m).length, 'exports'))"],
                        cwd=directory, env=env, check=True)
 
