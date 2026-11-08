@@ -10,6 +10,8 @@ import { FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
 import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
+
+const VERSION = "0.1.1"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";
@@ -171,8 +173,8 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // Only instrumentors get this facade; the returned/global provider remains
     // native. Explicit standalone FITracer users on it are unaffected.
     const instrumentationProvider = FITracer.autoProvider(agent.provider);
-    const tracer = agent.provider.getTracer("@traceai/auto", "0.1.0");
-    const wireTracer = new FITracer({ tracer: instrumentationProvider.getTracer("@traceai/auto", "0.1.0"), traceConfig: options.traceConfig });
+    const tracer = agent.provider.getTracer("@traceai/auto", VERSION);
+    const wireTracer = new FITracer({ tracer: instrumentationProvider.getTracer("@traceai/auto", VERSION), traceConfig: options.traceConfig });
     const admissionPrivacy = privacyFilter(options.traceConfig, [config.apiKey, config.secretKey].filter((v): v is string => !!v));
     const wirePipeline = (tracer as any)._spanProcessor;
     const wireDestinationReady = () => hasAutoSpanSink(wirePipeline, agent.processorIsObserver ? [processor] : []);

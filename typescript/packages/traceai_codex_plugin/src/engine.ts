@@ -148,7 +148,11 @@ export class CodexEngine {
       string,
       { handle: ChildHandle; start: Event; index: number }
     >();
-    const tools = new Map<string, ChildHandle>();
+    const tools = new Map<
+      string,
+      { handle: ChildHandle; input?: string; start: Event }
+    >();
+    const toolKey = (e: Event) => JSON.stringify([sourceKey(e), e.tool_use_id]);
     const children = new Map<string, ChildHandle>();
     const compacts = new Map<string, ChildHandle>();
     const laneOf = (e: Event) =>
@@ -229,7 +233,9 @@ export class CodexEngine {
             parentId,
             kind: "llm",
             name: "codex.model_attempt",
-            model: e.model,
+            model:
+              e.model ??
+              reader?.modelAt(e.receivedAt, e.source_turn_id ?? e.turn_id!),
             startTime: e.receivedAt,
             timing: "observed-event",
             sourceTiming: "hook-interval",
@@ -273,6 +279,7 @@ export class CodexEngine {
               .filter(Boolean)
               .join("\n") || undefined;
           m.handle.end({
+            model: e.model,
             output: e.status === "failed" ? e.error : output,
             usage: usage(e),
             outcome:
@@ -286,35 +293,64 @@ export class CodexEngine {
           models.delete(lane);
           break;
         }
-        case "PreToolUse":
-          if (e.tool_use_id)
-            tools.set(
-              e.tool_use_id,
-              root.child({
-                id: `tool:${e.tool_use_id}`,
-                parentId,
-                kind: "tool",
-                name: e.tool_name,
-                toolCallId: e.tool_use_id,
-                input: e.tool_input,
-                startTime: e.receivedAt,
-                timing: "observed-event",
-                sourceTiming: "hook-interval",
-              }),
-            );
+        case "PreToolUse": {
+          if (!e.tool_use_id) break;
+          const input =
+            e.tool_input ?? reader?.toolCalls.get(e.tool_use_id)?.text;
+          tools.set(toolKey(e), {
+            start: e,
+            input,
+            handle: root.child({
+              id: `tool:${toolKey(e)}`,
+              parentId,
+              kind: "tool",
+              name: e.tool_name,
+              toolCallId: e.tool_use_id,
+              input,
+              startTime: e.receivedAt,
+              timing: "observed-event",
+              sourceTiming: "hook-interval",
+            }),
+          });
           break;
+        }
         case "PostToolUse": {
-          const h = e.tool_use_id ? tools.get(e.tool_use_id) : undefined;
-          if (h) {
-            h.end({
-              output: e.tool_response,
-              outcome:
-                e.failed || reader?.toolResults.get(e.tool_use_id!)?.failed
-                  ? "error"
-                  : "success",
+          const tool = e.tool_use_id ? tools.get(toolKey(e)) : undefined;
+          if (tool) {
+            const result = reader?.toolResults.get(e.tool_use_id!);
+            const failed = e.failed || result?.failed;
+            const output =
+              failed && this.config.hideErrorDetails
+                ? undefined
+                : (e.tool_response ?? result?.text);
+            let gap: string | undefined;
+            if (tool.input === undefined || output === undefined) {
+              if (!this.config.captureContent) gap = "TOOL_CONTENT_DISABLED";
+              else if (
+                (tool.input === undefined && this.config.hideInputs) ||
+                (output === undefined && this.config.hideOutputs)
+              )
+                gap = "TOOL_CONTENT_HIDDEN";
+              else if (failed && this.config.hideErrorDetails)
+                gap = "TOOL_ERROR_DETAILS_HIDDEN";
+              else if (
+                result?.limited ||
+                reader?.toolCalls.get(e.tool_use_id!)?.limited
+              )
+                gap = "ROLLOUT_TOOL_CONTENT_LIMIT";
+              else if (reader?.unsupportedTools.has(e.tool_use_id!))
+                gap = "UNSUPPORTED_ROLLOUT_TOOL_CONTENT";
+              else if (tool.start.content_truncated || e.content_truncated)
+                gap = "HOOK_CONTENT_EVICTED_ROLLOUT_UNAVAILABLE";
+              else gap = "TOOL_CONTENT_NOT_PROVIDED";
+            }
+            tool.handle.end({
+              output,
+              gap,
+              outcome: failed ? "error" : "success",
               endTime: e.receivedAt,
             });
-            tools.delete(e.tool_use_id!);
+            tools.delete(toolKey(e));
           } else state.gap = true;
           break;
         }

@@ -14,7 +14,7 @@ import {
   type AdapterInspection,
 } from "@traceai/agent-core";
 import { EVENTS } from "./events";
-export const VERSION = "0.1.0"; // x-release-please-version
+export const VERSION = "0.1.1"; // x-release-please-version
 export const HOST_VERSION = "0.167.0";
 export const PLUGIN_ID = "futureagi-tracing@futureagi-local";
 const exec = promisify(execFile);

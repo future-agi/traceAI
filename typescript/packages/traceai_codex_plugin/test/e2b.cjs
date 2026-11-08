@@ -17,6 +17,7 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const nested = process.env.FI_TEST_NESTED === "true";
 const nestedReuse = process.env.FI_TEST_NESTED_REUSE === "true";
 const longTurn = process.env.FI_TEST_LONG_TURN === "true";
+const model = process.env.FI_TEST_MODEL ?? "gpt-5.1-codex";
 const privateMarker = "native-synthetic-private-marker";
 const fixtureMessages = (inputs) =>
   inputs
@@ -115,7 +116,7 @@ async function main() {
             response: {
               id: "resp_interrupt",
               object: "response",
-              model: "gpt-5.1-codex",
+              model,
               status: "in_progress",
               output: [],
             },
@@ -140,7 +141,7 @@ async function main() {
       }) + "\n",
     ).toString("base64");
     const command = longTurn
-      ? `printf step-${count}`
+      ? `printf step-${count}; printf '%03000d' 0`
       : `printf '%s' '${encoded}' | base64 -d; exit 7`;
     const args =
       shell?.name === "exec_command"
@@ -280,7 +281,7 @@ async function main() {
       id: "resp_" + count,
       object: "response",
       created_at: 1,
-      model: "gpt-5.1-codex",
+      model,
       status: "in_progress",
       output: [],
     };
@@ -331,7 +332,7 @@ async function main() {
   process.env.FI_API_KEY = "dummy-fi-api";
   process.env.FI_SECRET_KEY = "dummy-fi-secret";
   process.env.FI_OTLP_ENDPOINT = `http://127.0.0.1:${port}/tracer/v1/traces`;
-  const config = `model = "gpt-5.1-codex"\nmodel_provider = "mock"\n[model_providers.mock]\nname = "Local Responses"\nbase_url = "http://127.0.0.1:${port}/v1"\nwire_api = "responses"\nenv_key = "MOCK_API_KEY"\nsupports_websockets = false\n[analytics]\nenabled = false\n[feedback]\nenabled = false\n`;
+  const config = `model = ${JSON.stringify(model)}\nmodel_provider = "mock"\n[model_providers.mock]\nname = "Local Responses"\nbase_url = "http://127.0.0.1:${port}/v1"\nwire_api = "responses"\nenv_key = "MOCK_API_KEY"\nsupports_websockets = false\n[analytics]\nenabled = false\n[feedback]\nenabled = false\n`;
   await fs.writeFile(home + "/.codex/config.toml", config, { mode: 0o600 });
   const cli =
     process.env.FI_TEST_CLI ??
@@ -538,6 +539,16 @@ async function main() {
   assert.equal(toolSpans.length, longTurn ? 40 : 1);
   assert(
     toolSpans.every((s) => attrs(s)["tool.name"] && attrs(s)["tool_call.id"]),
+  );
+  assert(
+    spans
+      .filter((s) => s.name === "codex.model_attempt")
+      .every((s) => attrs(s)["gen_ai.request.model"] === model),
+    "every native request has the actual model",
+  );
+  assert(
+    toolSpans.every((s) => attrs(s)["input.value"] && attrs(s)["output.value"]),
+    "every completed native tool has arguments and result, including evicted early hooks",
   );
   if (longTurn) {
     assert.equal(requests.length, 41);

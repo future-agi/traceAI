@@ -33,7 +33,7 @@ It runs on the HTTP clients each runtime uses for AI calls:
 | SDK | Transports patched |
 | --- | --- |
 | Python | `httpx` and `httpx2` (sync and async), `requests`, `aiohttp` |
-| TypeScript | `globalThis.fetch` (covers undici and every fetch-based SDK) |
+| TypeScript | `globalThis.fetch` as observed after preload; not direct `undici.fetch`/`undici.request`, `node-fetch`, or a fetch reference cached before preload |
 | Go | `http.DefaultTransport` (and any `http.Client` built from it) |
 | C# | `HttpClient` through a `DiagnosticListener` handler |
 | Java | `java.net.http.HttpClient` and OkHttp when present |
