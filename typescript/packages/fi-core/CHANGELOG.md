@@ -1,3 +1,7 @@
+## [1.2.2] - pending release
+### Fix
+- Preserve numeric `gen_ai.usage.cache_read_tokens.audio` counts through admission, projection and export. The 1.2.0 shared privacy runtime mistook this modality count for an audio payload. Only nonnegative safe integers receive the metric role; strings, arrays, media ancestry and registered secrets retain their existing privacy protections.
+
 ## [1.2.1] - pending release
 ### Fix
 - **Spans no longer carry the process command line or the OS user.** 1.2.0 added OpenTelemetry's full process detector to every provider resource, so `process.command_args`, `process.command`, `process.owner`, `process.executable.path` and `process.pid` were exported with every span. Command-line flags can hold secrets. By default fi-core now detects only `process.runtime.name`, `process.runtime.version` and `process.runtime.description`, as it detected nothing before 1.2.0.
