@@ -50,6 +50,13 @@ export interface Event {
 }
 const id = (v: unknown): v is string =>
   typeof v === "string" && /^[a-zA-Z0-9_.:-]{1,256}$/.test(v);
+/** Model labels are not hook IDs: custom providers use names such as openai/gpt-4.1-mini. */
+export const modelName = (v: unknown): string | undefined =>
+  typeof v === "string" &&
+  /^[a-zA-Z0-9_.:/-]{1,128}$/.test(v) &&
+  !v.includes("://")
+    ? v
+    : undefined;
 /** Shell responses wrap JSON in status text, so they are not complete JSON strings.
  * Decode balanced object/array fragments before the shared recursive redactor;
  * otherwise an escaped assignment inside a non-secret field can be overlooked.
@@ -148,13 +155,13 @@ export function sanitizeEvent(
   for (const k of [
     "turn_id",
     "agent_id",
-    "model",
     "tool_name",
     "tool_use_id",
     "status",
     "reason",
   ] as const)
     if (id(r[k])) event[k] = r[k];
+  event.model = modelName(r.model);
   for (const k of ["transcript_path", "agent_transcript_path"] as const)
     if (typeof r[k] === "string" && r[k].length < 4096 && r[k].startsWith("/"))
       event[k] = r[k];

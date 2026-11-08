@@ -8,7 +8,12 @@ import {
   ensurePrivateDirectory,
 } from "@traceai/agent-core/files";
 import type { ResolvedConfig } from "@traceai/agent-core/config";
-import { cleanText, toolFailed } from "./events";
+import { cleanText, modelName, toolFailed } from "./events";
+interface ToolContent {
+  text?: string;
+  limited: boolean;
+  failed?: boolean;
+}
 export interface Message {
   at: number;
   turnId?: string;
@@ -50,7 +55,38 @@ export class RolloutReader {
   }
   gap = false;
   readonly messages: Message[] = [];
-  readonly toolResults = new Map<string, { failed: boolean }>();
+  readonly toolCalls = new Map<string, ToolContent>();
+  readonly toolResults = new Map<string, ToolContent>();
+  readonly unsupportedTools = new Set<string>();
+  private models: { at: number; turnId: string; model: string }[] = [];
+  private toolContentBytes = 0;
+  /** A turn can change model after compaction; never borrow another turn's context. */
+  modelAt(at: number, turnId: string): string | undefined {
+    const contexts = this.models.filter((m) => m.turnId === turnId);
+    return (
+      contexts.filter((m) => m.at <= at).at(-1)?.model ?? contexts[0]?.model
+    );
+  }
+  private retainToolContent(
+    entries: Map<string, ToolContent>,
+    id: string,
+    text: string | undefined,
+    failed?: boolean,
+  ): void {
+    this.toolContentBytes -= Buffer.byteLength(entries.get(id)?.text ?? "");
+    const bytes = Buffer.byteLength(text ?? "");
+    // Bound retained memory, not bytes ever seen: repeated rows replace content.
+    const limited = this.toolContentBytes + bytes > 1024 * 1024;
+    entries.set(id, { text: limited ? undefined : text, limited, failed });
+    if (!limited) this.toolContentBytes += bytes;
+    if (entries.size > 512) {
+      const oldest = entries.keys().next().value!;
+      this.toolContentBytes -= Buffer.byteLength(
+        entries.get(oldest)?.text ?? "",
+      );
+      entries.delete(oldest);
+    }
+  }
   readonly completed = new Map<string, { at: number; output?: string }>();
   constructor(
     private path: string,
@@ -170,10 +206,23 @@ export class RolloutReader {
           if (r.type === "session_meta" && p?.id !== this.session) {
             this.gap = true;
             this.messages.length = 0;
+            this.toolCalls.clear();
+            this.toolResults.clear();
+            this.unsupportedTools.clear();
+            this.toolContentBytes = 0;
+            this.models.length = 0;
             this.safeCursor = false;
             return;
           }
-          if (r.type === "turn_context") this.turn = p?.turn_id;
+          if (r.type === "turn_context") {
+            this.turn = p?.turn_id;
+            const model = modelName(p?.model),
+              at = Date.parse(r.timestamp);
+            if (this.retaining && this.turn && model && Number.isFinite(at)) {
+              this.models.push({ at, turnId: this.turn, model });
+              if (this.models.length > 512) this.models.shift();
+            }
+          }
           if (r.type === "event_msg" && p?.type === "task_started")
             this.turn = p.turn_id;
           this.targetSeen ||=
@@ -202,19 +251,33 @@ export class RolloutReader {
           // A per-turn cursor may scan old history, but unrelated messages and
           // tool results must neither consume this turn's budget nor mark gaps.
           if (this.targetTurn && messageTurn !== this.targetTurn) continue;
+          // Custom tools have distinct failure envelopes. Do not recover their raw
+          // output using shell failure semantics; explain the missing content instead.
+          if (
+            ["custom_tool_call", "custom_tool_call_output"].includes(p?.type) &&
+            typeof p.call_id === "string"
+          ) {
+            this.unsupportedTools.add(p.call_id);
+            if (this.unsupportedTools.size > 512)
+              this.unsupportedTools.delete(this.unsupportedTools.values().next().value!);
+          }
           if (
             p?.type === "function_call_output" &&
             typeof p.call_id === "string"
           ) {
-            this.toolResults.set(p.call_id, {
-              failed: toolFailed(
-                typeof p.output === "string"
-                  ? p.output
-                  : JSON.stringify(p.output),
-              ),
-            });
-            if (this.toolResults.size > 512)
-              this.toolResults.delete(this.toolResults.keys().next().value!);
+            const failed = toolFailed(
+              typeof p.output === "string"
+                ? p.output
+                : JSON.stringify(p.output),
+            );
+            this.retainToolContent(
+              this.toolResults,
+              p.call_id,
+              failed && this.config.hideErrorDetails
+                ? undefined
+                : cleanText(p.output, this.config, true),
+              failed,
+            );
           }
           const call = p?.type === "function_call";
           if (
@@ -235,6 +298,12 @@ export class RolloutReader {
               this.gap = true;
             }
           } else if (call) argumentsValue = p.arguments;
+          if (call && typeof p.call_id === "string")
+            this.retainToolContent(
+              this.toolCalls,
+              p.call_id,
+              cleanText(argumentsValue, this.config),
+            );
           const text = call
             ? cleanText(
                 { tool: p.name, arguments: argumentsValue },

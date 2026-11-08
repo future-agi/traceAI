@@ -1189,6 +1189,405 @@ test("nested serialized secrets and escaped assignments never escape direct or r
   assert(body.includes("visible-safe-result"));
 });
 
+test("issue 606 accepts provider-qualified hook model names", () => {
+  const raw = {
+    hook_event_name: "PreModelRequest",
+    session_id: "s",
+    cwd: "/work",
+  };
+  assert.equal(
+    sanitizeEvent(
+      { ...raw, model: "openai/gpt-4.1-mini" },
+      { captureContent: false },
+    ).model,
+    "openai/gpt-4.1-mini",
+  );
+  for (const model of [
+    "https://private.example/model",
+    "model\nprivate",
+    "x".repeat(129),
+  ])
+    assert.equal(
+      sanitizeEvent({ ...raw, model }, { captureContent: false }).model,
+      undefined,
+    );
+});
+
+test("issue 606 recovers turn-scoped models and evicted Bash content from real rollout shapes", async (t) => {
+  const f = await fixture(t);
+  const { CodexEngine } = require("../dist/engine.js");
+  const transcript = path.join(f.env.CODEX_HOME, "sessions/content.jsonl");
+  const store = new EventStore(f.config);
+  const events = [];
+  const add = async (hook_event_name, extra = {}) => {
+    const e = sanitizeEvent(
+      {
+        hook_event_name,
+        session_id: "s",
+        turn_id: "t",
+        cwd: f.repo,
+        transcript_path: transcript,
+        ...extra,
+      },
+      f.config,
+    );
+    events.push(e);
+    await store.append(e);
+  };
+  let rollout =
+    row("session_meta", { id: "s" }) +
+    row("turn_context", { turn_id: "old", model: "wrong-old-model" }) +
+    row("turn_context", { turn_id: "t", model: "openai/gpt-4.1-mini" });
+  await add("UserPromptSubmit", { prompt: "long tool turn" });
+  for (let i = 0; i < 29; i++) {
+    const call_id = `call-${i}`;
+    const input = {
+      cmd: `printf visible-input-${i}`,
+      password: "PRIVATE_ARGUMENT",
+    };
+    const output =
+      `Process exited with code 0\nFinal output:\nvisible-output-${i} ` +
+      "x".repeat(3000) +
+      '\nPASSWORD="PRIVATE_RESULT"';
+    await add("PreModelRequest"); // Codex 0.167.0 does not supply the model here.
+    await add("PostModelRequest", {
+      status: "completed",
+      token_usage: { input_tokens: 20, output_tokens: 8 },
+    });
+    await add("PreToolUse", {
+      tool_name: "Bash",
+      tool_use_id: call_id,
+      tool_input: input,
+    });
+    await add("PostToolUse", {
+      tool_name: "Bash",
+      tool_use_id: call_id,
+      tool_response: output,
+    });
+    const metadata = { turn_id: "t" };
+    rollout += row("response_item", {
+      type: "function_call",
+      status: "completed",
+      id: `fc-${i}`,
+      name: "exec_command",
+      arguments: JSON.stringify(input),
+      call_id,
+      internal_chat_message_metadata_passthrough: metadata,
+    });
+    rollout += row("response_item", {
+      type: "function_call_output",
+      id: null,
+      call_id,
+      output,
+      internal_chat_message_metadata_passthrough: metadata,
+    });
+  }
+  rollout +=
+    row("event_msg", { type: "task_complete", turn_id: "t" }) +
+    row("turn_context", { turn_id: "next", model: "wrong-next-model" });
+  await fs.writeFile(transcript, rollout, { mode: 0o600 });
+  const pending = await store.take(events[0]);
+  assert(
+    pending.events.some(
+      (e) =>
+        e.hook_event_name === "PreToolUse" &&
+        e.content_truncated &&
+        e.tool_input === undefined,
+    ),
+    "exercise actual journal eviction",
+  );
+  const engine = new CodexEngine(f.config);
+  for (const e of pending.events) await engine.accept(e);
+  await engine.accept({
+    ...events[0],
+    hook_event_name: "Stop",
+    receivedAt: Date.now(),
+  });
+  await engine.close();
+  const spans = flatten(f),
+    models = spans.filter((s) => s.name === "codex.model_attempt"),
+    tools = spans.filter((s) => s.name === "Bash");
+  assert.equal(models.length, 29);
+  await t.test("every attempt uses its own turn_context model", () => {
+    assert(
+      models.every(
+        (s) => attrs(s)["gen_ai.request.model"] === "openai/gpt-4.1-mini",
+      ),
+    );
+  });
+  await t.test(
+    "all 29 tools retain input and output after journal eviction",
+    () => {
+      assert.equal(tools.length, 29);
+      for (let i = 0; i < tools.length; i++) {
+        const a = attrs(
+          tools.find((s) => attrs(s)["tool_call.id"] === `call-${i}`),
+        );
+        assert(
+          a["input.value"]?.includes(`visible-input-${i}`),
+          `missing input ${i}`,
+        );
+        assert(
+          a["output.value"]?.includes(`visible-output-${i}`),
+          `missing output ${i}`,
+        );
+        assert.equal(a["fi.agent.gap"], undefined);
+      }
+    },
+  );
+  assert(!JSON.stringify(spans).includes("PRIVATE_ARGUMENT"));
+  assert(!JSON.stringify(spans).includes("PRIVATE_RESULT"));
+  const { checkShape } = require("@traceai/agent-core/test/conformance");
+  checkShape(
+    f.received.map((r) => r.body),
+    { calls: 29, tools: 29, inputTokens: 580, outputTokens: 232 },
+  );
+});
+
+for (const policy of [
+  {},
+  { captureContent: false },
+  { hideInputs: true },
+  { hideOutputs: true },
+  { hideErrorDetails: true },
+]) {
+  test(`issue 606 rollout recovery honors privacy ${JSON.stringify(policy)}`, async (t) => {
+    const f = await fixture(t);
+    await put(path.join(f.repo, ".codex/futureagi.json"), {
+      schemaVersion: 1,
+      captureContent: policy.captureContent ?? true,
+    });
+    const config = await core.resolveConfig({
+      ...f.options,
+      env: {
+        ...f.env,
+        FI_HIDE_INPUTS: String(policy.hideInputs ?? false),
+        FI_HIDE_OUTPUTS: String(policy.hideOutputs ?? false),
+        FI_HIDE_ERROR_DETAILS: String(policy.hideErrorDetails ?? false),
+      },
+    });
+    const transcript = path.join(
+      f.env.CODEX_HOME,
+      "sessions/privacy-recovery.jsonl",
+    );
+    await fs.writeFile(
+      transcript,
+      row("session_meta", { id: "s" }) +
+        row("turn_context", { turn_id: "t", model: "openai/gpt-4.1-mini" }) +
+        row("response_item", {
+          type: "function_call",
+          call_id: "call",
+          name: "exec_command",
+          arguments: JSON.stringify({
+            cmd: "visible-argument",
+            password: "PRIVATE_ARGUMENT",
+          }),
+        }) +
+        row("response_item", {
+          type: "function_call_output",
+          call_id: "call",
+          output:
+            'Process exited with code 7\nvisible-result PASSWORD="PRIVATE_RESULT"',
+        }),
+      { mode: 0o600 },
+    );
+    const { CodexEngine } = require("../dist/engine.js"),
+      engine = new CodexEngine(config);
+    for (const hook_event_name of [
+      "UserPromptSubmit",
+      "PreModelRequest",
+      "PostModelRequest",
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+    ]) {
+      await engine.accept(
+        sanitizeEvent(
+          {
+            hook_event_name,
+            session_id: "s",
+            turn_id: "t",
+            cwd: f.repo,
+            transcript_path: transcript,
+            tool_name: "Bash",
+            tool_use_id: "call",
+            status: "completed",
+          },
+          config,
+        ),
+      );
+    }
+    await engine.close();
+    const tool = attrs(flatten(f).find((s) => s.name === "Bash"));
+    assert.equal(tool["fi.agent.outcome"], "error");
+    assert.equal(
+      tool["input.value"]?.includes("visible-argument") ?? false,
+      config.captureContent && !config.hideInputs,
+    );
+    assert.equal(
+      tool["output.value"]?.includes("visible-result") ?? false,
+      config.captureContent && !config.hideOutputs && !config.hideErrorDetails,
+    );
+    assert.equal(
+      typeof tool["fi.agent.gap"],
+      Object.keys(policy).length ? "string" : "undefined",
+    );
+    assert(!JSON.stringify(flatten(f)).includes("PRIVATE_ARGUMENT"));
+    assert(!JSON.stringify(flatten(f)).includes("PRIVATE_RESULT"));
+    assert.equal(
+      attrs(flatten(f).find((s) => s.name === "codex.model_attempt"))[
+        "gen_ai.request.model"
+      ],
+      "openai/gpt-4.1-mini",
+    );
+  });
+}
+
+test("issue 606 bounded recovery reports missing tool content instead of silently empty spans", async (t) => {
+  const f = await fixture(t);
+  const transcript = path.join(
+    f.env.CODEX_HOME,
+    "sessions/bounded-content.jsonl",
+  );
+  let data =
+    row("session_meta", { id: "s" }) +
+    row("turn_context", { turn_id: "t", model: "openai/gpt-4.1-mini" });
+  for (let i = 0; i < 60; i++)
+    data += row("response_item", {
+      type: "function_call_output",
+      call_id: `large-${i}`,
+      output: "x".repeat(20000),
+    });
+  data += row("response_item", {
+    type: "custom_tool_call",
+    call_id: "custom",
+    name: "apply_patch",
+    input: "visible-patch",
+  });
+  data += row("response_item", {
+    type: "custom_tool_call_output",
+    call_id: "custom",
+    output: "visible-patch-result",
+  });
+  await fs.writeFile(transcript, data, { mode: 0o600 });
+  const { CodexEngine } = require("../dist/engine.js"),
+    engine = new CodexEngine(f.config);
+  const emit = (hook_event_name, rest = {}) =>
+    engine.accept(
+      sanitizeEvent(
+        {
+          hook_event_name,
+          session_id: "s",
+          turn_id: "t",
+          cwd: f.repo,
+          transcript_path: transcript,
+          ...rest,
+        },
+        f.config,
+      ),
+    );
+  await emit("UserPromptSubmit");
+  for (const tool_use_id of ["large-59", "missing", "custom"]) {
+    await emit("PreToolUse", { tool_use_id, tool_name: "Bash" });
+    await emit("PostToolUse", { tool_use_id });
+  }
+  await emit("Stop");
+  await engine.close();
+  const tools = flatten(f)
+    .filter((s) => s.name === "Bash")
+    .map(attrs);
+  assert.equal(tools[0]["fi.agent.gap"], "ROLLOUT_TOOL_CONTENT_LIMIT");
+  assert.equal(tools[1]["fi.agent.gap"], "TOOL_CONTENT_NOT_PROVIDED");
+  assert.equal(tools[2]["fi.agent.gap"], "UNSUPPORTED_ROLLOUT_TOOL_CONTENT");
+  assert.equal(tools[2]["input.value"], undefined);
+  assert.equal(tools[2]["output.value"], undefined);
+});
+
+test("issue 606 repeated rollout rows do not exhaust the retained-content budget", async (t) => {
+  const f = await fixture(t),
+    transcript = path.join(f.env.CODEX_HOME, "sessions/repeated-content.jsonl");
+  const repeated = row("response_item", {
+    type: "function_call_output",
+    call_id: "same",
+    output: "x".repeat(20000),
+  });
+  await fs.writeFile(
+    transcript,
+    row("session_meta", { id: "s" }) +
+      row("turn_context", { turn_id: "t", model: "mock" }) +
+      repeated.repeat(60),
+    { mode: 0o600 },
+  );
+  const reader = new RolloutReader(transcript, "s", f.config, "t");
+  await reader.read();
+  assert.equal(reader.toolResults.size, 1);
+  assert.equal(reader.toolResults.get("same").text.length, 20000);
+  assert.equal(reader.toolResults.get("same").limited, false);
+});
+
+test("issue 606 model changes and identical tool IDs stay scoped to source turn", async (t) => {
+  const f = await fixture(t),
+    transcript = path.join(f.env.CODEX_HOME, "sessions/scoped-content.jsonl");
+  const at = (timestamp, type, payload) =>
+    JSON.stringify({ timestamp, type, payload }) + "\n";
+  const data =
+    row("session_meta", { id: "s" }) +
+    at("2026-11-06T00:00:00Z", "turn_context", {
+      turn_id: "t",
+      model: "first/model",
+    }) +
+    at("2026-11-06T00:00:02Z", "turn_context", {
+      turn_id: "t",
+      model: "second/model",
+    }) +
+    row("response_item", {
+      type: "function_call",
+      call_id: "same",
+      arguments: '{"cmd":"target-input"}',
+    }) +
+    row("response_item", {
+      type: "function_call_output",
+      call_id: "same",
+      output: "target-output",
+    }) +
+    row("turn_context", { turn_id: "other", model: "wrong/model" }) +
+    row("response_item", {
+      type: "function_call",
+      call_id: "same",
+      arguments: '{"cmd":"wrong-input"}',
+    }) +
+    row("response_item", {
+      type: "function_call_output",
+      call_id: "same",
+      output: "wrong-output",
+    });
+  await fs.writeFile(transcript, data, { mode: 0o600 });
+  const reader = new RolloutReader(transcript, "s", f.config, "t");
+  await reader.read();
+  assert.equal(
+    reader.modelAt(Date.parse("2026-11-06T00:00:01Z"), "t"),
+    "first/model",
+  );
+  assert.equal(
+    reader.modelAt(Date.parse("2026-11-06T00:00:03Z"), "t"),
+    "second/model",
+  );
+  assert.equal(reader.modelAt(Date.now(), "other"), undefined);
+  assert.equal(reader.toolCalls.get("same").text, '{"cmd":"target-input"}');
+  assert.equal(reader.toolResults.get("same").text, "target-output");
+  await reader.checkpoint();
+  for (const name of await fs.readdir(f.config.paths.stateDir)) {
+    const saved = await fs.readFile(
+      path.join(f.config.paths.stateDir, name),
+      "utf8",
+    );
+    assert(
+      !saved.includes("target-input") && !saved.includes("target-output"),
+      "no rollout content persisted",
+    );
+  }
+});
+
 for (const recover of [false, true]) {
   test(`unified core reports terminal failure and successful later retry (recover=${recover})`, async (t) => {
     const f = await fixture(t);
