@@ -51,8 +51,9 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
     // A credential may itself be a key or media/embedding discriminator. Removing
     // it must not erase the context that protects its siblings in later FI passes.
     if (secrets.length && Object.entries(value).some(([key, item]) =>
-      exactSecrets(key, secrets) !== key || typeof item === "string" && exactSecrets(item, secrets) !== item &&
-        (["type", "object"].includes(normalizePrivacyName(key)) || indexPrivacyHints([[key, undefined]]).size > 0),
+      exactSecrets(key, secrets) !== key ||
+        (["type", "object"].includes(normalizePrivacyName(key)) || indexPrivacyHints([[key, undefined]]).size > 0) &&
+        (Array.isArray(item) ? item : [item]).some(v => typeof v === "string" && exactSecrets(v, secrets) !== v),
     )) return "[REDACTED]";
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
@@ -71,10 +72,14 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
       Buffer.byteLength(value) > LIMITS.ingress
     )
       return "[REDACTED_SIZE_LIMIT]";
+    // A literal credential spanning JSON framing owns the whole text. Handle it
+    // before parsing embedded islands can rewrite one part of the exact match.
+    if (secrets.some(secret => secret && /[{}\[\]"]/.test(secret) && value.includes(secret)))
+      return "[REDACTED]";
     const text = exactSecrets(value, secrets);
     if (/^\s*[\[{"]/.test(value)) {
       let parsed: unknown;
-      try { parsed = JSON.parse(value); } catch { return redactText(text, depth, secrets); }
+      try { parsed = JSON.parse(value); } catch { return redactText(value, depth, secrets); }
       if (text !== value) {
         // A source match crossing JSON syntax owns the complete container. Do
         // not reinterpret its damaged prefix as prose after removing the match.
@@ -82,7 +87,7 @@ export function redactStructured(value: unknown, depth = 0, secrets: readonly st
       }
       return JSON.stringify(redactStructured(parsed, depth + 1, secrets));
     }
-    return redactText(text, depth, secrets);
+    return redactText(value, depth, secrets);
   }
   return value;
 }
@@ -238,7 +243,7 @@ function redactEmbeddedJson(text: string, depth: number, secrets: readonly strin
   return result + text.slice(offset);
 }
 function redactText(text: string, depth = 0, secrets: readonly string[] = []): string {
-  return redactAssignments(redactEmbeddedJson(text, depth, secrets))
+  return redactAssignments(exactSecrets(redactEmbeddedJson(text, depth, secrets), secrets))
     // URI userinfo is credential-bearing for every scheme, including local databases.
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>]*@/gi, (uri) => uri.slice(0, uri.indexOf("://") + 3) + "[REDACTED]@")
     .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")
