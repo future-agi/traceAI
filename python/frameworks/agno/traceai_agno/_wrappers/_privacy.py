@@ -1,6 +1,7 @@
 """Compose FI privacy policy with OpenInference's attribute conventions."""
 
 import os
+import re
 from dataclasses import fields, replace
 from functools import wraps
 from inspect import signature
@@ -38,15 +39,33 @@ def privacy_configs(config: TraceConfig | None) -> tuple[TraceConfig, FITraceCon
     # An explicit FI limit may tighten OI's limit. Do not replace a caller's
     # larger OI limit with an FI default when no FI limit was requested.
     image_limit = _normalize_image_cap(config.base64_image_max_length)
-    if supplied and os.getenv("OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH") is None:
-        # F2 (RL 2310bu): a supplied OI config carries OI's nonzero constructor
-        # default when the caller never set a cap (e.g. a config passed only to
-        # hide inputs). Only a value that differs from OI's default is explicit
-        # caller policy; the default resolves to the FI cap (0 unless
-        # FI_BASE64_IMAGE_MAX_LENGTH is set).
+    # Match FI's nonnegative decimal cap grammar, including explicit zero.
+    # Empty, negative or unparseable OI env caps do not authorize a default cap.
+    oi_cap_env = os.getenv("OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH")
+    oi_cap_is_explicit = False
+    if oi_cap_env is not None and re.fullmatch(r"[+-]?[0-9]+", oi_cap_env.strip()):
         try:
-            oi_default = _normalize_image_cap(TraceConfig().base64_image_max_length)
-        except Exception:
+            oi_cap_is_explicit = int(oi_cap_env, 10) >= 0
+        except ValueError:
+            # Python can reject overlong decimal strings; treat them as absent.
+            pass
+    if supplied and not oi_cap_is_explicit:
+        # Constructor provenance is absent: even an explicitly supplied value
+        # equal to OI's default takes the FI ceiling. Read the invariant default
+        # from the dataclass, never TraceConfig() under the rejected OI env cap.
+        try:
+            cap_field = next(
+                field for field in fields(TraceConfig)
+                if field.name == "base64_image_max_length"
+            )
+            oi_default = cap_field.metadata.get("default_value", cap_field.default)
+            if (
+                not isinstance(oi_default, int)
+                or isinstance(oi_default, bool)
+                or oi_default < 0
+            ):
+                oi_default = None
+        except (StopIteration, TypeError):
             oi_default = None
         if oi_default is None or image_limit == oi_default:
             # Never above r5 (F2-R6-DELTA-SEC-001): the FI cap may only tighten OI's default.
