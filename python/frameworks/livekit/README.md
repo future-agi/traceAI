@@ -162,15 +162,16 @@ The recording helper controls only the metadata it writes. Attributes, events or
 - Calls on the original service, other processes and server-side completion events are not intercepted. There is no polling or webhook server. Your application supplies final updates and distributed trace-context propagation. The API owner remains responsible for shutdown; special-method/context-manager protocols are not proxied.
 - The envelope is not a promise that FI receives LiveKit Cloud's native root. The earlier Cloud-root limitation still applies. Native `AgentSession` parent inheritance and real SDK compatibility must be validated for the deployed mode.
 
-The pinned development lock contains LiveKit Agents 1.8.6, API 1.2.1, protocol 1.1.27 and FI 1.1.0. Those pins are **verification targets, not executed compatibility results for this feature**. Fake-service tests do not establish SDK schemas, timestamp semantics, native-session linkage or a playback UI.
+The pinned development lock contains LiveKit Agents 1.8.6, API 1.2.1, protocol 1.1.27, FI 1.3.0 and OpenTelemetry SDK 1.44.0. Those pins are **verification targets, not executed compatibility results for this feature**. Fake-service tests do not establish SDK schemas, timestamp semantics, native-session linkage or a playback UI.
 
 ## Compatibility
 
 *   **livekit-agents**: 1.x. 1.8 is the tested version (it needs Python 3.10 or later). Since 1.7, LiveKit names its content
     attributes `lk.pii.*` (for example `lk.pii.user_input`); both those names and the earlier ones are mapped to `input.value`
     and `output.value`.
-*   **fi-instrumentation-otel**: 1.1.0 or later (1.0.0 fails inside `register()` with OpenTelemetry 1.45, which livekit-agents
-    1.8.7 and later require). 1.0 moved span attributes from the `llm.*` names to the OpenTelemetry GenAI `gen_ai.*` names, and
+*   **Python**: 3.10 to 3.13.
+*   **fi-instrumentation-otel**: 1.3.0 or later; the recording helpers' privacy tests fail with 1.1.0. 1.3.0 needs Python 3.10
+    or later and sets the default base64 image cap to 0 (see its changelog). 1.0 moved span attributes from the `llm.*` names to the OpenTelemetry GenAI `gen_ai.*` names, and
     renamed the `SpanAttributes` constants with them. Code that only calls `register()` is unaffected; if your code sets or reads
     those attributes directly, see the
     [mapping from the old names](https://github.com/future-agi/traceAI/blob/main/docs/OTEL_GENAI_SEMANTIC_CONVENTIONS.md#migration-from-openinference-llm).

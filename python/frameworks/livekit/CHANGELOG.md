@@ -2,6 +2,9 @@
 
 ## [0.2.0] - pending release
 
+### Changed
+- Requires Python 3.10 or later and `fi-instrumentation-otel` 1.3.0 or later (0.1.3 accepted Python 3.9 and `fi-instrumentation-otel` 1.1.0). The recording helpers' privacy tests fail with `fi-instrumentation-otel` 1.1.0, and 1.3.0 itself needs Python 3.10. Upgrading from an older core also brings 1.3.0's default base64 image cap of 0; see the `fi-instrumentation-otel` changelog.
+
 ### Added
 - `record_egress` creates a short recording metadata snapshot beneath an explicitly bound session span, including available id, status, room/conversation, nanosecond timestamps and credential-free file/stream locators. It never reads or uploads media bytes.
 - `wrap_egress_client` provides opt-in, per-service capture of successful async start/stop/update responses without changing delegate arguments, return identity, errors or cancellation. SDK compatibility still requires validation against the deployed service/version; this is not a process-wide patch.

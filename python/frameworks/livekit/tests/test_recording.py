@@ -405,9 +405,17 @@ def test_delegate_errors_cancellation_and_capture_failures_do_not_change_api_beh
     h = harness
     service = FakeService(error=error)
     proxy = wrap(service, session_span=h.root, tracer=h.tracer)
-    with pytest.raises(type(error)) as caught:
-        asyncio.run(proxy.stop_egress(object()))
-    assert caught.value is error
+
+    async def call():
+        # Catch inside the coroutine: on Python 3.10, asyncio.run() replaces a task's
+        # CancelledError with a new instance, so identity is checked where the proxy raises.
+        try:
+            await proxy.stop_egress(object())
+        except BaseException as raised:
+            return raised
+        return None
+
+    assert asyncio.run(call()) is error
     assert len(service.calls) == 1
     assert _recordings(h.raw) == []
 
