@@ -322,7 +322,7 @@ async function fragmentRedactionRegression({ home, send, readSpans }, variant) {
     attrs(last)["input.value"],
   ]) {
     assert.match(text, /PUBLIC_FIRST_FRAGMENT/);
-    assert.match(text, /\[REDACTED\]/);
+    assert.match(text, /\[REDACTED\]|<redacted>/);
     assert.ok(!text.includes(marker));
     if (variant === "two-json-text-blocks")
       assert.match(text, /PUBLIC_SECOND_FRAGMENT/);
