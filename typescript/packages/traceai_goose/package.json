@@ -16,6 +16,7 @@
     "README.md"
   ],
   "scripts": {
+    "prepare": "pnpm run build",
     "build": "tsc -p tsconfig.json && esbuild src/hook.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/hook.cjs",
     "test": "node --test test/*.test.cjs"
   },

@@ -487,6 +487,13 @@ Other provider structures have no new exception without catalog/source evidence.
 resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an optional
 application `resource` are preserved.
 
+Resource detection is minimal by default: the provider adds the Node.js runtime
+name and version (`process.runtime.*`) and nothing that identifies the machine,
+the OS user or the command line (which can hold secrets passed as flags). To add
+OpenTelemetry's host, OS or full process attributes, set
+`OTEL_NODE_RESOURCE_DETECTORS` to a comma-separated list of `host`, `os` and
+`process`, or to `all`; `none` turns detection off.
+
 `FITracer` applies the shared privacy policy before SDK attribute-value truncation.
 Its library spans use the same deterministic count-limit projection as wire spans
 (spec A7), including late output/usage updates. Protected attributes are reserved

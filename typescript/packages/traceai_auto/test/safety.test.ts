@@ -63,7 +63,7 @@ test("consumer cancellation is OK with partial output and incomplete marker", as
   expect(spans[0].attributes["error.type"]).toBeUndefined();
 });
 test.each([["gzip", gzipSync], ["deflate", deflateSync]] as const)("encoded %s responses decode before parsing but retain application bytes", async (encoding, compress) => {
-  const bytes = compress(partial); globalThis.fetch = jest.fn(async () => new Response(bytes, { headers: { "content-type": "text/event-stream", "content-encoding": encoding } })); const h = hook();
+  const bytes = compress(partial); globalThis.fetch = jest.fn(async () => new Response(new Uint8Array(bytes), { headers: { "content-type": "text/event-stream", "content-encoding": encoding } })); const h = hook();
   expect(Buffer.from(await (await fetch(url, init)).arrayBuffer())).toEqual(bytes); await Promise.all([...h.pending]);
   expect(spans[0].attributes["output.value"]).toBe("partial"); expect(spans[0].attributes["traceai.wire.undecoded_encoding"]).toBeUndefined();
 });
@@ -93,7 +93,7 @@ test("native fetch response metadata prevents re-decoding plain-text transcripti
 });
 test("decompressed output is bounded independently of compressed size", async () => {
   const bytes = gzipSync('data: {"choices":[{"delta":{"content":"' + "x".repeat(10000) + '"}}]}\n\n');
-  globalThis.fetch = jest.fn(async () => new Response(bytes, { headers: { "content-type": "text/event-stream", "content-encoding": "gzip" } })); const h = hook(512);
+  globalThis.fetch = jest.fn(async () => new Response(new Uint8Array(bytes), { headers: { "content-type": "text/event-stream", "content-encoding": "gzip" } })); const h = hook(512);
   await (await fetch(url, init)).arrayBuffer(); await Promise.all([...h.pending]);
   expect(spans[0].attributes["traceai.wire.truncated"]).toBe(true); expect(spans[0].attributes["output.value"]).toBeUndefined();
 });
@@ -164,7 +164,7 @@ test("cloning a mutable custom Response preserves metadata and independent heade
 });
 test.each([["gzip", gzipSync], ["deflate", deflateSync], ["br", brotliCompressSync]] as const)("%s ElevenLabs JSON audio decodes before base64 counting", async (encoding, compress) => {
   const text = JSON.stringify({ audio_base64: Buffer.alloc(128).toString("base64") }), bytes = compress(text);
-  globalThis.fetch = jest.fn(async () => new Response(bytes, { headers: { "content-type": "application/json", "content-encoding": encoding } })); const h = hook();
+  globalThis.fetch = jest.fn(async () => new Response(new Uint8Array(bytes), { headers: { "content-type": "application/json", "content-encoding": encoding } })); const h = hook();
   const target = "https://api.elevenlabs.io/v1/text-to-speech/voice/with-timestamps";
   expect(Buffer.from(await (await fetch(target, { ...init, body: '{"text":"hello","model_id":"tts"}' })).arrayBuffer())).toEqual(bytes);
   await Promise.all([...h.pending]); expect(spans).toHaveLength(1);
