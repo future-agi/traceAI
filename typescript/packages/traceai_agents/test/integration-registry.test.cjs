@@ -52,7 +52,7 @@ test("all assembled packages have release metadata and explicit build coverage",
     assert.equal(config.packages[relative]?.["release-type"], "node", dir);
     assert.equal(config.packages[relative]?.["package-name"], pkg.name, dir);
     assert.equal(config.packages[relative]?.component, `npm-${pkg.name.replace(/^@/, "").replace("/", "-")}`, dir);
-    assert.equal(versions[relative], "0.1.0", dir);
+    assert.equal(versions[relative], pkg.version, dir);
     assert.ok(scripts["build:consumers"].includes(`--filter ${pkg.name} `), dir);
     assert.ok(scripts["test:agents"].includes(`--filter ${pkg.name} `), dir);
   }
