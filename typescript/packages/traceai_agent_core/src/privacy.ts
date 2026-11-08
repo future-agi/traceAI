@@ -28,23 +28,73 @@ export const isSensitiveKey = isSensitiveField;
 export const redactValue = (value: unknown, depth = 0): unknown =>
   redactStructured(value, depth);
 /** Defense in depth for content-on-by-default. Structure-only omits content entirely. */
-export function redact(text: string): string {
-  return redactStructured(text) as string;
+export function redact(text: string, secrets: readonly string[] = [], contextKey: (key: string) => boolean = () => false): string {
+  return redactStructured(text, 0, secrets, contextKey) as string;
 }
+/** Callers supply longest-first credentials. Keep inserted markers out of later
+ * matches. This runs on complete text and again on decoded JSON leaves, before
+ * assignments/PII can change a credential that overlaps their syntax. */
+function exactSecrets(text: string, secrets: readonly string[]): string {
+  for (const secret of secrets) {
+    if (!secret || !text.includes(secret)) continue;
+    text = text.split("[REDACTED]").map(part => part.split(secret).join("[REDACTED]")).join("[REDACTED]");
+  }
+  return text;
+}
+/** A match inside a JSON string is not framing, even if it contains brackets.
+ * Inspect a successfully parsed container at its original offsets, before any
+ * embedded rewrite can split a credential. Matches overlapping delimiters (or
+ * entering/leaving an embedded container) own that whole text instead. */
+function crossesJsonFraming(text: string, start: number, end: number, secrets: readonly string[]): boolean {
+  if (!secrets.some(secret => secret && text.includes(secret))) return false;
+  const strings: [number, number][] = [];
+  let open = -1, escaped = false;
+  for (let i = start; i < end; i++) {
+    if (open < 0) { if (text[i] === '"') open = i + 1; }
+    else if (escaped) escaped = false;
+    else if (text[i] === "\\") escaped = true;
+    else if (text[i] === '"') { strings.push([open, i]); open = -1; }
+  }
+  for (const secret of secrets) {
+    if (!secret) continue;
+    let at = text.indexOf(secret, Math.max(0, start - secret.length + 1));
+    while (at >= 0 && at < end) {
+      // Binary search the string token starting at or before this occurrence.
+      let lo = 0, hi = strings.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (strings[mid][0] <= at) lo = mid + 1; else hi = mid;
+      }
+      const token = strings[lo - 1];
+      if (!token || at + secret.length > token[1]) return true;
+      at = text.indexOf(secret, at + 1);
+    }
+  }
+  return false;
+}
+
 /** Check normalized keys before serialization, including nested JSON-encoded strings. */
-export function redactStructured(value: unknown, depth = 0): unknown {
+export function redactStructured(value: unknown, depth = 0, secrets: readonly string[] = [], contextKey: (key: string) => boolean = () => false): unknown {
   if (depth > 16) return "[REDACTED_DEPTH_LIMIT]";
   if (Array.isArray(value))
-    return value.map((item) => redactStructured(item, depth + 1));
-  if (value !== null && typeof value === "object")
+    return value.map((item) => redactStructured(item, depth + 1, secrets, contextKey));
+  if (value !== null && typeof value === "object") {
+    // A credential may itself be a key or media/embedding discriminator. Removing
+    // it must not erase the context that protects its siblings in later FI passes.
+    if (secrets.length && Object.entries(value).some(([key, item]) =>
+      exactSecrets(key, secrets) !== key ||
+        contextKey(key) &&
+        (Array.isArray(item) ? item : [item]).some(v => typeof v === "string" && exactSecrets(v, secrets) !== v),
+    )) return "[REDACTED]";
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
-        key,
+        exactSecrets(key, secrets),
         isSensitiveField(key)
           ? "[REDACTED]"
-          : redactStructured(item, depth + 1),
+          : redactStructured(item, depth + 1, secrets, contextKey),
       ]),
     );
+  }
   if (typeof value === "string") {
     // Inspect complete strings before any display truncation. Refuse oversized
     // content rather than treating a truncated JSON prefix as ordinary text.
@@ -54,13 +104,12 @@ export function redactStructured(value: unknown, depth = 0): unknown {
     )
       return "[REDACTED_SIZE_LIMIT]";
     if (/^\s*[\[{"]/.test(value)) {
-      try {
-        return JSON.stringify(redactStructured(JSON.parse(value), depth + 1));
-      } catch {
-        /* Opaque text still receives the free-text policy. */
-      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(value); } catch { return redactText(value, depth, secrets, contextKey); }
+      if (crossesJsonFraming(value, 0, value.length, secrets)) return "[REDACTED]";
+      return JSON.stringify(redactStructured(parsed, depth + 1, secrets, contextKey));
     }
-    return redactText(value, depth);
+    return redactText(value, depth, secrets, contextKey);
   }
   return value;
 }
@@ -163,7 +212,7 @@ function redactAssignments(text: string): string {
   }
   return result + text.slice(offset);
 }
-function redactEmbeddedJson(text: string, depth: number): string {
+function redactEmbeddedJson(text: string, depth: number, secrets: readonly string[], contextKey: (key: string) => boolean): string {
   if (text.length > LIMITS.ingress || Buffer.byteLength(text) > LIMITS.ingress)
     return "[REDACTED_SIZE_LIMIT]";
   let start = -1,
@@ -200,7 +249,17 @@ function redactEmbeddedJson(text: string, depth: number): string {
       if (!stack.length) {
         try {
           const parsed = JSON.parse(text.slice(start, i + 1));
-          const clean = redactStructured(parsed, depth + 1);
+          // A complete JSON-looking island wholly inside a prose credential is
+          // part of that credential, not surrounding framing. Leave it intact
+          // until exactSecrets removes the complete match below.
+          const covered = secrets.some(secret => {
+            if (!secret) return false;
+            const at = text.lastIndexOf(secret, start);
+            return at >= 0 && at + secret.length >= i + 1;
+          });
+          if (covered) { start = -1; continue; }
+          if (crossesJsonFraming(text, start, i + 1, secrets)) return "[REDACTED]";
+          const clean = redactStructured(parsed, depth + 1, secrets, contextKey);
           const sanitized = JSON.stringify(clean);
           // Do not rewrite harmless JSON-looking code or change prompt correlation.
           result += text.slice(offset, start) + (sanitized === JSON.stringify(parsed)
@@ -215,8 +274,8 @@ function redactEmbeddedJson(text: string, depth: number): string {
   }
   return result + text.slice(offset);
 }
-function redactText(text: string, depth = 0): string {
-  return redactAssignments(redactEmbeddedJson(text, depth))
+function redactText(text: string, depth: number, secrets: readonly string[], contextKey: (key: string) => boolean): string {
+  return redactAssignments(exactSecrets(redactEmbeddedJson(text, depth, secrets, contextKey), secrets))
     // URI userinfo is credential-bearing for every scheme, including local databases.
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/"'<>]*@/gi, (uri) => uri.slice(0, uri.indexOf("://") + 3) + "[REDACTED]@")
     .replace(/\b(?:bearer|basic)\s+[^\s,;"']+/gi, "[REDACTED]")

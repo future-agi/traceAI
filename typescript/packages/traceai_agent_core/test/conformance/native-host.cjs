@@ -135,7 +135,7 @@ else if (agent === "copilot" || agent === "claude" || agent === "goose") {
         ? [
             {
               pluginId: "futureagi-tracing@futureagi-local",
-              version: "0.1.0",
+              version: spec.codexVersion,
               enabled: true,
             },
           ]

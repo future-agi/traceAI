@@ -1,6 +1,7 @@
 import type { Hooks } from "@opencode-ai/plugin";
+import { seedSecrets } from "@traceai/fi-core";
 import {
-  collectionEnabled, redact, isSensitiveField,
+  collectionEnabled, createContentSanitizer, LIMITS,
   type ResolvedConfig, type TurnTracer, type TurnHandle, type TurnOutcome, type UsageInput,
 } from "@traceai/agent-core";
 
@@ -64,29 +65,46 @@ export function observe(config: ResolvedConfig, tracer: TurnTracer): Hooks {
   let retained = 0;
   let disposed = false;
   const MAX_CONTENT = 4 * 1024 * 1024;
+  const credentials = config.credentials ? [config.credentials.apiKey, config.credentials.secretKey] : [];
+  const sanitize = createContentSanitizer(credentials, {
+    hideInputs: config.hideInputs, hideOutputs: config.hideOutputs, hideErrorDetails: config.hideErrorDetails,
+  });
+  // Sanitize only during synchronous final emission. Preserve complete values
+  // for core admission; the observer never performs the 20,000-byte display cut.
+  const finalContent = (value: string | undefined): string | undefined =>
+    value === undefined ? undefined : sanitize(value, LIMITS.ingress);
+  // Originals stay memory-only until final emission: even a complete-value
+  // PII rewrite here could split a credential registered between hook events.
+  const bound = (text: string): string => text.length > LIMITS.ingress || Buffer.byteLength(text) > LIMITS.ingress
+    ? "[REDACTED_SIZE_LIMIT]" : text;
   function capture(value: unknown, direction: "input" | "output"): string | undefined {
     if ((direction === "input" ? config.hideInputs : config.hideOutputs) || value === undefined) return;
-    // Bound graph traversal, but sanitize complete string leaves and keys BEFORE
-    // truncation can remove JSON delimiters or split a saved credential.
-    let budget = 20000, nodes = 2048;
-    function clean(text: string): string {
-      text = redact(text);
-      for (const secret of [config.credentials?.apiKey, config.credentials?.secretKey]) if (secret) text = text.split(secret).join("[REDACTED]");
-      return text;
-    }
-    function bounded(v: unknown, depth = 0): unknown {
-      if (budget <= 0 || --nodes < 0 || depth > 8) return "[TRUNCATED]";
-      if (typeof v === "string") { const s = clean(v).slice(0, budget); budget -= s.length; return s; }
+    // Inspect complete data, not a 64-item projection that could drop privacy
+    // context. Refuse an over-budget graph whole; never truncate a raw leaf/key.
+    let budget = LIMITS.ingress, nodes = 20000;
+    function materialize(v: unknown, depth = 0): unknown {
+      if (--nodes < 0 || depth > 16) throw new Error("Content graph budget");
+      if (typeof v === "string") {
+        if (v.length > budget || (budget -= Buffer.byteLength(v)) < 0) throw new Error("Content byte budget");
+        return v;
+      }
       if (v === null || typeof v === "number" || typeof v === "boolean") return v;
-      if (Array.isArray(v)) return v.slice(0, 64).map(x => bounded(x, depth + 1));
-      if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).slice(0, 64).map(([k, x]) => [clean(k).slice(0, 128), isSensitiveField(k) ? "[REDACTED]" : bounded(x, depth + 1)]));
+      if (Array.isArray(v)) {
+        if (v.length > nodes) throw new Error("Content array budget");
+        return v.map(x => materialize(x, depth + 1));
+      }
+      if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [materialize(k, depth + 1), materialize(x, depth + 1)]));
       return undefined;
     }
-    const text = typeof value === "string" ? clean(value).slice(0, 20000) : JSON.stringify(bounded(value))?.slice(0, 20000);
-    if (text === undefined) return;
-    if (retained + text.length > MAX_CONTENT) return;
-    // Conservative budget: repeated updates count too; reset only after all turns settle.
-    retained += text.length;
+    let text: string | undefined;
+    try {
+      const complete = typeof value === "string" ? value : JSON.stringify(materialize(value));
+      text = complete === undefined ? undefined : bound(complete);
+    } catch { text = "[REDACTED_SIZE_LIMIT]"; }
+    try { seedSecrets(process.env, credentials); } catch { text = "[REDACTED_PRIVACY_FAILURE]"; }
+    if (text === undefined || retained + Buffer.byteLength(text) > MAX_CONTENT) return;
+    // Repeated updates count too; reset only after all turns settle.
+    retained += Buffer.byteLength(text);
     return text;
   }
   function active(session: string): Turn | undefined { return turns.get(current.get(session) ?? ""); }
@@ -132,7 +150,7 @@ export function observe(config: ResolvedConfig, tracer: TurnTracer): Hooks {
       return;
     }
     if (turns.size >= 64) return;
-    const text = config.hideInputs ? undefined : parts.slice(0, 64).filter(p => p.type === "text" && !p.synthetic).map(p => typeof p.text === "string" ? capture(p.text, "input") ?? "" : "").join("\n").slice(0, 20000);
+    const text = config.hideInputs ? undefined : bound(parts.slice(0, 64).filter(p => p.type === "text" && !p.synthetic).map(p => typeof p.text === "string" ? capture(p.text, "input") ?? "" : "").join("\n"));
     const parent = invocations.get(message.sessionID);
     const t: Turn = { id: message.id, session: message.sessionID, start: time(message.time?.created), input: text, steps: new Map(), idle: false, observed: Date.now(),
       parent: parent && turns.has(parent.turn) ? { ...parent } : undefined };
@@ -210,9 +228,9 @@ export function observe(config: ResolvedConfig, tracer: TurnTracer): Hooks {
   function emit(t: Turn, root?: TurnHandle, parentId?: string, depth = 0): void {
     if (depth > 16 || !turns.has(t.id)) return;
     const own = !root;
-    const handle = root ?? tracer.startTurn({ sessionId: t.session, turnId: t.id, input: t.input, startTime: t.start, usagePlan: "request" });
+    const handle = root ?? tracer.startTurn({ sessionId: t.session, turnId: t.id, input: finalContent(t.input), startTime: t.start, usagePlan: "request" });
     const childId = `session-${t.id}`;
-    const branch = own ? undefined : handle.child({ id: childId, kind: "agent", parentId, name: "subagent", input: t.input, startTime: t.start });
+    const branch = own ? undefined : handle.child({ id: childId, kind: "agent", parentId, name: "subagent", input: finalContent(t.input), startTime: t.start });
     const parent = own ? undefined : childId;
     let answer: string | undefined;
     if (t.compactionStart) {
@@ -222,17 +240,17 @@ export function observe(config: ResolvedConfig, tracer: TurnTracer): Hooks {
     for (const s of t.steps.values()) {
       // Subtask placeholder assistant messages can still contain genuine tools.
       const generation = s.native || s.outcome ? handle.child({ id: s.id, kind: s.native ? "llm" : "generation", parentId: parent,
-        name: s.compaction ? "compaction-generation" : "generation", startTime: s.start, input: s.input,
+        name: s.compaction ? "compaction-generation" : "generation", startTime: s.start, input: finalContent(s.input),
         model: s.model, provider: s.provider, fidelity: s.native ? "native-request" : "reconstructed-message" }) : undefined;
-      const text = [...s.text.values()].join("\n").slice(0, 20000) || undefined;
+      const text = finalContent([...s.text.values()].join("\n")) || undefined;
       if (text) answer = text;
       for (const tool of s.tools.values()) {
         const key = `${s.id}-${tool.id}`;
-        const h = handle.child({ id: key, kind: "tool", toolCallId: tool.id, parentId: generation ? s.id : parent, name: tool.name, input: tool.input, startTime: tool.start });
+        const h = handle.child({ id: key, kind: "tool", toolCallId: tool.id, parentId: generation ? s.id : parent, name: tool.name, input: finalContent(tool.input), startTime: tool.start });
         for (const child of [...turns.values()]) if (child.parent?.turn === t.id && child.parent.tool === key) emit(child, handle, key, depth + 1);
-        h.end({ output: tool.output, outcome: tool.outcome ?? "incomplete", endTime: tool.end ?? t.end });
+        h.end({ output: finalContent(tool.output), outcome: tool.outcome ?? "incomplete", endTime: tool.end ?? t.end });
       }
-      const output = text ?? (s.tools.size ? capture({ tool_calls: [...s.tools.values()].map(tool => ({ name: tool.name, arguments: tool.input })) }, "output") : undefined);
+      const output = text ?? (s.tools.size ? finalContent(capture({ tool_calls: [...s.tools.values()].map(tool => ({ name: tool.name, arguments: tool.input })) }, "output")) : undefined);
       generation?.end({ output, outcome: s.outcome ?? (s.end ? "success" : "incomplete"), endTime: s.end ?? t.end, usage: s.usage });
     }
     // Context overflow may be recovered by compaction. Only a later completed,

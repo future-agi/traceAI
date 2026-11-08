@@ -1,3 +1,7 @@
+## [1.2.3] - pending release
+### Fix
+- With `hideEmbeddingVectors`, recognize `object: "embedding"` as embedding context before oversized agent content is shortened. A late discriminator must not leave its vector data visible.
+
 ## [1.2.2] - pending release
 ### Fix
 - Preserve numeric `gen_ai.usage.cache_read_tokens.audio` counts through admission, projection and export. The 1.2.0 shared privacy runtime mistook this modality count for an audio payload. Only nonnegative safe integers receive the metric role; strings, arrays, media ancestry and registered secrets retain their existing privacy protections.

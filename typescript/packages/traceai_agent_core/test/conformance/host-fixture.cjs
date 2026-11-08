@@ -37,6 +37,7 @@ async function prepareHost(f) {
     userDir: path.dirname(f.config.paths.user),
     codexEvents: require(packages + "/traceai_codex_plugin/dist/events.js")
       .EVENTS,
+    codexVersion: require(packages + "/traceai_codex_plugin/package.json").version,
     hermesSource: path.resolve(
       packages,
       "../../python/frameworks/hermes-agent/hermes-plugin/futureagi",

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTurnTracer, resolveConfig } from '@traceai/agent-core';
 import { observe } from '../dist/observer.js';
+import { registerSecret } from '@traceai/fi-core';
 
 const attrs = span => Object.fromEntries(span.attributes.map(a => [a.key, a.value.stringValue ?? a.value.intValue ?? a.value.doubleValue ?? a.value.boolValue]));
 async function fixture(t, env = {}) {
@@ -80,16 +81,17 @@ test('replayed pre-error success cannot recover a later session failure', async 
 test('full structured fields are redacted before the adapter truncates prompt and tool data', async t => {
   const f = await fixture(t);
   const marker = 'PRIVATE_STRUCTURED_VALUE';
-  const prompt = JSON.stringify({ 'api key': { nested: marker }, padding: 'x'.repeat(24000) });
+  const prompt = JSON.stringify({ visible: 'PUBLIC_PROMPT', 'api key': { nested: marker }, padding: 'x'.repeat(24000) });
   await f.user(prompt); await f.message('model'); await f.part('model', { type: 'step-start' });
   await f.part('model', { type: 'tool', tool: 'read', callID: 'call-source', state: {
-    status: 'completed', input: { 'access token': [marker], nested: JSON.stringify({ 'private key': marker }), boundary: 'x'.repeat(19990) + 'synthetic-secret-boundary' },
-    output: JSON.stringify({ 'authorization': { password: marker }, padding: 'x'.repeat(24000) }), time: { start: Date.now() - 5, end: Date.now() },
+    status: 'completed', input: { visible: 'PUBLIC_INPUT', 'access token': [marker], nested: JSON.stringify({ 'private key': marker }), boundary: 'x'.repeat(19990) + 'synthetic-secret-boundary' },
+    output: JSON.stringify({ visible: 'PUBLIC_OUTPUT', 'authorization': { password: marker }, padding: 'x'.repeat(24000) }), time: { start: Date.now() - 5, end: Date.now() },
   } });
   const spans = await f.finish(), serialized = JSON.stringify(spans);
   assert.equal(serialized.includes(marker), false); assert.equal(serialized.includes('synthetic-secret'), false);
-  // Oversized JSON may be redacted in place or omitted whole by fi-core (>=1.2.0); never leaked.
-  assert.ok(/\[REDACTED\]|<redacted>|<omitted: incomplete audio>/.test(serialized));
+  assert.ok(/\[REDACTED\]|<redacted>/.test(serialized));
+  for (const publicText of ['PUBLIC_PROMPT', 'PUBLIC_INPUT', 'PUBLIC_OUTPUT']) assert.ok(serialized.includes(publicText));
+  assert.ok(!serialized.includes('<omitted: incomplete audio>'));
 });
 
 for (const hideErrorDetails of ['false', 'true']) test(`successful JSON fixture read stays successful (hideErrorDetails=${hideErrorDetails})`, async t => {
@@ -117,4 +119,40 @@ test('native tool failures stay errors and hidden details cannot leak through la
   const tool = spans.find(s => attrs(s)['fi.span.kind'] === 'TOOL');
   assert.equal(tool.status.code, 2); assert.equal(attrs(tool)['output.value'], undefined);
   assert.equal(JSON.stringify(spans).includes('PRIVATE_FAILURE_DETAIL'), false);
+});
+
+for (const overlap of [false, true]) test(`late observer credentials are scrubbed before any cut or PII rewrite: overlap=${overlap}`, async t => {
+  const previous = process.env.FI_PII_REDACTION;
+  process.env.FI_PII_REDACTION = 'true';
+  t.after(() => { if (previous === undefined) delete process.env.FI_PII_REDACTION; else process.env.FI_PII_REDACTION = previous; });
+  const f = await fixture(t);
+  const prefix = `LATE_OBSERVER_PRIVATE_${overlap}_`;
+  const secret = prefix + (overlap ? '123-45-6789_' : '') + 'q'.repeat(140);
+  const text = JSON.stringify({ stdout: 'PUBLIC_RESULT ' + 'p '.repeat(9940) + secret + ' tail' });
+  await f.user(text); await f.message('model'); await f.part('model', { type: 'step-start' });
+  await f.part('model', { type: 'text', id: 'answer', text });
+  await f.part('model', { type: 'tool', tool: 'read', callID: 'call-source', state: {
+    status: 'completed', input: text, output: text, time: { start: Date.now() - 5, end: Date.now() },
+  } });
+  registerSecret(secret);
+  const spans = await f.finish();
+  assert.equal(spans.length, 3);
+  for (const span of spans) for (const key of ['input.value', 'output.value']) {
+    const value = attrs(span)[key];
+    assert.equal(typeof value, 'string');
+    assert.match(value, /PUBLIC_RESULT/);
+    assert.ok(!value.includes(prefix));
+    assert.ok(Buffer.byteLength(value) <= 20000);
+  }
+});
+
+for (const length of [65, 100]) test(`tool input keeps a public ${length}-item file list`, async t => {
+  const f = await fixture(t); await f.user('Read public files');
+  await f.message('model'); await f.part('model', { type: 'step-start' });
+  const input = { purpose: 'PUBLIC_FILES', files: Array.from({ length }, (_, i) => `src/public-file-${i}.ts`) };
+  await f.part('model', { type: 'tool', tool: 'read_files', callID: 'call-source', state: {
+    status: 'completed', input, output: 'PUBLIC_RESULT', time: { start: Date.now() - 5, end: Date.now() },
+  } });
+  const spans = await f.finish(), tool = spans.find(s => attrs(s)['tool.name'] === 'read_files');
+  assert.deepEqual(JSON.parse(attrs(tool)['input.value']), input);
 });

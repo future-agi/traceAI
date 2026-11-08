@@ -7,7 +7,7 @@ import {
   type SpanContext,
   type TimeInput,
 } from "@opentelemetry/api";
-import { FITracer, FITracerProvider, ProjectType } from "@traceai/fi-core";
+import { FITracer, FITracerProvider, ProjectType, generateTraceConfig } from "@traceai/fi-core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { SemanticConventions as SC } from "@traceai/fi-semantic-conventions";
 import {
@@ -24,7 +24,7 @@ import {
   opaqueId,
 } from "./identity.js";
 import { normalizeUsage, type Counters, type UsagePlan } from "./usage.js";
-import { redact } from "./privacy.js";
+import { createContentBuffer, createContentSanitizer } from "./content.js";
 import { contentHash } from "./files.js";
 import { VERSION } from "./version.js";
 import type { DeliveryResult } from "./validation.js";
@@ -128,19 +128,6 @@ const label = (value: string | undefined): string | undefined =>
   value && /^[a-zA-Z0-9_.:/-]{1,128}$/.test(value) && !value.includes("://")
     ? value
     : undefined;
-function content(
-  value: string | undefined,
-  credentials?: ResolvedConfig["credentials"],
-): string | undefined {
-  if (typeof value !== "string") return undefined;
-  // redact() inspects complete structured content within its processing bound.
-  // Display truncation must never remove JSON structure before that inspection.
-  let clean = redact(value);
-  for (const key of [credentials?.apiKey, credentials?.secretKey])
-    if (key) clean = clean.split(key).join("[REDACTED]");
-  return clean.slice(0, 20000);
-}
-
 /** A private FI provider: no global tracer/context registration, host/process detectors or model gateway. */
 export function createTurnTracer(options: {
   config: ResolvedConfig;
@@ -160,6 +147,35 @@ export function createTurnTracer(options: {
       : undefined,
     identityKey: options.config.identityKey,
   };
+  const traceConfig = generateTraceConfig({
+    hideInputs: config.hideInputs,
+    hideOutputs: config.hideOutputs,
+    hideErrorDetails: config.hideErrorDetails,
+  });
+  const sanitize = createContentSanitizer(
+    config.credentials ? [config.credentials.apiKey, config.credentials.secretKey] : [],
+    traceConfig,
+  );
+  const content = (value: string | undefined): string | undefined =>
+    typeof value === "string" ? sanitize(value) : undefined;
+  const contentBuffer = createContentBuffer(
+    config.credentials ? [config.credentials.apiKey, config.credentials.secretKey] : [],
+  );
+  const pendingContent = new WeakMap<Span, {
+    input?: number;
+    events?: { name: string; input?: number; time: TimeInput }[];
+  }>();
+  function drainContent(span: Span, emit = false): void {
+    const pending = pendingContent.get(span);
+    pendingContent.delete(span);
+    const input = contentBuffer.take(pending?.input);
+    if (emit && input !== undefined) span.setAttribute(SC.INPUT_VALUE, sanitize(input));
+    for (const event of pending?.events ?? []) {
+      const text = contentBuffer.take(event.input);
+      if (emit) span.addEvent(event.name,
+        text === undefined ? {} : { [SC.INPUT_VALUE]: sanitize(text) }, event.time);
+    }
+  }
   const processor = new BoundedSpanProcessor(
     config,
     options.onDelivery,
@@ -199,11 +215,7 @@ export function createTurnTracer(options: {
   });
   const tracer = new FITracer({
     tracer: provider.getTracer("@traceai/agent-core", VERSION),
-    traceConfig: {
-      hideInputs: config.hideInputs,
-      hideOutputs: config.hideOutputs,
-      hideErrorDetails: config.hideErrorDetails,
-    },
+    traceConfig,
   });
   const active = new Map<string, TurnHandle>();
   const completed = new Set<string>();
@@ -296,10 +308,11 @@ export function createTurnTracer(options: {
     additive: boolean,
     measuredTiming = false,
   ): void {
+    drainContent(span, canCollect());
     const outcome = endOutcome(value);
     const out =
       !config.hideOutputs && !(config.hideErrorDetails && outcome === "error")
-        ? content(value.output, config.credentials)
+        ? content(value.output)
         : undefined;
     if (out !== undefined && canCollect())
       span.setAttribute(SC.OUTPUT_VALUE, out);
@@ -380,10 +393,8 @@ export function createTurnTracer(options: {
         attributes[SC.FI_AGENT_TAGS] = JSON.stringify(config.tags);
       if (config.environment)
         attributes["deployment.environment.name"] = config.environment;
-      const input = !config.hideInputs
-        ? content(value.input, config.credentials)
-        : undefined;
-      if (input !== undefined) attributes[SC.INPUT_VALUE] = input;
+      const input = !config.hideInputs ? contentBuffer.capture(value.input) : undefined;
+      value.input = undefined;
       const root = tracer.startSpan(
         value.unit === "run" ? `${config.agent}.run` : config.agent,
         {
@@ -395,6 +406,8 @@ export function createTurnTracer(options: {
         },
         ROOT_CONTEXT,
       );
+      const events: { name: string; input?: number; time: TimeInput }[] = [];
+      pendingContent.set(root, { input, events });
       const checkpoint = new Set(value.checkpoint ?? []);
       const children = new Map<
         string,
@@ -406,6 +419,7 @@ export function createTurnTracer(options: {
           skipped: boolean;
           outcome?: TurnOutcome;
           pending?: EndInput;
+          output?: number;
         }
       >();
       let ended = false,
@@ -428,14 +442,12 @@ export function createTurnTracer(options: {
           )
             return;
           try {
-            const input = !config.hideInputs
-              ? content(event.input, config.credentials)
-              : undefined;
-            root.addEvent(
-              event.name,
-              input === undefined ? {} : { [SC.INPUT_VALUE]: input },
-              event.time,
-            );
+            events.push({
+              name: event.name,
+              input: !config.hideInputs ? contentBuffer.capture(event.input) : undefined,
+              time: Array.isArray(event.time) ? [...event.time] as [number, number]
+                : event.time instanceof Date ? new Date(event.time) : event.time ?? Date.now(),
+            });
             eventCount++;
           } catch {
             /* fail open */
@@ -513,15 +525,15 @@ export function createTurnTracer(options: {
               if (label(child.toolCallId))
                 attrs[SC.TOOL_CALL_ID] = child.toolCallId!;
             }
-            const text = !config.hideInputs
-              ? content(child.input, config.credentials)
-              : undefined;
-            if (text !== undefined) attrs[SC.INPUT_VALUE] = text;
+            const skipped = checkpoint.has(contentHash(child.id));
+            const input = !config.hideInputs && !skipped ? contentBuffer.capture(child.input) : undefined;
+            child.input = undefined;
             const span = tracer.startSpan(
               label(child.name) ?? child.kind,
               { attributes: attrs, startTime: child.startTime },
               trace.setSpan(ROOT_CONTEXT, parent),
             );
+            pendingContent.set(span, { input });
             if (isModel)
               span.setAttribute(
                 SC.FI_USAGE_SCOPE,
@@ -532,6 +544,7 @@ export function createTurnTracer(options: {
               done: boolean;
               isModel: boolean;
               pending?: EndInput;
+              output?: number;
               measuredTiming: boolean;
               skipped: boolean;
               outcome?: TurnOutcome;
@@ -539,7 +552,7 @@ export function createTurnTracer(options: {
               span,
               done: false,
               isModel,
-              skipped: checkpoint.has(contentHash(child.id)),
+              skipped,
               measuredTiming:
                 isModel &&
                 child.fidelity === "native-request" &&
@@ -564,14 +577,13 @@ export function createTurnTracer(options: {
                       span.setAttribute(SC.LLM_PROVIDER, end.provider!);
                   }
                   if (isModel && value.usagePlan === "turn") {
+                    state.output = canCollect() && !config.hideOutputs &&
+                      !(config.hideErrorDetails && state.outcome === "error")
+                      ? contentBuffer.capture(end.output) : undefined;
                     state.pending = {
                       ...end,
                       outcome: state.outcome,
-                      output:
-                        config.hideOutputs ||
-                        (config.hideErrorDetails && state.outcome === "error")
-                          ? undefined
-                          : content(end.output, config.credentials),
+                      output: undefined,
                       usage: end.usage ? { ...end.usage } : undefined,
                       endTime: end.endTime ?? Date.now(),
                     };
@@ -638,7 +650,7 @@ export function createTurnTracer(options: {
               item.span.setAttribute(SC.FI_AGENT_USAGE_ADDITIVE, ownsUsage);
               finish(
                 item.span,
-                { ...modelEnd, ...(ownsUsage ? { usage: end.usage } : {}) },
+                { ...modelEnd, output: contentBuffer.take(item.output), ...(ownsUsage ? { usage: end.usage } : {}) },
                 ownsUsage,
                 item.measuredTiming,
               );
@@ -671,6 +683,13 @@ export function createTurnTracer(options: {
           } catch {
             /* fail open */
           }
+          // Deferred/checkpointed roots and children must also release originals.
+          drainContent(root);
+          for (const item of children.values()) {
+            drainContent(item.span);
+            contentBuffer.take(item.output);
+          }
+          events.length = 0;
           active.delete(turnWork);
           completed.add(turnWork);
           if (completed.size > 4096)
@@ -696,6 +715,7 @@ export function createTurnTracer(options: {
     async discard() {
       closed = true;
       active.clear();
+      contentBuffer.clear();
       processor.discard();
       try {
         await provider.shutdown();
@@ -705,6 +725,7 @@ export function createTurnTracer(options: {
     },
     async shutdown() {
       for (const turn of active.values()) turn.end({ outcome: "incomplete" });
+      contentBuffer.clear();
       closed = true;
       try {
         await provider.shutdown();
