@@ -480,7 +480,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     const hintItems = entries(attrs).map(([key, item]): [string, unknown] => {
       if ((budget.remaining -= key.length) < 0 || --budget.nodes < 0) throw new Error("Privacy hint budget");
       const leaf = key.split(/[.\[\]]+/).filter(part => part && !/^\d+$/.test(part)).at(-1);
-      const discriminator = indexPrivacyHints([[key, undefined]]).size > 0 || leaf?.replace(/[-_]/g, "").toLowerCase() === "type";
+      const discriminator = indexPrivacyHints([[key, undefined]]).size > 0 || ["type", "modality"].includes(leaf?.replace(/[-_]/g, "").toLowerCase() ?? "");
       if (!discriminator) return [key, undefined];
       const hintValue = (value: unknown): unknown => {
         if (--budget.nodes < 0) throw new Error("Privacy hint budget");
@@ -791,7 +791,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
   };
   return {
     attributes,
-    /** @internal Retain only tightening MIME/type bits from FI-authored writes.
+    /** @internal Retain only tightening MIME/type/modality bits from FI-authored writes.
      * No values, native storage, completeness grants or safe-MIME evidence. */
     admissionHints: (attrs: unknown, previous: PrivacyHints = new Map()): PrivacyHints => {
       const budget = { remaining: 64 * 1024, nodes: 4096 };
@@ -804,9 +804,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const items = entries(attrs).map(([key, value]): [string, unknown] => {
         charge(key);
         // Ask the catalog about MIME names without inspecting payload text.
-        // Type is the other discriminator understood by indexPrivacyHints.
+        // Type and modality are the other discriminators understood by indexPrivacyHints.
         const leaf = key.split(/[.\[\]]+/).filter(part => part && !/^\d+$/.test(part)).at(-1);
-        const discriminator = indexPrivacyHints([[key, undefined]]).size > 0 || leaf?.replace(/[-_]/g, "").toLowerCase() === "type";
+        const discriminator = indexPrivacyHints([[key, undefined]]).size > 0 || ["type", "modality"].includes(leaf?.replace(/[-_]/g, "").toLowerCase() ?? "");
         if (!discriminator) return [key, undefined];
         if (Array.isArray(value) && !types.isProxy(value)) {
           const length = data(value, "length");
@@ -815,11 +815,11 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         }
         return [key, charge(value)];
       });
-      const hints = new Map<string, readonly [boolean, boolean]>();
+      const hints = new Map<string, readonly [boolean, boolean, boolean, boolean]>();
       for (const [path, bits] of indexPrivacyHints(items, "", previous)) {
         if (!bits[0] && !bits[1]) continue;
         charge(path);
-        hints.set(path, [bits[0], bits[1]]);
+        hints.set(path, [bits[0], bits[1], false, !!bits[3]]);
       }
       return hints;
     },

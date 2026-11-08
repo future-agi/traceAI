@@ -726,6 +726,37 @@
       ],
       "scope": "The same object's payload fields and all their descendants, including source/inlineData wrappers. Payload ancestry persists through arbitrary chunk wrappers and numeric indices. Audio metadata_fields reset inherited media, audio and payload context at that component, so transcript.content is text. Fresh explicit hints/fields can start new context beneath a boundary. For flattened siblings use the exact indexed parent path; never bleed into another array element. Scalar, string-array and indexed MIME hints bind to the MIME field's parent, not its index. MIME parameters after a semicolon are ignored."
     },
+    "image": {
+      "type_names": [
+        "image",
+        "imageurl",
+        "inputimage"
+      ],
+      "modality_names": [
+        "image"
+      ],
+      "payload_fields": [
+        "data",
+        "bytes",
+        "content",
+        "image",
+        "imageurl",
+        "url",
+        "base64",
+        "b64json"
+      ],
+      "scope": "Type, modality and image MIME siblings establish image context in the same object and its descendants. Existing generic MIME payload fields retain their policy. These additional image payload fields omit encoded values at any length, including image_url and url, while ordinary HTTP URLs remain text. Audio metadata boundaries still reset inherited context except when the component is itself an image payload field. Exact indexed parents isolate sibling hints. No magic-signature or positive-cap exemption is added."
+    },
+    "video": {
+      "type_names": [
+        "video",
+        "inputvideo"
+      ],
+      "modality_names": [
+        "video"
+      ],
+      "scope": "Type and modality video declarations establish the same generic media context as video MIME siblings. The mime_siblings payload_fields and their descendants are omitted at every image cap, even without a magic signature. Audio metadata boundaries and exact indexed-parent isolation remain unchanged. This adds no safe-MIME evidence and does not extend image-only URL payload fields to video."
+    },
     "audio": {
       "fields": [
         "audio",

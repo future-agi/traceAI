@@ -1,3 +1,18 @@
+## [1.2.3] - pending release
+### Fix
+- **Upgrade.** 1.2.0, 1.2.1 and 1.2.2 could export short base64 media payloads that carry no recognized file signature: type- or modality-declared video (`type: video`, `type: input_video`, `modality: video`) at any cap, including the default 0; type-declared images (for example `{"type":"image","data":"<base64>"}`) when a positive `base64ImageMaxLength` (or `FI_BASE64_IMAGE_MAX_LENGTH`) was set; and images whose declaration is a separate attribute from the payload (for example `parts.0.type` = `image` beside `parts.0.data`), at any cap. 1.2.3 omits all of these at any cap. Setting the cap to 0 is not a workaround.
+- Covered declarations: image and video by type or modality declaration, audio by type declaration; by MIME declaration, `image/*`, `video/*`, `audio/*`, `application/pdf` and `application/octet-stream`. Payloads are recognized in the catalog payload fields (for example `data`, `bytes`, `content`, `base64`, `b64_json`), and image declarations also cover image URL fields such as `url` and `image_url`. Under video and other generic media declarations, raw base64 under other keys such as `video`, `video_url` or `url` is not covered by this declaration rule (see the known limitations).
+- Carry image declarations (`type: image`, `image_url`, `input_image`, `modality: image`, and image MIME siblings) and video declarations (`type: video`, `type: input_video`, `modality: video`) into payload recognition on FI admission, standalone span creation/setters and detached export. Short declared images without a catalog signature, including a valid 1x1 BMP, are omitted even below an explicit positive cap. Typed video uses the existing generic media payload fields at every cap, just like MIME-declared `video/mp4`, `video/webm` and `application/pdf`; cap 0 alone does not repair the earlier typed-video gap. These changes close the type-only/modality recognition gaps; credential/secret masking, audio omission and image cap-marker precedence are unchanged.
+- Keep image URL payload fields subject to declared base64 omission without treating ordinary HTTP image URLs as payload bytes. Preserve image hints across separate FI-authored writes.
+
+### Known limitations
+- Under a type- or modality-declared video, raw base64 stored under keys outside the catalog payload fields (for example `video`, `video_url` or `url`) is not omitted by the declaration rule; MIME-declared and signature-recognized payloads are unaffected.
+- Image data nested inside a JSON-encoded string field (for example an image url inside a JSON string) may still be exported at any image cap, including the default. A structural fix is planned for a later release. Upgrade anyway: 1.2.0, 1.2.1 and 1.2.2 export this shape and more (typed video at every cap, flattened image parts at cap 0).
+
+### Documentation
+- Scope the media-omission contract to recognized base64 image payloads in payload fields or `data:` URLs, not every possible image encoding. See the [README image recognition limits](README.md#image-recognition-limits) and 1.2.0 known limitations below for non-payload keys, headerless runs and spacing.
+- Document cap-0 ASCII whitespace compaction separately within each Q1 scope/view, including inside `data:` / `image/` fragments: U+0009-U+000D and U+001C-U+0020. Python also removes non-ASCII `str.isspace()` characters; TypeScript does not compact them in this check. JSON sibling tokens are never joined.
+
 ## [1.2.2] - pending release
 ### Fix
 - Preserve numeric `gen_ai.usage.cache_read_tokens.audio` counts through admission, projection and export. The 1.2.0 shared privacy runtime mistook this modality count for an audio payload. Only nonnegative safe integers receive the metric role; strings, arrays, media ancestry and registered secrets retain their existing privacy protections.
@@ -11,12 +26,12 @@
 ### Changed
 - 1.2.0 exports the typed session.id set with setSession; other session-named attributes remain masked.
 - With hideEmbeddingVectors, the legacy embedding.model_name attribute is also hidden.
-- **Base64 images are no longer exported.** fi-core never exports base64 image payloads; they become `<omitted: N base64 chars>` at any cap. Before, the default cap of 32000 exported images up to 32000 characters.
+- **Recognized base64 image payloads are omitted.** The FI media policy omits recognized base64 image payloads in payload fields or `data:` URLs at any cap, with markers such as `<omitted: N base64 chars>`. The previous default cap of 32000 could retain below-cap images. This is bounded recognition, not universal image detection: see known limitations below and the 1.2.3 typed-image fix above.
 - Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
 - The replacement is `[image-redacted]`, for the whole value or JSON string token.
-- `base64ImageMaxLength` and `FI_BASE64_IMAGE_MAX_LENGTH` keep working, with one shared default constant, `DEFAULT_BASE64_IMAGE_MAX_LENGTH` (0). With a positive value, image payloads are still omitted, and are replaced in place by the media markers rather than replacing the whole value.
+- `base64ImageMaxLength` and `FI_BASE64_IMAGE_MAX_LENGTH` keep working, with one shared default constant, `DEFAULT_BASE64_IMAGE_MAX_LENGTH` (0). With a positive value, recognized image payloads are still omitted by the media policy; at/below-cap payloads use media markers instead of the cap-0 whole-token rule. Recognition limits below still apply.
 - An invalid cap resolves to 0 and logs `Invalid base64 image cap; using 0.`
-- The TypeScript SDK is stricter: it never exports base64 images at any cap.
+- For recognized base64 image payloads in payload fields or `data:` URLs, TypeScript media omission remains stricter than Python's positive-cap behavior. See the [README image recognition limits](README.md#image-recognition-limits) for non-payload keys, headerless runs and spacing.
 
 ### Feature
 - The shared export-privacy runtime and `registerSecret(value)` that the new zero-code agent `@traceai/auto` uses. See the README.

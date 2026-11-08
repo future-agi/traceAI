@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "catalog_version": 1,
+  "catalog_version": 3,
   "cases": [
     {
       "name": "pattern-token-headers",
