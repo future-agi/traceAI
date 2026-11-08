@@ -11,7 +11,7 @@ You need **Node.js 20.6+**, an existing Node application, and a [Future AGI](htt
 Install in your application's directory:
 
 ```sh
-npm install @traceai/auto@0.1.0
+npm install @traceai/auto
 ```
 
 Set both FI keys through your deployment's secret manager or shell environment, then start the app with one preload:
@@ -44,10 +44,10 @@ Run from the application's directory so target libraries and optional instrument
 
 ### Try it with OpenAI
 
-If you do not have an app yet, install the supported OpenAI SDK version used in this example:
+If you do not have an app yet, install the OpenAI SDK (versions 4 to 7 are supported):
 
 ```sh
-npm install openai@4.104.0
+npm install openai
 ```
 
 Set `OPENAI_API_KEY` and `OPENAI_MODEL` for a model your account can use. Save this ordinary application code as `app.mjs`, then use the quick-start run command. There are **no tracing imports** in the application:
@@ -65,6 +65,10 @@ console.log(response.choices[0].message.content);
 The preload flushes completed spans when Node exits naturally. If your app explicitly terminates or runs inside a serverless invocation, use the [lifecycle guidance](https://github.com/future-agi/traceAI/blob/dev/typescript/packages/traceai_auto/docs/FRAMEWORKS.md#aws-lambda-and-short-lived-processes).
 
 ## What you get
+
+The **Try it with OpenAI** example, as it appears in Future AGI (a real run with OpenAI SDK 7 and `openai/gpt-4.1-mini` through OpenRouter):
+
+![The example's chat completion span in Future AGI: model, provider, prompt and completion tokens, cost, duration, and the request and response bodies](docs/images/quickstart-trace.png)
 
 - **Model calls without per-call wrappers.** OpenAI instrumentation is included. Recognized AI requests through the process's global `fetch` are also captured, including compatible gateways.
 - **More context from installed integrations.** Dedicated packages can add framework, agent, tool, retrieval and database spans. They retain their own method/version limits; auto-registration does not expand their coverage.

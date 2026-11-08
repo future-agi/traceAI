@@ -36,7 +36,7 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 **See your AI calls without adding tracing code.** Install [`@traceai/auto`](typescript/packages/traceai_auto/) and preload it before your app (Node.js 20.6+, ESM or CommonJS):
 
 ```bash
-npm install @traceai/auto@0.1.0
+npm install @traceai/auto
 FI_API_KEY="your-api-key" FI_SECRET_KEY="your-secret-key" \
 FI_PROJECT_NAME="my-ai-app" \
 node --import @traceai/auto/register app.mjs
