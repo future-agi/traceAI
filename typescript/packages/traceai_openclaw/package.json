@@ -6,7 +6,7 @@
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "files": ["dist", "native", "README.md", "LICENSE"],
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.cjs" },
+  "scripts": { "prepare": "pnpm run build", "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.cjs" },
   "engines": { "node": ">=24.16.0 <25" },
   "dependencies": {
     "@traceai/agent-core": "workspace:^",
