@@ -1,4 +1,6 @@
 const fs = require('node:fs');
+// tsc does not emit privacy.json (it is not in any tsconfig include), so these byte-exact copies are
+// the only ones: a consumer's `tsc --build` reference to fi-core cannot reserialize them.
 for (const dir of ['dist/src', 'dist/esm', 'dist/esnext']) {
   fs.copyFileSync('src/privacy.json', `${dir}/privacy.json`);
 }
