@@ -398,19 +398,26 @@ export async function finisherStatus(c: ResolvedConfig) {
 }
 export async function pendingTurnIds(c: ResolvedConfig): Promise<string[]> {
   const ids: string[] = [];
-  for (const name of await turnFiles(c)) {
-    const file = join(c.paths.stateDir, `${c.agent}-turns`, name);
-    // Serialize metadata reads with atomic replacement: an opened old inode can
-    // otherwise reach nlink=0 mid-read and correctly trip the no-follow guard.
-    const raw = await locked(file, () => readProtected(file));
-    if (!raw) continue;
-    const state: Envelope = JSON.parse(raw);
-    if (
-      state.schemaVersion === 1 &&
-      state.phase === "pending" &&
-      state.route === routeId(c)
-    )
-      ids.push(name.slice(0, -5));
+  const names = await turnFiles(c),
+    route = routeId(c);
+  // Tombstones do not consume active capacity, but serial lease acquisition for
+  // every tombstone can consume the entire hook deadline. Bound concurrent I/O
+  // while retaining each file's no-follow read and atomic-replacement lease.
+  for (let offset = 0; offset < names.length; offset += 8) {
+    const batch = await Promise.all(
+      names.slice(offset, offset + 8).map(async (name) => {
+        const file = join(c.paths.stateDir, `${c.agent}-turns`, name);
+        const raw = await locked(file, () => readProtected(file));
+        if (!raw) return undefined;
+        const state: Envelope = JSON.parse(raw);
+        return state.schemaVersion === 1 &&
+          state.phase === "pending" &&
+          state.route === route
+          ? name.slice(0, -5)
+          : undefined;
+      }),
+    );
+    ids.push(...batch.filter((id): id is string => id !== undefined));
   }
   return ids;
 }

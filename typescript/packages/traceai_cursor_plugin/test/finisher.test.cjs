@@ -357,6 +357,10 @@ test("expired claim fences a stale owner and export claims cannot be replayed", 
   );
   assert.equal((await f.state()).value.encrypted, undefined);
   assert.equal(await claimPending(f.config, id), undefined);
+  // The hook can hand off IDs scanned before another process claimed export.
+  // Reusing that metadata must still revalidate the current envelope under lock.
+  await require("../dist/runtime.js").processPending(f.config, [id]);
+  assert.equal(spans(f.requests).length, 0);
   await Promise.all([f.stop(), f.end()]);
   assert.equal(
     spans(f.requests).length,

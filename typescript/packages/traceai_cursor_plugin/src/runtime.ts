@@ -164,9 +164,14 @@ async function detach(c: ResolvedConfig, claim: PendingTurn): Promise<void> {
   if (child.pid) await handoffPending(c, claim, child.pid);
 }
 /** Called after every hook, also recovering a crashed finisher without replaying any export claim. */
-export async function processPending(c: ResolvedConfig): Promise<void> {
+export async function processPending(
+  c: ResolvedConfig,
+  pending?: readonly string[],
+): Promise<void> {
   const settleDeadline = Date.now() + SETTLE_MS;
-  for (const id of await pendingTurnIds(c)) {
+  // The hook already scanned protected metadata. Reuse only the opaque IDs;
+  // claimPending still locks and revalidates each current snapshot before export.
+  for (const id of pending ?? await pendingTurnIds(c)) {
     const claim = await claimPending(c, id);
     if (!claim) continue;
     const s = source(claim);

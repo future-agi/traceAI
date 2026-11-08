@@ -102,11 +102,12 @@ export async function hook(args = process.argv.slice(2)): Promise<void> {
       ).catch(() => {});
       return;
     }
-    if (!collectionEnabled(config) || !(await pendingTurnIds(config)).length)
-      return;
+    if (!collectionEnabled(config)) return;
+    const pending = await pendingTurnIds(config);
+    if (!pending.length) return;
     const { processPending } =
       require("./runtime.js") as typeof import("./runtime.js");
-    await processPending(config);
+    await processPending(config, pending);
   } catch {
     /* Never print provider/filesystem errors or change the agent's exit status. */
   } finally {
