@@ -162,6 +162,17 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
                     "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
                     "tag": f"nuget-{name}-v{version}", "core": False,
                     "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # Ruby is inventoried for release-please coverage but intentionally held
+    # from the five-ecosystem publisher until a RubyGems publisher is configured.
+    ruby_version = root / "ruby/roast/lib/traceai/roast/version.rb"
+    if ruby_version.is_file():
+        match = re.search(r'^\s*VERSION\s*=\s*["\']([^"\']+)["\']', ruby_version.read_text(), re.M)
+        if not match:
+            raise ValueError(f"{ruby_version}: missing Ruby gem VERSION")
+        version = match.group(1)
+        out.append({"ecosystem": "ruby", "name": "traceai-roast", "version": version,
+                    "dir": "ruby/roast", "tag": f"ruby-traceai-roast-v{version}",
+                    "core": False, "changelog": None})
     return out
 
 

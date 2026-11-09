@@ -22,7 +22,9 @@ concurrency:
 jobs:
   test:
     name: .NET 10 / OpenTelemetry ${{ matrix.otel }}
-    runs-on: macos-14
+    # GitHub stopped accepting macos-14 on 2026-11-05; macos-15 runs the same
+    # loopback-only sandbox profile in guardrails-typescript-tests.yml.
+    runs-on: macos-15
     timeout-minutes: 15
     strategy:
       fail-fast: false

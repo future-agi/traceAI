@@ -48,12 +48,12 @@ func serverClient(t *testing.T, transport string, executor *agent, tp *sdktrace.
 		t.Cleanup(srv.Close)
 		c = card(srv.URL, transport == "rest", true)
 	}
-	client, err := a2aclient.NewFromCard(context.Background(), c, opts...)
+	client, err := traceaia2a.NewClientFromCard(context.Background(), c, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.Destroy() })
-	return traceaia2a.WrapClient(client)
+	return client
 }
 
 func TestServerTraceContinuesClient(t *testing.T) {

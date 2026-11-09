@@ -16,7 +16,7 @@ import type {
   CommandFailedEvent,
 } from "mongodb";
 
-const VERSION = "0.1.1"; // x-release-please-version
+const VERSION = "0.1.2"; // x-release-please-version
 
 // Only application commands: never authentication, handshakes or session payloads.
 const COMMANDS = new Set([
@@ -268,6 +268,13 @@ export class MongoDBInstrumentation extends InstrumentationBase {
       traceConfig: { hideErrorDetails: true, ...this.traceConfig },
     });
     const span = tracer.startSpan(`mongodb ${event.commandName}`, { kind: SpanKind.CLIENT, attributes });
+    // A processor's onStart can disable us (and even re-enable with new state)
+    // before this span is published. Detached listeners cannot finish it later.
+    const client = state.ref.deref();
+    if (!this.isEnabled() || !client || this.clients.get(client) !== state) {
+      span.end();
+      return;
+    }
     state.spans.set(event.requestId, span);
   }
 

@@ -119,13 +119,19 @@ const explodingTool = createTool({
 
 // Stands in for VoltOps or any other processor the user already has in the array.
 const recorded = [];
+// Keep native references in this test only, to check them again after FI export.
+const nativeSpans = [];
 const recorder = {
   onStart() {},
   onEnd(span) {
+    nativeSpans.push(span);
     recorded.push({
       name: span.name,
       spanId: span.spanContext().spanId,
       traceId: span.spanContext().traceId,
+      conversationId: span.attributes["conversation.id"],
+      userId: span.attributes["user.id"],
+      errorType: span.attributes["error.type"],
       // Event names and attribute keys as VoltAgent wrote them (the control for event filtering).
       events: (span.events ?? []).map((event) => [event.name, Object.keys(event.attributes ?? {})]),
     });
@@ -237,6 +243,11 @@ await processor.forceFlush();
 result.flushMs = Date.now() - started;
 const traceIds = [...new Set(recorded.map((span) => span.traceId))];
 result.recorded = recorded;
+result.nativeIdentities = nativeSpans.map((span) => ({
+  spanId: span.spanContext().spanId,
+  conversationId: span.attributes["conversation.id"],
+  userId: span.attributes["user.id"],
+}));
 result.traceIds = traceIds;
 const storedCounts = [];
 for (const traceId of traceIds) storedCounts.push((await observability.getTraceFromStorage(traceId)).length);

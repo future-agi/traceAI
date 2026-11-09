@@ -1,0 +1,70 @@
+{
+  "name": "milestone-a10-responses-custom-tool-initial-input-failure-after-output",
+  "description": "The observed thinking/tool/code milestone survives failure before ordinary text or tool completion.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "response.created",
+        "response": {
+          "output": []
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "ct-r6b",
+          "name": "",
+          "input": ""
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "item": {
+          "type": "custom_tool_call",
+          "id": "ct-r6b",
+          "name": "",
+          "input": "print(1)"
+        }
+      },
+      {
+        "type": "response.output_text.delta",
+        "delta": "Later"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ],
+    "error_after_chunks": 3
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@traceai/hermes-agent",
+  "version": "0.1.0",
+  "description": "Native Hermes Agent tracing setup companion; Python-only tracing runtime",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.cjs", "prepare": "pnpm run build" },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=22.16.0" },
+  "dependencies": { "@traceai/agent-core": "workspace:^" },
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" },
+  "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_hermes_agent" },
+  "publishConfig": { "access": "public" },
+  "license": "Apache-2.0",
+  "author": "Future AGI"
+}

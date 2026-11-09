@@ -1,0 +1,69 @@
+{
+  "name": "milestone-openai-completions-text",
+  "description": "Legacy Completions streams carry output in choices[].text, not delta.content; empty scaffolds are not output.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "prompt": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "cmpl-r6",
+        "object": "text_completion",
+        "choices": [
+          {
+            "index": 0,
+            "text": ""
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "index": 0,
+            "text": ""
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "index": 0,
+            "text": "Hi"
+          }
+        ]
+      },
+      "[DONE]"
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_completion fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "output.value": "Hi",
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

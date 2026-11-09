@@ -67,3 +67,9 @@ In **Observe**, select `guardrails_project` to inspect the native `guard`, `step
 - Guardrails' `settings.disable_tracing` remains authoritative. When it is `True`, native traces are suppressed.
 - Existing `GuardrailsInstrumentor().instrument(...)` and `.uninstrument()` calls remain supported. SDKs without native guard/runner telemetry, including Guardrails 0.5.0, retain the legacy adapter. Upgrade Guardrails to use the native route.
 - Uninstrumentation restores the telemetry bindings for subsequent calls. Finish in-flight validations and streams before changing tracing configuration.
+
+## Known limitations
+
+With `guardrails-ai==0.7.0` and `guardrails-ai==0.11.0`, closing an `AsyncGuard` stream early can leave a native step span as the current OpenTelemetry context in the continuing task. Subsequent, unrelated spans can then get the wrong parent, even after the step span has ended. Cancellation between chunks followed by `aclose()` has the same limitation. This reproduces without traceAI and originates in [Guardrails' native async-stream tracing and cleanup](https://github.com/guardrails-ai/guardrails/blob/06d0ff2c5f9bcb493d976b76f885e37e41ce845d/guardrails/telemetry/guard_tracing.py#L209-L238); traceAI does not work around it.
+
+Consume streams to exhaustion in the same task before starting unrelated traced work. An early `aclose()`, including one in `finally`, is not sufficient to restore the parent context on these versions. If early termination is required, use non-streaming validation, or set Guardrails' `settings.disable_tracing = True` before starting validations and accept the loss of native Guardrails spans. No fixed native-tracing version is identified here; other versions are not implied to be unaffected.

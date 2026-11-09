@@ -34,7 +34,10 @@ def init_tracing() -> None:
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint:
         # Without an endpoint OpenLIT prints every span to stdout instead.
-        raise SystemExit("Set OTEL_EXPORTER_OTLP_ENDPOINT to the fi-collector origin.")
+        raise SystemExit(
+            "Set OTEL_EXPORTER_OTLP_ENDPOINT to your collector base URL "
+            "(https://api.futureagi.com/tracer for Cloud), without /v1/traces."
+        )
     api_key = os.environ.get("FI_API_KEY")
     secret_key = os.environ.get("FI_SECRET_KEY")
     if not (api_key and secret_key):
@@ -49,7 +52,8 @@ def init_tracing() -> None:
         )
     openlit.init(
         service_name=APP_NAME,
-        # The origin, no path: the OTLP/HTTP exporter appends /v1/traces.
+        # The base URL (Cloud: https://api.futureagi.com/tracer), not the
+        # full trace URL: OTLP/HTTP preserves the prefix and appends /v1/traces.
         otlp_endpoint=endpoint,
         # OpenLIT joins this dict into OTEL_EXPORTER_OTLP_HEADERS, which the
         # exporter splits on commas and percent-decodes: encode the values.

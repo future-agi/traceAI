@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.0.1</version>
+        <version>1.0.2</version>
     </parent>
 
     <artifactId>traceai-spring-ai</artifactId>
@@ -54,6 +54,12 @@
             <artifactId>traceai-java-core</artifactId>
         </dependency>
 
+        <!-- Bounded structured message serialization (version managed by the shared parent). -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
+
         <!-- Spring AI model API (provided - the application brings its own Spring AI version) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
@@ -61,10 +67,24 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Optional at runtime: model-only applications do not need ChatClient. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Spring Framework (managed by the Spring Boot BOM) -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Provided by the native application's Boot BOM; wrappers do not require the bridge. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
             <scope>provided</scope>
         </dependency>
 

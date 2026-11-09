@@ -5,6 +5,7 @@ from typing import Any, Iterable, Iterator, List, Mapping, Tuple
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import (
+    FiLLMProviderValues,
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
@@ -36,7 +37,17 @@ class _RequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if not isinstance(request_parameters, Mapping):
             return
+        yield from _get_model_attributes(request_parameters)
         yield from _get_attributes_from_chat_completion_create_param(request_parameters)
+
+
+def _get_model_attributes(
+    params: Mapping[str, Any],
+) -> Iterator[Tuple[str, AttributeValue]]:
+    # Attribution must survive HTTP errors and hidden invocation parameters.
+    yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.MISTRALAI.value
+    if isinstance(model := params.get("model"), str) and model:
+        yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
 
 
 def _get_attributes_from_chat_completion_create_param(

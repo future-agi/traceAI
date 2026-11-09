@@ -1,0 +1,74 @@
+{
+  "name": "milestone-a10-cohere-text-string-empty",
+  "description": "Empty/null payloads and role/ID/finish scaffolds never establish first output.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "message-start",
+        "delta": {
+          "message": {
+            "role": "assistant"
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": ""
+          }
+        }
+      },
+      {
+        "type": "content-delta",
+        "delta": {
+          "message": {
+            "content": null
+          }
+        }
+      },
+      {
+        "type": "message-end"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

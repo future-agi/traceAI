@@ -1,0 +1,66 @@
+{
+  "name": "openai-embeddings",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/embeddings",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "text-embedding-3-small",
+      "input": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "object": "list",
+      "model": "text-embedding-3-small",
+      "data": [
+        {
+          "index": 0,
+          "embedding": [
+            0.1,
+            0.2,
+            0.3
+          ]
+        },
+        {
+          "index": 1,
+          "embedding": [
+            0.4,
+            0.5,
+            0.6
+          ]
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "embeddings text-embedding-3-small",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.span.kind": "EMBEDDING",
+      "gen_ai.operation.name": "embeddings",
+      "gen_ai.embeddings.dimension.count": 3,
+      "gen_ai.request.embedding_inputs_count": 2,
+      "gen_ai.usage.input_tokens": 2,
+      "gen_ai.usage.total_tokens": 2
+    },
+    "absent": [
+      "gen_ai.embeddings.vectors",
+      "gen_ai.usage.output_tokens"
+    ]
+  }
+}
