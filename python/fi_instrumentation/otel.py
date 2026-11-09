@@ -592,6 +592,15 @@ class BatchSpanProcessor(_BatchSpanProcessor):
 _CREDENTIAL_HEADERS = (AUTHORIZATION, "x-api-key", "x-secret-key")
 
 
+def _is_blank(value: Any) -> bool:
+    """None, or a str/bytes value that is empty after stripping whitespace."""
+    if value is None:
+        return True
+    if isinstance(value, (bytes, bytearray)):
+        return not bytes(value).strip()
+    return not str(value).strip()
+
+
 def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
     """Lower-case explicit headers and add the FI_API_KEY/FI_SECRET_KEY pair once.
 
@@ -602,15 +611,15 @@ def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
     lower-cased on both sides, so the request never carries case-variant
     duplicates such as ``x-api-key`` and ``X-Api-Key``.
     """
-    if not headers:
-        merged: Dict[str, Any] = {}
-    elif isinstance(headers, Mapping):
-        merged = {str(k).lower(): v for k, v in headers.items()}
-    else:
-        merged = {str(k).lower(): v for k, v in headers}
-    for name in _CREDENTIAL_HEADERS:
-        if name in merged and not str(merged[name] if merged[name] is not None else "").strip():
-            del merged[name]
+    pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
+    merged: Dict[str, Any] = {}
+    for key, value in pairs:
+        name = (key.decode() if isinstance(key, bytes) else str(key)).lower()
+        # Skip a blank credential before collapsing case variants, so an empty
+        # duplicate can never erase an explicit one and pull in the env pair.
+        if name in _CREDENTIAL_HEADERS and _is_blank(value):
+            continue
+        merged[name] = value
     if not any(name in merged for name in _CREDENTIAL_HEADERS):
         auth_header = get_env_fi_auth_header()
         if auth_header:
