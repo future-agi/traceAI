@@ -1,6 +1,6 @@
 import logging
 from enum import Enum
-from typing import Any, Iterable, Iterator, Mapping, Tuple, TypeVar
+from typing import Any, Dict, Iterable, Iterator, Mapping, Tuple, TypeVar
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import (
@@ -24,6 +24,48 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+# Request arguments also include credentials, headers and transport options.
+# Match the completion allowlist policy: only known, typed inference controls
+# belong in request-parameter telemetry, never arbitrary provider configuration.
+_INFERENCE_PARAMETER_TYPES = {
+    "model": (str,),
+    "temperature": (int, float),
+    "top_p": (int, float),
+    "n": (int,),
+    "max_tokens": (int,),
+    "max_completion_tokens": (int,),
+    "frequency_penalty": (int, float),
+    "presence_penalty": (int, float),
+    "seed": (int,),
+    "logprobs": (bool,),
+    "top_logprobs": (int,),
+    "stream": (bool,),
+    "parallel_tool_calls": (bool,),
+    "reasoning_effort": (str,),
+    "stop": (str,),
+}
+
+
+def _get_inference_parameters(request_parameters: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project telemetry without inspecting or mutating transport/auth objects.
+
+    Exact builtin types exclude clients, nested configuration and subclasses
+    with custom serialization. Stop sequences are the only allowed container;
+    headers, extra_body, extra_query and future SDK options are omitted by default.
+    """
+    parameters: Dict[str, Any] = {}
+    for name, allowed_types in _INFERENCE_PARAMETER_TYPES.items():
+        if name in request_parameters:
+            value = request_parameters[name]
+            if value is None or type(value) in allowed_types:
+                parameters[name] = value
+
+    stop = request_parameters.get("stop")
+    if type(stop) in (list, tuple) and all(type(item) is str for item in stop):
+        parameters["stop"] = list(stop)
+    return parameters
+
+
 class _RequestAttributesExtractor:
     __slots__ = ()
 
@@ -32,13 +74,13 @@ class _RequestAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
-        if model := request_parameters.get("model"):
+        inference_parameters = _get_inference_parameters(request_parameters)
+        if model := inference_parameters.get("model"):
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         try:
-            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters)
-
+            # Never yield a raw request, even temporarily before message input.
             messages = request_parameters.get("messages")
-            input_data = messages if messages is not None else request_parameters
+            input_data = messages if messages is not None else inference_parameters
 
             if messages and isinstance(messages, Iterable):
                 yield from _extract_eval_input(messages)
@@ -59,11 +101,9 @@ class _RequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if not isinstance(request_parameters, Mapping):
             return
-        invocation_params = dict(request_parameters)
-        invocation_params.pop("messages", None)  # Remove LLM input messages
-        invocation_params.pop("functions", None)
+        invocation_params = _get_inference_parameters(request_parameters)
 
-        if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
+        if isinstance((tools := request_parameters.get("tools")), Iterable):
             for i, tool in enumerate(tools):
                 yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(
                     tool

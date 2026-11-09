@@ -1,4 +1,3 @@
-import json
 import logging
 from abc import ABC
 from contextlib import contextmanager
@@ -7,7 +6,7 @@ from inspect import Signature, signature
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
 
 import opentelemetry.context as context_api
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import get_attributes_from_context
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     FiSpanKindValues,
@@ -93,20 +92,14 @@ def _parse_args(
 ) -> Dict[str, Any]:
     bound_signature = signature.bind(*args, **kwargs)
     bound_signature.apply_defaults()
-    bound_arguments = bound_signature.arguments  # Defaults empty to NOT_GIVEN
-    request_data: Dict[str, Any] = {}
-    for key, value in bound_arguments.items():
-        try:
-            if value is not None and value is not NOT_GIVEN:
-                try:
-                    # ensure the value is JSON-serializable
-                    safe_json_dumps(value)
-                    request_data[key] = value
-                except json.JSONDecodeError:
-                    request_data[key] = str(value)
-        except Exception:
-            request_data[key] = str(value)
-    return request_data
+    # Binding must not serialize opaque clients or transport/auth configuration.
+    # The extractor projects safe telemetry; the SDK still receives the original
+    # args and kwargs unchanged.
+    return {
+        key: value
+        for key, value in bound_signature.arguments.items()
+        if value is not None and value is not NOT_GIVEN
+    }
 
 
 class _CompletionsWrapper(_WithTracer):
@@ -130,12 +123,6 @@ class _CompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
-        # Prepare invocation parameters by merging args and kwargs
-        invocation_parameters = {}
-        for arg in args:
-            if arg and isinstance(arg, dict):
-                invocation_parameters.update(arg)
-        invocation_parameters.update(kwargs)
         request_parameters = _parse_args(signature(wrapped), *args, **kwargs)
         span_name = "Completions"
 
@@ -248,12 +235,6 @@ class _AsyncCompletionsWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
-        # Prepare invocation parameters by merging args and kwargs
-        invocation_parameters = {}
-        for arg in args:
-            if arg and isinstance(arg, dict):
-                invocation_parameters.update(arg)
-        invocation_parameters.update(kwargs)
         request_parameters = _parse_args(signature(wrapped), *args, **kwargs)
 
         span_name = "AsyncCompletions"
