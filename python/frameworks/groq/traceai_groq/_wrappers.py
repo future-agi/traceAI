@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
 
 import groq
 import opentelemetry.context as context_api
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     FiSpanKindValues,
@@ -104,7 +104,7 @@ def _parse_args(
         try:
             if (
                 value is not None
-                and value is not NOT_GIVEN
+                and not isinstance(value, type(NOT_GIVEN))
                 and not (omit_type is not None and isinstance(value, omit_type))
             ):
                 try:
@@ -124,10 +124,10 @@ class _CompletionsWrapper(_WithTracer):
     Captures all calls to the pipeline
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, config: TraceConfig | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
-        self._response_extractor = _ResponseAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config)
+        self._response_extractor = _ResponseAttributesExtractor(config)
 
     def __call__(
         self,
@@ -209,10 +209,10 @@ class _AsyncCompletionsWrapper(_WithTracer):
     Captures all asynchronous calls to the pipeline
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, config: TraceConfig | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RequestAttributesExtractor()
-        self._response_extractor = _ResponseAttributesExtractor()
+        self._request_extractor = _RequestAttributesExtractor(config)
+        self._response_extractor = _ResponseAttributesExtractor(config)
 
     async def __call__(
         self,

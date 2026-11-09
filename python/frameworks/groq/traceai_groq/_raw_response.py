@@ -4,11 +4,12 @@ No network body is fetched by instrumentation. Response and parsed stream share 
 completion state, so their independent close paths can only export one span.
 """
 
+import json
 from typing import Any
 
 import httpx
 from groq import AsyncStream, Stream
-from groq.types.chat import ChatCompletionChunk
+from groq.types.chat import ChatCompletion, ChatCompletionChunk
 from wrapt import ObjectProxy
 
 from traceai_groq._stream import _AsyncStream, _Stream, _StreamState
@@ -31,6 +32,23 @@ class _ResponseProxy(ObjectProxy):
             content=body,
             request=native.request,
         )
+
+    def _self_finish_json(self, body: bytes) -> None:
+        # Only replay a fully consumed body. Do not populate the SDK's parse
+        # cache, advance its iterator or alter the chunks returned to the caller.
+        try:
+            data = json.loads(body)
+        except Exception as error:
+            self._self_state.finish(error)
+            return
+        try:
+            parsed = ChatCompletion.model_validate(data)
+        except Exception:
+            # The SDK can accept loosely typed JSON. Telemetry validation must
+            # not turn a successful native read into a caller-visible error.
+            self._self_state.finish()
+        else:
+            self._self_state.finish_response(parsed)
 
     def _self_wrap_parsed(self, parsed: Any, proxy_type: type) -> Any:
         # The SDK caches parse() results per target type. Preserve that identity
@@ -61,8 +79,10 @@ class _RawResponse(_ResponseProxy):
             # Use an independent parse for telemetry without changing its cache.
             try:
                 parsed = self.__wrapped__._parse()
-            except Exception:
-                self._self_state.finish()
+            except Exception as error:
+                # read() still succeeds, but a later native parse() of this
+                # same body would fail. Do not export premature OK telemetry.
+                self._self_state.finish(error)
             else:
                 self._self_state.finish_response(parsed)
 
@@ -134,6 +154,8 @@ class _RawResponse(_ResponseProxy):
                         self._self_state.capture(chunk)
                 except Exception:
                     pass  # Telemetry must not change a successful native read.
+            else:
+                self._self_finish_json(b"".join(parts))
         except GeneratorExit:
             raise
         except BaseException as error:
@@ -158,8 +180,10 @@ class _AsyncRawResponse(_ResponseProxy):
         else:
             try:
                 parsed = self.__wrapped__._parse()
-            except Exception:
-                self._self_state.finish()
+            except Exception as error:
+                # read() still succeeds, but a later native parse() of this
+                # same body would fail. Do not export premature OK telemetry.
+                self._self_state.finish(error)
             else:
                 self._self_state.finish_response(parsed)
 
@@ -229,6 +253,8 @@ class _AsyncRawResponse(_ResponseProxy):
                         self._self_state.capture(chunk)
                 except Exception:
                     pass  # Telemetry must not change a successful native read.
+            else:
+                self._self_finish_json(b"".join(parts))
         except GeneratorExit:
             raise
         except BaseException as error:

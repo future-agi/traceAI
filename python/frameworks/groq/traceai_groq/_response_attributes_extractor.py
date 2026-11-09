@@ -1,6 +1,8 @@
 import logging
 from typing import Any, Iterable, Iterator, Mapping, Tuple
 
+from fi_instrumentation import TraceConfig
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
     MessageAttributes,
     SpanAttributes,
@@ -22,11 +24,24 @@ logger.addHandler(logging.NullHandler())
 
 
 class _ResponseAttributesExtractor:
+    def __init__(self, config: TraceConfig | None = None) -> None:
+        self._config = config or TraceConfig()
+
     def get_attributes(
         self, response: Any, is_streaming: bool = False
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        hide_content = (
+            self._config.hide_outputs
+            or self._config.hide_output_messages
+            or self._config.hide_output_text
+        )
         if is_streaming:
-            yield from _as_streaming_output(response)
+            for key, value in _as_streaming_output(response):
+                if hide_content and key == SpanAttributes.OUTPUT_VALUE:
+                    value = REDACTED_VALUE
+                yield key, value
+        elif hide_content:
+            yield SpanAttributes.OUTPUT_VALUE, REDACTED_VALUE
         else:
             yield from _as_raw_output(response)
             processed_response = _process_response(response)

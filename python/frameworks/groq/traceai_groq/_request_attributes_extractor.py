@@ -3,7 +3,8 @@ from collections.abc import Iterator as OneShotIterator
 from enum import Enum
 from typing import Any, Iterable, Iterator, Mapping, Tuple, TypeVar
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     MessageAttributes,
@@ -40,7 +41,10 @@ def _without_transport_parameters(parameters: Mapping[str, Any]) -> dict[str, An
 
 
 class _RequestAttributesExtractor:
-    __slots__ = ()
+    __slots__ = ("_config",)
+
+    def __init__(self, config: TraceConfig | None = None) -> None:
+        self._config = config or TraceConfig()
 
     def get_attributes_from_request(
         self,
@@ -50,6 +54,16 @@ class _RequestAttributesExtractor:
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         if model := request_parameters.get("model"):
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
+        # Aggregate JSON contains copies of the structured message content.
+        # Apply the same policy before serializing, while retaining model metadata.
+        if (
+            self._config.hide_inputs
+            or self._config.hide_input_messages
+            or self._config.hide_input_text
+            or self._config.hide_input_images
+        ):
+            yield SpanAttributes.INPUT_VALUE, REDACTED_VALUE
+            return
         try:
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters)
 
