@@ -123,8 +123,11 @@ _CREDIT_CARD_RE = re.compile(
 # Do not match the last ten/eleven digits of a longer identifier. A negative
 # word lookbehind also keeps the full leading '+'/'(' in a telephone match;
 # placing a word boundary before those non-word characters would leave them.
+# A JSON escape before the number (backslash followed by n, t or r) also starts a
+# match, so a phone after a newline in serialized metadata or messages is found.
 _PHONE_RE = re.compile(
-    r"(?<!\w)(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b"
+    r"(?:(?<!\w)|(?<=\\[ntr]))"
+    r"(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b"
 )
 
 _IP_RE = re.compile(
