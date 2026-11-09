@@ -158,7 +158,7 @@ class _StreamState:
             tokens_only = bool(
                 not isinstance(self.accumulator, _ChatAccumulator)
                 and self.config
-                and self.config.hide_inputs
+                and (self.config.hide_inputs or self.config.hide_input_text)
                 and self.request.get("return_full_text")
             )
             response = (
@@ -166,6 +166,8 @@ class _StreamState:
                 if isinstance(self.accumulator, _ChatAccumulator)
                 else self.accumulator.response(tokens_only=tokens_only)
             )
+            # Keep numeric usage before removing input-origin prefill details.
+            attributes = list(self.extractor.get_attributes(response))
             if tokens_only:
                 # Prefill tokens are input-origin text, too.
                 response["details"].pop("prefill", None)
@@ -184,7 +186,7 @@ class _StreamState:
             _finish_tracing(
                 status=status,
                 with_span=self.span,
-                attributes=self.extractor.get_attributes(response),
+                attributes=iter(attributes),
                 extra_attributes=extra_attributes,
             )
         except Exception:

@@ -432,7 +432,10 @@ class _FeatureExtractionWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
@@ -491,7 +494,10 @@ class _AsyncFeatureExtractionWrapper(_WithTracer):
             span_name=span_name,
             attributes=self._request_extractor.get_attributes_from_request(request_parameters),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
+            extra_attributes=_private_request_attributes(
+                self._request_extractor.get_extra_attributes_from_request(request_parameters),
+                self._tracer._self_config,
+            ),
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
