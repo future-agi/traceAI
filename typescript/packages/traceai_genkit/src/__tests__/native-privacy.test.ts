@@ -40,7 +40,7 @@ it.each(["background-model", "check-operation", "cancel-operation"])("sanitizes 
   const out = map(attributes, subtype === "background-model" ? request : operation, operation, resolveContentPolicy({ hideErrorDetails: true, hideInputText: true }));
   expect(JSON.stringify(out)).not.toContain(marker);
   const result = JSON.parse(out["genkit:output"] as string);
-  expect(result).toMatchObject({ id: operation.id, action: operation.action, done: true, metadata: operation.metadata });
+  expect(result).toMatchObject({ id: operation.id, action: operation.action, done: true, metadata: "__REDACTED__" });
   expect(result.error).toEqual({ status: "INTERNAL", code: 13 });
   expect(result.output.message).toEqual(response.message);
 });

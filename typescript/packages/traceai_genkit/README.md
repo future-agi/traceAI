@@ -169,6 +169,10 @@ new FIGenkitSpanProcessor({ tracerProvider, traceConfig: { hideInputs: true, hid
 
 A generation response can include a copy of its request. `hideInputs` or `hideInputMessages` removes that embedded request from both `genkit:output` and `output.value`, without removing the model's reply. `hideInputText` redacts the embedded request's text and reasoning instead; `hideInputImages` redacts its image media. These rules also apply to background-model operations and their check/cancel spans. If a native response cannot be parsed, the processor redacts it when field-level masking is required.
 
+The manual processor also applies fi-core's semantic content rules to attributes from `setAttributes` and `setPromptTemplate`, including opaque `input.value`/`output.value`, raw payloads, prompt-template variables, and semantic message copies. Native structured generation envelopes retain their field-level masking.
+
+Background `Operation.metadata` is opaque provider state and may repeat requests, responses, images, vectors, or errors. Its exported copy becomes `__REDACTED__` whenever any input/output/message/text/image/vector or error-detail hiding setting applies, including nested generation responses and check/cancel inputs and outputs. This deliberately hides innocuous metadata too. Operation identifiers, completion state, and permitted response fields remain available; application objects and Genkit's own telemetry are unchanged. With all these settings off, metadata and semantic content are exported as before.
+
 Hidden or not, tokens, finish reason, model, provider, kinds, names and session are exported: they are read from Genkit's span before anything is hidden.
 
 Never exported, in either mode:

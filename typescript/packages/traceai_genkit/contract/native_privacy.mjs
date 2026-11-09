@@ -128,7 +128,7 @@ if (!process.argv[2]) {
       assert.ok(operations.some((o) => o.done && o.error));
       for (const op of operations) {
         assert.equal(op.action, '/background-model/offline/background');
-        assert.deepEqual(op.metadata, { stage: 'safe' });
+        assert.equal(op.metadata, '__REDACTED__', 'opaque state follows content/error hiding even when error text is opted in');
         if (op.error) {
           assert.equal(op.error.status, 'INTERNAL');
           assert.equal(op.error.code, 13);

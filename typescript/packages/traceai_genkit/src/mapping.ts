@@ -1,5 +1,5 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
-import { REDACTED_VALUE } from "@traceai/fi-core";
+import { generateTraceConfig, maskAttributes, REDACTED_VALUE } from "@traceai/fi-core";
 import { FISpanKind, MimeType, SemanticConventions } from "@traceai/fi-semantic-conventions";
 import {
   FI_SPAN_KIND,
@@ -179,8 +179,16 @@ function maskGeneration(response: Record<string, unknown>, policy: ContentPolicy
   }
 }
 
+/** Operation metadata is opaque provider state: any content family may be copied into it. */
+function hidesOperationMetadata(policy: ContentPolicy): boolean {
+  return policy.hideInputs || policy.hideInputMessages || policy.hideInputText || !!policy.hideInputImages ||
+    policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText || policy.hideEmbeddingVectors ||
+    hidesFreeText(policy);
+}
+
 /** OperationSchema is used by background-model, check-operation and cancel-operation. */
 function maskOperation(operation: Record<string, unknown>, policy: ContentPolicy, model: boolean, depth: number): void {
+  if (operation.metadata !== undefined && hidesOperationMetadata(policy)) operation.metadata = REDACTED_VALUE;
   if (hidesFreeText(policy)) maskError(operation);
   // Non-model background actions can return arbitrary output; only model operations
   // have a GenerateResponse here. Error policy still covers every Operation.error.
@@ -201,9 +209,7 @@ function maskOperation(operation: Record<string, unknown>, policy: ContentPolicy
  * Parse only these native envelopes, never arbitrary util/tool/flow content.
  */
 function generationOutput(value: AttributeValue, policy: ContentPolicy, operation = false, model = false): AttributeValue {
-  if (!hidesFreeText(policy) && !policy.hideInputs && !policy.hideInputMessages &&
-      !policy.hideInputText && !policy.hideInputImages &&
-      !(operation && (policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText))) return value;
+  if (!hidesOperationMetadata(policy)) return value;
   const response = parseJson(value);
   // Truncated native envelopes cannot be safely field-masked.
   if (!isRecord(response)) return REDACTED_VALUE;
@@ -255,7 +261,7 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const modes = sideModes(policy, isGeneration);
   // FI_HIDE_EMBEDDING_VECTORS: the vectors are in an embedder span's output.
   const hideVectors = kind === FISpanKind.EMBEDDING && policy.hideEmbeddingVectors === true;
-  const out: Attributes = {};
+  let out: Attributes = {};
   let generationInput = source[GenkitAttributes.INPUT];
   if (options.separateInvocationParameters && (isModelCall ||
       (source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL && source[GenkitAttributes.NAME] === "generate"))) {
@@ -346,6 +352,16 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
       }
     }
   }
+
+  // Native spans do not pass through FISpan. Apply the same semantic content rules
+  // to both native attributes and fi-core context copies before creating aliases
+  // from the already field-masked native envelopes below. Otherwise opaque context
+  // values can override those aliases, including prompt-template variables.
+  out = maskAttributes({
+    config: generateTraceConfig({ ...policy, hideInputImages: policy.hideInputImages ?? false,
+      hideErrorDetails: hidesFreeText(policy) }),
+    attributes: out,
+  });
 
   // input.value / output.value, the keys Future AGI shows as a span's input and output. A hidden
   // side gets fi-core's "__REDACTED__" and no mime type, as fi-core's own masking does.

@@ -74,6 +74,8 @@ jobs:
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             "$(command -v node)" contract/native_privacy.mjs
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
+            "$(command -v node)" contract/context_operation_privacy.mjs
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             env OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT=256 "$(command -v node)" contract/review_round2.mjs
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
             "$(command -v node)" contract/review_round2.mjs
