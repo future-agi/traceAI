@@ -97,9 +97,7 @@ def test_tool_image_environment_and_length_boundaries(monkeypatch, hidden, direc
         "parts"
     ][0]
     assert result["id"] == "call-1"
-    if direction == "output":
-        assert result["response"] == chunks
-    elif hidden:
+    if direction == "input" and hidden:
         assert result["response"] == [chunks[0], chunks[-1]]
     else:
         assert result["response"] == [
