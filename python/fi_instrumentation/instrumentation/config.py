@@ -313,7 +313,7 @@ class TraceConfig:
             "default_value": DEFAULT_PII_REDACTION,
         },
     )
-    """Enables PII redaction, except on correlation identifiers and metadata."""
+    """Enables PII redaction, except on correlation identifier fields (session/user/conversation ids)."""
     _hide_error_details: Optional[bool] = field(
         default=None,
         metadata={
@@ -483,7 +483,7 @@ class TraceConfig:
         if resolved is None:
             return None
         # Image policy still applies to every retained value. Only the PII pass
-        # exempts correlation identifiers and metadata (#195).
+        # exempts correlation identifier fields (#195); metadata stays redacted.
         return self.redact_value(
             resolved, image_key=_is_image_key(key), attribute_key=key
         )
@@ -499,7 +499,7 @@ class TraceConfig:
 
         The image cap is independent of the attribute's PII scope and runs first.
         ``mask`` supplies the key for span, event, link and sampler attributes;
-        correlation identifiers and metadata are exempt from PII only. Unkeyed
+        correlation identifier fields are exempt from PII only. Unkeyed
         callers retain the full PII policy, including ``FiSpan``'s exception
         message, stack trace, generated type and ERROR status description.
         Unknown/custom attribute keys remain scanned for compatibility.

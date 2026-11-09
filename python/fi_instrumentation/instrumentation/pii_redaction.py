@@ -200,25 +200,26 @@ def _redact_credit_cards(text: str) -> str:
     return _CREDIT_CARD_RE.sub(replace, text)
 
 
-# Exempt the structured correlation fields from issue #195, not an allowlist
+# Exempt the correlation identifier fields from issue #195, not an allowlist
 # of content fields. Dev also protects arbitrary event/link/sampler attributes,
 # raw payloads, error text, prompt variables and newer semantic conventions.
-# An allowlist would silently remove that existing PII protection.
+# An allowlist would silently remove that existing PII protection. Metadata is
+# free-form and is where opted-in users put emails and phone numbers, so it
+# stays redacted (fi-security ruling on the #244 scope).
 _PII_STRUCTURED_PREFIXES = (
     "session.id",
     "user.id",
     "gen_ai.conversation.id",
     "conversation.id",
-    "metadata",
 )
 
 
 def key_carries_free_text(key: str) -> bool:
-    """Scan every key except explicit correlation fields and their descendants.
+    """Scan every key except the correlation identifier fields and their descendants.
 
     This is a PII-only exemption, not a privacy bypass: image capping and
-    explicit hide flags still apply. In particular, custom free-text keys
-    remain protected. Metadata may intentionally contain unredacted PII.
+    explicit hide flags still apply. Custom free-text keys and metadata
+    remain protected.
     """
     return not any(
         key == prefix or key.startswith(prefix + ".")
