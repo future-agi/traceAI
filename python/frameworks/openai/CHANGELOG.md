@@ -1,3 +1,13 @@
+## [Unreleased]
+### Fixed
+- Normally exhausted Chat Completions streams now export ERROR when at least one
+  choice reports a non-null `finish_reason` but a requested choice index never does.
+  This honors the effective on-wire `n`, including `extra_body` overrides, for sync
+  and async streams on the shared OpenAI/DeepSeek route. All non-null finish reasons
+  count as terminal, including `length` and `content_filter`. Caller-initiated early
+  close/context exit remains OK unless an exception occurs. Known limitation:
+  streams with no `finish_reason` at all are not judged and remain OK.
+
 ## [0.1.11] - 2026-10-29
 ### Fixed
 - Attribute OpenAI-compatible calls to `api.together.ai` to `together`, including streamed and failed requests; unknown proxies and look-alike hosts still use `openai`.
