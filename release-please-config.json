@@ -1329,6 +1329,14 @@
       "component": "traceai-roast",
       "package-name": "traceai-roast",
       "version-file": "lib/traceai/roast/version.rb"
+    },
+    "typescript/packages/traceai_n8n": {
+      "release-type": "node",
+      "component": "npm-traceai-n8n",
+      "package-name": "@traceai/n8n",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     }
   }
 }

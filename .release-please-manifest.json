@@ -157,5 +157,6 @@
   "typescript/packages/traceai_vitest_evals": "0.1.0",
   "python/frameworks/openrouter": "0.1.0",
   "go/langchaingo": "0.1.0",
-  "ruby/roast": "0.1.0"
+  "ruby/roast": "0.1.0",
+  "typescript/packages/traceai_n8n": "0.1.0"
 }
