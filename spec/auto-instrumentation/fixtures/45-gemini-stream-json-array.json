@@ -1,0 +1,79 @@
+{
+  "name": "gemini-stream-json-array",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Say hello world"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "Hello "
+                }
+              ]
+            }
+          }
+        ],
+        "modelVersion": "gemini-2.5-flash"
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "world"
+                }
+              ]
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 4,
+          "candidatesTokenCount": 2,
+          "totalTokenCount": 6
+        },
+        "modelVersion": "gemini-2.5-flash"
+      }
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "generate_content gemini-2.5-flash",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.request.stream": true,
+      "output.value": "Hello world",
+      "gen_ai.usage.total_tokens": 6,
+      "gen_ai.response.finish_reasons": [
+        "STOP"
+      ]
+    }
+  }
+}

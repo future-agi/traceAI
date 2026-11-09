@@ -1,3 +1,57 @@
+## [1.2.3] - pending release
+### Fix
+- **Upgrade.** 1.2.0, 1.2.1 and 1.2.2 could export short base64 media payloads that carry no recognized file signature: type- or modality-declared video (`type: video`, `type: input_video`, `modality: video`) at any cap, including the default 0; type-declared images (for example `{"type":"image","data":"<base64>"}`) when a positive `base64ImageMaxLength` (or `FI_BASE64_IMAGE_MAX_LENGTH`) was set; and images whose declaration is a separate attribute from the payload (for example `parts.0.type` = `image` beside `parts.0.data`), at any cap. 1.2.3 omits all of these at any cap. Setting the cap to 0 is not a workaround.
+- Covered declarations: image and video by type or modality declaration, audio by type declaration; by MIME declaration, `image/*`, `video/*`, `audio/*`, `application/pdf` and `application/octet-stream`. Payloads are recognized in the catalog payload fields (for example `data`, `bytes`, `content`, `base64`, `b64_json`), and image declarations also cover image URL fields such as `url` and `image_url`. Under video and other generic media declarations, raw base64 under other keys such as `video`, `video_url` or `url` is not covered by this declaration rule (see the known limitations).
+- Carry image declarations (`type: image`, `image_url`, `input_image`, `modality: image`, and image MIME siblings) and video declarations (`type: video`, `type: input_video`, `modality: video`) into payload recognition on FI admission, standalone span creation/setters and detached export. Short declared images without a catalog signature, including a valid 1x1 BMP, are omitted even below an explicit positive cap. Typed video uses the existing generic media payload fields at every cap, just like MIME-declared `video/mp4`, `video/webm` and `application/pdf`; cap 0 alone does not repair the earlier typed-video gap. These changes close the type-only/modality recognition gaps; credential/secret masking, audio omission and image cap-marker precedence are unchanged.
+- Keep image URL payload fields subject to declared base64 omission without treating ordinary HTTP image URLs as payload bytes. Preserve image hints across separate FI-authored writes.
+
+### Known limitations
+- Under a type- or modality-declared video, raw base64 stored under keys outside the catalog payload fields (for example `video`, `video_url` or `url`) is not omitted by the declaration rule; MIME-declared and signature-recognized payloads are unaffected.
+- Image data nested inside a JSON-encoded string field (for example an image url inside a JSON string) may still be exported at any image cap, including the default. A structural fix is planned for a later release. Upgrade anyway: 1.2.0, 1.2.1 and 1.2.2 export this shape and more (typed video at every cap, flattened image parts at cap 0).
+
+### Documentation
+- Scope the media-omission contract to recognized base64 image payloads in payload fields or `data:` URLs, not every possible image encoding. See the [README image recognition limits](README.md#image-recognition-limits) and 1.2.0 known limitations below for non-payload keys, headerless runs and spacing.
+- Document cap-0 ASCII whitespace compaction separately within each Q1 scope/view, including inside `data:` / `image/` fragments: U+0009-U+000D and U+001C-U+0020. Python also removes non-ASCII `str.isspace()` characters; TypeScript does not compact them in this check. JSON sibling tokens are never joined.
+
+## [1.2.2] - pending release
+### Fix
+- Preserve numeric `gen_ai.usage.cache_read_tokens.audio` counts through admission, projection and export. The 1.2.0 shared privacy runtime mistook this modality count for an audio payload. Only nonnegative safe integers receive the metric role; strings, arrays, media ancestry and registered secrets retain their existing privacy protections.
+
+## [1.2.1] - pending release
+### Fix
+- **Spans no longer carry the process command line or the OS user.** 1.2.0 added OpenTelemetry's full process detector to every provider resource, so `process.command_args`, `process.command`, `process.owner`, `process.executable.path` and `process.pid` were exported with every span. Command-line flags can hold secrets. By default fi-core now detects only `process.runtime.name`, `process.runtime.version` and `process.runtime.description`, as it detected nothing before 1.2.0.
+- To opt in, set the OpenTelemetry Node variable `OTEL_NODE_RESOURCE_DETECTORS` to a comma-separated list of `host`, `os` and `process`, or `all` / `none`. `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` are always applied.
+
+## [1.2.0] - pending release
+### Changed
+- 1.2.0 exports the typed session.id set with setSession; other session-named attributes remain masked.
+- With hideEmbeddingVectors, the legacy embedding.model_name attribute is also hidden.
+- **Recognized base64 image payloads are omitted.** The FI media policy omits recognized base64 image payloads in payload fields or `data:` URLs at any cap, with markers such as `<omitted: N base64 chars>`. The previous default cap of 32000 could retain below-cap images. This is bounded recognition, not universal image detection: see known limitations below and the 1.2.3 typed-image fix above.
+- Default cap 0 redacts any value or token that mentions a data: image URL, including mentions with no payload.
+- The replacement is `[image-redacted]`, for the whole value or JSON string token.
+- `base64ImageMaxLength` and `FI_BASE64_IMAGE_MAX_LENGTH` keep working, with one shared default constant, `DEFAULT_BASE64_IMAGE_MAX_LENGTH` (0). With a positive value, recognized image payloads are still omitted by the media policy; at/below-cap payloads use media markers instead of the cap-0 whole-token rule. Recognition limits below still apply.
+- An invalid cap resolves to 0 and logs `Invalid base64 image cap; using 0.`
+- For recognized base64 image payloads in payload fields or `data:` URLs, TypeScript media omission remains stricter than Python's positive-cap behavior. See the [README image recognition limits](README.md#image-recognition-limits) for non-payload keys, headerless runs and spacing.
+
+### Feature
+- The shared export-privacy runtime and `registerSecret(value)` that the new zero-code agent `@traceai/auto` uses. See the README.
+
+### Fix
+- Non-HTTP(S) URLs in text, such as `wss://`, `redis://` or `s3://`, are no longer mistaken for base64 audio and partly omitted. Media payload and credential masking are unchanged.
+- A manual `batch: false`, set explicitly or by default, keeps a simple span processor. Only the zero-code agent batches, on its own export route.
+- Safe URL query parameters are kept byte-exact, and credential values in URLs are masked by the shared sanitizer. Masking of assignments in prose and headers is unchanged.
+- Hidden embedding-vector fallbacks use the `__REDACTED__` marker consistently.
+- Native SDK count-limit evidence is kept for late library projection, and Genkit native loss evidence is kept before mapping rewrites.
+
+### Known limitations
+- embedding.model_name may be omitted from FI exports of very large embedding batches; use gen_ai.request.model.
+- The image cap does not detect headerless base64 images (PNG, JPEG, GIF, WebP without a data: URL) unless they are the whole value or a whole JSON string token, nor a declared image payload whose base64 contains spaces; the media policy may still omit them.
+- An over-cap image payload stored under a key outside the payload fields (data, bytes, content, image, image_url, url, base64, b64_json) of an image-declaring object, without a data: URL, is not detected by the image cap (e.g. {"type":"image","mime_type":"image/heic","blob":"<base64>"}); other media policy may still withhold it.
+
+## [1.1.1] - pending release
+### Fix
+- Export the shared PII policy for native exporters. `@traceai/mastra` requires at least this version; publish fi-core before publishing Mastra.
+
 ## [1.1.0] - 2026-10-18
 ### Security fix: content hiding skipped the attributes passed when a span is created
 - **This bug predates 1.1.0: it is in every published release, 0.1.0 to 1.0.0.** `FITracer.startSpan` handed `options.attributes` straight to the OpenTelemetry span, so attributes passed at span creation skipped `FISpan` and every masking rule: `hideInputs` and the other hide flags, PII redaction, and (new in this release) error-detail hiding. About 22 instrumentations put the prompt there, `@traceai/openai` included, so with `FI_HIDE_INPUTS=true` the prompt was still exported in `input.value`, `gen_ai.input.messages` and `raw.input`.

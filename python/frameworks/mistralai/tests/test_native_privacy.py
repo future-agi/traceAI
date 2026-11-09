@@ -97,10 +97,15 @@ def test_tool_image_environment_and_length_boundaries(monkeypatch, hidden, direc
         "parts"
     ][0]
     assert result["id"] == "call-1"
-    if direction == "output":
-        assert result["response"] == chunks
-    elif hidden:
+    # Newer cores apply an explicit base64 cap to output messages too; older
+    # published cores leave output tool images to the input-image policy only.
+    core_caps_output = long not in TraceConfig(base64_image_max_length=len(short)).mask(
+        "gen_ai.output.messages", payload
+    )
+    if direction == "input" and hidden:
         assert result["response"] == [chunks[0], chunks[-1]]
+    elif direction == "output" and not core_caps_output:
+        assert result["response"] == chunks
     else:
         assert result["response"] == [
             chunks[0],

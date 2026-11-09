@@ -31,7 +31,7 @@ pip install -r requirements.txt
 
 export FI_API_KEY="YOUR_API_KEY"
 export FI_SECRET_KEY="YOUR_SECRET_KEY"
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://YOUR_FI_COLLECTOR_ORIGIN"  # no path
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://api.futureagi.com/tracer"
 export OTEL_RESOURCE_ATTRIBUTES="project_name=my-chatbot,project_type=observe"
 export OPENAI_API_KEY="YOUR_OPENAI_KEY"  # optional: OPENAI_BASE_URL, OPENAI_MODEL
 
@@ -99,12 +99,15 @@ there shows up as a log line, not an exception.
 
 ### Endpoint
 
-Set `otlp_endpoint` to the collector origin, with no path. OpenLIT copies
-it into `OTEL_EXPORTER_OTLP_ENDPOINT` (`openlit/otel/tracing.py:72-73`) and
-creates OpenTelemetry's OTLP/HTTP span exporter with no arguments
-(`tracing.py:121-128`). That exporter (`opentelemetry-exporter-otlp-proto-http`
-1.45.0, `_common/__init__.py:129-138`) removes one trailing `/` and always
-appends `/v1/traces`. Tested results:
+Set `otlp_endpoint` to the collector base URL: `https://api.futureagi.com/tracer`
+for Cloud. For self-hosted deployments, use your collector's base URL,
+including any deployment path prefix. Do not include `/v1/traces`.
+OpenLIT copies the base URL into `OTEL_EXPORTER_OTLP_ENDPOINT`
+(`openlit/otel/tracing.py:72-73`) and creates OpenTelemetry's OTLP/HTTP span
+exporter with no arguments (`tracing.py:121-128`). The exporter preserves the
+base path and appends `/v1/traces`, so Cloud traces go to
+`https://api.futureagi.com/tracer/v1/traces`. A trailing `/` on the base URL
+is optional. Endpoint examples:
 
 | `otlp_endpoint` | Request path | Reply from a fi-collector-like mux |
 |---|---|---|

@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['4.0.0', '5.23.2', '6.0.0', '7.0.0', '7.47.0']
+        sdk: ['4.0.0', '5.23.2', '6.0.0', '7.0.0', '7.47.0', 'latest']
     defaults:
       run:
         shell: bash
@@ -92,7 +92,8 @@ jobs:
               packages/traceai_openai/test/reviewRegressions.cjs \
               packages/traceai_openai/test/reviewRoundTwo.cjs \
               packages/traceai_openai/test/reviewRoundThree.cjs \
-              packages/traceai_openai/test/choiceIndexes.cjs
+              packages/traceai_openai/test/choiceIndexes.cjs \
+              packages/traceai_openai/test/mixedImports.cjs
       - name: Typecheck current SDK request contracts
         if: matrix.sdk == '7.47.0'
         env:

@@ -1,0 +1,71 @@
+{
+  "name": "openai-chat-stream-gzip",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o-mini",
+      "stream": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Count to 3"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "gzip": true,
+    "sse": [
+      {
+        "id": "c39",
+        "model": "gpt-4o-mini",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": "1, 2"
+            }
+          }
+        ]
+      },
+      {
+        "id": "c39",
+        "model": "gpt-4o-mini",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": ", 3"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "total_tokens": 14
+        }
+      },
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-mini",
+    "status": "OK",
+    "attributes": {
+      "output.value": "1, 2, 3",
+      "gen_ai.usage.output_tokens": 5,
+      "gen_ai.request.stream": true
+    }
+  }
+}

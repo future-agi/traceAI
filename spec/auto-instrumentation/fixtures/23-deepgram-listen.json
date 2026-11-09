@@ -1,0 +1,55 @@
+{
+  "name": "deepgram-listen",
+  "request": {
+    "method": "POST",
+    "url": "https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true",
+    "headers": {
+      "content-type": "audio/wav"
+    },
+    "binary": {
+      "size": 32000,
+      "content_type": "audio/wav"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "metadata": {
+        "request_id": "dg-1",
+        "duration": 2.25,
+        "channels": 1
+      },
+      "results": {
+        "channels": [
+          {
+            "alternatives": [
+              {
+                "transcript": "book a table for two",
+                "confidence": 0.99
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription nova-3",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "deepgram",
+      "gen_ai.request.model": "nova-3",
+      "gen_ai.audio.language": "en",
+      "gen_ai.audio.transcript": "book a table for two",
+      "output.value": "book a table for two",
+      "gen_ai.audio.duration_secs": 2.25,
+      "gen_ai.response.id": "dg-1",
+      "gen_ai.audio.mime_type": "audio/wav",
+      "traceai.audio.input_bytes": 32000
+    }
+  }
+}

@@ -1,0 +1,87 @@
+name: LiveKit TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_livekit/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/livekit-typescript-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-contract:
+    name: LiveKit SDK contract (${{ matrix.version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: floor
+            client: '1.0.0'
+            rtc: '0.3.0'
+          - version: latest
+            client: latest
+            rtc: latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install locked dependencies and real SDKs
+        run: |
+          corepack enable
+          pnpm --filter @traceai/fi-instrumentation-livekit... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/livekit-sdk" --ignore-scripts --no-audit --no-fund \
+            "livekit-client@${{ matrix.client }}" "@livekit/rtc-node@${{ matrix.rtc }}"
+      - name: Build
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/fi-instrumentation-livekit build
+      - name: Unit tests with loopback-only networking
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            "$(command -v node)" packages/traceai_livekit/node_modules/jest/bin/jest.js \
+            --config packages/traceai_livekit/jest.config.js --runInBand
+      - name: Real SDKs and OTLP with loopback-only networking
+        run: |
+          # Only the floor SDK lacks dispose(); latest must exit naturally.
+          exit_args=()
+          if [[ "${{ matrix.version }}" == floor ]]; then exit_args+=(--test-force-exit); fi
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" "$(command -v node)" \
+            --test "${exit_args[@]}" packages/traceai_livekit/test/compatibility.cjs
+          git diff --exit-code -- pnpm-lock.yaml
+      - name: Install tarball with published dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/livekit-package"
+          pnpm --dir packages/traceai_livekit pack --pack-destination "$RUNNER_TEMP/livekit-package"
+          tarballs=("$RUNNER_TEMP/livekit-package/"*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          npm install --prefix "$RUNNER_TEMP/livekit-sdk" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
+      - name: Test the tarball with loopback-only networking
+        run: |
+          exit_args=()
+          if [[ "${{ matrix.version }}" == floor ]]; then exit_args+=(--test-force-exit); fi
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" \
+            "LIVEKIT_INSTRUMENTATION_DIR=$RUNNER_TEMP/livekit-sdk/node_modules/@traceai/fi-instrumentation-livekit" \
+            "$(command -v node)" --test "${exit_args[@]}" packages/traceai_livekit/test/compatibility.cjs
+      - name: Standalone README exits naturally with latest RTC SDK
+        if: matrix.version == 'latest'
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" \
+            "LIVEKIT_INSTRUMENTATION_DIR=$RUNNER_TEMP/livekit-sdk/node_modules/@traceai/fi-instrumentation-livekit" \
+            "$(command -v node)" --test packages/traceai_livekit/test/readme-shutdown.cjs

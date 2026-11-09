@@ -1,6 +1,7 @@
 import { InstrumentationBase, InstrumentationConfig, InstrumentationNodeModuleDefinition } from "@opentelemetry/instrumentation";
 import { context, createContextKey, diag, trace, SpanKind, SpanStatusCode, Span } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
+import { performance } from "node:perf_hooks";
 import { FITracer, generateTraceConfig, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
 import { Data, Operation, object, inputAttributes, outputAttributes, hideOutput } from "./attributes";
@@ -116,7 +117,7 @@ export class CohereInstrumentation extends InstrumentationBase {
       }
       const execContext = trace.setSpan(parent, span).setValue(IN_COHERE_CALL, true);
       let ended = false;
-      const finish = (response: Data, error?: unknown, cancelled = false) => {
+      const finish = (response: Data, error?: unknown, cancelled = false, timeToFirstTokenMs?: number) => {
         if (ended) return;
         ended = true;
         try {
@@ -138,6 +139,7 @@ export class CohereInstrumentation extends InstrumentationBase {
             }
           }
           span.setAttributes(outputAttributes(operation, response, config));
+          if (timeToFirstTokenMs !== undefined) span.setAttribute("cohere.stream.time_to_first_token_ms", timeToFirstTokenMs);
           if (error !== undefined) {
             span.recordException(error instanceof Error ? error : new Error(String(error)));
             span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
@@ -155,7 +157,7 @@ export class CohereInstrumentation extends InstrumentationBase {
       const streams = new WeakMap<object, object>();
       const resolved = (result: unknown): unknown => {
         if (operation === "chatStream" && result && typeof (result as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
-          if (!streams.has(result as object)) streams.set(result as object, wrapStream(result as object, execContext, !hideOutput(config), finish));
+          if (!streams.has(result as object)) streams.set(result as object, wrapStream(result as object, execContext, !hideOutput(config), finish, requestStart));
           return streams.get(result as object);
         }
         finish(object(result));
@@ -166,6 +168,7 @@ export class CohereInstrumentation extends InstrumentationBase {
         throw error;
       };
       let pending: unknown;
+      const requestStart = performance.now();
       try {
         pending = context.with(execContext, () => original.apply(this, args));
       } catch (error) { return rejected(error); }

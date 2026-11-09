@@ -1,0 +1,57 @@
+name: OpenRouter TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_openrouter/**'
+      - 'typescript/packages/traceai_openai/src/provider.ts'
+      - 'typescript/packages/traceai_openai/src/__tests__/provider.test.ts'
+      - 'typescript/packages/traceai_openai/src/__tests__/providerHostsWire.test.ts'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - '.github/workflows/openrouter-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openrouter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.19.0', '22', '24', '26']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: corepack enable
+      - name: Frozen install
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/openrouter...' --filter '@traceai/openai...'
+      - name: Build and lint
+        working-directory: typescript
+        run: |
+          pnpm --filter '@traceai/fi-semantic-conventions' --filter '@traceai/fi-core' run build
+          pnpm --filter '@traceai/openrouter' run build
+          pnpm --filter '@traceai/openrouter' run lint
+      - name: SDK floor/current and attribution (network denied)
+        working-directory: typescript
+        run: |
+          sudo env PATH="$PATH" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" pnpm --filter '@traceai/openrouter' test
+          sudo env PATH="$PATH" unshare --net -- bash -eu -c 'ip link set lo up; user="$1"; shift; exec runuser -u "$user" -- "$@"' bash "$(id -un)" pnpm --filter '@traceai/openai' exec jest --runInBand src/__tests__/provider.test.ts src/__tests__/providerHostsWire.test.ts
+      - name: Verify publishable package contents
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/openrouter-package"
+          pnpm --filter '@traceai/openrouter' pack --pack-destination "$RUNNER_TEMP/openrouter-package"
+          tar -tzf "$RUNNER_TEMP/openrouter-package"/*.tgz | grep -q 'package/dist/src/index.js'
+      - name: Release wiring
+        if: matrix.node == '22'
+        run: python3 .github/release/release_plan.py --check

@@ -1,0 +1,104 @@
+{
+  "name": "milestone-a10-cohere-text-start-empty",
+  "description": "Empty/null/object/list payloads, type tags, IDs and finish metadata do not establish output.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v2/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "type": "message-start",
+        "delta": {
+          "message": {
+            "role": "assistant"
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": null
+            }
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": {}
+            }
+          }
+        }
+      },
+      {
+        "type": "content-start",
+        "delta": {
+          "message": {
+            "content": {
+              "type": "text",
+              "text": []
+            }
+          }
+        }
+      },
+      {
+        "type": "message-end"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      90
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

@@ -1,10 +1,11 @@
 import { Attributes, AttributeValue } from "@opentelemetry/api";
 import { REDACTED_VALUE } from "./constants";
-import { SemanticConventions } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, SemanticAttributePrefixes, RetrievalAttributePostfixes } from "@traceai/fi-semantic-conventions";
 import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
 import { isErrorDetailAttribute } from "./errorDetails";
 import { redactMessages } from "./messageRedaction";
+import { capBase64Images } from "./imageCap";
 
 // Apply text and image settings together: the masking rule list stops at its
 // first match, so independent rules would let image hiding bypass text hiding.
@@ -39,7 +40,17 @@ const maskEmbeddingVectorsRule: MaskingRule = {
  * With JSON blob format, messages are stored as a single JSON string under gen_ai.input.messages / gen_ai.output.messages.
  * The rules now parse and modify the JSON blob content.
  */
+const retrievalDocuments = `${SemanticAttributePrefixes.retrieval}.${RetrievalAttributePostfixes.documents}`;
+
 const maskingRules: MaskingRule[] = [
+  {
+    // Retrieved documents are outputs too, including metadata that can duplicate
+    // private content. Cover both opaque payloads and flattened document fields.
+    condition: ({ config, key }) =>
+      (config.hideOutputs || config.hideOutputText) &&
+      (key === retrievalDocuments || key.startsWith(`${retrievalDocuments}.`)),
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
   {
     // Error text (exception messages, stack traces, provider error bodies) can quote the content
     condition: ({ config, key }) =>
@@ -47,11 +58,13 @@ const maskingRules: MaskingRule[] = [
     action: () => undefined,
   },
   {
-    // Raw/value payloads are opaque duplicates. Do not attempt provider-specific
-    // JSON parsing here: granular hiding must also cover every copied payload.
+    // Opaque inputs include tool schemas (descriptions, enums, defaults) and
+    // their copies in invocation parameters. Do not parse provider-specific
+    // JSON: separately recorded model/token metadata remains available.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT),
+      (key === SemanticConventions.INPUT_VALUE || key === SemanticConventions.RAW_INPUT ||
+        key === SemanticConventions.LLM_TOOLS || key === SemanticConventions.LLM_INVOCATION_PARAMETERS),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -62,10 +75,10 @@ const maskingRules: MaskingRule[] = [
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
-    // Prompt substitution values are opaque input payloads, including images.
+    // Prompt templates and substitution values are opaque input payloads, including images.
     condition: ({ config, key }) =>
       (config.hideInputs || config.hideInputText || config.hideInputImages || config.hideInputMessages) &&
-      key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES,
+      (key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES || key === SemanticConventions.PROMPT_TEMPLATE_TEMPLATE),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -76,7 +89,8 @@ const maskingRules: MaskingRule[] = [
   {
     condition: ({ config, key }) =>
       (config.hideOutputs || config.hideOutputText || config.hideOutputMessages || config.hideEmbeddingVectors) &&
-      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT),
+      (key === SemanticConventions.OUTPUT_VALUE || key === SemanticConventions.RAW_OUTPUT ||
+        key === SemanticConventions.LLM_FUNCTION_CALL),
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -119,11 +133,23 @@ export function mask({
       break;
     }
   }
-  // Apply PII redaction to retained text even when a content rule matched.
-  if (config.piiRedaction && value != null) {
-    return redactPiiInValue(value);
+  if (value == null) {
+    return value;
   }
-  return value;
+  // Applied to retained text even when a content rule matched
+  return redactValue(config, value);
+}
+
+/**
+ * The value-level redaction every exported value gets, whatever its key: the base64 image cap
+ * (`base64ImageMaxLength`, see {@link capBase64Images}), then PII redaction when `piiRedaction`
+ * is on. The cap runs first so PII redaction never rewrites part of an oversized image. {@link mask}
+ * applies it to span and link attributes; `FISpan` applies it to event attributes, the
+ * recorded exception and the ERROR status description.
+ */
+export function redactValue(config: TraceConfig, value: AttributeValue): AttributeValue {
+  const capped = capBase64Images(value, config.base64ImageMaxLength);
+  return config.piiRedaction ? redactPiiInValue(capped) : capped;
 }
 
 /**

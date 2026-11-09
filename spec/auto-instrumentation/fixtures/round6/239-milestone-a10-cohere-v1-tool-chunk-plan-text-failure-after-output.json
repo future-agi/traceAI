@@ -1,0 +1,58 @@
+{
+  "name": "milestone-a10-cohere-v1-tool-chunk-plan-text-failure-after-output",
+  "description": "A completed tool-calls-chunk output record preserves its milestone on failure before subsequent text or tool-calls-generation.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.cohere.com/v1/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "message": "Hi",
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "event_type": "stream-start",
+        "generation_id": "co-r6b"
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "text": ""
+      },
+      {
+        "event_type": "tool-calls-chunk",
+        "text": "Looking up weather"
+      },
+      {
+        "event_type": "text-generation",
+        "text": "Later"
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ],
+    "error_after_chunks": 3
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

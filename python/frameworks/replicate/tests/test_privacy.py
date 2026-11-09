@@ -109,7 +109,14 @@ def test_data_uri_output_records_only_its_media_type():
 
     values = attrs(traced.one())
     assert values["replicate.output.type"] == "url"
-    assert values["output.value"].startswith("data:image/png;base64,")
+    # fi-instrumentation-otel 1.3.0 defaults the base64 image cap to 0 and replaces
+    # a value carrying a data: image URL whole; older cores keep only the media type.
+    from fi_instrumentation import TraceConfig
+
+    if getattr(TraceConfig(), "base64_image_max_length", None) == 0:
+        assert values["output.value"] == "[image-redacted]"
+    else:
+        assert values["output.value"].startswith("data:image/png;base64,")
     assert DATA_PAYLOAD not in traced.wire()
 
 

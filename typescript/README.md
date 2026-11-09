@@ -98,7 +98,7 @@ Content is captured by default. The core's `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, 
 | `@traceai/lancedb` | [traceai_lancedb](packages/traceai_lancedb/) |
 | `@traceai/langchain` | [traceai_langchain](packages/traceai_langchain/) |
 | `@traceai/fi-instrumentation-livekit` | [traceai_livekit](packages/traceai_livekit/) |
-| `@traceai/llamaindex` | [traceai_llamaindex](packages/traceai_llamaindex/) |
+| `@traceai/llamaindex` (deprecated) | [traceai_llamaindex](packages/traceai_llamaindex/) |
 | `@traceai/mastra` | [traceai_mastra](packages/traceai_mastra/) |
 | `@traceai/mcp` | [traceai_mcp](packages/traceai_mcp/) |
 | `@traceai/milvus` | [traceai_milvus](packages/traceai_milvus/) |
