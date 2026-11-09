@@ -85,6 +85,13 @@ endpoints pass through without an AI span.
 and `hideErrorDetails(true)` when initializing tracing to retain request metadata
 without prompt, response, or error details. Message hiding also excludes those
 messages from raw payload attributes. Authentication headers are never captured.
+MCP tool definitions omit `authorization` and the entire `headers` map from telemetry,
+regardless of content settings, including when a compatible server echoes the tool
+definitions. `hideInputs(true)` or `hideInputMessages(true)` also omits echoed
+Responses `instructions` (strings or message lists) from raw output. Hidden fields
+are omitted, not replaced with placeholder text. These rules affect only telemetry;
+requests sent to the provider and responses delivered to the application are unchanged.
+Permitted model output, status and token usage remain available.
 
 Wire metadata capture is bounded to 64 KiB per JSON payload or SSE event. Oversized
 payloads reach the application unchanged but may have no extracted metadata.

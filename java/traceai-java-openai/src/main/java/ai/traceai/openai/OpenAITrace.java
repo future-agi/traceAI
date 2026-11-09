@@ -50,6 +50,7 @@ final class OpenAITrace {
     synchronized void request(byte[] bytes) {
         safely(() -> {
             JsonObject json = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject();
+            redactCredentials(json);
             attribute(json, "model", SemanticConventions.LLM_MODEL_NAME);
             attribute(json, "model", SemanticConventions.LLM_REQUEST_MODEL);
             if (json.has("messages")) {
@@ -120,8 +121,29 @@ final class OpenAITrace {
         safely(() -> usage(json));
         if (terminal) safely(() -> tools.record(json));
         if (failed) return;
+        // These trees were parsed from a telemetry-only byte capture, not the SDK response.
+        // Echoed request fields keep their input policy even inside raw output.
+        redactCredentials(json);
+        if (tracer.getConfig().isHideInputs() || tracer.getConfig().isHideInputMessages()) {
+            json.remove("instructions");
+        }
         // Error payloads are never model output. Apply tool privacy to parent capture as well.
         output(tools.redact(json));
+    }
+
+    /** Authentication in MCP tool definitions is never content, including echoed definitions. */
+    private static void redactCredentials(JsonElement value) {
+        if (value.isJsonArray()) {
+            for (JsonElement child : value.getAsJsonArray()) redactCredentials(child);
+        } else if (value.isJsonObject()) {
+            JsonObject object = value.getAsJsonObject();
+            if ("mcp".equals(string(object, "type"))) {
+                object.remove("authorization");
+                // Header names are user-defined; removing the whole map also covers custom auth.
+                object.remove("headers");
+            }
+            for (Map.Entry<String, JsonElement> field : object.entrySet()) redactCredentials(field.getValue());
+        }
     }
 
     private void usage(JsonObject json) {
