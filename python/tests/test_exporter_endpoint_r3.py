@@ -90,3 +90,47 @@ def test_binding_errors_are_preserved():
         otel.GRPCSpanExporter("localhost:1", endpoint="localhost:2")
     with pytest.raises(TypeError):
         otel.HTTPSpanExporter("http://localhost:1", endpoint="http://localhost:2")
+
+
+def _captured_headers(transport, monkeypatch, env, headers):
+    monkeypatch.setattr(otel, "get_env_fi_auth_header", lambda: env)
+    cls, base = (otel.GRPCSpanExporter, otel._GRPCSpanExporter) if transport == "grpc" else (otel.HTTPSpanExporter, otel._HTTPSpanExporter)
+    captured = {}
+    signature = inspect.signature(base)
+    init_signature = inspect.signature(base.__init__)
+    def capture(self, *args, **kwargs):
+        captured.update(signature.bind_partial(*args, **kwargs).arguments)
+    capture.__signature__ = init_signature
+    with patch.object(base, "__init__", capture):
+        cls(endpoint="http://local.invalid:4317", headers=headers)
+    return captured["headers"]
+
+
+ENV_PAIR = {"X-Api-Key": "synthetic-env-key", "X-Secret-Key": "synthetic-env-secret"}
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+@pytest.mark.parametrize("empty", ["", "   ", None])
+def test_empty_authorization_does_not_hide_env_credentials(transport, empty, monkeypatch):
+    """Issue #155: an empty Authorization header is not a credential."""
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, {"Authorization": empty, "X-Custom": "value"})
+    assert headers == {"x-api-key": "synthetic-env-key", "x-secret-key": "synthetic-env-secret", "x-custom": "value"}
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+def test_explicit_fi_keys_win_without_case_variant_duplicates(transport, monkeypatch):
+    """Issue #155: explicit X-Api-Key/X-Secret-Key are sent once and never mixed with the env pair."""
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, {"x-api-key": "synthetic-explicit-key", "X-Secret-Key": "synthetic-explicit-secret"})
+    assert headers == {"x-api-key": "synthetic-explicit-key", "x-secret-key": "synthetic-explicit-secret"}
+    assert len({k.lower() for k in headers}) == len(headers)
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+def test_env_pair_is_lower_cased_and_added_once(transport, monkeypatch):
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, None)
+    assert headers == {"x-api-key": "synthetic-env-key", "x-secret-key": "synthetic-env-secret"}
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+def test_no_credentials_anywhere_sends_no_headers(transport, monkeypatch):
+    assert _captured_headers(transport, monkeypatch, None, {"Authorization": ""}) is None

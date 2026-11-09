@@ -8,7 +8,7 @@ import threading
 import uuid
 import warnings
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -589,6 +589,35 @@ class BatchSpanProcessor(_BatchSpanProcessor):
         super().on_end(span)
 
 
+_CREDENTIAL_HEADERS = (AUTHORIZATION, "x-api-key", "x-secret-key")
+
+
+def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
+    """Lower-case explicit headers and add the FI_API_KEY/FI_SECRET_KEY pair once.
+
+    Explicit credentials win: the environment pair is added only when no
+    Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
+    header with an empty value is dropped rather than treated as a credential,
+    so an empty Authorization no longer hides valid environment keys. Keys are
+    lower-cased on both sides, so the request never carries case-variant
+    duplicates such as ``x-api-key`` and ``X-Api-Key``.
+    """
+    if not headers:
+        merged: Dict[str, Any] = {}
+    elif isinstance(headers, Mapping):
+        merged = {str(k).lower(): v for k, v in headers.items()}
+    else:
+        merged = {str(k).lower(): v for k, v in headers}
+    for name in _CREDENTIAL_HEADERS:
+        if name in merged and not str(merged[name] if merged[name] is not None else "").strip():
+            del merged[name]
+    if not any(name in merged for name in _CREDENTIAL_HEADERS):
+        auth_header = get_env_fi_auth_header()
+        if auth_header:
+            merged.update({k.lower(): v for k, v in auth_header.items()})
+    return merged
+
+
 class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
@@ -604,30 +633,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        auth_header = get_env_fi_auth_header()
-        lower_case_auth_header = (
-            {k.lower(): v for k, v in auth_header.items()} if auth_header else None
+        bound_args.arguments["headers"] = (
+            _with_fi_auth_headers(bound_args.arguments.get("headers")) or None
         )
-
-        if not bound_args.arguments.get("headers"):
-            headers = {
-                **(lower_case_auth_header or dict()),
-            }
-            bound_args.arguments["headers"] = headers if headers else None
-        else:
-            passed_headers = bound_args.arguments["headers"]
-            if isinstance(passed_headers, dict):
-                headers = {k.lower(): v for k, v in passed_headers.items()}
-            else:
-                headers = {k.lower(): v for k, v in passed_headers}
-
-            if AUTHORIZATION not in headers:
-                bound_args.arguments["headers"] = {
-                    **headers,
-                    **(lower_case_auth_header or dict()),
-                }
-            else:
-                bound_args.arguments["headers"] = headers
 
         if bound_args.arguments.get("endpoint") is None:
             bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
@@ -667,12 +675,7 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             _, endpoint = _normalized_endpoint(None)
             bound_args.arguments["endpoint"] = endpoint
 
-        final_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        if AUTHORIZATION not in final_headers:
-            auth_header = get_env_fi_auth_header()
-            if auth_header:
-                final_headers.update(auth_header)
-        bound_args.arguments["headers"] = final_headers or None
+        bound_args.arguments["headers"] = _with_fi_auth_headers(headers) or None
 
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
