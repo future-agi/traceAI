@@ -545,7 +545,10 @@ def test_native_kickoff_structural_configuration_never_reaches_wire(
         from crewai import LLM
         from crewai.tools import BaseTool
 
-        llm = LLM(model="openai/synthetic", api_key=api_key, base_url=base_url)
+        # Do not rely on newer CrewAI's routing of unknown synthetic models.
+        llm = LLM(
+            model="openai/synthetic", provider="openai", api_key=api_key, base_url=base_url
+        )
         assert llm.api_key == api_key and llm.base_url == base_url
     assert os.environ["OPENAI_API_KEY"] == environment_key
 

@@ -71,6 +71,20 @@ def mock_non_fireworks_client():
 
 
 @pytest.fixture(autouse=True)
+def isolate_instrumentor():
+    """Mock-based tests must not leave the singleton or SDK methods patched."""
+    from openai.resources.chat import AsyncCompletions, Completions
+    from traceai_fireworks import FireworksInstrumentor
+
+    sync_create, async_create = Completions.create, AsyncCompletions.create
+    yield
+    instrumentor = FireworksInstrumentor()
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()
+    Completions.create, AsyncCompletions.create = sync_create, async_create
+
+
+@pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     """These unit/serialization contracts must never contact a provider."""
     import socket

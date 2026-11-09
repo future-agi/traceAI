@@ -40,7 +40,7 @@ describe("@traceai/genkit package.json", () => {
     });
     expect(manifest.bugs).toEqual(sibling.bugs);
     expect(manifest.homepage).toBe(
-      "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_genkit#readme",
+      "https://docs.futureagi.com/docs/tracing",
     );
   });
 });

@@ -1,352 +1,123 @@
-/**
- * Tests for LiveKit instrumentation.
- */
+import { SpanStatusCode } from '@opentelemetry/api';
+import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { LiveKitInstrumentation, isPatched } from '../instrumentation';
+import { VERSION } from '../version';
 
-import { LiveKitInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
-import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+const exporter = new InMemorySpanExporter();
+const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+const instances: LiveKitInstrumentation[] = [];
+function create(config: ConstructorParameters<typeof LiveKitInstrumentation>[0] = {}) {
+  const inst = new LiveKitInstrumentation(config);
+  inst.setTracerProvider(provider);
+  instances.push(inst);
+  return inst;
+}
+afterEach(() => {
+  instances.splice(0).forEach(inst => inst.disable());
+  expect(isPatched()).toBe(false);
+  exporter.reset();
+});
+afterAll(() => provider.shutdown());
 
-describe("LiveKitInstrumentation", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  const instrumentation = new LiveKitInstrumentation();
-  instrumentation.disable();
-  instrumentation.setTracerProvider(tracerProvider);
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  afterAll(() => {
-    instrumentation.disable();
-  });
-
-  describe("VERSION", () => {
-    it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
-    });
-  });
-
-  describe("LiveKitInstrumentation", () => {
-    it("should create instrumentation instance", () => {
-      const inst = new LiveKitInstrumentation();
-      expect(inst).toBeInstanceOf(LiveKitInstrumentation);
-    });
-
-    it("should accept configuration options", () => {
-      const inst = new LiveKitInstrumentation({
-        traceConfig: {
-          hideInputs: true,
-          hideOutputs: true,
-        },
-      });
-      expect(inst).toBeInstanceOf(LiveKitInstrumentation);
-    });
-
-    it("should have instrumentationName", () => {
-      const inst = new LiveKitInstrumentation();
-      expect(inst.instrumentationName).toBe("@traceai/fi-instrumentation-livekit");
-    });
-
-    it("should have instrumentationVersion", () => {
-      const inst = new LiveKitInstrumentation();
-      expect(inst.instrumentationVersion).toBe(VERSION);
-    });
-  });
-
-  describe("isPatched", () => {
-    it("should return false when not patched", () => {
-      instrumentation.disable();
-      expect(isPatched()).toBe(false);
-    });
-  });
-
-  describe("manuallyInstrument", () => {
-    it("should handle null module", () => {
-      const inst = new LiveKitInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      // Should not throw
-      inst.manuallyInstrument(null);
-      expect(true).toBe(true);
-    });
-
-    it("should mark client module as patched", () => {
-      const inst = new LiveKitInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      const mockModule = {
-        Room: {
-          prototype: {},
-        },
-      };
-
-      inst.manuallyInstrument(mockModule);
-      expect(mockModule).toHaveProperty("_fiPatched", true);
-    });
-
-    it("should mark rtc-node module as patched", () => {
-      const inst = new LiveKitInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      const mockModule = {
-        AudioSource: {
-          prototype: {},
-        },
-        VideoSource: {
-          prototype: {},
-        },
-      };
-
-      inst.manuallyInstrument(mockModule);
-      expect(mockModule).toHaveProperty("_fiPatched", true);
-    });
-  });
-
-  describe("enable/disable", () => {
-    it("should enable instrumentation", () => {
-      const inst = new LiveKitInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-
-    it("should disable instrumentation", () => {
-      const inst = new LiveKitInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      inst.disable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-  });
+test('metadata matches the release manifest package version', () => {
+  const inst = create();
+  expect(VERSION).toBe(require('../../package.json').version);
+  expect(inst.instrumentationVersion).toBe(VERSION);
+  expect(inst.instrumentationName).toBe('@traceai/fi-instrumentation-livekit');
 });
 
-describe("LiveKit Client Patching", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should wrap Room.connect when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalConnect = jest.fn().mockResolvedValue(undefined);
-
-    const mockModule = {
-      Room: {
-        prototype: {
-          connect: originalConnect,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap Room.disconnect when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalDisconnect = jest.fn().mockResolvedValue(undefined);
-
-    const mockModule = {
-      Room: {
-        prototype: {
-          disconnect: originalDisconnect,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap LocalParticipant.publishTrack when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalPublish = jest.fn().mockResolvedValue({ sid: "track-123" });
-
-    const mockModule = {
-      Room: {
-        prototype: {},
-      },
-      LocalParticipant: {
-        prototype: {
-          publishTrack: originalPublish,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap LocalParticipant.unpublishTrack when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalUnpublish = jest.fn().mockResolvedValue(undefined);
-
-    const mockModule = {
-      Room: {
-        prototype: {},
-      },
-      LocalParticipant: {
-        prototype: {
-          unpublishTrack: originalUnpublish,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should not double-patch module", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      _fiPatched: true,
-      Room: {
-        prototype: {
-          connect: jest.fn(),
-        },
-      },
-    };
-
-    const original = mockModule.Room.prototype.connect;
-    inst.manuallyInstrument(mockModule);
-
-    // Should not have changed
-    expect(mockModule.Room.prototype.connect).toBe(original);
-  });
+test('empty modules and disabled manual instrumentation do not patch', () => {
+  const inst = create({ instrumentationConfig: { enabled: false } });
+  class Room { disconnect() {} }
+  const original = Room.prototype.disconnect;
+  inst.manuallyInstrument(null);
+  inst.manuallyInstrument({ Room });
+  expect(Room.prototype.disconnect).toBe(original);
+  expect(isPatched()).toBe(false);
+  inst.enable();
+  inst.manuallyInstrument({ Room });
+  expect(Room.prototype.disconnect).not.toBe(original);
 });
 
-describe("LiveKit RTC Node Patching", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should wrap AudioSource.captureFrame when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCapture = jest.fn();
-
-    const mockModule = {
-      AudioSource: {
-        prototype: {
-          captureFrame: originalCapture,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap VideoSource.captureFrame when available", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCapture = jest.fn();
-
-    const mockModule = {
-      VideoSource: {
-        prototype: {
-          captureFrame: originalCapture,
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
+test('second instrumentation cannot duplicate spans or unwrap the first owner', async () => {
+  class Room { async disconnect() {} }
+  const first = create();
+  const second = create();
+  first.manuallyInstrument({ Room });
+  second.manuallyInstrument({ Room });
+  second.disable();
+  await new Room().disconnect();
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+  expect(isPatched()).toBe(true);
 });
 
-describe("Room Lifecycle Tracking", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
+test('later wrappers survive disable and retained old wrappers stay inert after re-enable', () => {
+  class Room { disconnect() { return 'result'; } }
+  const inst = create();
+  inst.manuallyInstrument({ Room });
+  const instrumented = Room.prototype.disconnect;
+  const thirdParty = function (this: Room) { return instrumented.call(this); };
+  Room.prototype.disconnect = thirdParty;
+  inst.disable();
+  expect(Room.prototype.disconnect).toBe(thirdParty);
+  expect(new Room().disconnect()).toBe('result');
+  expect(exporter.getFinishedSpans()).toHaveLength(0);
+  inst.enable();
+  inst.manuallyInstrument({ Room });
+  new Room().disconnect();
+  expect(exporter.getFinishedSpans()).toHaveLength(1);
+});
 
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
+test('sync throws preserve identity and redact error details using constructor config', () => {
+  const error = new Error('private audio payload');
+  class VideoSource { captureFrame(_frame: any) { throw error; } }
+  const inst = create({ traceConfig: { hideErrorDetails: true } });
+  inst.manuallyInstrument({ VideoSource });
+  expect(() => new VideoSource().captureFrame({ width: 16, height: 16 })).toThrow(error);
+  const [span] = exporter.getFinishedSpans();
+  expect(span.status.code).toBe(SpanStatusCode.ERROR);
+  expect(JSON.stringify([span.events, span.status])).not.toContain('private audio payload');
+});
 
-  it("should handle room connect and disconnect lifecycle", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
+test('RTC publish and SID-based unpublish are both traced', async () => {
+  class Room {}
+  class AudioSource {}
+  class LocalParticipant {
+    identity = 'participant';
+    async publishTrack(_track: any, _options: any) { return { sid: 'track-1' }; }
+    async unpublishTrack(_sid: string) {}
+  }
+  const inst = create();
+  inst.manuallyInstrument({ Room, AudioSource, LocalParticipant });
+  const participant = new LocalParticipant();
+  await expect(participant.publishTrack({ kind: 0, name: 'mic' }, {})).resolves.toEqual({ sid: 'track-1' });
+  await participant.unpublishTrack('track-1');
+  const spans = exporter.getFinishedSpans();
+  expect(spans).toHaveLength(2);
+  expect(spans[0].attributes['livekit.track_kind']).toBe(0);
+  expect(spans[1].attributes['livekit.track_sid']).toBe('track-1');
+});
 
-    const mockModule = {
-      Room: {
-        prototype: {
-          connect: jest.fn().mockResolvedValue(undefined),
-          disconnect: jest.fn().mockResolvedValue(undefined),
-        },
-      },
-    };
+test('concurrent rooms with equal names and repeated connects export each operation once', async () => {
+  class Room { name = 'same'; async connect() {} async disconnect() {} }
+  const inst = create();
+  inst.manuallyInstrument({ Room });
+  const rooms = [new Room(), new Room()];
+  await Promise.all(rooms.map(room => room.connect()));
+  await rooms[0].connect();
+  await rooms[0].disconnect();
+  expect(exporter.getFinishedSpans()).toHaveLength(4);
+});
 
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should handle track publish and unpublish", () => {
-    const inst = new LiveKitInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Room: {
-        prototype: {},
-      },
-      LocalParticipant: {
-        prototype: {
-          publishTrack: jest.fn().mockResolvedValue({ sid: "track-1" }),
-          unpublishTrack: jest.fn().mockResolvedValue(undefined),
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
+test('async rejected and successful captures finish with the original result', async () => {
+  const failure = { message: 'synthetic failure' };
+  class AudioSource { async captureFrame(frame: any) { if (!frame) throw failure; return frame; } }
+  const inst = create();
+  inst.manuallyInstrument({ AudioSource });
+  const source = new AudioSource();
+  const frame = { samplesPerChannel: 480, sampleRate: 48000, channels: 1 };
+  await expect(source.captureFrame(null)).rejects.toBe(failure);
+  await expect(source.captureFrame(frame)).resolves.toBe(frame);
+  expect(exporter.getFinishedSpans().map(span => span.status.code)).toEqual([SpanStatusCode.ERROR, SpanStatusCode.OK]);
 });

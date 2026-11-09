@@ -10,7 +10,7 @@ import {
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
 import { ContentPolicy } from "./spans";
 import { AgentClassLike, CursorSDKModuleLike } from "./types";
 import { VERSION } from "./version";
@@ -18,7 +18,8 @@ import { RunWatcher, TracingContext, isPatched, patchAgentClass, wrapAgent } fro
 
 export const INSTRUMENTATION_NAME = "@traceai/cursor-sdk";
 const MODULE_NAME = "@cursor/sdk";
-const SUPPORTED_VERSIONS = [">=1.0.0 <2"];
+// SDK 1.0.7 has a synchronous Agent.create() and no usage event; 1.0.37 is the earliest verified async API.
+const SUPPORTED_VERSIONS = [">=1.0.37 <2"];
 const DEFAULT_GRACE_MS = 2000;
 const DEFAULT_DRAIN_MS = 30_000;
 
@@ -217,10 +218,9 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
   private tracingContext(): TracingContext | undefined {
     if (!this.isEnabled() || this.stopped) return undefined;
     const policy = this.contentPolicy;
-    const tracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
-    });
+    const traceConfig = generateTraceConfig({ ...this.traceConfig, ...policy });
+    policy.hideErrorDetails = traceConfig.hideErrorDetails;
+    const tracer = new FITracer({ tracer: this.tracer, traceConfig });
     return { tracer, policy, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry };
   }
 }

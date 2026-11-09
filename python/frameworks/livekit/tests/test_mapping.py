@@ -500,3 +500,113 @@ def test_a_second_exporter_on_the_same_provider_sees_the_span_untouched() -> Non
     assert SpanAttributes.INPUT_VALUE in ours.exported[0].attributes
     (seen,) = other.get_finished_spans()
     assert dict(seen.attributes) == secret_attributes
+
+
+def test_recording_attributes_are_projected_on_the_fi_copy_only() -> None:
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import Event
+    from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+    from opentelemetry.trace import Link, SpanKind, Status, StatusCode
+
+    attributes = {
+        'lk.recording.operation': 'snapshot',
+        'lk.pii.recording.egress_id': 'egress-synthetic',
+        'lk.recording.status': '0',
+        'lk.recording.started_at_unix_nano': 100,
+        'lk.recording.ended_at_unix_nano': 200,
+        'lk.pii.room_name': 'room-synthetic',
+        'lk.pii.recording.conversation_id': 'conversation-synthetic',
+        'lk.pii.recording.file_locations': ('s3://bucket/call.mp4',),
+        'lk.pii.recording.stream_locations': ('rtmps://stream.example',),
+        SpanAttributes.GEN_AI_SPAN_KIND: 'CHAIN',
+    }
+    before = dict(attributes)
+    parent = _context()
+    span = ReadableSpan(
+        name='livekit.recording.snapshot', context=_context(), parent=parent,
+        resource=Resource.create({'project_name': 'recording-test'}), attributes=attributes,
+        events=[Event('test-event', {'n': 1}, timestamp=5)],
+        links=[Link(_context())], kind=SpanKind.INTERNAL,
+        status=Status(StatusCode.UNSET), start_time=1, end_time=9,
+        instrumentation_scope=InstrumentationScope('recording-test', '1'),
+    )
+    exporter = _MappedRecorder()
+    exporter.export([span])
+    (mapped,) = exporter.exported
+    for source, target in (
+        ('lk.recording.operation', 'livekit.recording.operation'),
+        ('lk.pii.recording.egress_id', 'livekit.recording.egress_id'),
+        ('lk.recording.status', 'livekit.recording.status'),
+        ('lk.recording.started_at_unix_nano', 'livekit.recording.started_at_unix_nano'),
+        ('lk.recording.ended_at_unix_nano', 'livekit.recording.ended_at_unix_nano'),
+        ('lk.pii.room_name', 'livekit.recording.room_name'),
+        ('lk.pii.recording.conversation_id', SpanAttributes.GEN_AI_CONVERSATION_ID),
+        ('lk.pii.recording.file_locations', 'livekit.recording.file_locations'),
+        ('lk.pii.recording.stream_locations', 'livekit.recording.stream_locations'),
+    ):
+        assert mapped.attributes[target] == before[source]
+    assert attributes == before and dict(span.attributes) == before
+    assert mapped is not span
+    for field in ('name', 'context', 'parent', 'resource', 'events', 'links', 'kind',
+                  'status', 'start_time', 'end_time', 'instrumentation_scope'):
+        assert getattr(mapped, field) == getattr(span, field)
+
+
+def test_recording_explicit_conversation_id_wins_over_room_name() -> None:
+    mapped = _map_attributes_to_fi_conventions({
+        'lk.recording.operation': 'snapshot', 'lk.pii.room_name': 'room-synthetic',
+        'lk.pii.recording.conversation_id': 'conversation-synthetic',
+    })
+    assert mapped[SpanAttributes.GEN_AI_CONVERSATION_ID] == 'conversation-synthetic'
+
+
+def test_recording_withheld_conversation_id_is_not_rebuilt_from_room() -> None:
+    attributes = {'lk.recording.operation': 'snapshot', 'lk.pii.room_name': 'room-synthetic'}
+    assert SpanAttributes.GEN_AI_CONVERSATION_ID not in _map_attributes_to_fi_conventions(attributes)
+    del attributes['lk.recording.operation']
+    assert _map_attributes_to_fi_conventions(attributes)[SpanAttributes.GEN_AI_CONVERSATION_ID] == 'room-synthetic'
+
+
+@pytest.mark.parametrize("operation", [
+    "snapshot", "start_room_composite_egress", "start_web_egress",
+    "start_participant_egress", "start_track_composite_egress", "start_track_egress",
+    "stop_egress", "update_stream", "update_layout",
+])
+@pytest.mark.parametrize("scope", [None, "traceai_livekit.recording", "caller-supplied-scope"],
+                         ids=["no-scope", "default-scope", "caller-scope"])
+def test_reserved_recording_names_clear_stale_aliases_without_marker(operation, scope):
+    from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+
+    original = {
+        "lk.pii.room_name": "room-synthetic",
+        SpanAttributes.GEN_AI_CONVERSATION_ID: "stale-conversation-synthetic",
+        "livekit.recording.file_locations": ("stale-synthetic.mp4",),
+    }
+    span = ReadableSpan(
+        name="livekit.recording." + operation, context=_context(), attributes=dict(original),
+        instrumentation_scope=InstrumentationScope(scope) if scope is not None else None,
+    )
+    exporter = _MappedRecorder()
+    exporter.export([span])
+    mapped, = exporter.exported
+    assert SpanAttributes.GEN_AI_CONVERSATION_ID not in mapped.attributes
+    assert "livekit.recording.file_locations" not in mapped.attributes
+    assert "livekit.recording.operation" not in mapped.attributes
+    assert mapped.attributes["livekit.recording.room_name"] == "room-synthetic"
+    assert dict(span.attributes) == original
+    assert mapped.instrumentation_scope == span.instrumentation_scope
+
+
+@pytest.mark.parametrize("name", [
+    "agent_session", "livekit.recording", "livekit.recording.snapshot.extra",
+    "livekit.recording.unrecognized", "prefix.livekit.recording.snapshot",
+])
+def test_nonrecording_names_keep_legacy_room_mapping(name):
+    original = {"lk.pii.room_name": "room-synthetic"}
+    span = ReadableSpan(name=name, context=_context(), attributes=dict(original))
+    exporter = _MappedRecorder()
+    exporter.export([span])
+    mapped, = exporter.exported
+    assert mapped.attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] == "room-synthetic"
+    assert "livekit.recording.room_name" not in mapped.attributes
+    assert dict(span.attributes) == original

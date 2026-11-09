@@ -90,7 +90,7 @@ Content is captured by default. The core's `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, 
 | `@traceai/fireworks` | [traceai_fireworks](packages/traceai_fireworks/) |
 | `@traceai/genkit` | [traceai_genkit](packages/traceai_genkit/) |
 | `@traceai/fi-instrumentation-google-adk` | [traceai_google_adk](packages/traceai_google_adk/) |
-| `@traceai/google-genai` | [traceai_google_genai](packages/traceai_google_genai/) |
+| `@traceai/google-genai` (legacy `@google/generative-ai` only) | [traceai_google_genai](packages/traceai_google_genai/) |
 | `@traceai/groq` | [traceai_groq](packages/traceai_groq/) |
 | `@traceai/guardrails` | [traceai_guardrails](packages/traceai_guardrails/) |
 | `@traceai/huggingface` | [traceai_huggingface](packages/traceai_huggingface/) |
@@ -98,7 +98,7 @@ Content is captured by default. The core's `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, 
 | `@traceai/lancedb` | [traceai_lancedb](packages/traceai_lancedb/) |
 | `@traceai/langchain` | [traceai_langchain](packages/traceai_langchain/) |
 | `@traceai/fi-instrumentation-livekit` | [traceai_livekit](packages/traceai_livekit/) |
-| `@traceai/llamaindex` | [traceai_llamaindex](packages/traceai_llamaindex/) |
+| `@traceai/llamaindex` (deprecated) | [traceai_llamaindex](packages/traceai_llamaindex/) |
 | `@traceai/mastra` | [traceai_mastra](packages/traceai_mastra/) |
 | `@traceai/mcp` | [traceai_mcp](packages/traceai_mcp/) |
 | `@traceai/milvus` | [traceai_milvus](packages/traceai_milvus/) |

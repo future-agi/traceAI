@@ -125,10 +125,10 @@ jobs:
           corepack pnpm run build:deps
           corepack pnpm --filter "@traceai/$PACKAGE_NAME" run build
           corepack pnpm --filter "@traceai/$PACKAGE_NAME" test --runInBand
-      - name: Codex real SDK contract (local subprocess, no API calls)
+      - name: Codex floor and pinned SDK contracts (real binaries, loopback provider)
         if: matrix.package.name == 'codex-sdk'
         working-directory: ${{ matrix.package.dir }}
-        run: node contract/run_real_sdk.mjs
+        run: bash contract/compatibility.sh
       - name: Build installable tarball
         working-directory: ${{ matrix.package.dir }}
         run: |
@@ -190,6 +190,12 @@ jobs:
           java-version: '21.0.8'
       - name: Install checksum-pinned Maven 3.9.9
         run: bash .github/integration-ci/install_maven.sh
+      - name: Install matching Java core for Arconia privacy
+        if: matrix.package.name == 'arconia'
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-core -am install
+      - name: Install the Quarkus native tracing adapter
+        if: matrix.package.name == 'quarkus-langchain4j'
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-quarkus-langchain4j -am -DskipTests install
       - name: Build packaged application and run OTLP integration tests
         working-directory: ${{ matrix.package.dir }}
         run: |

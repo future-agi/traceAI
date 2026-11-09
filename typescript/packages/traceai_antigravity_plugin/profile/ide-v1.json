@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "antigravity-ide",
+  "profileVersion": "ide-v1",
+  "packageName": "@traceai/antigravity-plugin",
+  "qualification": "schema-fixtures-only",
+  "qualifiedHostVersions": [],
+  "installable": false,
+  "exportsEnabled": false,
+  "requiresWorker": false,
+  "blocker": "ANTIGRAVITY_GUI_QUALIFICATION_REQUIRED",
+  "documentation": "https://antigravity.google/docs/hooks",
+  "surfaces": {
+    "ide": {
+      "appDataRelativeToHome": ".gemini/antigravity-ide",
+      "transcriptRelativeToConversation": ".system_generated/logs/transcript.jsonl"
+    },
+    "app": {
+      "appDataRelativeToHome": ".gemini/antigravity",
+      "transcriptRelativeToConversation": ".system_generated/logs/transcript.jsonl"
+    }
+  },
+  "documentedRegistration": {
+    "globalHooksRelativeToHome": ".gemini/config/hooks.json",
+    "workspaceHooks": ".agents/hooks.json",
+    "globalPluginsRelativeToHome": ".gemini/config/plugins",
+    "workspacePlugins": ".agents/plugins"
+  },
+  "observedEvents": ["SessionStart", "PreInvocation", "PostInvocation", "PostToolUse", "Stop"],
+  "excludedEvents": ["PreToolUse"],
+  "capabilities": {
+    "userTurnBoundaries": "unqualified",
+    "modelRequests": "unqualified",
+    "transcriptSchema": "unqualified",
+    "tokensAndCost": "unqualified",
+    "nestedSubagents": "unqualified",
+    "compaction": "unqualified",
+    "guiEnvironment": "unqualified"
+  }
+}

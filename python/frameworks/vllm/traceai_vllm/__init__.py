@@ -1,38 +1,13 @@
-"""TraceAI instrumentation for vLLM.
+"""Legacy chat-only vLLM client instrumentation.
 
-This module provides OpenTelemetry instrumentation for vLLM,
-enabling comprehensive observability for vLLM API calls.
-vLLM uses an OpenAI-compatible API.
-
-Example usage:
-
-    from fi_instrumentation import register
-    from fi_instrumentation.fi_types import ProjectType
-    from traceai_vllm import VLLMInstrumentor
-
-    # Setup TraceAI
-    trace_provider = register(
-        project_type=ProjectType.OBSERVE,
-        project_name="vllm-app",
-    )
-
-    # Instrument vLLM
-    VLLMInstrumentor().instrument(tracer_provider=trace_provider)
-
-    # Now use OpenAI client with vLLM
-    from openai import OpenAI
-
-    client = OpenAI(
-        api_key="token",  # vLLM doesn't require real key
-        base_url="http://localhost:8000/v1",  # Your vLLM server
-    )
-    response = client.chat.completions.create(
-        model="meta-llama/Llama-2-7b-chat-hf",
-        messages=[{"role": "user", "content": "Hello!"}]
-    )
+VLLMInstrumentor remains available for OpenAI >= 1.0.0. New applications should
+use traceai_openai.OpenAIInstrumentor and set_client_provider(client,
+provider="vllm") with OpenAI >= 1.69.0. See the package README for migration.
+This package does not instrument the vLLM server or inference engine.
 """
 
 import logging
+import warnings
 from importlib import import_module
 from typing import Any, Collection
 
@@ -82,6 +57,15 @@ class VLLMInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
+        warnings.warn(
+            "VLLMInstrumentor is deprecated. Use traceai_openai.OpenAIInstrumentor "
+            "and set_client_provider(client, provider='vllm') instead "
+            "(requires OpenAI >= 1.69.0). When both instrumentors are enabled, "
+            "OpenAIInstrumentor owns tracing and its tracer_provider and "
+            "TraceConfig apply.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):

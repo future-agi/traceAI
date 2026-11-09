@@ -214,9 +214,13 @@ function getFunctionCallDataFromAdditionalKwargs(
   const functionCallName = isString(functionCall.name)
     ? functionCall.name
     : undefined;
-  const functionCallArgs = isString(functionCall.args)
-    ? functionCall.args
-    : undefined;
+  // Legacy OpenAI function_call uses `arguments`; retain the existing `args`
+  // spelling as a fallback for non-standard adapters.
+  const functionCallArgs = isString(functionCall.arguments)
+    ? functionCall.arguments
+    : isString(functionCall.args)
+      ? functionCall.args
+      : undefined;
   return {
     [SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]: functionCallName,
     [SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON]:
@@ -574,9 +578,10 @@ function formatTokenCounts(
     if (isObject(usageMetadata.input_token_details)) {
       tokenCountAttributes[
         SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
-      ] =
-        getTokenCount(usageMetadata.input_token_details.cache_read) ||
-        undefined;
+      ] = getTokenCount(usageMetadata.input_token_details.cache_read);
+      tokenCountAttributes[
+        SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE
+      ] = getTokenCount(usageMetadata.input_token_details.cache_creation);
       tokenCountAttributes[
         SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO
       ] = getTokenCount(usageMetadata.input_token_details.audio) || undefined;
