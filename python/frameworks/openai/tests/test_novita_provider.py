@@ -6,6 +6,7 @@ before assertions, covering sync/async success, streams, errors and look-alikes.
 
 import asyncio
 import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from queue import Queue
 from threading import Thread
@@ -22,6 +23,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 from traceai_openai import OpenAIInstrumentor
+from traceai_openai._providers import provider_from_host
 
 from .test_openai_compatible_spans import (
     ANSWER,
@@ -33,6 +35,32 @@ from .test_openai_compatible_spans import (
     client,
     unauthorized,
 )
+
+
+PROMPT = "synthetic-novita-private-prompt"
+
+
+@pytest.mark.parametrize("host,expected", [
+    ("api.novita.ai", "novita"),
+    ("API.NOVITA.AI.", "novita"),
+    ("novita.ai", "openai"),
+    ("proxy.api.novita.ai", "openai"),
+    ("api.novita.ai.evil.example", "openai"),
+    ("notapi.novita.ai", "openai"),
+    ("api.novita-ai.example", "openai"),
+    # The resolver accepts a hostname, not a URL or authority. The SDK extracts
+    # the host first; schemes and ports on a genuine Novita URL do not change it.
+    ("https://api.novita.ai", "openai"),
+    ("http://api.novita.ai", "openai"),
+    ("api.novita.ai:443", "openai"),
+    ("api.novita.ai:8443", "openai"),
+    ("api.novita.ai@evil.example", "openai"),
+    (None, "openai"),
+    ("", "openai"),
+    (443, "openai"),
+])
+def test_novita_host_boundaries(host, expected):
+    assert provider_from_host(host) == expected
 
 
 @pytest.fixture(scope="module")
@@ -63,7 +91,11 @@ def otlp_receiver():
 
 
 @pytest.fixture
-def wire_trace(otlp_receiver):
+def wire_trace(otlp_receiver, monkeypatch, hidden):
+    # Keep credentials, telemetry destinations and privacy flags synthetic.
+    for name in tuple(os.environ):
+        if name.startswith(("FI_", "OTEL_", "OPENAI_")):
+            monkeypatch.delenv(name)
     endpoint, received = otlp_receiver
     assert received.empty()
     session = requests.Session()
@@ -72,7 +104,10 @@ def wire_trace(otlp_receiver):
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = OpenAIInstrumentor()
-    instrumentor.instrument(tracer_provider=provider, config=TraceConfig())
+    config = TraceConfig(
+        hide_inputs=True, hide_outputs=True, hide_llm_invocation_parameters=True,
+    ) if hidden else TraceConfig()
+    instrumentor.instrument(tracer_provider=provider, config=config)
     try:
         yield received
     finally:
@@ -84,6 +119,12 @@ def wire_trace(otlp_receiver):
     ("https://api.novita.ai/openai/v1", "novita"),
     ("https://API.NOVITA.AI./openai/v1", "novita"),
     ("https://api.novita.ai:443/openai/v1", "novita"),
+    # Match existing host-only mappings: a port or HTTP scheme is not a new host.
+    ("https://api.novita.ai:8443/openai/v1", "novita"),
+    ("http://api.novita.ai:8080/openai/v1", "novita"),
+    ("https://api.novita.ai.evil.example:8443/openai/v1", "openai"),
+    ("http://proxy.api.novita.ai:8080/openai/v1", "openai"),
+    ("https://api.novita.ai@evil.example/openai/v1", "openai"),
     ("https://api.novita.ai.customer.example/openai/v1", "openai"),
     ("https://notapi.novita.ai/openai/v1", "openai"),
     ("https://proxy.api.novita.ai/openai/v1", "openai"),
@@ -93,7 +134,8 @@ def wire_trace(otlp_receiver):
 ])
 @pytest.mark.parametrize("outcome", ["success", "stream", "stream-usage", "error"])
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-def test_novita_provider_over_otlp(wire_trace, base_url, expected_provider, outcome, use_async):
+@pytest.mark.parametrize("hidden", [False, True], ids=["default", "hidden"])
+def test_novita_provider_over_otlp(wire_trace, base_url, expected_provider, outcome, use_async, hidden):
     calls = []
     streaming = outcome.startswith("stream")
 
@@ -123,7 +165,7 @@ def test_novita_provider_over_otlp(wire_trace, base_url, expected_provider, outc
 
     kwargs = {
         "model": REQUEST_MODEL,
-        "messages": [{"role": "user", "content": "Capital of Japan?"}],
+        "messages": [{"role": "user", "content": PROMPT}],
         "max_tokens": 128,
         "stream": streaming,
     }
@@ -177,6 +219,8 @@ def test_novita_provider_over_otlp(wire_trace, base_url, expected_provider, outc
     attrs = {item.key: getattr(item.value, item.value.WhichOneof("value"))
              for item in span.attributes}
     assert attrs["gen_ai.provider.name"] == expected_provider
+    # This instrumentor emits the modern provider field, not the legacy system.
+    assert "gen_ai.system" not in attrs
     assert attrs["gen_ai.request.model"] == (
         RESPONSE_MODEL if outcome == "success" else REQUEST_MODEL
     )
@@ -190,6 +234,10 @@ def test_novita_provider_over_otlp(wire_trace, base_url, expected_provider, outc
         assert attrs["gen_ai.usage.total_tokens"] == 7
     else:
         assert not any(key.startswith("gen_ai.usage.") for key in attrs)
-    if streaming:
+    if hidden:
+        assert PROMPT.encode() not in payload
+        assert ANSWER.encode() not in payload
+        assert "gen_ai.request.parameters" not in attrs
+    elif streaming:
         assert attrs["output.value"] == ANSWER
     assert b"test-vendor-key" not in payload
