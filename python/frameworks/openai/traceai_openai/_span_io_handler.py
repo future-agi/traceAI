@@ -61,8 +61,8 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
         if eval_input:
             eval_input_str = " \n ".join(map(str, eval_input))
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
-        if eval_input and len(eval_input) > 0:
-            _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input[0])
+            # Describe the value actually exported (all messages joined), not the first message.
+            _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input_str)
     elif isinstance(input_data, str):
         # A bare prompt (e.g. Responses API ``input="..."``) is already the input
         # text; JSON-encoding it would wrap it in quotes.

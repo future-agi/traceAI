@@ -367,4 +367,31 @@ class TestProcessInputData:
         mock, process = span
         process("plain prompt", mock)
         attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
-        assert attrs[SpanAttributes.INPUT_VALUE] == '"plain prompt"'
+        # A bare prompt is already the input text; it is not JSON-quoted.
+        assert attrs[SpanAttributes.INPUT_VALUE] == "plain prompt"
+        assert attrs[SpanAttributes.INPUT_MIME_TYPE] == "text/plain"
+
+    def test_mime_type_describes_the_joined_value(self, span):
+        """A JSON first message followed by text is exported as text, not JSON."""
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process(
+            [
+                {"role": "user", "content": '{"task": "sum"}'},
+                {"role": "user", "content": "now explain it"},
+            ],
+            mock,
+        )
+        attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
+        assert attrs[SpanAttributes.INPUT_VALUE] == '{"task": "sum"} \n now explain it'
+        assert attrs[SpanAttributes.INPUT_MIME_TYPE] == "text/plain"
+
+    def test_single_json_message_keeps_json_mime_type(self, span):
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process([{"role": "user", "content": '{"task": "sum"}'}], mock)
+        attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
+        assert attrs[SpanAttributes.INPUT_VALUE] == '{"task": "sum"}'
+        assert attrs[SpanAttributes.INPUT_MIME_TYPE] == "application/json"
