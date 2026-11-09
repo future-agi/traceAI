@@ -11,6 +11,7 @@ from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     SpanAttributes,
 )
+from openai import Omit
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 from opentelemetry import context as context_api
@@ -222,14 +223,23 @@ class _WithOpenAI(ABC):
         cast_to: type,
         request_parameters: Mapping[str, Any],
         instance: Any = None,
+        request_options: Any = None,
     ) -> Any:
         """
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
         not a stream.
         """
         response_accumulator_factory = self._response_accumulator_factories.get(cast_to)
+        accumulator_parameters = request_parameters
+        if cast_to is self._openai.types.chat.ChatCompletion and request_options is not None:
+            # Validate the on-wire choice count without expanding request metadata
+            # or passing arbitrary extra_body fields into response extraction.
+            _, effective_parameters = _parse_request_args(
+                (cast_to, request_options), include_extra_body=True,
+            )
+            accumulator_parameters = {**request_parameters, "n": effective_parameters.get("n", 1)}
         response_accumulator = (
-            response_accumulator_factory(request_parameters)
+            response_accumulator_factory(accumulator_parameters)
             if response_accumulator_factory
             else None
         )
@@ -241,7 +251,7 @@ class _WithOpenAI(ABC):
             extractor = _ResponseAttributesExtractor(self._openai, self._config, provider=provider)
             if cast_to is self._openai.types.chat.ChatCompletion:
                 response_accumulator = _DeepSeekChatAccumulator(
-                    request_parameters=request_parameters,
+                    request_parameters=accumulator_parameters,
                     chat_completion_type=cast_to,
                     response_attributes_extractor=extractor,
                 )
@@ -416,6 +426,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     cast_to=cast_to,
                     request_parameters=request_parameters,
                     instance=instance,
+                    request_options=args[1],
                 )
             except BaseException as e:
                 with_span.add_secrets(request_credentials(instance, getattr(e, "request", None), {}))
@@ -500,6 +511,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     cast_to=cast_to,
                     request_parameters=request_parameters,
                     instance=instance,
+                    request_options=args[1],
                 )
             except Exception:
                 logger.exception(
@@ -509,19 +521,26 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
         return response
 
 
-def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]]:
+def _parse_request_args(
+    args: Tuple[type, Any], *, include_extra_body: bool = False,
+) -> Tuple[type, Mapping[str, Any]]:
     # We don't use `signature(request).bind()` because `request` could have been monkey-patched
     # (incorrectly) by others and the signature at runtime may not match the original.
     # The targeted signature of `request` is here:
     # https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/_base_client.py#L846-L847  # noqa: E501
     cast_to: type = args[0]
-    request_parameters: Mapping[str, Any] = (
-        json_data
-        # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/_models.py#L427  # noqa: E501
-        if hasattr(args[1], "json_data")
-        and isinstance(json_data := args[1].json_data, Mapping)
-        else {}
-    )
+    json_data = getattr(args[1], "json_data", None)
+    if include_extra_body and (extra_json := getattr(args[1], "extra_json", None)) is not None:
+        # Mirror the SDK's shallow extra_body merge without mutating its options.
+        # Opt in only for completion validation; exported metadata stays unchanged.
+        if json_data is None:
+            json_data = extra_json
+        elif isinstance(json_data, Mapping) and isinstance(extra_json, Mapping):
+            json_data = {
+                key: value for key, value in {**json_data, **extra_json}.items()
+                if not isinstance(value, Omit)
+            }
+    request_parameters: Mapping[str, Any] = json_data if isinstance(json_data, Mapping) else {}
     # FIXME: Because request parameters is just a Mapping, it can contain any value as long as it
     # serializes correctly in an HTTP request body. For example, Enum values may be present if a
     # third-party library puts them there. Enums can turn into their intended string values via

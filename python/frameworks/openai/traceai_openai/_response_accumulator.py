@@ -217,7 +217,8 @@ class _ChatCompletionAccumulator:
         # requested-model convention for streams; only aggregate message fields.
         self._values += {
             "choices": [
-                {"index": choice["index"], "message": choice.get("delta") or {}}
+                {"index": choice["index"], "message": choice.get("delta") or {},
+                 "finish_reason": choice.get("finish_reason")}
                 for choice in raw_chunk.get("choices", [])
                 if choice.get("index") is not None
             ]
@@ -270,7 +271,28 @@ class _ChatCompletionAccumulator:
                 output_value = safe_json_dumps(messages)
         yield SpanAttributes.OUTPUT_VALUE, output_value
 
-    def get_status(self) -> Optional[trace_api.Status]:
+    def get_status(self, *, exhausted: bool = False) -> Optional[trace_api.Status]:
+        # Closing early is a normal caller action. Only judge a server-ended
+        # stream when at least one choice proves the provider emits finish reasons.
+        if not exhausted:
+            return None
+        choices = (self._result() or {}).get("choices", [])
+        finished = {
+            choice["index"] for choice in choices
+            if choice.get("finish_reason") is not None
+        }
+        if not finished:
+            return None
+        expected = self._request_parameters.get("n", 1)
+        if not isinstance(expected, int) or expected < 1:
+            expected = 1
+        # Check requested indices, not the count of returned choices. The indexed
+        # accumulator retains reasons across null deltas and usage-only chunks.
+        if any(index not in finished for index in range(expected)):
+            return trace_api.Status(
+                trace_api.StatusCode.ERROR,
+                "Stream ended before all choices finished",
+            )
         return None
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:

@@ -7,6 +7,7 @@ from openai.types.chat import ChatCompletionChunk
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._response_accumulator import (
+    _ChatCompletionAccumulator,
     _ResponsesAccumulator,
     _raw_response_status,
     _response_status,
@@ -427,7 +428,7 @@ class _Stream(ObjectProxy):  # type: ignore
         except StopIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-                self._finish_tracing(status=status)
+                self._finish_tracing(status=status, exhausted=True)
             raise
         except BaseException as exception:
             if not self._self_is_finished:
@@ -458,12 +459,17 @@ class _Stream(ObjectProxy):  # type: ignore
     def _finish_tracing(
         self,
         status: Optional[trace_api.Status] = None,
+        *,
+        exhausted: bool = False,
     ) -> None:
         if self._self_is_finished:
             return
         if status is None or status.status_code is not trace_api.StatusCode.ERROR:
-            get_status = getattr(self._self_response_accumulator, "get_status", None)
-            if get_status is not None:
+            accumulator = self._self_response_accumulator
+            get_status = getattr(accumulator, "get_status", None)
+            if isinstance(accumulator, _ChatCompletionAccumulator):
+                status = accumulator.get_status(exhausted=exhausted) or status
+            elif get_status is not None:
                 status = get_status() or status
         _finish_tracing(
             status=status,
@@ -544,7 +550,7 @@ class _AsyncStream(ObjectProxy):
         except StopAsyncIteration:
             if not self._self_is_finished:
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-                self._finish_tracing(status=status)
+                self._finish_tracing(status=status, exhausted=True)
             raise
         except BaseException as exception:
             if not self._self_is_finished:
@@ -575,12 +581,17 @@ class _AsyncStream(ObjectProxy):
     def _finish_tracing(
         self,
         status: Optional[trace_api.Status] = None,
+        *,
+        exhausted: bool = False,
     ) -> None:
         if self._self_is_finished:
             return
         if status is None or status.status_code is not trace_api.StatusCode.ERROR:
-            get_status = getattr(self._self_response_accumulator, "get_status", None)
-            if get_status is not None:
+            accumulator = self._self_response_accumulator
+            get_status = getattr(accumulator, "get_status", None)
+            if isinstance(accumulator, _ChatCompletionAccumulator):
+                status = accumulator.get_status(exhausted=exhausted) or status
+            elif get_status is not None:
                 status = get_status() or status
         _finish_tracing(
             status=status,
