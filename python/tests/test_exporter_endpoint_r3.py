@@ -134,3 +134,23 @@ def test_env_pair_is_lower_cased_and_added_once(transport, monkeypatch):
 @pytest.mark.parametrize("transport", ["grpc", "http"])
 def test_no_credentials_anywhere_sends_no_headers(transport, monkeypatch):
     assert _captured_headers(transport, monkeypatch, None, {"Authorization": ""}) is None
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+def test_empty_case_variant_does_not_erase_an_explicit_credential(transport, monkeypatch):
+    """A later empty duplicate must not drop an earlier non-empty Authorization and pull in env keys."""
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, {"Authorization": "Bearer synthetic", "authorization": ""})
+    assert headers == {"authorization": "Bearer synthetic"}
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+@pytest.mark.parametrize("empty", [b"", b"   "])
+def test_empty_bytes_credential_does_not_hide_env_credentials(transport, empty, monkeypatch):
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, {"Authorization": empty})
+    assert headers == {"x-api-key": "synthetic-env-key", "x-secret-key": "synthetic-env-secret"}
+
+
+@pytest.mark.parametrize("transport", ["grpc", "http"])
+def test_non_empty_bytes_credential_is_kept(transport, monkeypatch):
+    headers = _captured_headers(transport, monkeypatch, ENV_PAIR, {"Authorization": b"Bearer synthetic"})
+    assert headers == {"authorization": b"Bearer synthetic"}
