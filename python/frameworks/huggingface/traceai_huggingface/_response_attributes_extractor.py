@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _without_prefill(response: Any) -> Mapping[str, Any]:
+    """Copy telemetry details without input-origin tokens; never edit SDK objects."""
+    data = dict(_to_dict(response))
+    if data.get("details") is None:
+        return data
+    details = dict(_to_dict(data["details"]))
+    details.pop("prefill", None)
+    if details.get("best_of_sequences") is not None:
+        sequences = []
+        for sequence in details["best_of_sequences"]:
+            item = dict(_to_dict(sequence))
+            item.pop("prefill", None)
+            sequences.append(item)
+        details["best_of_sequences"] = sequences
+    data["details"] = details
+    return data
+
+
 class _TextGenerationResponseAttributesExtractor:
     """Extract span attributes from HuggingFace text_generation response."""
 
@@ -39,10 +57,14 @@ class _TextGenerationResponseAttributesExtractor:
         response: Optional[Any],
         request_parameters: Mapping[str, Any],
         is_streaming: bool = False,
+        *,
+        hide_input_text: bool = False,
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes including output."""
         if response is None:
             return
+        if hide_input_text and not isinstance(response, str):
+            response = _without_prefill(response)
 
         # Get generated text
         generated_text = ""

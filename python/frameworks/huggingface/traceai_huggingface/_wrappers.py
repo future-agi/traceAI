@@ -150,7 +150,13 @@ class _TextGenerationWrapper(_WithTracer):
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
                     extra_attributes=_private_response_attributes(
-                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._response_extractor.get_extra_attributes(
+                            response, request_parameters,
+                            hide_input_text=(
+                                self._tracer._self_config.hide_inputs
+                                or self._tracer._self_config.hide_input_text
+                            ),
+                        ),
                         self._tracer._self_config,
                         chat=False,
                         request=request_parameters,
@@ -235,7 +241,13 @@ class _AsyncTextGenerationWrapper(_WithTracer):
                     with_span=span,
                     attributes=self._response_extractor.get_attributes(response),
                     extra_attributes=_private_response_attributes(
-                        self._response_extractor.get_extra_attributes(response, request_parameters),
+                        self._response_extractor.get_extra_attributes(
+                            response, request_parameters,
+                            hide_input_text=(
+                                self._tracer._self_config.hide_inputs
+                                or self._tracer._self_config.hide_input_text
+                            ),
+                        ),
                         self._tracer._self_config,
                         chat=False,
                         request=request_parameters,

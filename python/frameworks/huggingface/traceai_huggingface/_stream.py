@@ -168,12 +168,18 @@ class _StreamState:
             )
             # Keep numeric usage before removing input-origin prefill details.
             attributes = list(self.extractor.get_attributes(response))
-            if tokens_only:
-                # Prefill tokens are input-origin text, too.
-                response["details"].pop("prefill", None)
-            extra_attributes = self.extractor.get_extra_attributes(
-                response, self.request
-            )
+            if isinstance(self.accumulator, _TextAccumulator):
+                extra_attributes = self.extractor.get_extra_attributes(
+                    response, self.request,
+                    hide_input_text=bool(
+                        self.config
+                        and (self.config.hide_inputs or self.config.hide_input_text)
+                    ),
+                )
+            else:
+                extra_attributes = self.extractor.get_extra_attributes(
+                    response, self.request
+                )
             if self.config and (
                 self.config.hide_output_messages or self.config.hide_output_text
             ):
