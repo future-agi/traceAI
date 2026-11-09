@@ -167,9 +167,32 @@ class _WithOpenAI(ABC):
         return provider_from_host(getattr(base_url, "host", None))
 
     def _get_attributes_from_instance(
-        self, instance: Any
+        self, instance: Any, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, self._provider_for_instance(instance)
+        try:
+            # Host attribution alone does not make a plain OpenAI client Azure-specific.
+            if not isinstance(instance, (self._openai.AzureOpenAI, self._openai.AsyncAzureOpenAI)):
+                return
+            attributes: dict[str, AttributeValue] = {}
+            endpoint = instance.base_url
+            if isinstance(endpoint.host, str) and endpoint.host:
+                attributes[SpanAttributes.SERVER_ADDRESS] = endpoint.host.lower()
+            if isinstance(endpoint.port, int):
+                attributes[SpanAttributes.SERVER_PORT] = endpoint.port
+            # Read only the version, never export the URL, headers or full query.
+            api_version = instance.default_query.get("api-version")
+            if isinstance(api_version, str) and api_version:
+                attributes["azure.openai.api_version"] = api_version
+            deployment = getattr(instance, "_azure_deployment", None)
+            if not isinstance(deployment, str) or not deployment:
+                deployment = request_parameters.get("model")
+            if isinstance(deployment, str) and deployment:
+                attributes["azure.openai.deployment"] = deployment
+        except Exception:
+            # Optional metadata must not disrupt the request or its existing span.
+            return
+        yield from attributes.items()
 
     def _get_attributes_from_request(
         self,
@@ -397,7 +420,7 @@ class _Request(_WithTracer, _WithOpenAI):
             span_name=span_name,
             secrets=secrets,
             attributes=chain(
-                self._get_attributes_from_instance(instance),
+                self._get_attributes_from_instance(instance, request_parameters),
                 self._get_attributes_from_request(
                     cast_to=cast_to,
                     request_parameters=request_parameters,
@@ -469,7 +492,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             span_name=span_name,
             secrets=secrets,
             attributes=chain(
-                self._get_attributes_from_instance(instance),
+                self._get_attributes_from_instance(instance, request_parameters),
                 self._get_attributes_from_request(
                     cast_to=cast_to,
                     request_parameters=request_parameters,
