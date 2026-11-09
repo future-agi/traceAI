@@ -106,10 +106,8 @@ class FiTracingProcessor(TracingProcessor):
                     for k, v in _get_attributes_from_input(initial_input):
                         root_span.set_attribute(k, v)
             if final_output := self._trace_outputs.pop(trace.trace_id, None):
-                root_span.set_attribute(OUTPUT_VALUE, final_output.model_dump_json())
-                if text_output := _get_text_from_response(final_output):
-                    root_span.set_attribute(OUTPUT_VALUE, text_output)
-                for k, v in _get_attributes_from_response(final_output):
+                root_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(final_output))
+                for k, v in _get_attributes_from_response(final_output, include_usage=False):
                     root_span.set_attribute(k, v)
 
             root_span.set_status(Status(StatusCode.OK))
@@ -165,9 +163,7 @@ class FiTracingProcessor(TracingProcessor):
             if hasattr(data, "response") and isinstance(response := data.response, Response):
                 self._trace_outputs[span.trace_id] = response
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-                otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                if text_output := _get_text_from_response(response):
-                    otel_span.set_attribute(OUTPUT_VALUE, text_output)
+                otel_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(response))
                 for k, v in _get_attributes_from_response(response):
                     otel_span.set_attribute(k, v)
             if hasattr(data, "input") and (input := data.input):
@@ -196,10 +192,8 @@ class FiTracingProcessor(TracingProcessor):
                 if hasattr(data, "response") and isinstance(
                     response := data.response, Response
                 ):
-                    parent_otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                    if text_output := _get_text_from_response(response):
-                        parent_otel_span.set_attribute(OUTPUT_VALUE, text_output)
-                    for k, v in _get_attributes_from_response(response):
+                    parent_otel_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(response))
+                    for k, v in _get_attributes_from_response(response, include_usage=False):
                         parent_otel_span.set_attribute(k, v)
         elif isinstance(data, GenerationSpanData):
             otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(data.input))
@@ -591,6 +585,21 @@ def _get_attributes_from_message_content_list(
             assert_never(item["type"])
 
 
+def _get_output_from_response(response: Response) -> str:
+    """Keep echoed request fields out of output without mutating the SDK response."""
+    if text_output := _get_text_from_response(response):
+        return text_output
+    # Match the OpenAI instrumentor's response-owned allowlist. A denylist would
+    # let new SDK request-echo fields bypass directional input privacy settings.
+    return response.model_dump_json(
+        include={
+            "id", "object", "created_at", "model", "status", "output", "usage",
+            "incomplete_details",
+        },
+        exclude_none=True,
+    )
+
+
 def _get_text_from_response(response: Response) -> Optional[str]:
     """Extracts the concatenated text from a Response object."""
     texts = []
@@ -604,9 +613,13 @@ def _get_text_from_response(response: Response) -> Optional[str]:
     return " ".join(texts) if texts else None
 
 
-def _get_attributes_from_response(obj: Response) -> Iterator[tuple[str, AttributeValue]]:
+def _get_attributes_from_response(
+    obj: Response, *, include_usage: bool = True
+) -> Iterator[tuple[str, AttributeValue]]:
     yield from _get_attributes_from_tools(obj.tools)
-    yield from _get_attributes_from_usage(obj.usage)
+    # Wrapper spans copy response metadata, but only LLM requests contribute usage.
+    if include_usage:
+        yield from _get_attributes_from_usage(obj.usage)
     yield from _get_attributes_from_response_output(obj.output)
     if isinstance(obj.instructions, str):
         yield from _get_attributes_from_response_instruction(obj.instructions)
