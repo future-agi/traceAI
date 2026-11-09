@@ -227,6 +227,43 @@ def test_optional_dependency_changes_do_not_leave_stale_hooks(
     assert protect_module.Protect.protect is original_protect
 
 
+def test_cleanup_only_restores_the_class_it_patched(
+    monkeypatch, protect_module, instrumentor, otlp
+):
+    provider, _ = otlp
+    patched_class = protect_module.Protect
+    original_protect = patched_class.protect
+    instrumentor.instrument(tracer_provider=provider)
+
+    class ReplacementProtect:
+        def protect(self, inputs, protect_rules):
+            return inputs
+
+    replacement_method = ReplacementProtect.protect
+    monkeypatch.setattr(protect_module, "Protect", ReplacementProtect)
+    instrumentor.uninstrument()
+
+    assert patched_class.protect is original_protect
+    assert ReplacementProtect.protect is replacement_method
+    assert instrumentor._protect_class is None
+    assert instrumentor._original_protect is None
+
+
+def test_dependency_added_while_disabled_is_not_modified(
+    monkeypatch, protect_module, instrumentor, otlp
+):
+    provider, _ = otlp
+    original_protect = protect_module.Protect.protect
+    monkeypatch.setitem(sys.modules, "fi.evals", None)
+    instrumentor.instrument(tracer_provider=provider)
+    monkeypatch.setitem(sys.modules, "fi.evals", protect_module)
+    instrumentor.uninstrument()
+
+    assert protect_module.Protect.protect is original_protect
+    assert instrumentor._protect_class is None
+    assert instrumentor._original_protect is None
+
+
 def test_public_lifecycle_is_idempotent(protect_module, instrumentor, otlp):
     provider, spans = otlp
     client = protect_module.Protect()
