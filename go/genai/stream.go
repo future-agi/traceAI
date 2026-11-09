@@ -33,7 +33,9 @@ func newStreamBody(reqCtx context.Context, rc io.ReadCloser, span trace.Span, tc
 	if rc == nil {
 		rc = io.NopCloser(bytes.NewReader(nil))
 	}
-	return &streamBody{rc: rc, reqCtx: reqCtx, span: span, tc: tc, secrets: secrets, acc: newAccumulator()}
+	acc := newAccumulator()
+	acc.stream = true
+	return &streamBody{rc: rc, reqCtx: reqCtx, span: span, tc: tc, secrets: secrets, acc: acc}
 }
 
 func (s *streamBody) Read(p []byte) (int, error) {
@@ -72,11 +74,17 @@ func (s *streamBody) onBlock(block []byte) {
 	}
 	prefix, data, _ := bytes.Cut(block, []byte(":"))
 	if string(prefix) == "data" {
+		if len(bytes.TrimSpace(data)) == 0 {
+			s.acc.decodeFailed = true
+			return
+		}
 		s.acc.addResponse(data)
 		return
 	}
 	if e := parseAPIError(block); e.Message != "" || e.Status != "" || e.Code != 0 {
 		s.acc.streamErr = &e
+	} else {
+		s.acc.decodeFailed = true
 	}
 }
 
@@ -86,12 +94,15 @@ func (s *streamBody) end(err error) {
 		return
 	}
 	s.ended = true
-	s.span.SetAttributes(s.tc.Filter(s.acc.attributes())...)
+	s.span.SetAttributes(s.tc.Filter(s.acc.attributes(s.tc))...)
 	switch {
 	case err != nil:
 		f := failureClass(s.reqCtx, err)
 		s.span.SetAttributes(attribute.String(ErrorType, f.errType))
 		s.span.SetStatus(codes.Error, f.desc)
+	case s.acc.decodeFailed:
+		s.span.SetAttributes(attribute.String(ErrorType, "decode"))
+		s.span.SetStatus(codes.Error, "failed to decode generation response")
 	case s.acc.streamErr != nil:
 		e := s.acc.streamErr
 		errType, desc := "stream_error", "error in stream"

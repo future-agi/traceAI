@@ -1,6 +1,6 @@
 {
   "name": "@traceai/cursor-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry tracing for the Cursor TypeScript SDK (@cursor/sdk) agent runs",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -20,6 +20,7 @@
     "test": "jest",
     "typecheck:contract": "tsc --noEmit -p contract/tsconfig.json",
     "test:contract": "pnpm run build && pnpm run typecheck:contract && node contract/auto_instrument.cjs && node contract/real_sdk_error.mjs",
+    "test:contract:offline": "pnpm run build && pnpm run typecheck:contract && node contract/auto_instrument.cjs && node contract/otlp_wire.cjs && node --test contract/real_sdk_runs.cjs",
     "prepare": "pnpm run build"
   },
   "keywords": [
@@ -47,7 +48,7 @@
   },
   "homepage": "https://docs.futureagi.com/docs/tracing",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -56,7 +57,8 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
-    "@cursor/sdk": "1.0.38",
+    "@cursor/sdk": "1.2.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.10",
@@ -67,7 +69,7 @@
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
-    "@cursor/sdk": ">=1.0.0 <2"
+    "@cursor/sdk": ">=1.0.37 <2"
   },
   "peerDependenciesMeta": {
     "@cursor/sdk": {

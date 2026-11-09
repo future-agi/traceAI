@@ -404,3 +404,214 @@ def test_the_allow_pii_opt_out_keeps_content_out_of_the_export(
         assert SpanAttributes.INPUT_VALUE not in attributes
         assert SpanAttributes.OUTPUT_VALUE not in attributes
         assert [k for k in attributes if k.startswith("lk.pii.")] == []
+
+
+# Recording rows use real LiveKit telemetry, but never start an RPC/collector.
+@pytest.mark.parametrize('allow_pii', [True, False])
+def test_recording_metadata_respects_livekit_pii_opt_out_and_cloud_redaction(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any, allow_pii: bool
+) -> None:
+    from types import SimpleNamespace
+    import traceai_livekit
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    record = getattr(traceai_livekit, 'record_egress', None)
+    assert callable(record)
+    monkeypatch.setenv('LIVEKIT_TELEMETRY_ALLOW_PII', 'true' if allow_pii else 'false')
+    captured = []
+
+    def capture(self: Any, spans: Any) -> SpanExportResult:
+        captured.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr(_FIHTTPSpanExporter, 'export', capture)
+    provider = make_provider(batch=False)
+    assert enable_http_attribute_mapping()
+    cloud = InMemorySpanExporter()
+    gate = _GatedSpanExporter(cloud, export_jobs={})
+    gate.open_job('recording-job')
+
+    class AddJob(SpanProcessor):
+        def on_start(self, span, parent_context=None):
+            span.set_attribute('job_id', 'recording-job')
+
+        def on_end(self, span):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    provider.add_span_processor(AddJob())
+    provider.add_span_processor(SimpleSpanProcessor(gate))
+    tracer = provider.get_tracer('recording-test')
+    root = tracer.start_span('session-envelope')
+    try:
+        assert record(SimpleNamespace(
+            egress_id='egress-synthetic', room_name='room-synthetic', status=0,
+            file_results=[SimpleNamespace(location='https://storage.example/call.mp4?sig=SENTINEL')],
+        ), session_span=root, tracer=tracer)
+    finally:
+        root.end()
+    provider.force_flush()
+    gate.job_registered('recording-job', traces_enabled=True, redacted=True)
+    ours = next(s for s in captured if s.name == 'livekit.recording.snapshot')
+    assert ours.attributes['livekit.recording.status'] == '0'
+    assert ours.context.trace_id == root.get_span_context().trace_id
+    if allow_pii:
+        assert ours.attributes['livekit.recording.egress_id'] == 'egress-synthetic'
+    else:
+        assert not any('pii' in k.split('.') for k in ours.attributes)
+        for key in ('egress_id', 'room_name', 'file_locations', 'stream_locations'):
+            assert 'livekit.recording.' + key not in ours.attributes
+        assert SpanAttributes.GEN_AI_CONVERSATION_ID not in ours.attributes
+    seen = next(s for s in cloud.get_finished_spans() if s.name == 'livekit.recording.snapshot')
+    assert not any('pii' in k.split('.') for k in seen.attributes)
+    assert SpanAttributes.GEN_AI_CONVERSATION_ID not in seen.attributes
+    assert not any(k.startswith('livekit.recording.') for k in seen.attributes)
+    for value in seen.attributes.values():
+        assert not any(s in str(value) for s in ('egress-synthetic', 'room-synthetic', 'storage.example', 'SENTINEL'))
+
+
+def test_native_agent_session_and_recording_share_the_explicit_session_trace(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any
+) -> None:
+    from types import SimpleNamespace
+    from opentelemetry import trace
+    import traceai_livekit
+
+    wrap = getattr(traceai_livekit, 'wrap_egress_client', None)
+    assert callable(wrap)
+    captured = []
+
+    def capture(self: Any, spans: Any) -> SpanExportResult:
+        captured.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr(_FIHTTPSpanExporter, 'export', capture)
+    provider = make_provider(batch=False)
+    assert enable_http_attribute_mapping()
+    tracer = provider.get_tracer('recording-test')
+    root = tracer.start_span('session-envelope')
+
+    class Egress:
+        async def start_room_composite_egress(self, request):
+            return SimpleNamespace(egress_id='egress-synthetic', status=0)
+
+        async def stop_egress(self, request):
+            return SimpleNamespace(egress_id='egress-synthetic', status=2)
+
+    service = wrap(Egress(), session_span=root, tracer=tracer)
+
+    async def run():
+        with trace.use_span(root, end_on_exit=False):
+            await service.start_room_composite_egress(object())
+            await _run_one_turn()
+        root.end()
+        with tracer.start_as_current_span('unrelated'):
+            await service.stop_egress(object())
+
+    try:
+        asyncio.run(run())
+    finally:
+        if root.is_recording():
+            root.end()
+    provider.force_flush()
+    native = [s for s in captured if s.name == 'agent_session']
+    recordings = [s for s in captured if s.name.startswith('livekit.recording.')]
+    assert native, 'native session linkage remains unverified without agent_session'
+    assert len(recordings) == 2
+    assert all(s.context.trace_id == root.get_span_context().trace_id for s in native + recordings)
+    assert all(s.parent.span_id == root.get_span_context().span_id for s in recordings)
+
+
+@pytest.mark.parametrize("allow_pii", [True, False], ids=["pii-allowed", "pii-disabled"])
+@pytest.mark.parametrize("withhold_conversation", [True, False], ids=["stronger-policy", "default-policy"])
+def test_recording_ambient_context_does_not_bypass_livekit_privacy(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any, allow_pii: bool,
+    withhold_conversation: bool,
+) -> None:
+    from types import SimpleNamespace
+    from fi_instrumentation import FITracer, TraceConfig, using_attributes, using_session
+    from opentelemetry import context, trace
+    from opentelemetry.sdk.trace import SpanProcessor
+    from traceai_livekit import record_egress
+
+    class RecordingPolicy(TraceConfig):
+        def mask(self, key, value):
+            if withhold_conversation and key == SpanAttributes.GEN_AI_CONVERSATION_ID:
+                return None
+            return super().mask(key, value)
+
+    monkeypatch.setenv("LIVEKIT_TELEMETRY_ALLOW_PII", "true" if allow_pii else "false")
+    captured = []
+
+    def capture(self, spans):
+        captured.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr(_FIHTTPSpanExporter, "export", capture)
+    provider = make_provider(batch=False)
+    assert enable_http_attribute_mapping()
+    raw, cloud = InMemorySpanExporter(), InMemorySpanExporter()
+    gate = _GatedSpanExporter(cloud, export_jobs={})
+    gate.open_job("recording-job-synthetic")
+
+    class AddJob(SpanProcessor):
+        def on_start(self, span, parent_context=None):
+            span.set_attribute("job_id", "recording-job-synthetic")
+
+        def on_end(self, span):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    provider.add_span_processor(AddJob())
+    provider.add_span_processor(SimpleSpanProcessor(raw))
+    provider.add_span_processor(SimpleSpanProcessor(gate))
+    tracer = provider.get_tracer("caller-supplied-scope")
+    root = tracer.start_span("session-envelope")
+    saved = trace.NonRecordingSpan(root.get_span_context())
+    root.end()
+    existing = FITracer(tracer, config=TraceConfig())
+    with tracer.start_as_current_span("unrelated"):
+        with using_session("ambient-person@example.invalid"), using_attributes(
+            user_id="ambient-user@example.invalid", metadata={"source": "ambient-synthetic"},
+        ):
+            before = context.get_current()
+            assert record_egress(
+                SimpleNamespace(egress_id="egress-synthetic", room_name="room-synthetic"),
+                session_span=saved, tracer=existing, trace_config=RecordingPolicy(),
+            )
+            assert context.get_current() is before
+    provider.force_flush()
+    gate.job_registered("recording-job-synthetic", traces_enabled=True, redacted=True)
+    ours = next(s for s in captured if s.name == "livekit.recording.snapshot")
+    other = next(s for s in raw.get_finished_spans() if s.name == "livekit.recording.snapshot")
+    seen = next(s for s in cloud.get_finished_spans() if s.name == "livekit.recording.snapshot")
+    for span in (ours, other, seen):
+        assert span.context.trace_id == saved.get_span_context().trace_id
+        assert span.parent.span_id == saved.get_span_context().span_id
+        assert "ambient-" not in str(dict(span.attributes))
+        assert SpanAttributes.SESSION_ID not in span.attributes
+        assert SpanAttributes.USER_ID not in span.attributes
+    assert SpanAttributes.GEN_AI_CONVERSATION_ID not in other.attributes
+    assert not any(k.startswith("livekit.recording.") for k in other.attributes)
+    assert SpanAttributes.GEN_AI_CONVERSATION_ID not in seen.attributes
+    assert not any("pii" in k.split(".") for k in seen.attributes)
+    assert not any(k.startswith("livekit.recording.") for k in seen.attributes)
+    if allow_pii:
+        assert ours.attributes["livekit.recording.egress_id"] == "egress-synthetic"
+    else:
+        assert not any("pii" in k.split(".") for k in ours.attributes)
+        assert "livekit.recording.egress_id" not in ours.attributes
+    if allow_pii and not withhold_conversation:
+        assert ours.attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] == "room-synthetic"
+    else:
+        assert SpanAttributes.GEN_AI_CONVERSATION_ID not in ours.attributes

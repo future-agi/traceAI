@@ -20,6 +20,15 @@
   spans from OpenTelemetry's global tracer provider and `configure_strands_tracing(tracer_provider=...)` does not
   make the provider global, so with `register()`'s default (`False`) a Strands agent sent no spans to Future AGI.
 
+## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-strands-v0.1.1...traceai-strands-v0.1.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **strands:** adapt native spans without duplicate usage ([#470](https://github.com/future-agi/traceAI/issues/470)) ([8d761fe](https://github.com/future-agi/traceAI/commit/8d761fe8090097815d3746c0918431893af160c9))
+* **strands:** preserve native completion and request metadata ([#522](https://github.com/future-agi/traceAI/issues/522)) ([6d7fb5d](https://github.com/future-agi/traceAI/commit/6d7fb5d5399d962742bc8d64434f00fdc2f41660))
+* **strands:** require strands-agents 1.24 and document early stream-close spans ([2909b4e](https://github.com/future-agi/traceAI/commit/2909b4e1882eaecb74f4c3ff60b85e8cf8a63f6d))
+
 ## [0.1.0]
 ### Feature
 - Added support for AWS Strands Agents instrumentation.

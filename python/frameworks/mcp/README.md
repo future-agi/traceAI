@@ -1,68 +1,38 @@
-# MCP OpenTelemetry Integration
+# MCP OpenTelemetry integration
 
-## Overview
-This integration provides support for using OpenTelemetry with the MCP framework. It enables tracing and monitoring of applications built with MCP.
+Connect trace context across Python MCP client and server transports. `traceAI-mcp` propagates context; it does not create spans or configure a tracer provider.
 
-## Installation
+## Native MCP 2.x tracing
 
-1. **Install traceAI MCP**
+For MCP 2.3 and later in the 2.x series, prefer the SDK's native OpenTelemetry support. It creates client request and server operation spans, including tool names, and propagates W3C trace context. Do not enable `MCPInstrumentor` alongside this native route.
+
+Follow the [Python MCP tracing guide](https://docs.futureagi.com/docs/integrations/traceai/mcp-python) for standard OpenTelemetry configuration and a runnable calculator client/server. No OpenAI API key, agent framework, or copied instrumentation wrapper is required. Configure a provider/exporter in each process; a client cannot export a remote server's spans.
+
+Native MCP error spans can contain exception text and stack traces. The `FI_HIDE_*` settings do not control native MCP telemetry. Use safe tool names and error messages, and apply your Collector's redaction policy when needed.
+
+## MCP 1.x context propagation
+
+Use Python 3.11–3.13. Install the published package and the MCP 1.x SDK:
 
 ```bash
-pip install traceAI-mcp traceAI-openai
+pip install "traceAI-mcp>=0.1.3" "mcp>=1.30.0,<2"
 ```
 
-
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+Keep your existing application, agent, or model instrumentation to create spans. Configure its provider/exporter in both client and server processes. Enable MCP propagation in each process before importing transport functions:
 
 ```python
-import os
-
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-```
-
-## Quickstart
-
-### Register Tracer Provider
-Set up the trace provider to establish the observability pipeline. The trace provider:
-
-```python
-from fi_instrumentation import register
-from fi_instrumentation.fi_types import ProjectType
-
-trace_provider = register(
-    project_type=ProjectType.OBSERVE,
-    project_name="my-mcp-project"
-)
-```
-
-### Configure MCP Instrumentation
-Set up your MCP Instrumentation with built-in observability.
-
-```python
-from traceai_openai import OpenAIInstrumentor
 from traceai_mcp import MCPInstrumentor
 
-OpenAIInstrumentor().instrument(tracer_provider=trace_provider)
-MCPInstrumentor().instrument(tracer_provider=tracer_provider)
+MCPInstrumentor().instrument()
 ```
 
-Start your MCP server as usual. TraceAI will automatically trace all MCP requests which will be visible in the FutureAGI platform.
+The instrumentor connects existing spans; installing it alone will not create a request or tool span tree. It requires `mcp>=1.30.0`; new MCP 2.x setups should use the native route instead.
 
-### MCP 1.8.1 dependency compatibility
+### Upgrading older MCP 1.x applications
 
-MCP 1.8.1 uses a private Pydantic API that is absent in Pydantic 2.14.2.
-If you must stay on MCP 1.8.1, pin its compatible Pydantic dependency:
+Upgrade the MCP SDK to at least 1.30.0 in both client and server environments. MCP 1.8.1 can close the session when a request is cancelled, preventing subsequent requests from completing. Pinning Pydantic resolves an import incompatibility in that older SDK, but does not fix cancellation. SDK versions below 1.30.0 are no longer supported by this instrumentor.
 
-```bash
-pip install "traceAI-mcp" "mcp==1.8.1" "pydantic==2.11.10"
-```
-
-This pin applies only to MCP 1.8.1; do not impose it on newer SDK versions.
-
-### Instrumentation lifecycle
+## Instrumentation lifecycle
 
 `uninstrument()` disables this instrumentor's per-message propagation on
 already-instrumented open streams as well as on newly opened transports; it

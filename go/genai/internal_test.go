@@ -43,22 +43,24 @@ func TestModelFromPath(t *testing.T) {
 	}
 }
 
-func TestGenerateMethodMatchesOnlyGenerateCalls(t *testing.T) {
+func TestTracedMethodMatchesSupportedCalls(t *testing.T) {
 	for path, want := range map[string]bool{
-		"/v1beta/models/m:generateContent":       true,
-		"/v1beta/models/m:streamGenerateContent": true,
-		"/v1beta/models/m:countTokens":           false,
-		"/v1beta/models/m:embedContent":          false,
-		"/v1beta/models/m":                       false,
-		"/v1beta/files":                          false,
+		"/v1beta/models/m:generateContent":        true,
+		"/v1beta/models/m:streamGenerateContent":  true,
+		"/v1beta/models/m:countTokens":            false,
+		"/v1beta/models/m:embedContent":           true,
+		"/v1beta/models/m:batchEmbedContents":     true,
+		"/v1beta/models/m:asyncBatchEmbedContent": false,
+		"/v1beta/models/m":                        false,
+		"/v1beta/files":                           false,
 	} {
 		req, _ := http.NewRequest(http.MethodPost, "http://x"+path+"?alt=sse", nil)
-		if _, ok := generateMethod(req); ok != want {
+		if _, ok := tracedMethod(req); ok != want {
 			t.Errorf("%s: %v", path, ok)
 		}
 	}
 	req, _ := http.NewRequest(http.MethodGet, "http://x/v1beta/models/m:generateContent", nil)
-	if _, ok := generateMethod(req); ok {
+	if _, ok := tracedMethod(req); ok {
 		t.Error("GET must not match")
 	}
 }
@@ -125,9 +127,9 @@ func TestMediaParts(t *testing.T) {
 	}
 
 	acc := newAccumulator()
-	acc.addResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"here"},{"inlineData":{"mimeType":"image/png","data":"GENERATEDBYTES"}}]}}]}`))
-	for _, kv := range acc.attributes() {
-		if strings.Contains(kv.Value.Emit(), "GENERATEDBYTES") {
+	acc.addResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"here"},{"inlineData":{"mimeType":"image/png","data":"R0VORVJBVEVEQllURVM="}}]}}]}`))
+	for _, kv := range acc.attributes(TraceConfig{}) {
+		if strings.Contains(kv.Value.Emit(), "R0VORVJBVEVEQllURVM=") {
 			t.Errorf("generated image bytes in %s", kv.Key)
 		}
 	}
@@ -140,7 +142,7 @@ func TestThoughtsSkippedAndStreamTextJoined(t *testing.T) {
 	acc.addResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true},{"text":"Hel"}]}}]}`))
 	acc.addResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"lo"},{"text":"","thoughtSignature":"c2ln"}]},"finishReason":"STOP"}]}`))
 	a := map[string]string{}
-	for _, kv := range acc.attributes() {
+	for _, kv := range acc.attributes(TraceConfig{}) {
 		a[string(kv.Key)] = kv.Value.Emit()
 	}
 	if a[OutputValue] != "Hello" || a[GenAIOutputMessages+".0."+MessageContent] != "Hello" {
@@ -157,7 +159,7 @@ func TestUsageMapping(t *testing.T) {
 	acc := newAccumulator()
 	acc.addResponse([]byte(`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"totalTokenCount":20,"thoughtsTokenCount":6,"cachedContentTokenCount":3}}`))
 	a := map[string]string{}
-	for _, kv := range acc.attributes() {
+	for _, kv := range acc.attributes(TraceConfig{}) {
 		a[string(kv.Key)] = kv.Value.Emit()
 	}
 	for k, v := range map[string]string{
@@ -170,7 +172,7 @@ func TestUsageMapping(t *testing.T) {
 	}
 	acc = newAccumulator()
 	acc.addResponse([]byte(`{"usageMetadata":{"promptTokenCount":5}}`))
-	for _, kv := range acc.attributes() {
+	for _, kv := range acc.attributes(TraceConfig{}) {
 		if kv.Key == GenAIUsageOutputTokens || kv.Key == GenAIUsageTotalTokens {
 			t.Errorf("%s written without a count in the response", kv.Key)
 		}

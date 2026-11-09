@@ -2,16 +2,17 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
   context,
   trace,
   SpanKind,
-  SpanStatusCode,
   Span,
+  SpanStatusCode,
   Attributes,
+  TracerProvider,
 } from "@opentelemetry/api";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { VERSION } from "./version";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 
@@ -30,14 +31,28 @@ const VectorDBConventions = {
   DB_VECTOR_DELETE_COUNT: "db.vector.delete.count",
   DB_VECTOR_COLLECTION_NAME: "db.vector.collection.name",
 } as const;
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, generateTraceConfig } from "@traceai/fi-core";
 
-const MODULE_NAME = "chromadb";
+// Suppression must also work when the caller uses a BasicTracerProvider without
+// installing an OpenTelemetry context manager. Do not change global OTel state.
+const activeCollection = new AsyncLocalStorage<{
+  instance: object;
+  operation: string;
+  owner: object;
+}>();
+const wrappedFunctions = new WeakSet<Function>();
+let patchCount = 0;
 
-let _isPatched = false;
+type Patch = {
+  target: any;
+  name: string;
+  descriptor: PropertyDescriptor;
+  wrapper: Function;
+  active: boolean;
+};
 
-export function isPatched() {
-  return _isPatched;
+export function isPatched(): boolean {
+  return patchCount > 0;
 }
 
 /**
@@ -64,7 +79,11 @@ export interface ChromaDBInstrumentationConfig extends InstrumentationConfig {
 export class ChromaDBInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private _chromaConfig: ChromaDBInstrumentationConfig;
+  private hideInputs!: boolean;
+  // Lazy initialization: InstrumentationBase calls enable() from its constructor.
+  private patches?: Patch[];
+  private modules?: Set<any>;
+  private collectionPrototypes?: Set<any>;
 
   constructor({
     instrumentationConfig,
@@ -79,21 +98,39 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig)
     );
     this._traceConfig = traceConfig;
-    this._chromaConfig = instrumentationConfig || {};
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    const traceConfig = generateTraceConfig(this._traceConfig);
+    this.hideInputs = traceConfig.hideInputs;
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   public override enable(): void {
+    this.refreshTracer();
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    this.modules?.forEach((module) => this.patch(module));
+    this.collectionPrototypes?.forEach((prototype) => this.patchCollection(prototype));
+  }
+
+  public override disable(): void {
+    super.disable();
+    // The base class only unpatches modules discovered by its import hooks.
+    // Manual modules and collection implementations discovered by factories
+    // must be restored as well.
+    this.unpatch();
   }
 
   protected init() {
     return new InstrumentationNodeModuleDefinition(
       "chromadb",
-      ["^1.0.0"],
+      ["^1.1.0", "^2.0.0", "^3.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this)
     );
@@ -102,100 +139,188 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
   /**
    * Manually instruments the ChromaDB module
    */
-  manuallyInstrument(module: any) {
+  manuallyInstrument(module: any): void {
     this.patch(module);
   }
 
-  private patch(moduleExports: any, moduleVersion?: string) {
-    if (_isPatched) {
-      return moduleExports;
+  private patch(moduleExports: any) {
+    if (!moduleExports) return moduleExports;
+    (this.modules ??= new Set()).add(moduleExports);
+    if (!this.isEnabled()) return moduleExports;
+
+    // Collection is a runtime export in v1/v2, but type-only in v3.
+    // CollectionHandle and the factories cover v3's unexported implementations.
+    for (const name of ["Collection", "CollectionHandle"]) {
+      this.patchCollection(moduleExports[name]?.prototype);
     }
-
-    const instrumentation = this;
-
-    // Ensure fiTracer is properly initialized
-    if (!instrumentation.fiTracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig,
-      });
-    }
-
-    // Patch Collection class methods
-    if (moduleExports.Collection) {
-      const CollectionPrototype = moduleExports.Collection.prototype;
-
-      // Patch add method
-      if (CollectionPrototype.add) {
-        const originalAdd = CollectionPrototype.add;
-        CollectionPrototype.add = function (this: any, params: any) {
-          return instrumentation.wrapAdd(originalAdd, this, params);
-        };
-      }
-
-      // Patch query method
-      if (CollectionPrototype.query) {
-        const originalQuery = CollectionPrototype.query;
-        CollectionPrototype.query = function (this: any, params: any) {
-          return instrumentation.wrapQuery(originalQuery, this, params);
-        };
-      }
-
-      // Patch get method
-      if (CollectionPrototype.get) {
-        const originalGet = CollectionPrototype.get;
-        CollectionPrototype.get = function (this: any, params?: any) {
-          return instrumentation.wrapGet(originalGet, this, params);
-        };
-      }
-
-      // Patch update method
-      if (CollectionPrototype.update) {
-        const originalUpdate = CollectionPrototype.update;
-        CollectionPrototype.update = function (this: any, params: any) {
-          return instrumentation.wrapUpdate(originalUpdate, this, params);
-        };
-      }
-
-      // Patch upsert method
-      if (CollectionPrototype.upsert) {
-        const originalUpsert = CollectionPrototype.upsert;
-        CollectionPrototype.upsert = function (this: any, params: any) {
-          return instrumentation.wrapUpsert(originalUpsert, this, params);
-        };
-      }
-
-      // Patch delete method
-      if (CollectionPrototype.delete) {
-        const originalDelete = CollectionPrototype.delete;
-        CollectionPrototype.delete = function (this: any, params?: any) {
-          return instrumentation.wrapDelete(originalDelete, this, params);
-        };
-      }
-
-      // Patch count method
-      if (CollectionPrototype.count) {
-        const originalCount = CollectionPrototype.count;
-        CollectionPrototype.count = function (this: any) {
-          return instrumentation.wrapCount(originalCount, this);
-        };
-      }
-
-      // Patch peek method
-      if (CollectionPrototype.peek) {
-        const originalPeek = CollectionPrototype.peek;
-        CollectionPrototype.peek = function (this: any, params?: any) {
-          return instrumentation.wrapPeek(originalPeek, this, params);
-        };
+    for (const name of ["ChromaClient", "CloudClient"]) {
+      const prototype = moduleExports[name]?.prototype;
+      for (const factory of [
+        "createCollection", "getCollection", "getOrCreateCollection",
+        "getCollectionById", "getCollectionByCrn", "getCollections",
+        "listCollections", "collection",
+      ]) {
+        this.patchFactory(prototype, factory);
       }
     }
-
-    _isPatched = true;
     return moduleExports;
   }
 
-  private unpatch(moduleExports: any, moduleVersion?: string) {
-    _isPatched = false;
+  private patchCollection(prototype: any): void {
+    if (!prototype || prototype === Object.prototype) return;
+    (this.collectionPrototypes ??= new Set()).add(prototype);
+    const handlers = {
+      add: this.wrapAdd, query: this.wrapQuery, get: this.wrapGet,
+      update: this.wrapUpdate, upsert: this.wrapUpsert, delete: this.wrapDelete,
+      count: this.wrapCount, peek: this.wrapPeek, search: this.wrapSearch,
+    };
+    const instrumentation = this;
+    for (const [name, handler] of Object.entries(handlers)) {
+      this.patchMethod(prototype, name, (original, owner) => function (this: any, ...args: any[]) {
+        const active = activeCollection.getStore();
+        // Suppress only known SDK delegation: a handle calling its base method,
+        // or peek calling get. User callbacks may issue independent operations
+        // on the same collection (including another query).
+        const delegated = active && active.instance === this && (
+          (active.operation === name && Object.prototype.isPrototypeOf.call(owner, active.owner)) ||
+          (active.operation === "peek" && name === "get")
+        );
+        return activeCollection.run({ instance: this, operation: name, owner }, () => {
+          if (delegated) return original.apply(this, args);
+          const params = instrumentation.getOperationParams(name, args);
+          return handler.call(instrumentation, () => original.apply(this, args), this, params);
+        });
+      });
+    }
+    this.patchFactory(prototype, "fork");
+  }
+
+  private patchFactory(prototype: any, name: string): void {
+    const instrumentation = this;
+    this.patchMethod(prototype, name, (original) => function (this: any, ...args: any[]) {
+      const result = original.apply(this, args);
+      const instrumentResult = (value: any) => {
+        // A factory may finish after disable(). Never install late wrappers.
+        if (instrumentation.isEnabled()) {
+          for (const collection of Array.isArray(value) ? value : [value]) {
+            if (collection && typeof collection === "object") {
+              instrumentation.patchCollection(Object.getPrototypeOf(collection));
+            }
+          }
+        }
+        return value;
+      };
+      // collection(id) is synchronous; do not turn it into a Promise.
+      return result && typeof result.then === "function"
+        ? result.then(instrumentResult)
+        : instrumentResult(result);
+    });
+  }
+
+  private patchMethod(
+    prototype: any,
+    name: string,
+    wrap: (original: Function, owner: object) => Function
+  ): void {
+    // Patch the owner, not an inherited copy. This also instruments unexported
+    // base classes without retaining every collection instance in memory.
+    let target = prototype;
+    while (target && target !== Object.prototype) {
+      const descriptor = Object.getOwnPropertyDescriptor(target, name);
+      if (!descriptor) {
+        target = Object.getPrototypeOf(target);
+        continue;
+      }
+      const original = descriptor.value;
+      if (typeof original !== "function" || wrappedFunctions.has(original) ||
+          (!descriptor.configurable && !descriptor.writable)) return;
+      const wrapped = wrap(original, target);
+      const instrumentation = this;
+      const patch: Patch = {
+        target, name, descriptor, active: true,
+        wrapper: function (this: any, ...args: any[]) {
+          return patch.active && instrumentation.isEnabled()
+            ? wrapped.apply(this, args)
+            : original.apply(this, args);
+        },
+      };
+      Object.defineProperty(target, name, { ...descriptor, value: patch.wrapper });
+      wrappedFunctions.add(patch.wrapper);
+      (this.patches ??= []).push(patch);
+      patchCount++;
+      return;
+    }
+  }
+
+  private unpatch(_moduleExports?: any): void {
+    for (const patch of (this.patches ?? []).reverse()) {
+      patch.active = false;
+      // Do not remove a wrapper installed by another library after ours.
+      if (patch.target[patch.name] === patch.wrapper) {
+        Object.defineProperty(patch.target, patch.name, patch.descriptor);
+      }
+      patchCount--;
+    }
+    this.patches = [];
+  }
+
+  /** Normalize metadata only; the original SDK always receives its exact args. */
+  private getOperationParams(operation: string, args: any[]): any {
+    const first = args[0];
+    if (operation === "peek") {
+      return { limit: (typeof first === "number" ? first : first?.limit) ?? 10 };
+    }
+    if (first !== undefined && !Array.isArray(first) && typeof first !== "string") {
+      if (first && ["add", "update", "upsert", "get", "delete"].includes(operation)) {
+        // Chroma v1/v2 object-style APIs also accept single records. Normalize
+        // a metadata copy, never the parameters passed to the SDK.
+        return {
+          ...first,
+          ids: typeof first.ids === "string" ? [first.ids] : first.ids,
+          embeddings: typeof first.embeddings?.[0] === "number" ? [first.embeddings] : first.embeddings,
+          documents: typeof first.documents === "string" ? [first.documents] : first.documents,
+        };
+      }
+      return first;
+    }
+    switch (operation) {
+      case "query":
+        return { nResults: args[1], where: args[2] };
+      case "add":
+      case "update":
+      case "upsert":
+        return {
+          ids: typeof first === "string" ? [first] : first,
+          embeddings: typeof args[1]?.[0] === "number" ? [args[1]] : args[1],
+          documents: typeof args[3] === "string" ? [args[3]] : args[3],
+        };
+      case "get":
+        return { ids: first, where: args[1], limit: args[2] };
+      case "delete":
+        return { ids: first, where: args[1] };
+      default:
+        return first;
+    }
+  }
+
+  private recordError(span: Span, error: unknown): void {
+    // JavaScript promises can reject with any value, not just Error objects.
+    // Do not dereference/serialize arbitrary rejections or replace their identity.
+    const exception = error instanceof Error || typeof error === "string" ? error : { name: "Error" };
+    span.recordException(exception);
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: error instanceof Error ? error.message : typeof error === "string" ? error : undefined,
+    });
+  }
+
+  private recordResultCount(span: Span, result: any): void {
+    // Early Chroma get/peek return Axios envelopes; newer SDKs return data.
+    const ids = result?.ids ?? result?.data?.ids;
+    if (Array.isArray(ids)) {
+      span.setAttribute(VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
+        ids.reduce((count: number, row: unknown) => count + (Array.isArray(row) ? row.length : 1), 0));
+    }
   }
 
   private getCollectionName(instance: any): string {
@@ -209,8 +334,10 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     return {
       [VectorDBConventions.DB_SYSTEM]: "chromadb",
       [VectorDBConventions.DB_OPERATION_NAME]: operation,
-      [VectorDBConventions.DB_NAMESPACE]: collectionName,
-      [VectorDBConventions.DB_VECTOR_COLLECTION_NAME]: collectionName,
+      ...(!this.hideInputs ? {
+        [VectorDBConventions.DB_NAMESPACE]: collectionName,
+        [VectorDBConventions.DB_VECTOR_COLLECTION_NAME]: collectionName,
+      } : {}),
       [SemanticConventions.FI_SPAN_KIND]: "VECTOR_DB",
     };
   }
@@ -251,9 +378,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -268,10 +394,10 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     const collectionName = this.getCollectionName(instance);
     const attributes = this.getCommonAttributes("query", collectionName);
 
-    const nResults = params?.nResults || params?.n_results || 10;
+    const nResults = params?.nResults ?? params?.n_results ?? 10;
     attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] = nResults;
 
-    if (params?.where) {
+    if (!this.hideInputs && params?.where) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_FILTER] =
         JSON.stringify(params.where);
     }
@@ -294,22 +420,39 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      // Add result attributes
-      if (result?.ids) {
-        const resultCount = Array.isArray(result.ids[0])
-          ? result.ids[0].length
-          : result.ids.length;
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          resultCount
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
+      throw error;
+    } finally {
+      span.end();
+    }
+  }
+
+  private async wrapSearch(
+    original: Function,
+    instance: any,
+    searches: any
+  ): Promise<any> {
+    const attributes = this.getCommonAttributes("search", this.getCollectionName(instance));
+    attributes["db.vector.search.count"] = Array.isArray(searches) ? searches.length : 1;
+    const span = this.fiTracer.startSpan("chroma search", {
+      kind: SpanKind.CLIENT,
+      attributes,
+    });
+    try {
+      const result = await context.with(
+        trace.setSpan(context.active(), span),
+        () => original.call(instance, searches)
+      );
+      this.recordResultCount(span, result);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -328,7 +471,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       attributes["db.vector.get.ids_count"] = params.ids.length;
     }
 
-    if (params?.limit) {
+    if (params?.limit != null) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] =
         params.limit;
     }
@@ -344,18 +487,12 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      if (result?.ids) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.ids.length
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -385,9 +522,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -422,9 +558,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -456,9 +591,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
       );
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -489,9 +623,8 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();
@@ -506,7 +639,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     const collectionName = this.getCollectionName(instance);
     const attributes = this.getCommonAttributes("peek", collectionName);
 
-    if (params?.limit) {
+    if (params?.limit != null) {
       attributes[VectorDBConventions.DB_VECTOR_QUERY_TOP_K] =
         params.limit;
     }
@@ -522,18 +655,12 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
         () => original.call(instance, params)
       );
 
-      if (result?.ids) {
-        span.setAttribute(
-          VectorDBConventions.DB_VECTOR_RESULTS_COUNT,
-          result.ids.length
-        );
-      }
+      this.recordResultCount(span, result);
 
       span.setStatus({ code: SpanStatusCode.OK });
       return result;
-    } catch (error: any) {
-      span.recordException(error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    } catch (error: unknown) {
+      this.recordError(span, error);
       throw error;
     } finally {
       span.end();

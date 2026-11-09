@@ -1,0 +1,64 @@
+{
+  "name": "bedrock-invoke-anthropic-cache",
+  "request": {
+    "method": "POST",
+    "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-fixture/invoke",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "anthropic_version": "bedrock-2023-05-31",
+      "max_tokens": 100,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "msg-br",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 15,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 100,
+        "cache_creation_input_tokens": 20,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 5,
+          "ephemeral_1h_input_tokens": 15
+        }
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat anthropic.claude-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.usage.input_tokens": 135,
+      "gen_ai.usage.output_tokens": 4,
+      "gen_ai.usage.total_tokens": 139,
+      "gen_ai.usage.cache_read_tokens": 100,
+      "gen_ai.usage.cache_write_tokens": 20
+    },
+    "absent": [
+      "gen_ai.usage.output_tokens.reasoning",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

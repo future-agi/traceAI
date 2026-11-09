@@ -29,6 +29,8 @@ VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
 # INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
 TS_VERSION_RE = re.compile(r'^\s*(?:export\s+)?const\s+(?:VERSION|INSTRUMENTATION_VERSION)\s*=\s*["\']([^"\']+)["\']', re.M)
 MAVEN_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+# A version a pom outside the reactor pins with a release-please marker, e.g. the Spring AI consumer.
+JAVA_MARKED_RE = re.compile(r">([^<>\s]+)</[\w.:-]+>\s*<!--\s*x-release-please-version\s*-->")
 
 
 def pypi_normalize(name: str) -> str:
@@ -65,6 +67,17 @@ def declared_ts_versions(pkg_dir: Path) -> dict[str, str]:
         if "__tests__" in rel.parts or f.name.endswith((".test.ts", ".spec.ts", ".d.ts")):
             continue
         if match := TS_VERSION_RE.search(f.read_text()):
+            out[str(rel)] = match.group(1)
+    return out
+
+
+def declared_java_versions(java: Path) -> dict[str, str]:
+    out = {}
+    for f in sorted(java.rglob("pom.xml")):
+        rel = f.relative_to(java)
+        if "target" in rel.parts:
+            continue
+        if match := JAVA_MARKED_RE.search(f.read_text()):
             out[str(rel)] = match.group(1)
     return out
 
@@ -131,7 +144,8 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
             artifacts.append(child.findtext("m:artifactId", namespaces=MAVEN_NS))
         out.append({"ecosystem": "java", "name": f"{group}:{artifact}", "version": version,
                     "dir": "java", "tag": f"java-v{version}", "core": False,
-                    "group": group, "artifacts": artifacts, "changelog": "java/CHANGELOG.md"})
+                    "group": group, "artifacts": artifacts, "changelog": "java/CHANGELOG.md",
+                    "declared": declared_java_versions(root / "java")})
     manifest_path = root / ".release-please-manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     for f in sorted((root / "go").glob("*/go.mod")):
@@ -148,6 +162,17 @@ def other_packages(root: Path = REPO_ROOT) -> list[dict]:
                     "dir": str(f.parent.relative_to(root)), "project": str(f.relative_to(root)),
                     "tag": f"nuget-{name}-v{version}", "core": False,
                     "changelog": str(f.parent.relative_to(root)) + "/CHANGELOG.md"})
+    # Ruby is inventoried for release-please coverage but intentionally held
+    # from the five-ecosystem publisher until a RubyGems publisher is configured.
+    ruby_version = root / "ruby/roast/lib/traceai/roast/version.rb"
+    if ruby_version.is_file():
+        match = re.search(r'^\s*VERSION\s*=\s*["\']([^"\']+)["\']', ruby_version.read_text(), re.M)
+        if not match:
+            raise ValueError(f"{ruby_version}: missing Ruby gem VERSION")
+        version = match.group(1)
+        out.append({"ecosystem": "ruby", "name": "traceai-roast", "version": version,
+                    "dir": "ruby/roast", "tag": f"ruby-traceai-roast-v{version}",
+                    "core": False, "changelog": None})
     return out
 
 
@@ -164,7 +189,8 @@ def consistency_problems(packages: list[dict]) -> list[str]:
         seen[key] = p["dir"]
         for rel, v in p.get("declared", {}).items():
             if v != p["version"]:
-                symbol, manifest = ("VERSION", "package.json") if p["ecosystem"] == "typescript" else ("__version__", "pyproject.toml")
+                symbol, manifest = {"typescript": ("VERSION", "package.json"), "java": ("the marked traceAI version", "java/pom.xml")}.get(
+                    p["ecosystem"], ("__version__", "pyproject.toml"))
                 problems.append(f"{p['dir']}/{rel}: {symbol} is {v} but {manifest} says {p['version']}")
     return problems
 
@@ -185,7 +211,8 @@ def coverage_problems(root: Path, packages: list[dict]) -> list[str]:
             scoped_rel = str(f.relative_to(root / path))
             if "x-release-please-version" not in f.read_text():
                 problems.append(f"{f.relative_to(root)}: missing release-please version marker")
-            if scoped_rel not in cfg.get(path, {}).get("extra-files", []):
+            extra_files = {e if isinstance(e, str) else e.get("path") for e in cfg.get(path, {}).get("extra-files", [])}
+            if scoped_rel not in extra_files:
                 problems.append(f"{p['dir']}/{rel}: missing release-please extra-file")
     return problems
 
@@ -201,11 +228,11 @@ def _get_json(url: str) -> dict | None:
         raise  # Authentication failures, rate limits and server errors must never mean 'not published'.
 
 
-def published_versions(p: dict) -> set[str] | None:
+def published_versions(p: dict, *, strict: bool = True) -> set[str] | None:
     eco = p["ecosystem"]
     if eco == "python":
         d = _get_json(f"https://pypi.org/pypi/{p['name']}/json")
-        return set(d["releases"]) if d else None
+        return {version for version, files in d["releases"].items() if files} if d else None
     if eco == "typescript":
         d = _get_json("https://registry.npmjs.org/" + p["name"].replace("/", "%2F"))
         return set(d.get("versions", {})) if d else None
@@ -219,16 +246,26 @@ def published_versions(p: dict) -> set[str] | None:
         return {p["version"]} if d else None
     if eco == "java":
         # Query canonical repository files rather than the eventually consistent search index.
-        # One reactor publishes together; do not skip if any module is missing.
-        for artifact in p["artifacts"]:
+        # Verification (strict) needs every reactor artifact served. The plan's skip decision
+        # (strict=False) needs only the parent: the reactor is one Central deployment, Central never
+        # accepts a second upload of a published version, and a module added later ships with the
+        # next reactor version.
+        def on_central(artifact):
             url = f"https://repo.maven.apache.org/maven2/{p['group'].replace('.', '/')}/{artifact}/{p['version']}/{artifact}-{p['version']}.pom"
             try:
                 with urllib.request.urlopen(url, timeout=30):
-                    pass
+                    return True
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    return None
+                    return False
                 raise
+        parent, *modules = p["artifacts"]  # other_packages lists the reactor parent first
+        if not on_central(parent):
+            return None
+        if not strict:
+            return {p["version"]}
+        if any(not on_central(a) for a in modules):
+            return None
         return {p["version"]}
     raise ValueError(f"Unknown ecosystem: {eco}")
 
@@ -247,14 +284,14 @@ def plan(packages: list[dict], config: dict, *, offline: bool = False, only: set
             out["skipped"].append({"name": p["name"], "reason": "Central requires com.futureagi release coordinates; merge the Java release-profile PR first"})
             continue
         if not offline:
-            have = published_versions(p)
+            have = published_versions(p, strict=False)
             published = have is not None and p["version"] in have
             if published and not include_published:
                 out["skipped"].append({"name": p["name"], "reason": f"{p['version']} is already published"})
                 continue
             p = {**p, "first_release": have is None, "registry_published": published}
             if p["ecosystem"] == "python":
-                p["pypi_bootstrap"] = have is None and p["name"] in set(config.get("pypi_bootstrap_token", []))
+                p["pypi_bootstrap"] = p["name"] in set(config.get("pypi_bootstrap_token", []))
         out[p["ecosystem"]].append({k: v for k, v in p.items() if k not in ("declared", "ecosystem")})
     for eco in ECOSYSTEMS:
         out[eco].sort(key=lambda e: (not e["core"], e["name"].lower()))

@@ -518,9 +518,11 @@ def test_no_secret_in_the_export_or_output(recipe_run: dict[str, Any]) -> None:
         ("/v1/traces", ("/v1/traces/v1/traces", 404)),
         # fi-collector also serves /tracer/v1/traces.
         ("/tracer", ("/tracer/v1/traces", 200)),
+        ("/tracer/", ("/tracer/v1/traces", 200)),
+        ("/tracer/v1/traces", ("/tracer/v1/traces/v1/traces", 404)),
     ],
 )
-def test_endpoint_is_the_origin_and_v1_traces_is_appended(
+def test_endpoint_preserves_the_base_path_and_appends_v1_traces(
     tmp_path: Path, suffix: str, expected: tuple[str, int]
 ) -> None:
     result, calls, guard_attempts = _run_against_recorder(tmp_path, suffix)
@@ -807,7 +809,11 @@ def test_a_later_otlp_exporter_in_the_process_sends_the_future_agi_keys(tmp_path
 @pytest.mark.parametrize(
     ("unset", "message"),
     [
-        ("OTEL_EXPORTER_OTLP_ENDPOINT", "Set OTEL_EXPORTER_OTLP_ENDPOINT"),
+        (
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "Set OTEL_EXPORTER_OTLP_ENDPOINT to your collector base URL "
+            "(https://api.futureagi.com/tracer for Cloud), without /v1/traces.",
+        ),
         ("OTEL_RESOURCE_ATTRIBUTES", "Set OTEL_RESOURCE_ATTRIBUTES"),
         ("FI_API_KEY", "Set FI_API_KEY and FI_SECRET_KEY"),
         ("FI_SECRET_KEY", "Set FI_API_KEY and FI_SECRET_KEY"),
@@ -1023,6 +1029,33 @@ def test_readme_run_block_sets_what_app_py_checks(monkeypatch: pytest.MonkeyPatc
     # The parser src/app.py checks the project with.
     monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", exports["OTEL_RESOURCE_ATTRIBUTES"])
     assert OTELResourceDetector().detect().attributes.get("project_name")
+
+
+def test_readme_cloud_endpoint_preserves_the_base_path_on_the_wire(tmp_path: Path) -> None:
+    """Use the documented base path with a loopback collector, never Cloud."""
+    (block,) = _code_blocks(_readme_section("Run"), "bash")
+    exports = dict(re.findall(r'^export (\w+)="([^"]*)"', block, flags=re.MULTILINE))
+    endpoint = urlsplit(exports["OTEL_EXPORTER_OTLP_ENDPOINT"])
+    assert (endpoint.scheme, endpoint.netloc, endpoint.path) == (
+        "https",
+        "api.futureagi.com",
+        "/tracer",
+    )
+    with Receiver() as receiver, FakeOpenAI(ANSWER) as fake:
+        result, guard_attempts = _launch(tmp_path, APP, receiver.origin + endpoint.path, fake)
+        requests, spans = receiver.requests(), receiver.spans()
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert {request["path"] for request in requests} == {"/tracer/v1/traces"}
+    assert set(_by_name(spans)) == {LLM_SPAN, HTTP_SPAN}
+    for request in requests:
+        assert request["headers"]["x-api-key"] == FI_API_KEY
+        assert request["headers"]["x-secret-key"] == FI_SECRET_KEY
+        assert all(resource["project_name"] == PROJECT for resource in request["resource_attributes"])
+    payload = json.dumps(spans)
+    for marker in (*CONTENT_MARKERS, FI_API_KEY, FI_SECRET_KEY, OPENAI_KEY):
+        assert marker not in payload
 
 
 def _collector_aliases() -> dict[str, Any]:

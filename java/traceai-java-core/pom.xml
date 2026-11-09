@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.2</version>
     </parent>
 
     <artifactId>traceai-java-core</artifactId>
@@ -57,7 +55,22 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
+        <!-- Only needed when the application explicitly imports the Spring privacy configuration.
+             Provided scope keeps Spring out of non-Spring consumers; Boot manages its runtime version. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>6.1.2</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Testing -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.11.1-alpha</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

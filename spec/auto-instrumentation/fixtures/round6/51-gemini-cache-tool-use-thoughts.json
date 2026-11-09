@@ -1,0 +1,67 @@
+{
+  "name": "gemini-cache-tool-use-thoughts",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Hi"
+              }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 12,
+        "toolUsePromptTokenCount": 3,
+        "cachedContentTokenCount": 10,
+        "candidatesTokenCount": 5,
+        "thoughtsTokenCount": 8,
+        "totalTokenCount": 28
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "generate_content gemini-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.usage.input_tokens": 15,
+      "gen_ai.usage.output_tokens": 13,
+      "gen_ai.usage.total_tokens": 28,
+      "gen_ai.usage.cache_read_tokens": 10,
+      "gen_ai.usage.output_tokens.reasoning": 8
+    },
+    "absent": [
+      "gen_ai.usage.cache_write_tokens",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

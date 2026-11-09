@@ -3,7 +3,6 @@ package traceaigenai
 import (
 	"encoding/json"
 	"sort"
-	"strconv"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -12,18 +11,31 @@ import (
 // pointer: the API leaves zero counts out, and an absent count is never
 // written as 0.
 type usageMetadata struct {
-	PromptTokenCount        *int64 `json:"promptTokenCount"`
-	CandidatesTokenCount    *int64 `json:"candidatesTokenCount"`
-	TotalTokenCount         *int64 `json:"totalTokenCount"`
-	ThoughtsTokenCount      *int64 `json:"thoughtsTokenCount"`
-	CachedContentTokenCount *int64 `json:"cachedContentTokenCount"`
+	PromptTokenCount           *int64            `json:"promptTokenCount"`
+	ToolUsePromptTokenCount    *int64            `json:"toolUsePromptTokenCount"`
+	CandidatesTokenCount       *int64            `json:"candidatesTokenCount"`
+	TotalTokenCount            *int64            `json:"totalTokenCount"`
+	ThoughtsTokenCount         *int64            `json:"thoughtsTokenCount"`
+	CachedContentTokenCount    *int64            `json:"cachedContentTokenCount"`
+	PromptTokensDetails        []*modalityTokens `json:"promptTokensDetails"`
+	CandidatesTokensDetails    []*modalityTokens `json:"candidatesTokensDetails"`
+	CacheTokensDetails         []*modalityTokens `json:"cacheTokensDetails"`
+	ToolUsePromptTokensDetails []*modalityTokens `json:"toolUsePromptTokensDetails"`
+}
+
+type modalityTokens struct {
+	Modality   string `json:"modality"`
+	TokenCount *int64 `json:"tokenCount"`
 }
 
 type generateResponse struct {
 	Candidates []struct {
-		Index        *int    `json:"index"`
-		Content      content `json:"content"`
-		FinishReason string  `json:"finishReason"`
+		Index              *int                `json:"index"`
+		Content            content             `json:"content"`
+		FinishReason       string              `json:"finishReason"`
+		GroundingMetadata  *groundingMetadata  `json:"groundingMetadata"`
+		CitationMetadata   *citationMetadata   `json:"citationMetadata"`
+		URLContextMetadata *urlContextMetadata `json:"urlContextMetadata"`
 	} `json:"candidates"`
 	UsageMetadata *usageMetadata  `json:"usageMetadata"`
 	ModelVersion  string          `json:"modelVersion"`
@@ -76,10 +88,13 @@ type candidateAcc struct {
 // accumulator collects one GenerateContentResponse, either from a full
 // response body or from the chunks of a stream.
 type accumulator struct {
-	model, id  string
-	candidates map[int]*candidateAcc
-	usage      *usageMetadata
-	streamErr  *apiError
+	model, id    string
+	candidates   map[int]*candidateAcc
+	usage        *usageMetadata
+	grounding    groundingCapture
+	streamErr    *apiError
+	decodeFailed bool
+	stream       bool
 }
 
 func newAccumulator() *accumulator {
@@ -87,8 +102,14 @@ func newAccumulator() *accumulator {
 }
 
 func (a *accumulator) addResponse(b []byte) {
+	normalized, err := normalizeGenerationResponse(b, a.stream)
+	if err != nil {
+		a.decodeFailed = true
+		return
+	}
 	var r generateResponse
-	if json.Unmarshal(b, &r) != nil {
+	if json.Unmarshal(normalized, &r) != nil {
+		a.decodeFailed = true
 		return
 	}
 	if len(r.Error) > 0 && string(r.Error) != "null" {
@@ -112,6 +133,7 @@ func (a *accumulator) addResponse(b []byte) {
 		if c.Index != nil {
 			idx = *c.Index
 		}
+		a.grounding.add(idx, c.GroundingMetadata, c.CitationMetadata, c.URLContextMetadata)
 		acc, ok := a.candidates[idx]
 		if !ok {
 			acc = &candidateAcc{}
@@ -129,7 +151,7 @@ func (a *accumulator) addResponse(b []byte) {
 
 // attributes returns the response attributes. Usage is written only when the
 // API reported it; nothing is written as a zero placeholder.
-func (a *accumulator) attributes() []attribute.KeyValue {
+func (a *accumulator) attributes(tc TraceConfig) []attribute.KeyValue {
 	var kvs []attribute.KeyValue
 	if a.id != "" {
 		kvs = append(kvs, attribute.String(GenAIResponseID, a.id))
@@ -138,6 +160,9 @@ func (a *accumulator) attributes() []attribute.KeyValue {
 		kvs = append(kvs, attribute.String(GenAIResponseModel, a.model))
 	}
 	kvs = append(kvs, usageAttributes(a.usage)...)
+	if value := a.grounding.json(); value != "" {
+		kvs = append(kvs, attribute.String(GenAIResponseGrounding, value))
+	}
 
 	idxs := make([]int, 0, len(a.candidates))
 	for i := range a.candidates {
@@ -146,32 +171,33 @@ func (a *accumulator) attributes() []attribute.KeyValue {
 	sort.Ints(idxs)
 	var finish []string
 	msgs := make([]content, 0, len(idxs))
-	for n, i := range idxs {
+	for _, i := range idxs {
 		c := a.candidates[i]
 		if c.finish != "" {
 			finish = append(finish, c.finish)
 		}
 		m := content{Role: c.role, Parts: mergeText(c.parts)}
 		msgs = append(msgs, m)
-		kvs = append(kvs, messageAttributes(GenAIOutputMessages+"."+strconv.Itoa(n)+".", m, "model", true)...)
 	}
 	if len(finish) > 0 {
 		kvs = append(kvs, attribute.StringSlice(GenAIResponseFinishReasons, finish))
 	}
+	preview := messagePreview(msgs, GenAIOutputMessages, "model", true)
 	if len(msgs) == 1 {
 		v := viewParts(msgs[0].Parts)
 		if text, ok := v.onlyText(); ok && text != "" && len(v.calls) == 0 && len(v.results) == 0 {
-			return append(kvs,
-				attribute.String(OutputValue, text),
+			kvs = append(kvs,
+				attribute.String(OutputValue, tc.contentText(text, true)),
 				attribute.String(OutputMimeType, MimeTypeText))
+			return append(kvs, preview...)
 		}
 	}
-	if s := conversationJSON(msgs, "model", TraceConfig{}, true); s != "" && len(msgs) > 0 {
+	if s := conversationJSON(msgs, "model", tc, true); s != "" && len(msgs) > 0 {
 		kvs = append(kvs,
 			attribute.String(OutputValue, s),
 			attribute.String(OutputMimeType, MimeTypeJSON))
 	}
-	return kvs
+	return append(kvs, preview...)
 }
 
 // mergeText joins consecutive text parts (a stream sends the answer in many
@@ -199,16 +225,24 @@ func mergeText(parts []part) []part {
 	return out
 }
 
-// usageAttributes maps usageMetadata the way traceai-google-genai does:
-// output tokens are candidates plus thoughts, thoughts are also the reasoning
-// count, cached content tokens are cache reads.
+// Input tokens include tool-use prompts; output tokens include thoughts.
+// Cache reads are a subset of prompt tokens, never added again. The provider
+// total is authoritative and is not invented when it is absent.
 func usageAttributes(u *usageMetadata) []attribute.KeyValue {
 	if u == nil {
 		return nil
 	}
 	var kvs []attribute.KeyValue
-	if u.PromptTokenCount != nil {
-		kvs = append(kvs, attribute.Int64(GenAIUsageInputTokens, *u.PromptTokenCount))
+	if u.PromptTokenCount != nil || u.ToolUsePromptTokenCount != nil {
+		var input int64
+		if u.PromptTokenCount != nil {
+			input += *u.PromptTokenCount
+		}
+		if u.ToolUsePromptTokenCount != nil {
+			input += *u.ToolUsePromptTokenCount
+			kvs = append(kvs, attribute.Int64(GenAIUsageToolUsePromptTokens, *u.ToolUsePromptTokenCount))
+		}
+		kvs = append(kvs, attribute.Int64(GenAIUsageInputTokens, input))
 	}
 	if u.CandidatesTokenCount != nil || u.ThoughtsTokenCount != nil {
 		var out int64
@@ -229,5 +263,35 @@ func usageAttributes(u *usageMetadata) []attribute.KeyValue {
 	if u.CachedContentTokenCount != nil && *u.CachedContentTokenCount > 0 {
 		kvs = append(kvs, attribute.Int64(GenAIUsageCacheReadTokens, *u.CachedContentTokenCount))
 	}
+	if details := usageDetails(u); details != "" {
+		kvs = append(kvs, attribute.String(GenAIUsageDetails, details))
+	}
 	return kvs
+}
+
+// Retain pricing-relevant modality counts in one attribute, without unbounded
+// flattened keys or opaque provider metadata. Unknown enum strings are omitted.
+func usageDetails(u *usageMetadata) string {
+	out := map[string][]modalityTokens{}
+	for key, details := range map[string][]*modalityTokens{
+		"promptTokensDetails":        u.PromptTokensDetails,
+		"candidatesTokensDetails":    u.CandidatesTokensDetails,
+		"cacheTokensDetails":         u.CacheTokensDetails,
+		"toolUsePromptTokensDetails": u.ToolUsePromptTokensDetails,
+	} {
+		for _, detail := range details {
+			if detail == nil || detail.TokenCount == nil {
+				continue
+			}
+			switch detail.Modality {
+			case "MODALITY_UNSPECIFIED", "TEXT", "IMAGE", "VIDEO", "AUDIO", "DOCUMENT":
+				out[key] = append(out[key], *detail)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
 }

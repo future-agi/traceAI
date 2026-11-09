@@ -11,6 +11,7 @@ This integration provides support for using OpenTelemetry with the Google Gen AI
 pip install traceAI-google-genai
 ```
 
+Supported SDK: `google-genai>=1.8.0`; offline sync/async streaming trace tests verified on **1.8.0**, **1.24.0**, and **3.0.0**.
 
 ### Set Environment Variables
 Set up your environment variables to authenticate with FutureAGI
@@ -67,4 +68,12 @@ response = client.models.generate_content(
 
 print(response)
 ```
+
+## Streaming output
+
+For synchronous and asynchronous `generate_content_stream` calls, the exported
+`output.value` preserves each candidate's parts in arrival order. Parallel tool
+calls, repeated calls to the same function, and media parts remain distinct.
+Text chunks are still concatenated in the message-content span attribute.
+The response chunks delivered to your application are unchanged.
 

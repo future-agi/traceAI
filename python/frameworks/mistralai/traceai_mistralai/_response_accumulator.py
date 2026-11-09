@@ -16,8 +16,6 @@ from typing import (
     Type,
 )
 
-from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from opentelemetry.util.types import AttributeValue
 from traceai_mistralai._utils import _to_dict
 
@@ -43,8 +41,6 @@ class _ChatCompletionAccumulator:
         "_request_parameters",
         "_response_attributes_extractor",
         "_chat_completion_type",
-        "_content",
-        "_raw_data",
     )
 
     def __init__(
@@ -58,8 +54,6 @@ class _ChatCompletionAccumulator:
         self._response_attributes_extractor = response_attributes_extractor
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
-        self._content: List[str] = []
-        self._raw_data: List[Dict[str, Any]] = []
         self._values = _ValuesAccumulator(
             data=_ValuesAccumulator(
                 choices=_IndexedAccumulator(
@@ -81,15 +75,13 @@ class _ChatCompletionAccumulator:
 
     def process_chunk(self, chunk: Any) -> None:
         raw_chunk = _to_dict(chunk)
-        self._raw_data.append(raw_chunk)
-
-        if "choices" in raw_chunk.get("data", {}):
-            choices = raw_chunk["data"]["choices"]
-            if choices and isinstance(choices, list):
-                delta = choices[0].get("delta", {})
-                content = delta.get("content")
-                if content is not None:
-                    self._content.append(content)
+        self._is_null = False
+        self._cached_result = None
+        accumulated = deepcopy(raw_chunk)
+        for choice in accumulated.get("data", {}).get("choices", []):
+            if "delta" in choice:
+                choice["message"] = choice.pop("delta")
+        self._values += accumulated
 
     def _result(self) -> Optional[Dict[str, Any]]:
         if self._is_null:
@@ -99,12 +91,8 @@ class _ChatCompletionAccumulator:
         return self._cached_result
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        # Combine the accumulated content and raw data
-        output_value = "".join(self._content)
-        raw_output = safe_json_dumps(self._raw_data)
-        yield SpanAttributes.OUTPUT_VALUE, output_value
-        yield SpanAttributes.OUTPUT_VALUE, raw_output
-        yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
+        # The reconstructed semantic messages carry the output and its policy.
+        yield from ()
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -151,6 +139,18 @@ class _ValuesAccumulator:
             elif isinstance(self_value, _StringAccumulator):
                 if isinstance(value, str):
                     self_value += value
+                elif isinstance(value, list):
+                    # Legacy SDK 1.12 accepts typed text chunks in SSE deltas.
+                    # Export the accumulated answer via the semantic output
+                    # attribute, where TraceConfig applies text privacy.
+                    for chunk in value:
+                        chunk = _to_dict(chunk)
+                        if (
+                            isinstance(chunk, Mapping)
+                            and chunk.get("type") == "text"
+                            and isinstance(chunk.get("text"), str)
+                        ):
+                            self_value += chunk["text"]
             elif isinstance(self_value, _IndexedAccumulator):
                 if isinstance(value, Iterable):
                     for index, v in enumerate(value):

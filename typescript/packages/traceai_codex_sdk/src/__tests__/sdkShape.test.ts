@@ -27,8 +27,9 @@ function methodBody(source: string, signature: RegExp): string {
 }
 
 describe("installed @openai/codex-sdk shape", () => {
-  it("is the version the package is tested against", () => {
-    expect(JSON.parse(readFileSync(join(SDK_DIR, "package.json"), "utf8")).version).toBe("0.162.1");
+  const expectedVersion = process.env.CODEX_SDK_VERSION ?? "0.166.0";
+  it("is the exact SDK version selected by the compatibility matrix", () => {
+    expect(JSON.parse(readFileSync(join(SDK_DIR, "package.json"), "utf8")).version).toBe(expectedVersion);
   });
 
   const js = sdkFile("index.js");
@@ -58,8 +59,15 @@ describe("installed @openai/codex-sdk shape", () => {
     for (const type of ["agent_message", "reasoning", "command_execution", "file_change", "mcp_tool_call", "web_search", "todo_list", "error"]) {
       expect(dts).toContain(`type: "${type}"`);
     }
-    for (const field of ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens"]) {
+    for (const field of ["input_tokens", "cached_input_tokens", "output_tokens"]) {
       expect(dts).toContain(`${field}: number`);
+    }
+    // These fields are present in the pinned latest SDK, but not in the floor's
+    // declaration. The instrumentation treats them as optional in both versions.
+    if (expectedVersion === "0.166.0") {
+      for (const field of ["cache_write_input_tokens", "reasoning_output_tokens"]) {
+        expect(dts).toContain(`${field}: number`);
+      }
     }
   });
 });

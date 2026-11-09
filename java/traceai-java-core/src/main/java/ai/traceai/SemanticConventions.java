@@ -8,6 +8,87 @@ package ai.traceai;
  */
 public final class SemanticConventions {
 
+    // Coding-agent usage and provenance.
+    /** Scope of canonical usage: request, attempt, turn or unknown. A turn aggregate is not a measured individual request. */
+    public static final String FI_USAGE_SCOPE = "fi.usage.scope";
+
+    /** Use none for non-additive summaries and additive for the sole owner of canonical usage. Never duplicate canonical tokens or cost on summaries: older aggregate readers sum all span kinds. */
+    public static final String FI_USAGE_CONTRIBUTION = "fi.usage.contribution";
+
+    /** Cost provenance understood by Future AGI: provider_reported, estimated or unknown. Unknown must not be represented by an invented zero. */
+    public static final String FI_COST_KIND = "fi.cost.kind";
+
+    /** Evidence fidelity: native-request, reconstructed-message, aggregate-turn or unknown. Only source-observed requests/messages may be LLM spans. */
+    public static final String FI_AGENT_FIDELITY = "fi.agent.fidelity";
+
+    /** Timing provenance: source, reconstructed or observed-event. Reconstructed message timing is not measured request latency or TTFT. */
+    public static final String FI_AGENT_TIMING = "fi.agent.timing";
+
+    /** Terminal outcome: success, error, interrupted or incomplete; missing stop events are incomplete, not success. */
+    public static final String FI_AGENT_OUTCOME = "fi.agent.outcome";
+
+    /** Boolean provenance flag for canonical usage ownership; not itself a backend aggregation gate. Request/attempt plans count each observed model operation once. For turn-only totals, place canonical usage exactly once on the last source-observed generation (marked scope=turn), or the AGENT root if there is no generation. Keep all other spans summary-only; never fabricate a model request. */
+    public static final String FI_AGENT_USAGE_ADDITIVE = "fi.agent.usage.additive";
+
+    /** One immutable plan per turn: request, attempt, turn or unknown. Never mix per-request counters and overlapping turn totals; unknown plans remain summary-only. */
+    public static final String FI_AGENT_USAGE_PLAN = "fi.agent.usage.plan";
+
+    /** Boolean: source input count already includes cache reads/writes. Normalize input once; cache detail counters are subsets, not additional total tokens. */
+    public static final String FI_AGENT_USAGE_CACHE_IN_INPUT = "fi.agent.usage.cache_in_input";
+
+    /** Boolean: source output count already includes reasoning. Normalize output once; reasoning is a subset, not extra total tokens. */
+    public static final String FI_AGENT_USAGE_REASONING_IN_OUTPUT = "fi.agent.usage.reasoning_in_output";
+
+    /** Source of the cost, for example reported or host-price-table; independent of whether this span contributes to totals. */
+    public static final String FI_AGENT_COST_SOURCE = "fi.agent.cost.source";
+
+    /** Identifier/version of the estimator or price table for estimated costs; omit for reported costs. Never include credentials. */
+    public static final String FI_AGENT_COST_ESTIMATOR = "fi.agent.cost.estimator";
+
+    /** Bounded diagnostic code for missing evidence, for example MISSING_PARENT, MISSING_CHILD_STOP or UNRESOLVED_USAGE; not raw error content. */
+    public static final String FI_AGENT_GAP = "fi.agent.gap";
+
+    /** Versioned transport contract identifier; not an endpoint URL or credential. */
+    public static final String FI_AGENT_TRANSPORT = "fi.agent.transport";
+
+    /** Opaque integration correlation identifier; not a substitute for a source-provided tool_call.id. */
+    public static final String FI_AGENT_SOURCE_CALL_ID = "fi.agent.source_call_id";
+
+    /** Non-additive normalized input token summary; never summed into canonical usage. */
+    public static final String FI_AGENT_SUMMARY_INPUT = "fi.agent.summary.input";
+
+    /** Non-additive normalized output token summary; never summed into canonical usage. */
+    public static final String FI_AGENT_SUMMARY_OUTPUT = "fi.agent.summary.output";
+
+    /** Non-additive input plus output token summary; never summed into canonical usage. */
+    public static final String FI_AGENT_SUMMARY_TOTAL = "fi.agent.summary.total";
+
+    /** Non-additive cache-read token summary, a subset of normalized input. */
+    public static final String FI_AGENT_SUMMARY_CACHE_READ = "fi.agent.summary.cache_read";
+
+    /** Non-additive cache-write token summary, a subset of normalized input. */
+    public static final String FI_AGENT_SUMMARY_CACHE_WRITE = "fi.agent.summary.cache_write";
+
+    /** Non-additive reasoning token summary, a subset of normalized output. */
+    public static final String FI_AGENT_SUMMARY_REASONING = "fi.agent.summary.reasoning";
+
+    /** Non-additive cost summary in USD; never place this amount in canonical cost as well unless this span owns the usage. */
+    public static final String FI_AGENT_SUMMARY_COST_USD = "fi.agent.summary.cost_usd";
+
+    /** JSON-encoded array of configured bounded tags, subject to the integration privacy policy. */
+    public static final String FI_AGENT_TAGS = "fi.agent.tags";
+
+    /** Agent lifecycle event type, for example compaction; not a model invocation. */
+    public static final String FI_AGENT_EVENT = "fi.agent.event";
+
+    /** Source input completeness, for example partial; do not present an excerpt as the full model input. */
+    public static final String FI_AGENT_INPUT_COMPLETENESS = "fi.agent.input.completeness";
+
+    /** Provenance of captured content, for example a source transcript; not evidence of native request capture. */
+    public static final String FI_AGENT_CONTENT_SOURCE = "fi.agent.content.source";
+
+
+
     // ── FI Span Kind ─────────────────────────────────────────────────
     public static final String FI_SPAN_KIND = "fi.span.kind";
     public static final String GEN_AI_SPAN_KIND = "gen_ai.span.kind";
@@ -133,6 +214,7 @@ public final class SemanticConventions {
 
     // ── GenAI Performance / Streaming ────────────────────────────────
     public static final String GEN_AI_CLIENT_OPERATION_DURATION = "gen_ai.client.operation.duration";
+    /** Measured time to first token in milliseconds for the Future AGI span attribute consumer. Not the OTel histogram unit (seconds). Convert seconds to milliseconds before emission; omit for reconstructed timing. The current gateway seconds writer is inconsistent with the dashboard and requires a separate migration. */
     public static final String GEN_AI_SERVER_TIME_TO_FIRST_TOKEN = "gen_ai.server.time_to_first_token";
     public static final String GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN = "gen_ai.server.time_per_output_token";
     public static final String GEN_AI_SERVER_QUEUE_TIME = "gen_ai.server.queue_time";

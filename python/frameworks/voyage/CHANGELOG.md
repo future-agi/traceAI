@@ -1,3 +1,19 @@
+# Changelog
+
+## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-voyage-v0.1.1...traceai-voyage-v0.1.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **voyage:** trace multimodal and contextualized embeddings ([#462](https://github.com/future-agi/traceAI/issues/462)) ([ed22eaf](https://github.com/future-agi/traceAI/commit/ed22eaf0e7c1cde5fef678530611abdf6273eba9))
+
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-voyage-v0.1.0...traceai-voyage-v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **voyage:** trace multimodal and contextualized embeddings ([#462](https://github.com/future-agi/traceAI/issues/462)) ([ed22eaf](https://github.com/future-agi/traceAI/commit/ed22eaf0e7c1cde5fef678530611abdf6273eba9))
+
 ## [0.1.0] - 2026-10-05
 ### Feature
 - First release. OpenTelemetry instrumentation for the official Voyage AI

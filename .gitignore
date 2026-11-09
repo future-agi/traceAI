@@ -20,6 +20,8 @@ dist
 develop-eggs
 .installed.cfg
 lib
+# Ruby gems store their source in lib/.
+!ruby/roast/lib/
 lib64
 
 # Installer logs

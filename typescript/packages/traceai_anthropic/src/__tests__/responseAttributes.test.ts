@@ -666,3 +666,21 @@ describe('Anthropic Response Attributes', () => {
     });
   });
 });
+
+
+describe("cumulative streaming usage", () => {
+  it("merges partial snapshots without adding cumulative output counts", () => {
+    const { reconstructedMessage } = aggregateAnthropicStreamEvents([
+      { type: "message_start", message: { usage: { input_tokens: 3, output_tokens: 1, cache_creation_input_tokens: 4, cache_read_input_tokens: 5 } } },
+      { type: "message_delta", delta: {}, usage: { output_tokens: 2 } },
+      { type: "message_delta", delta: {}, usage: { output_tokens: 3, cache_creation_input_tokens: null } },
+    ] as any);
+    expect(getAnthropicUsageAttributes(reconstructedMessage)).toMatchObject({
+      "gen_ai.usage.input_tokens": 12,
+      "gen_ai.usage.output_tokens": 3,
+      "gen_ai.usage.total_tokens": 15,
+      "gen_ai.usage.cache_write_tokens": 4,
+      "gen_ai.usage.cache_read_tokens": 5,
+    });
+  });
+});
