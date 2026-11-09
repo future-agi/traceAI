@@ -1,0 +1,31 @@
+{
+  "name": "app-api-chat-not-ollama",
+  "request": {
+    "method": "POST",
+    "url": "https://myapp.example.com/api/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "x",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "reply": "hi"
+    }
+  },
+  "expect": {
+    "captured": false
+  }
+}

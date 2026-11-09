@@ -228,33 +228,62 @@ def _cut_traceback(description: str) -> Optional[str]:
 def _prefix_cuts(
     description: str, summaries: Iterable[ExceptionSummary]
 ) -> List[Tuple[int, int]]:
-    # "<Type>: " at the start of a line, when the exception's own message
-    # follows it up to the end of that line (or of the description). Plain string
-    # operations only: exception messages can be megabytes and quote the prompt,
-    # so they never go into a regular expression (slow to compile and match, and
-    # kept in the global `re` cache after the span ends).
+    """Bound prefix cleanup by description + summary input units.
+
+    Each candidate prepays its WORST-CASE prefix/message comparison volume.
+    Repeated long common prefixes therefore cannot trigger quadratic retries.
+    On exhaustion discard every tentative cut: keep the complete description,
+    including type prefixes, and let clean_error_description remove tracebacks.
+    No message is truncated, partially cleaned, regex-compiled or cached.
+
+    Native startswith keeps the common megabyte-message case inexpensive. Line
+    starts are found once with disjoint single-character searches; cuts are
+    emitted in that same order, without a sort. The factor is an internal work
+    invariant, not a message-length cutoff or an image-cap budget change.
+    """
+    summaries = list(summaries)
     size = len(description)
-    cuts: Dict[int, int] = {}
+    input_units = size + sum(
+        len(summary.message or "") + sum(len(name) + 1 for name in summary.type_names) + 1
+        for summary in summaries
+    )
+    remaining = 32 * input_units
+    starts = [0]
+    position = 0
+    while (newline := description.find("\n", position)) != -1:
+        position = newline + 1
+        starts.append(position)
+    cuts = [0] * len(starts)
     for summary in summaries:
+        message = summary.message or ""
         for name in summary.type_names:
-            prefix = f"{name}:" if not summary.message else f"{name}: "
-            start = 0
-            while (pos := description.find(prefix, start)) != -1:
-                start = pos + 1
-                if pos and description[pos - 1] != "\n":
+            # Prepay construction as well, including repeated aliases of one
+            # large message. Iteration over aliases is covered by input_units.
+            prefix_length = len(name) + (2 if message else 1)
+            if prefix_length > remaining:
+                return []
+            remaining -= prefix_length
+            prefix = f"{name}: " if message else f"{name}:"
+            for index, pos in enumerate(starts):
+                cost = prefix_length + len(message) + 2
+                if cost > remaining:
+                    return []
+                remaining -= cost
+                end = pos + prefix_length
+                if not description.startswith(prefix, pos):
                     continue
-                end = pos + len(prefix)
-                if summary.message:
-                    if not description.startswith(summary.message, end):
+                if message:
+                    if not description.startswith(message, end):
                         continue
-                    tail = end + len(summary.message)
+                    tail = end + len(message)
                 else:
                     tail = end + 1 if description.startswith(" ", end) else end
                     end = tail
                 if tail != size and description[tail] != "\n":
                     continue
-                cuts.setdefault(pos, end)
-    return sorted(cuts.items())
+                if not cuts[index]:
+                    cuts[index] = end
+    return [(pos, end) for pos, end in zip(starts, cuts) if end]
 
 
 def clean_error_description(
@@ -266,8 +295,9 @@ def clean_error_description(
     ``use_span`` and most instrumentors build ``"<Type>: <message>"``, and some
     join one such line per exception (llama-index). The type already lives in
     ``error.type`` and ``exception.type``, so each ``"<Type>: "`` prefix of a
-    known exception is removed. A Python traceback never stays in the
-    description.
+    known exception is removed when bounded cleanup can finish. Exhaustion
+    preserves the complete original description instead of partially cutting
+    prefixes. A Python traceback never stays in the description.
     """
     if not description:
         return description

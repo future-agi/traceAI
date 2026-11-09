@@ -45,7 +45,7 @@ def assert_span(exporter, error=False, full=True):
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.status.status_code == (StatusCode.ERROR if error else StatusCode.OK)
+    assert span.status.status_code == (StatusCode.ERROR if error else (StatusCode.OK if full else StatusCode.UNSET))
     if full:
         attrs = dict(span.attributes)
         assert 'hello' in str(attrs)

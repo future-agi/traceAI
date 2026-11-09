@@ -1,0 +1,69 @@
+{
+  "name": "milestone-ndjson-ollama-chat-failure-before-chunks",
+  "description": "Only complete newline-terminated records in delivered chunks contribute; no future bytes, incomplete line or later parse time may supply a milestone.",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/api/chat",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant"
+        },
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "message": {
+          "role": "assistant",
+          "content": "Hé"
+        },
+        "done": false
+      },
+      {
+        "done": true
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      30,
+      70
+    ],
+    "chunk_sizes": [
+      70,
+      86,
+      14
+    ],
+    "error_after_chunks": 0
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_chunk",
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

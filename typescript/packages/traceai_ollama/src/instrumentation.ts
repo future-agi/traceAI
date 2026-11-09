@@ -2,6 +2,7 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
+  isWrapped,
   safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
@@ -12,6 +13,7 @@ import {
   Attributes,
   SpanStatusCode,
   Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
@@ -30,16 +32,20 @@ import {
 
 const MODULE_NAME = "ollama";
 
-/**
- * Flag to check if the ollama module has been patched
- */
-let _isFIPatched = false;
+// Identify our exact wrappers, including when inherited by the default singleton.
+// This is not an admission flag: separate CJS/ESM constructors need separate patches.
+const patchedFunctions = new WeakSet<object>();
+let activePatchCount = 0;
 
-/**
- * Function to check if instrumentation is enabled / disabled
- */
+interface MethodPatch {
+  owner: Record<string, unknown>;
+  name: string;
+  wrapped: object;
+}
+
+/** Whether any Ollama methods are currently tracked as instrumented. */
 export function isPatched() {
-  return _isFIPatched;
+  return activePatchCount > 0;
 }
 
 /**
@@ -61,6 +67,7 @@ function getExecContext(span: Span) {
 interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  thinking?: string;
   images?: string[];
   tool_calls?: OllamaToolCall[];
 }
@@ -87,7 +94,7 @@ interface OllamaTool {
 
 interface OllamaChatRequest {
   model: string;
-  messages: OllamaMessage[];
+  messages?: OllamaMessage[];
   format?: string | Record<string, unknown>;
   options?: Record<string, unknown>;
   stream?: boolean;
@@ -128,6 +135,7 @@ interface OllamaGenerateResponse {
   model: string;
   created_at: string;
   response: string;
+  thinking?: string;
   done: boolean;
   done_reason?: string;
   context?: number[];
@@ -167,9 +175,9 @@ interface OllamaEmbeddingsResponse {
   embedding: number[];
 }
 
-interface OllamaAbortableAsyncIterator<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
-  abort(): void;
+interface OllamaAbortableAsyncIterator<T> extends AsyncIterable<T> {
+  // The supported 0.4.x SDK returns an async generator without abort().
+  abort?(): void;
 }
 
 /**
@@ -179,6 +187,13 @@ interface OllamaAbortableAsyncIterator<T> {
 export class OllamaInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  // Lazily initialized: InstrumentationBase can patch already-loaded modules in super().
+  private _modulePatches?: WeakMap<object, MethodPatch[]>;
+  // Retain manual registrations across disable/enable, just like the automatic hooks.
+  private _manualModules?: Set<Record<string, unknown>>;
+  // A foreign wrapper can retain ours even when it cannot safely be removed.
+  // Explicit manual instrumentation still works with automatic hooks disabled initially.
+  private _wrappersDisabled?: boolean;
 
   constructor({
     instrumentationConfig,
@@ -193,10 +208,28 @@ export class OllamaInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.refreshTracer();
   }
 
   public override enable(): void {
+    this._wrappersDisabled = false;
     super.enable();
+    this.refreshTracer();
+    for (const module of this._manualModules ?? []) this.patch(module);
+  }
+
+  public override disable(): void {
+    this._wrappersDisabled = true;
+    super.disable();
+    for (const module of this._manualModules ?? []) this.unpatch(module);
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
@@ -204,7 +237,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
 
   protected init() {
     const module = new InstrumentationNodeModuleDefinition(
-      "ollama",
+      MODULE_NAME,
       [">=0.4.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
@@ -216,120 +249,47 @@ export class OllamaInstrumentation extends InstrumentationBase {
    * Manually instruments the Ollama module
    */
   manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
+    this._manualModules ??= new Set();
+    this._manualModules.add(module);
+    if (!this._wrappersDisabled) this.patch(module);
   }
 
   /**
    * Patches the Ollama module
    */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
-    }
+  private patch(module: Record<string, unknown>) {
+    // A module namespace can be immutable. Keep ownership outside the SDK exports.
+    this._modulePatches ??= new WeakMap();
+    const patches = this._modulePatches.get(module) ?? [];
+    this._modulePatches.set(module, patches);
+    this.refreshTracer();
 
-    const instrumentation: OllamaInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the Ollama class
-    const Ollama = module.Ollama as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (Ollama?.prototype) {
-      // Patch chat method
-      if (typeof Ollama.prototype.chat === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "chat",
-          this.createChatWrapper(instrumentation),
-        );
-      }
-
-      // Patch generate method
-      if (typeof Ollama.prototype.generate === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "generate",
-          this.createGenerateWrapper(instrumentation),
-        );
-      }
-
-      // Patch embed method (new API)
-      if (typeof Ollama.prototype.embed === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "embed",
-          this.createEmbedWrapper(instrumentation),
-        );
-      }
-
-      // Patch embeddings method (legacy API)
-      if (typeof Ollama.prototype.embeddings === "function") {
-        this._wrap(
-          Ollama.prototype,
-          "embeddings",
-          this.createEmbeddingsWrapper(instrumentation),
-        );
+    const Ollama = module.Ollama as { prototype: Record<string, unknown> } | undefined;
+    const defaultOllama = module.default as Record<string, unknown> | undefined;
+    const wrappers = {
+      chat: this.createChatWrapper(this),
+      generate: this.createGenerateWrapper(this),
+      embed: this.createEmbedWrapper(this),
+      embeddings: this.createEmbeddingsWrapper(this),
+    };
+    for (const owner of [Ollama?.prototype, defaultOllama]) {
+      if (!owner) continue;
+      for (const [name, wrapper] of Object.entries(wrappers)) {
+        const original = owner[name];
+        if (typeof original !== "function" || patchedFunctions.has(original) || isWrapped(original)) continue;
+        // If another owner retained our wrapper, re-enable it in place instead of
+        // wrapping the outer function again (including the singleton's inherited method).
+        if (patches.some(patch => patch.name === name && patch.owner[name] === original)) continue;
+        // _wrap would remove an existing shimmer wrapper; never take that ownership.
+        this._wrap(owner, name, wrapper);
+        const wrapped = owner[name];
+        if (typeof wrapped === "function" && wrapped !== original) {
+          patches.push({ owner, name, wrapped });
+          patchedFunctions.add(wrapped);
+          activePatchCount++;
+        }
       }
     }
-
-    // Also patch the default export if it exists (for direct imports)
-    const defaultOllama = module.default as {
-      chat?: unknown;
-      generate?: unknown;
-      embed?: unknown;
-      embeddings?: unknown;
-    } | undefined;
-
-    if (defaultOllama) {
-      if (typeof defaultOllama.chat === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "chat",
-          this.createChatWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.generate === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "generate",
-          this.createGenerateWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.embed === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "embed",
-          this.createEmbedWrapper(instrumentation),
-        );
-      }
-      if (typeof defaultOllama.embeddings === "function") {
-        this._wrap(
-          defaultOllama as Record<string, unknown>,
-          "embeddings",
-          this.createEmbeddingsWrapper(instrumentation),
-        );
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
     return module;
   }
 
@@ -343,7 +303,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaChatRequest,
       ) {
-        const { messages: _messages, ...invocationParameters } = request;
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
+        const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Chat`,
@@ -359,7 +320,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(request),
-              ...getChatToolsJSONSchema(request),
+              // Tool definitions stay in INPUT_VALUE/RAW_INPUT, where FITracer
+              // applies code and environment input-hiding controls.
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
             },
           },
@@ -419,7 +381,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaGenerateRequest,
       ) {
-        const { prompt: _prompt, ...invocationParameters } = request;
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
+        const invocationParameters = getInvocationParameters(request);
 
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Generate`,
@@ -493,6 +456,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaEmbedRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const inputTexts = Array.isArray(request.input) ? request.input : [request.input];
 
         const span = instrumentation.fiTracer.startSpan(
@@ -561,6 +525,7 @@ export class OllamaInstrumentation extends InstrumentationBase {
         this: unknown,
         request: OllamaEmbeddingsRequest,
       ) {
+        if (instrumentation._wrappersDisabled) return original.apply(this, [request]);
         const span = instrumentation.fiTracer.startSpan(
           `Ollama Embeddings`,
           {
@@ -620,51 +585,23 @@ export class OllamaInstrumentation extends InstrumentationBase {
   /**
    * Un-patches the Ollama module
    */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const Ollama = moduleExports.Ollama as {
-      prototype: Record<string, unknown>;
-    } | undefined;
-
-    if (Ollama?.prototype) {
-      if (typeof Ollama.prototype.chat === "function") {
-        this._unwrap(Ollama.prototype, "chat");
+  private unpatch(moduleExports: Record<string, unknown>) {
+    const patches = this._modulePatches?.get(moduleExports);
+    if (!patches) return;
+    const retained: MethodPatch[] = [];
+    for (const patch of patches) {
+      // A different instrumentor may have replaced/wrapped this function since
+      // we installed it. Never invoke that instrumentor's __unwrap hook.
+      if (patch.owner[patch.name] !== patch.wrapped) {
+        retained.push(patch);
+        continue;
       }
-      if (typeof Ollama.prototype.generate === "function") {
-        this._unwrap(Ollama.prototype, "generate");
-      }
-      if (typeof Ollama.prototype.embed === "function") {
-        this._unwrap(Ollama.prototype, "embed");
-      }
-      if (typeof Ollama.prototype.embeddings === "function") {
-        this._unwrap(Ollama.prototype, "embeddings");
-      }
+      this._unwrap(patch.owner, patch.name);
+      patchedFunctions.delete(patch.wrapped);
+      activePatchCount--;
     }
-
-    const defaultOllama = moduleExports.default as Record<string, unknown> | undefined;
-    if (defaultOllama) {
-      if (typeof defaultOllama.chat === "function") {
-        this._unwrap(defaultOllama, "chat");
-      }
-      if (typeof defaultOllama.generate === "function") {
-        this._unwrap(defaultOllama, "generate");
-      }
-      if (typeof defaultOllama.embed === "function") {
-        this._unwrap(defaultOllama, "embed");
-      }
-      if (typeof defaultOllama.embeddings === "function") {
-        this._unwrap(defaultOllama, "embeddings");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
+    if (retained.length) this._modulePatches?.set(moduleExports, retained);
+    else this._modulePatches?.delete(moduleExports);
   }
 }
 
@@ -696,116 +633,186 @@ function isAsyncIterator<T>(
 }
 
 /**
- * Wraps a chat stream to capture the full response
+ * Observe the native iterator without replacing its abortable stream object.
+ * Explicit controls also finalize a stream closed before its first next(), when
+ * an async generator's finally block would never run. Cancellation aborts the
+ * transport before awaiting return/throw, so a pending read cannot block cleanup.
  */
-async function* wrapChatStream(
-  stream: OllamaAbortableAsyncIterator<OllamaChatResponse>,
+function wrapStream<T>(
+  stream: OllamaAbortableAsyncIterator<T>,
   span: Span,
-): AsyncGenerator<OllamaChatResponse, void, unknown> {
-  let fullContent = "";
-  let lastResponse: OllamaChatResponse | null = null;
-  const allChunks: OllamaChatResponse[] = [];
+  onChunk: (chunk: T) => void,
+  getAttributes: () => Attributes,
+): OllamaAbortableAsyncIterator<T> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let ended = false;
+  type Outcome = { code: SpanStatusCode; error?: unknown };
+  let cancellation: Outcome | undefined;
+  let restoreAbort = () => {};
 
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      if (chunk.message?.content) {
-        fullContent += chunk.message.content;
+  function finish(outcome: Outcome) {
+    if (ended) return;
+    ended = true;
+    try {
+      span.setAttributes(getAttributes());
+      if (outcome.code === SpanStatusCode.ERROR) {
+        const error = outcome.error instanceof Error
+          ? outcome.error : new Error(String(outcome.error));
+        span.recordException(error);
+        span.setStatus({ code: outcome.code, message: error.message });
+      } else {
+        span.setStatus({ code: outcome.code });
       }
-      lastResponse = chunk;
-      yield chunk;
+    } catch {
+      // Telemetry must not replace the SDK's result or original exception.
+      diag.warn("Failed to record Ollama stream attributes");
+    } finally {
+      restoreAbort();
+      span.end();
     }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
   }
 
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+  const tracked: AsyncIterableIterator<T> = {
+    [Symbol.asyncIterator]() { return this; },
+    async next(...args: [] | [unknown]) {
+      try {
+        const result = await iterator.next(...args);
+        if (result.done) {
+          finish(cancellation ?? { code: SpanStatusCode.OK });
+        } else if (!ended) {
+          onChunk(result.value);
+        }
+        return result;
+      } catch (error) {
+        finish(cancellation ?? { code: SpanStatusCode.ERROR, error });
+        throw error;
+      }
+    },
+    async return(value?: unknown) {
+      cancellation ??= { code: SpanStatusCode.UNSET };
+      try {
+        stream.abort?.();
+        return iterator.return
+          ? await iterator.return(value) : { done: true as const, value };
+      } catch (error) {
+        finish({ code: SpanStatusCode.ERROR, error });
+        throw error;
+      } finally {
+        finish(cancellation);
+      }
+    },
+    async throw(error?: unknown) {
+      cancellation ??= { code: SpanStatusCode.ERROR, error };
+      try {
+        stream.abort?.();
+        if (iterator.throw) return await iterator.throw(error);
+        if (iterator.return) await iterator.return();
+        throw error;
+      } finally {
+        finish(cancellation);
+      }
+    },
   };
 
-  if (lastResponse) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastResponse.model;
-    if (lastResponse.prompt_eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastResponse.prompt_eval_count;
-    }
-    if (lastResponse.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastResponse.eval_count;
-    }
-    if (lastResponse.prompt_eval_count !== undefined && lastResponse.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] =
-        lastResponse.prompt_eval_count + lastResponse.eval_count;
-    }
+  // The SDK client keeps the original stream in its active-request list. Observe
+  // that object's abort as well, so client.abort() closes even an unread span.
+  // Restore it on completion so the SDK cannot retain our captured output.
+  const originalAbort = stream.abort;
+  if (originalAbort) {
+    const ownAbort = Object.prototype.hasOwnProperty.call(stream, "abort");
+    const abort = () => {
+      cancellation ??= { code: SpanStatusCode.UNSET };
+      try {
+        return originalAbort.call(stream);
+      } finally {
+        finish(cancellation);
+      }
+    };
+    stream.abort = abort;
+    restoreAbort = () => {
+      if (stream.abort !== abort) return;
+      if (ownAbort) stream.abort = originalAbort;
+      else delete stream.abort;
+    };
   }
 
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+  return new Proxy(stream, {
+    get(target, property) {
+      if (property === Symbol.asyncIterator) return () => tracked;
+      // Keep the direct controls provided by earlier instrumentor releases, too.
+      if (property === "next") return tracked.next;
+      if (property === "return") return tracked.return;
+      if (property === "throw") return tracked.throw;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
-/**
- * Wraps a generate stream to capture the full response
- */
-async function* wrapGenerateStream(
+/** Capture chat content, thinking and complete native tool calls across chunks. */
+function wrapChatStream(
+  stream: OllamaAbortableAsyncIterator<OllamaChatResponse>,
+  span: Span,
+): OllamaAbortableAsyncIterator<OllamaChatResponse> {
+  const message: OllamaMessage = { role: "assistant", content: "" };
+  let lastResponse: OllamaChatResponse | undefined;
+  const allChunks: OllamaChatResponse[] = [];
+
+  return wrapStream(stream, span, (chunk) => {
+    allChunks.push(chunk);
+    message.content += chunk.message?.content ?? "";
+    if (chunk.message?.thinking) {
+      message.thinking = (message.thinking ?? "") + chunk.message.thinking;
+    }
+    if (chunk.message?.tool_calls?.length) {
+      (message.tool_calls ??= []).push(...chunk.message.tool_calls);
+    }
+    lastResponse = chunk;
+  }, () => ({
+    [SemanticConventions.OUTPUT_VALUE]: message.content,
+    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+    ...getChatOutputMessagesAttributes({ message }),
+    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+    ...(lastResponse ? {
+      [SemanticConventions.LLM_MODEL_NAME]: lastResponse.model,
+      ...getChatUsageAttributes(lastResponse),
+    } : {}),
+  }));
+}
+
+/** Capture generate content and thinking without changing yielded chunks. */
+function wrapGenerateStream(
   stream: OllamaAbortableAsyncIterator<OllamaGenerateResponse>,
   span: Span,
-): AsyncGenerator<OllamaGenerateResponse, void, unknown> {
-  let fullResponse = "";
-  let lastChunk: OllamaGenerateResponse | null = null;
+): OllamaAbortableAsyncIterator<OllamaGenerateResponse> {
+  const message: OllamaMessage = { role: "assistant", content: "" };
+  let lastChunk: OllamaGenerateResponse | undefined;
   const allChunks: OllamaGenerateResponse[] = [];
 
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      if (chunk.response) {
-        fullResponse += chunk.response;
-      }
-      lastChunk = chunk;
-      yield chunk;
+  return wrapStream(stream, span, (chunk) => {
+    allChunks.push(chunk);
+    message.content += chunk.response ?? "";
+    if (chunk.thinking) {
+      message.thinking = (message.thinking ?? "") + chunk.thinking;
     }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
-  }
-
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullResponse,
+    lastChunk = chunk;
+  }, () => ({
+    [SemanticConventions.OUTPUT_VALUE]: message.content,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+    ...getChatOutputMessagesAttributes({ message }),
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.prompt_eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.prompt_eval_count;
-    }
-    if (lastChunk.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.eval_count;
-    }
-    if (lastChunk.prompt_eval_count !== undefined && lastChunk.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] =
-        lastChunk.prompt_eval_count + lastChunk.eval_count;
-    }
-  }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+    ...(lastChunk ? {
+      [SemanticConventions.LLM_MODEL_NAME]: lastChunk.model,
+      ...getGenerateUsageAttributes(lastChunk),
+    } : {}),
+  }));
 }
 
 /**
  * Gets input message attributes for chat requests
  */
 function getChatInputMessagesAttributes(request: OllamaChatRequest): Attributes {
-  const serialized = request.messages.map((message) => {
+  const serialized = (request.messages ?? []).map((message) => {
     const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
       obj.content = message.content;
@@ -816,22 +823,15 @@ function getChatInputMessagesAttributes(request: OllamaChatRequest): Attributes 
 }
 
 /**
- * Gets tool schema attributes for chat requests
- */
-function getChatToolsJSONSchema(request: OllamaChatRequest): Attributes {
-  if (!request.tools) {
-    return {};
-  }
-  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
-}
-
-/**
  * Gets output message attributes from chat response
  */
-function getChatOutputMessagesAttributes(response: OllamaChatResponse): Attributes {
+function getChatOutputMessagesAttributes(response: Pick<OllamaChatResponse, "message">): Attributes {
   const msg: Record<string, unknown> = { role: response.message.role };
   if (response.message.content) {
     msg.content = response.message.content;
+  }
+  if (response.message.thinking) {
+    msg.thinking = response.message.thinking;
   }
   if (response.message.tool_calls) {
     msg.tool_calls = response.message.tool_calls.map((tc) => ({
@@ -859,6 +859,45 @@ function getChatUsageAttributes(response: OllamaChatResponse): Attributes {
   }
 
   return attributes;
+}
+
+// Content-bearing fields (including stop sequences, JSON schemas and context
+// tokens) belong only in the privacy-governed input attributes, never parameters.
+const INVOCATION_NUMERIC_OPTIONS = [
+  "num_keep", "seed", "num_predict", "top_k", "top_p", "tfs_z", "typical_p",
+  "repeat_last_n", "temperature", "repeat_penalty", "presence_penalty",
+  "frequency_penalty", "mirostat", "mirostat_tau", "mirostat_eta", "num_ctx",
+  "num_batch", "num_gpu", "main_gpu", "rope_frequency_base", "rope_frequency_scale",
+  "num_thread",
+] as const;
+const INVOCATION_BOOLEAN_OPTIONS = [
+  "penalize_newline", "numa", "low_vram", "f16_kv", "vocab_only", "use_mmap",
+  "use_mlock", "embedding_only",
+] as const;
+
+function getInvocationParameters(request: OllamaChatRequest | OllamaGenerateRequest): Record<string, unknown> {
+  const parameters: Record<string, unknown> = { model: request.model };
+  if (typeof request.stream === "boolean") parameters.stream = request.stream;
+  if ("raw" in request && typeof request.raw === "boolean") parameters.raw = request.raw;
+  if (request.format === "json") parameters.format = request.format;
+  const keepAlive = request.keep_alive;
+  if ((typeof keepAlive === "number" && Number.isFinite(keepAlive)) ||
+      (typeof keepAlive === "string" && /^-?\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h)?$/.test(keepAlive))) {
+    parameters.keep_alive = keepAlive;
+  }
+  if (request.options) {
+    const options: Record<string, number | boolean> = {};
+    for (const key of INVOCATION_NUMERIC_OPTIONS) {
+      const value = request.options[key];
+      if (typeof value === "number" && Number.isFinite(value)) options[key] = value;
+    }
+    for (const key of INVOCATION_BOOLEAN_OPTIONS) {
+      const value = request.options[key];
+      if (typeof value === "boolean") options[key] = value;
+    }
+    parameters.options = options;
+  }
+  return parameters;
 }
 
 /**

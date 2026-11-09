@@ -49,10 +49,11 @@ jobs:
       - name: Prepare a clean tarball consumer
         run: |
           mkdir -p "$RUNNER_TEMP/pipecat-package"
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
           pnpm --dir packages/traceai_pipecat pack --pack-destination "$RUNNER_TEMP/pipecat-package"
           tarballs=("$RUNNER_TEMP/pipecat-package/"*.tgz)
           test "${#tarballs[@]}" -eq 1
-          node packages/traceai_pipecat/test/prepare-packed.cjs "${tarballs[0]}" "$RUNNER_TEMP/pipecat-consumer"
+          node packages/traceai_pipecat/test/prepare-packed.cjs "${tarballs[0]}" "$RUNNER_TEMP/pipecat-consumer" "$RUNNER_TEMP/fi-core.tgz"
           git diff --exit-code -- pnpm-lock.yaml
       - name: Test installed tarball with loopback-only networking
         run: |

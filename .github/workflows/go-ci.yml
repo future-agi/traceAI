@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [a2a, anthropic, bedrock, eino, genai, lambda, openai]
+        module: [a2a, anthropic, bedrock, eino, genai, lambda, langchaingo, openai]
         go: ['1.26.0', stable]
     defaults:
       run:
@@ -120,3 +120,27 @@ jobs:
         run: |
           go vet ./...
           go test -race -count=1 ./...
+
+  langchaingo-compatibility:
+    name: langchaingo / ${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['v0.1.15', latest]
+    defaults:
+      run:
+        working-directory: go/langchaingo
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: go/langchaingo/go.sum
+      - name: Select LangChainGo version
+        run: go get github.com/tmc/langchaingo@${{ matrix.sdk }}
+      - name: Test callbacks and embedding wrapper
+        run: go test -race -count=1 ./...

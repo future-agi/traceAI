@@ -1,0 +1,60 @@
+name: Transformers pipelines
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/transformers/**'
+      - '.github/workflows/transformers-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/transformers/**'
+      - '.github/workflows/transformers-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - {python: '3.10', transformers: '4.42.0'}
+          - {python: '3.11', transformers: '4.57.6'}
+          - {python: '3.12', transformers: '5.22.1'}
+        distribution: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.lane.python }}
+      - name: Build and install a distribution
+        env:
+          DISTRIBUTION: ${{ matrix.distribution }}
+          TRANSFORMERS_VERSION: ${{ matrix.lane.transformers }}
+        run: |
+          python -m pip install 'build>=1.2,<2' 'hatchling>=1.27,<2'
+          python -m build python/frameworks/transformers --outdir "$RUNNER_TEMP/dist"
+          python -m pip install 'torch==2.8.0' --index-url https://download.pytorch.org/whl/cpu
+          if [ "$DISTRIBUTION" = wheel ]; then
+            artifact=$(find "$RUNNER_TEMP/dist" -name '*.whl' -print -quit)
+          else
+            artifact=$(find "$RUNNER_TEMP/dist" -name '*.tar.gz' -print -quit)
+          fi
+          python -m pip install "${artifact}[dev]" "transformers==$TRANSFORMERS_VERSION" 'numpy<2'
+          cp -R python/frameworks/transformers/tests "$RUNNER_TEMP/transformers-tests"
+      - name: Test installed distribution without outbound network
+        run: |
+          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
+          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          python -I -m mypy --ignore-missing-imports --follow-imports=skip python/frameworks/transformers/traceai_transformers
+          cd "$RUNNER_TEMP"
+          python -I -m pytest transformers-tests -q --noconftest

@@ -19,9 +19,11 @@ from opentelemetry.context import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from ._chat_input import ChatInput, mask_chat_input
 from ._errors import is_error_detail_key
+from ._image_cap import _normalize_image_cap, cap_base64_images
 from .logging import logger
-from .pii_redaction import redact_pii_in_value
+from .pii_redaction import key_carries_free_text, redact_pii_in_value
 
 
 class suppress_tracing:
@@ -175,7 +177,7 @@ DEFAULT_HIDE_INPUT_TEXT = False
 DEFAULT_HIDE_OUTPUT_TEXT = False
 
 DEFAULT_HIDE_EMBEDDING_VECTORS = False
-DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32_000
+DEFAULT_BASE64_IMAGE_MAX_LENGTH = 0
 DEFAULT_PII_REDACTION = False
 DEFAULT_HIDE_ERROR_DETAILS = None
 # None means "derive from the content hide flags", see _CONTENT_HIDE_FLAGS.
@@ -201,8 +203,9 @@ class TraceConfig:
     encoded images to reduce payloads.
 
     For those attributes not passed, this object tries to read from designated
-    environment variables and, if not found, has default values that maximize
-    observability.
+    environment variables and, if not found, uses the documented defaults.
+    Images default to fail-closed redaction; an explicit positive image cap
+    opts into the bounded r4 image policy.
     """
 
     hide_llm_invocation_parameters: Optional[bool] = field(
@@ -283,7 +286,26 @@ class TraceConfig:
             "default_value": DEFAULT_BASE64_IMAGE_MAX_LENGTH,
         },
     )
-    """Limits characters of a base64 encoding of an image"""
+    """Nonnegative integer image cap; default 0 (fail-closed image redaction).
+
+    At zero, data: followed by image/ and then a comma anywhere in the same
+    supported decoded view replaces its strict-JSON string-token scope, or the
+    whole unfenced value, with [image-redacted]. Spacing and Default_Ignorable/Cf
+    characters are ignored. No MIME, flag or payload grammar is required: false
+    flags, empty payloads and non-base64 SVG followed by a comma are deliberately
+    over-redacted; a mention with no later comma carries no payload and is kept.
+    Q1 tokens are inspected independently. Declared/signature-only images
+    retain their positive recognition. A still-changing scope after three
+    transport passes is also replaced. Existing scan, depth and work bounds
+    may replace benign scopes. Non-image data URIs, remote image URLs and
+    already-exported data are outside this image-prefix policy.
+
+    An explicit positive integer retains the r4 bounded behavior and its
+    exact/below-limit handling. Invalid init/env caps (including bool, float,
+    negative and unparsable values) warn without logging their value and use
+    0. Decimal integer strings, including "0", are accepted. None means read
+    the environment, then the default. Stronger hide policies still win.
+    """
     pii_redaction: Optional[bool] = field(
         default=None,
         metadata={
@@ -291,7 +313,7 @@ class TraceConfig:
             "default_value": DEFAULT_PII_REDACTION,
         },
     )
-    """Enables regex-based PII redaction on attribute values"""
+    """Enables PII redaction, except on correlation identifier fields (session/user/conversation ids)."""
     _hide_error_details: Optional[bool] = field(
         default=None,
         metadata={
@@ -359,8 +381,13 @@ class TraceConfig:
     def mask(
         self,
         key: str,
-        value: Union[AttributeValue, Callable[[], AttributeValue]],
+        value: Union[AttributeValue, Callable[[], AttributeValue], ChatInput],
     ) -> Optional[AttributeValue]:
+        # Opaque payloads can duplicate structured messages. Treat their whole
+        # value as private before evaluating a lazy serializer; no safe modality
+        # boundary exists inside arbitrary JSON or strings.
+        private_input = self.hide_inputs or self.hide_input_messages or self.hide_input_text
+        private_output = self.hide_outputs or self.hide_output_messages or self.hide_output_text
         if self.hide_error_details and is_error_detail_key(key):
             return None
         elif (
@@ -368,20 +395,24 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
-        elif self.hide_inputs and _has_content_prefix(key, (SpanAttributes.INPUT_VALUE,)):
+        elif type(value) is ChatInput:
+            # Exact type and exact input keys only. Core validates and masks the
+            # passive structure itself; a caller cannot mark an opaque string safe.
+            value = (mask_chat_input(value, self)
+                     if key in (SpanAttributes.INPUT_VALUE, SpanAttributes.RAW_INPUT)
+                     else REDACTED_VALUE)
+        elif (private_input or self.hide_input_images) and _has_content_prefix(
+            key, (SpanAttributes.INPUT_VALUE, *tuple(_HIDDEN_WITH_INPUTS))
+        ):
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
             return None
-        elif self.hide_inputs and _has_content_prefix(key, tuple(_HIDDEN_WITH_INPUTS)):
-            # The raw request body (messages included) and the values filled
-            # into a prompt template are inputs too.
-            value = REDACTED_VALUE
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.OUTPUT_VALUE,)):
+        elif private_output and _has_content_prefix(
+            key, (SpanAttributes.OUTPUT_VALUE, SpanAttributes.RAW_OUTPUT)
+        ):
             value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_MIME_TYPE:
             return None
-        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.RAW_OUTPUT,)):
-            value = REDACTED_VALUE
         # The aggregate tool call can contain both arguments and results; hide
         # it if either direction is private. Specific child fields remain
         # directional, and identifiers like gen_ai.tool.name stay visible.
@@ -440,14 +471,6 @@ class TraceConfig:
             and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
         ):
             return None
-        elif (
-            is_base64_url(value)  # type:ignore
-            and len(value) > self.base64_image_max_length  # type:ignore
-            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
-            and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
-            and key.endswith(ImageAttributes.IMAGE_URL)
-        ):
-            value = REDACTED_VALUE
         elif self.hide_embedding_vectors and (
             _has_content_prefix(key, (SpanAttributes.GEN_AI_EMBEDDINGS_VECTORS,))
             or (
@@ -457,9 +480,38 @@ class TraceConfig:
         ):
             return None
         resolved = value() if callable(value) else value
-        if self.pii_redaction and resolved is not None:
-            resolved = redact_pii_in_value(resolved)
-        return resolved
+        if resolved is None:
+            return None
+        # Image policy still applies to every retained value. Only the PII pass
+        # exempts correlation identifier fields (#195); metadata stays redacted.
+        return self.redact_value(
+            resolved, image_key=_is_image_key(key), attribute_key=key
+        )
+
+    def redact_value(
+        self,
+        value: AttributeValue,
+        image_key: bool = False,
+        *,
+        attribute_key: Optional[str] = None,
+    ) -> AttributeValue:
+        """Apply the image cap, then the optional PII pass.
+
+        The image cap is independent of the attribute's PII scope and runs first.
+        ``mask`` supplies the key for span, event, link and sampler attributes;
+        correlation identifier fields are exempt from PII only. Unkeyed
+        callers retain the full PII policy, including ``FiSpan``'s exception
+        message, stack trace, generated type and ERROR status description.
+        Unknown/custom attribute keys remain scanned for compatibility.
+        """
+        capped = cap_base64_images(
+            value, self.base64_image_max_length, REDACTED_VALUE, image_key=image_key
+        )
+        if self.pii_redaction and (
+            attribute_key is None or key_carries_free_text(attribute_key)
+        ):
+            return redact_pii_in_value(capped)
+        return capped
 
     def _parse_value(
         self,
@@ -468,8 +520,13 @@ class TraceConfig:
         env_var: str,
         default_value: Any,
     ) -> None:
-        type_name = expected_type.__name__
         init_value = getattr(self, field_name, None)
+        if field_name == "base64_image_max_length":
+            supplied = os.getenv(env_var) if init_value is None else init_value
+            cap = default_value if supplied is None else _normalize_image_cap(supplied)
+            object.__setattr__(self, field_name, cap)
+            return
+        type_name = expected_type.__name__
         if init_value is None:
             env_value = os.getenv(env_var)
             if env_value is None:
@@ -491,7 +548,7 @@ class TraceConfig:
                     )
                     object.__setattr__(self, field_name, default_value)
         else:
-            if not isinstance(init_value, expected_type):
+            if not isinstance(init_value, expected_type) or (expected_type is int and isinstance(init_value, bool)):
                 raise TypeError(
                     f"The field {field_name.lstrip('_')} must be of type '{type_name}' "
                     f"but '{type(init_value).__name__}' was found."
@@ -512,7 +569,22 @@ class TraceConfig:
             return cast_to(value)
 
 
+def _is_image_key(key: str) -> bool:
+    # A flattened payload, not every schema/identifier descendant of an image.
+    image = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
+    return (
+        key.endswith(image)
+        or key.endswith(ImageAttributes.IMAGE_URL)
+        or (
+            image + "." in key
+            and key.rsplit(".", 1)[-1] in ("data", "bytes", "content", "base64", "b64_json")
+        )
+    )
+
+
 def is_base64_url(url: str) -> bool:
     if not isinstance(url, str):
         return False
-    return url.startswith("data:image/") and "base64" in url
+    # Data URL schemes, media types and the base64 marker are case-insensitive.
+    lowered = url.lower()
+    return lowered.startswith("data:image/") and "base64" in lowered

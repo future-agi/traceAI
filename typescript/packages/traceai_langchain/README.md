@@ -36,6 +36,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import * as CallbackManagerModule from "@langchain/core/callbacks/manager";
+import * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import * as RunnableModule from "@langchain/core/runnables";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
@@ -56,7 +58,7 @@ registerInstrumentations({
 });
 
 // 3. Manually instrument LangChain (required as it doesn't have a traditional module structure)
-lcInstrumentation.manuallyInstrument(CallbackManagerModule);
+lcInstrumentation.manuallyInstrument(CallbackManagerModule, ChatModelModule, RunnableModule);
 
 // 4. Use LangChain as normal
 const chatModel = new ChatOpenAI({
@@ -90,6 +92,20 @@ For a long-running service, leave the provider running between requests. When th
 service stops, finish in-flight chains, await `awaitAllCallbacks()`, then shut down
 the provider. Before an explicit `forceFlush()`, drain callbacks in the same order.
 
+Pass all three modules to `manuallyInstrument()` when using composed streams.
+The chat-model and Runnable patches handle `break`, iterator `return()`, and
+cancellation for models, nested `RunnableSequence` chains, and streaming Runnable
+transforms. Unfinished spans end with an error and `langchain.stream.cancelled=true`,
+without reporting partial output or usage as a successful response. The two-module
+form covers model streams only; the original one-module form covers callbacks
+only. Fully consume or explicitly close every stream; an iterator abandoned
+without `return()` cannot be observed.
+
+Streaming LLM spans record `gen_ai.response.time_to_first_token` in **seconds**
+from run start to the first token callback or delivered model chunk. It is recorded
+once, including for streams later cancelled, and remains available when input and
+output content are hidden. Runs with no observed streaming token/chunk omit it.
+
 ## Features
 
 - Automatic tracing of LangChain operations
@@ -97,6 +113,54 @@ the provider. Before an explicit `forceFlush()`, drain callbacks in the same ord
 - Support for both ESM and CommonJS modules
 - Compatible with `@langchain/core` 0.2.x, 0.3.x, and 1.x
 - Integration with TraceAI's observability platform
+
+## Remote LangGraph SDK calls
+
+The local graph callback instrumentation above traces graph nodes in your process.
+For a graph served by a remote LangGraph server, wrap the SDK client to trace
+`runs.wait` and `runs.stream` as client operations. Install the LangGraph SDK
+and this package's required LangChain core peer:
+
+```bash
+npm install @traceai/langchain @traceai/fi-core @langchain/core @langchain/langgraph-sdk @opentelemetry/core @opentelemetry/api
+```
+
+For SDK releases with `ClientConfig.onRequest` (such as 1.12.9), use its
+official hook to send the client span's W3C trace context to the server:
+
+```typescript
+import { Client } from "@langchain/langgraph-sdk";
+import { register, ProjectType } from "@traceai/fi-core";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { propagation } from "@opentelemetry/api";
+import { wrapLangGraphClient, langGraphTraceRequestHook } from "@traceai/langchain";
+
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+const provider = register({ projectName: "my-remote-graphs", projectType: ProjectType.OBSERVE });
+const client = wrapLangGraphClient(new Client({
+  apiUrl: process.env.LANGGRAPH_API_URL!,
+  apiKey: process.env.LANGGRAPH_API_KEY,
+  onRequest: langGraphTraceRequestHook(),
+}), { tracerProvider: provider });
+try {
+  const state = await client.runs.wait("my-thread-id", "my-assistant-id", {
+    input: { question: "What is OpenTelemetry?" },
+  });
+  console.log(state);
+} finally {
+  await provider.shutdown();
+}
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, `LANGGRAPH_API_URL`, and (if your remote
+server requires one) `LANGGRAPH_API_KEY` in your environment. Configure a W3C
+propagator once at startup, as shown above. Older SDK releases without
+`onRequest` still support client spans,
+but cannot inject headers through the official hook. Instrument the remote
+server separately to see its node, model, and tool spans; sending a trace
+header alone does not cause server spans to appear. Stream spans end after the
+stream is fully consumed or closed, not when `runs.stream()` returns.
+Requests and outputs are not copied onto these client spans.
 
 ## Peer Dependencies
 

@@ -84,6 +84,7 @@ func TestCompletedStreamIgnoresLaterCancellation(t *testing.T) {
 		p, e := provider(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		_, r := NewClient(nil, WithTracerProvider(p)).start(ctx, "test", nil)
+		r.streamComplete = true // Simulate an already observed provider stop event.
 		inner := &fakeReader{events: make(chan *int), closed: make(chan struct{})}
 		if !explicitClose {
 			close(inner.events)

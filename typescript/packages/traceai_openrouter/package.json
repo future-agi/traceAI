@@ -1,0 +1,24 @@
+{
+  "name": "@traceai/openrouter",
+  "version": "0.1.0",
+  "description": "OpenTelemetry tracing for the official OpenRouter TypeScript SDK",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.cjs", "lint": "eslint src", "prepare": "pnpm run build" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20.19.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_openrouter" },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "license": "Apache-2.0", "publishConfig": { "access": "public" },
+  "keywords": ["openrouter", "opentelemetry", "traceai"],
+  "dependencies": { "@opentelemetry/api": "^1.9.0" },
+  "peerDependencies": { "@openrouter/sdk": ">=1.5.33 <2.0.0" },
+  "devDependencies": {
+    "@openrouter/sdk": "1.5.34",
+    "@openrouter/sdk-floor": "npm:@openrouter/sdk@1.5.33",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@types/node": "^22.15.29",
+    "eslint": "^9.39.1", "typescript": "^5.7.3", "typescript-eslint": "^8.46.2"
+  }
+}

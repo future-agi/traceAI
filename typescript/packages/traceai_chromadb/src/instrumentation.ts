@@ -130,7 +130,7 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
   protected init() {
     return new InstrumentationNodeModuleDefinition(
       "chromadb",
-      ["^1.0.0", "^2.0.0", "^3.0.0"],
+      ["^1.1.0", "^2.0.0", "^3.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this)
     );
@@ -334,8 +334,10 @@ export class ChromaDBInstrumentation extends InstrumentationBase {
     return {
       [VectorDBConventions.DB_SYSTEM]: "chromadb",
       [VectorDBConventions.DB_OPERATION_NAME]: operation,
-      [VectorDBConventions.DB_NAMESPACE]: collectionName,
-      [VectorDBConventions.DB_VECTOR_COLLECTION_NAME]: collectionName,
+      ...(!this.hideInputs ? {
+        [VectorDBConventions.DB_NAMESPACE]: collectionName,
+        [VectorDBConventions.DB_VECTOR_COLLECTION_NAME]: collectionName,
+      } : {}),
       [SemanticConventions.FI_SPAN_KIND]: "VECTOR_DB",
     };
   }

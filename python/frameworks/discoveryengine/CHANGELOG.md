@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/future-agi/traceAI/compare/traceai-discoveryengine-v0.1.0...traceai-discoveryengine-v0.1.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **openai:** close privacy and SDK lifecycle release blockers ([#571](https://github.com/future-agi/traceAI/issues/571)) ([d7e5555](https://github.com/future-agi/traceAI/commit/d7e5555b60faa8b77d8f0db05942e91092fcfe94))
+
 ## 0.1.0
 
 First release.

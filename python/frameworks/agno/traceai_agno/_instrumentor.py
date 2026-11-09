@@ -210,7 +210,8 @@ def configure_agno_tracing(
     For Future AGI direct export, use https://api.futureagi.com/tracer/v1/traces,
     headers X-Api-Key and X-Secret-Key, and a project_name. Project attributes
     belong to the resource, not authentication headers. Content controls are
-    supplied through OpenInference's TraceConfig or OPENINFERENCE_* variables.
+    supplied through OpenInference's TraceConfig, OPENINFERENCE_* variables,
+    and the shared FI_HIDE_* policy (either family's hide flags take precedence).
     """
     return AgnoInstrumentorWrapper().instrument(
         tracer_provider=tracer_provider,

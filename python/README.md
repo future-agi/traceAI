@@ -4,6 +4,24 @@ OpenTelemetry instrumentation for AI applications. Install the core and the inst
 
 [All languages](../README.md) · [Integration guides](https://docs.futureagi.com/docs/integrations/traceai) · [Core API and configuration](fi_instrumentation/README.md)
 
+## Supported Python versions
+
+Core tracing supports Python 3.10–3.15, with either the default HTTP exporter
+or the optional `grpc` exporter:
+
+```bash
+pip install fi-instrumentation-otel         # HTTP tracing, Python 3.10–3.15
+pip install 'fi-instrumentation-otel[grpc]' # gRPC tracing, Python 3.10–3.15
+```
+
+The optional `evaluation` extra (including `[grpc,evaluation]`) supports Python
+3.10–3.14. Its dependency chain, including LiteLLM/fastuuid, is not yet compatible
+with Python 3.15. Use Python 3.14 or earlier for
+`pip install 'fi-instrumentation-otel[evaluation]'`; installing this extra on
+3.15 can fail while resolving or building those dependencies. It is never
+silently omitted, and it does not restrict core-only or `[grpc]` installs.
+Framework instrumentors have their own runtime constraints.
+
 ## Quickstart
 
 Use Python 3.10–3.13 for this OpenAI example.
@@ -100,6 +118,14 @@ Content capture is on by default. Configure `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
 Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument(tracer_provider=provider)` to use an existing exporter. The `register()` helper configures Future AGI by default. On current source, `register(span_exporter=...)` replaces that destination; older published versions may not include this option.
 
 [Provider setup](fi_instrumentation/otel.py) · [Examples](examples/)
+
+## Troubleshooting: 401 Unauthorized when exporting traces
+
+- **Check the export URL.** Set `FI_BASE_URL` to the deployment you intend to use. The default HTTP exporter sends to `/tracer/v1/traces` and replaces any path in `FI_BASE_URL`; an explicit `HTTPSpanExporter(endpoint=...)` is used unchanged. A successful health check does not validate your export credentials.
+- **Use one pair of keys.** Set `FI_API_KEY` and `FI_SECRET_KEY` from the same key, in the exporting process, before the exporter is created. Do not use a masked secret.
+- **Use one credential source.** Explicit `Authorization`, `X-Api-Key` or `X-Secret-Key` headers take precedence and the environment keys are then not added. Remove an unrelated `Authorization` header rather than mixing sources. An empty credential header is ignored.
+- **Retired or disabled keys.** If the service reports a retired key, create a personal key at `/dashboard/keys`, and confirm that its owner still has access to the organization (and workspace, when scoped).
+- **When reporting an issue**, share the sanitized URL, SDK and exporter versions, the response status, error code and request id, and the header *names* you send. Never share key values, `Authorization` values or an unredacted environment dump.
 
 ## Packages
 

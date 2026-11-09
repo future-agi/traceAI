@@ -239,13 +239,11 @@ def test_tool_journey_reaches_collector_path_mapped_with_content_hidden(built_pa
     for child in (llm, weather, failing):
         assert child["parentSpanId"] == root["spanId"]
 
-    # Model, provider, tool, session, user.
+    # Model/provider/tool/user identity survives; session credentials do not.
     assert l["gen_ai.request.model"] == "mockai/mock-model-1" and l["gen_ai.provider.name"] == "mockai"
     assert r["gen_ai.request.model"] == "mockai/mock-model-1"
     assert (w["gen_ai.tool.name"], w["gen_ai.tool.call.id"]) == ("get_weather", "call-weather")
-    for span in spans:
-        a = _attrs(span)
-        assert a["session.id"] == "conv-123" and a["user.id"] == "user-9", span["name"]
+    _assert_session_privacy(spans, output)
 
     # Tokens: promoted keys on the model-call span only; the trace sums to the mock model's calls.
     calls = output["modelCalls"]
@@ -259,10 +257,13 @@ def test_tool_journey_reaches_collector_path_mapped_with_content_hidden(built_pa
             assert not [key for key in _attrs(span) if _is_promoted(key)], span["name"]
     assert r["voltagent.usage.input_tokens"] == 24 and r["usage.prompt_tokens"] == 24
 
-    # Errors: ERROR status carrying the error type only; no message, no stack trace.
+    # The FI destination hides status text too; error classification stays an attribute.
     assert _status(failing) == 2
     assert "error.message" not in f and "error.stack" not in f
-    assert failing["status"].get("message") == f["error.type"]
+    native_failure = next(span for span in output["recorded"] if span["name"] == "tool.execution:explode")
+    assert isinstance(f["error.type"], str) and f["error.type"]
+    assert f["error.type"] == native_failure["errorType"]
+    assert "message" not in failing["status"]
     exception = [event for event in failing.get("events", []) if event["name"] == "exception"]
     assert exception and set(_attrs(exception[0])) == {"exception.type"}
     assert _status(weather) == 1 and _status(root) == 1
@@ -289,10 +290,32 @@ def _hex_span_id(span_id: str) -> str:
     return binascii.hexlify(base64.b64decode(span_id)).decode()
 
 
+def _assert_session_privacy(spans: List[Dict[str, Any]], output: Dict[str, Any]) -> None:
+    # H1/S1: a caller-supplied conversation ID does not establish that session.id
+    # is non-authorizing. Require exact redaction, not omission or a wildcard.
+    # Preserve the old positive identity control on native spans, before AND
+    # after FI export; export must not mutate VoltAgent's own destinations.
+    recorded = {span["spanId"]: span for span in output["recorded"]}
+    native = {span["spanId"]: span for span in output["nativeIdentities"]}
+    assert len(spans) == len(recorded) == len(native)
+    assert set(recorded) == set(native) == {_hex_span_id(span["spanId"]) for span in spans}
+    for span in spans:
+        span_id = _hex_span_id(span["spanId"])
+        for control in (recorded[span_id], native[span_id]):
+            assert control["conversationId"] == "conv-123", span["name"]
+            assert control["userId"] == "user-9", span["name"]
+        a = _attrs(span)
+        assert a["session.id"] == "<redacted>", span["name"]
+        assert a["user.id"] == "user-9", span["name"]
+    # Discovery from session.id also protects duplicate aliases and other surfaces.
+    assert "conv-123" not in json.dumps(spans)
+
+
 def test_content_is_exported_by_default(built_package: Path) -> None:
     with Receiver() as receiver:
         output = _run_fixture(NODE, receiver.origin, "tools")
         spans = receiver.spans()
+    _assert_session_privacy(spans, output)
     root = _attrs(_one(spans, "assistant"))
     weather = _attrs(_one(spans, "tool.execution:get_weather"))
     failing = _one(spans, "tool.execution:explode")

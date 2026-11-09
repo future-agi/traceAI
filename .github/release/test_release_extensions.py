@@ -44,6 +44,14 @@ class ExtensionTests(unittest.TestCase):
             p = release_plan.other_packages(root)[0]
             self.assertEqual((p['version'], p['tag']), ('0.1.7', 'go/openai/v0.1.7'))
 
+    def test_ruby_gem_is_inventoried_but_held_until_publisher_exists(self):
+        root = release_plan.REPO_ROOT
+        gems = [p for p in release_plan.other_packages(root) if p['ecosystem'] == 'ruby']
+        self.assertEqual([(p['name'], p['version']) for p in gems], [('traceai-roast', '0.1.0')])
+        plan = release_plan.plan(gems, release_plan.load_config(), offline=True)
+        self.assertEqual(plan['skipped'][0]['name'], 'traceai-roast')
+        self.assertIn('RubyGems publishing', plan['skipped'][0]['reason'])
+
     def test_go_proxy_case_escaping(self):
         with patch.object(release_plan, '_get_json', return_value={'Version': 'v0.1.0'}) as get:
             p = {'ecosystem': 'go', 'name': 'github.com/future-agi/traceAI/go/openai', 'version': '0.1.0'}
@@ -284,8 +292,21 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(release_plan.coverage_problems(root, packages), [])
         config = json.loads((root / 'release-please-config.json').read_text())
         manifest = json.loads((root / '.release-please-manifest.json').read_text())
-        self.assertEqual(set(config['packages']), {p.get('release_path', p['dir']) for p in packages})
+        publishable_paths = {p.get('release_path', p['dir']) for p in packages}
+        # Held adapter prototypes keep version metadata for eventual qualification,
+        # but private:true must still exclude them from every publication plan.
+        private_paths = {
+            str(file.parent.relative_to(root)): json.loads(file.read_text())
+            for file in (root / 'typescript/packages').glob('*/package.json')
+            if json.loads(file.read_text()).get('private')
+        }
+        self.assertTrue(publishable_paths <= set(config['packages']))
+        self.assertTrue(set(config['packages']) - publishable_paths <= set(private_paths))
         self.assertEqual(set(manifest), set(config['packages']))
+        for path in set(config['packages']) - publishable_paths:
+            self.assertEqual(manifest[path], private_paths[path]['version'])
+            self.assertEqual(config['packages'][path]['release-type'], 'node')
+            self.assertEqual(config['packages'][path]['package-name'], private_paths[path]['name'])
         for p in packages:
             self.assertEqual(manifest[p.get('release_path', p['dir'])], p['version'])
 
