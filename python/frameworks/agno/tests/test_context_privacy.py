@@ -116,10 +116,11 @@ async def test_context_privacy_at_every_boundary(
             if privacy == "hide_inputs":
                 assert expected != raw
             elif privacy == "pii":
-                # Issue #195: PII redaction exempts correlation identifiers and
-                # metadata; this context carries PII only in user.id and metadata.
+                # Issue #195: PII redaction exempts identifier fields such as
+                # user.id; free-form metadata stays redacted.
                 assert expected["user.id"] == raw["user.id"]
-                assert expected["metadata"] == raw["metadata"]
+                assert expected["metadata"] != raw["metadata"]
+                assert CONTACT not in expected["metadata"]
             if operation == "knowledge":
                 store = VectorStore()
                 knowledge = Knowledge(name="context-records", vector_db=store)
@@ -189,8 +190,8 @@ async def test_context_privacy_at_every_boundary(
                     {a.key: a.value.string_value for a in span.attributes}, expected
                 )
             secret = TEMPLATE if privacy == "hide_inputs" else CONTACT
-            # Issue #195: PII redaction keeps user.id and metadata, which are the
-            # only attributes carrying CONTACT here (assert_policy pins the rest).
+            # Issue #195: PII redaction keeps user.id, which still carries CONTACT
+            # here; metadata is redacted (assert_policy pins every value).
             assert (
                 secret.encode() in b"".join(body for _, _, body in receiver[1])
             ) == (privacy in ("default", "pii"))
@@ -224,9 +225,10 @@ def test_composed_policy_keeps_openinference_config_and_provider_isolation(monke
                 pass
             assert dict(get_attributes_from_context()) == raw
         private, other = exporter.get_finished_spans()
-        # FI PII redaction applies to the agno span's free text; correlation
-        # identifiers and metadata are exempt (issue #195).
+        # FI PII redaction applies to the agno span's free text and metadata;
+        # identifier fields such as user.id are exempt (issue #195).
         assert CONTACT not in private.attributes["input.value"]
+        assert CONTACT not in private.attributes["metadata"]
         assert private.attributes["user.id"] == CONTACT
         assert other.attributes["user.id"] == CONTACT
         assert other.attributes["input.value"] == f"reach {CONTACT}"

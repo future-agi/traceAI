@@ -17,23 +17,48 @@ from fi_instrumentation.instrumentation.pii_redaction import (
 
 EMAIL = "jane@example.com"
 UUID = "73630065-0794-4450-a1f9-8cc987a02b09"
-STRUCTURED_KEYS = (
+PHONE = "+1 415 555 0100"
+# Identifier fields are exempt from PII redaction (#195). Metadata is free-form and
+# stays redacted when the flag is on (fi-security ruling on the #244 scope).
+ID_KEYS = (
     "session.id",
     "user.id",
     "gen_ai.conversation.id",
     "conversation.id",
+)
+METADATA_KEYS = (
     "metadata",
     "metadata.request_id",
     "metadata.message.content",
 )
+STRUCTURED_KEYS = ID_KEYS + METADATA_KEYS
 
 
-@pytest.mark.parametrize("key", STRUCTURED_KEYS)
-@pytest.mark.parametrize("value", (UUID, "1234567890123", EMAIL))
-def test_structured_values_are_exempt_from_pii(clean_env, key, value):
+@pytest.mark.parametrize("key", ID_KEYS)
+@pytest.mark.parametrize("value", (UUID, "1234567890123", EMAIL, PHONE))
+def test_identifier_values_are_exempt_from_pii(clean_env, key, value):
     config = TraceConfig(pii_redaction=True)
     assert not key_carries_free_text(key)
     assert config.mask(key, value) == value
+
+
+@pytest.mark.parametrize("key", METADATA_KEYS)
+def test_metadata_is_redacted_when_pii_redaction_is_on(clean_env, key):
+    config = TraceConfig(pii_redaction=True)
+    assert key_carries_free_text(key)
+    assert config.mask(key, EMAIL) == "<EMAIL_ADDRESS>"
+    assert config.mask(key, f"call {PHONE}") == "call <PHONE_NUMBER>"
+    assert config.mask(key, '{"contact": "jane@example.com", "safe": "kept"}') == (
+        '{"contact": "<EMAIL_ADDRESS>", "safe": "kept"}'
+    )
+    # #244's pattern fixes still keep identifier-shaped metadata values intact.
+    assert config.mask(key, UUID) == UUID
+    assert config.mask(key, "1234567890123") == "1234567890123"
+
+
+@pytest.mark.parametrize("key", METADATA_KEYS)
+def test_metadata_is_unchanged_when_pii_redaction_is_off(clean_env, key):
+    assert TraceConfig(pii_redaction=False).mask(key, EMAIL) == EMAIL
 
 
 @pytest.mark.parametrize("key", STRUCTURED_KEYS)
@@ -165,7 +190,7 @@ def test_exported_surfaces_keep_correlation_and_redact_custom_content(clean_env)
         for attributes in collections:
             assert attributes["session.id"] == UUID
             assert attributes["user.id"] == "1234567890123"
-            assert attributes["metadata"] == EMAIL
+            assert attributes["metadata"] == "<EMAIL_ADDRESS>"
             assert attributes["extra"] == "<EMAIL_ADDRESS>"
         assert exported.attributes["gen_ai.conversation.id"] == UUID
         assert exported.attributes["later"] == "<EMAIL_ADDRESS>"
