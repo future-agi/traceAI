@@ -192,7 +192,8 @@ def test_close_failure_preserves_exception_and_finishes(
                 stream = await sdk.chat.completions.create(**ARGS, stream=True)
                 await stream.__anext__()
                 with monkeypatch.context() as patch:
-                    patch.setattr(stream.response, "aclose", fail_close)
+                    # Fail the SDK stream's own HTTP response; stream.response is a close-tracking proxy.
+                    patch.setattr(stream.__wrapped__.response, "aclose", fail_close)
                     with pytest.raises(RuntimeError) as caught:
                         await getattr(stream, close_method)()
                     assert caught.value is error
@@ -208,7 +209,8 @@ def test_close_failure_preserves_exception_and_finishes(
             stream = sdk.chat.completions.create(**ARGS, stream=True)
             next(stream)
             with monkeypatch.context() as patch:
-                patch.setattr(stream.response, "close", fail_close)
+                # Fail the SDK stream's own HTTP response; stream.response is a close-tracking proxy.
+                patch.setattr(stream.__wrapped__.response, "close", fail_close)
                 with pytest.raises(RuntimeError) as caught:
                     stream.close()
                 assert caught.value is error
