@@ -112,7 +112,7 @@ class _RequestAttributesExtractor:
 
             # Handle images in multimodal messages
             if "images" in message and not self._config.hide_input_images:
-                images = message.get("images", [])
+                images = message.get("images") or []
                 yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.images", safe_json_dumps(images[:3])  # Limit to 3
 
     def _extract_invocation_parameters(

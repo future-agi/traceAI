@@ -34,12 +34,12 @@ def _redact_tool_calls(tool_calls: Any) -> Any:
         return tool_calls
     redacted = []
     for tool in tool_calls:
-        if not isinstance(tool, Mapping):
-            redacted.append(tool)
-            continue
-        item = dict(tool)
-        if isinstance(item.get("function"), Mapping):
-            function = dict(item["function"])
+        # SDK models are iterable but are not Mappings. Normalize both levels
+        # before redaction, including a mapping containing a typed function.
+        item = dict(tool) if isinstance(tool, Mapping) else dict(_to_dict(tool))
+        if item.get("function") is not None:
+            value = item["function"]
+            function = dict(value) if isinstance(value, Mapping) else dict(_to_dict(value))
             if "arguments" in function:
                 function["arguments"] = REDACTED_VALUE
             item["function"] = function
