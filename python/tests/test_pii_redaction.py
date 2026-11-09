@@ -56,6 +56,16 @@ def test_metadata_is_redacted_when_pii_redaction_is_on(clean_env, key):
     assert config.mask(key, "1234567890123") == "1234567890123"
 
 
+@pytest.mark.parametrize("escape", ("\\n", "\\t", "\\r"))
+def test_phone_after_a_json_escape_in_metadata_is_redacted(clean_env, escape):
+    # Metadata is JSON-serialized; a newline before a phone becomes backslash-n.
+    config = TraceConfig(pii_redaction=True)
+    value = '{"contact": "call' + escape + '2125550199"}'
+    assert config.mask("metadata", value) == '{"contact": "call' + escape + '<PHONE_NUMBER>"}'
+    # A long identifier after an escape is still not a phone number.
+    assert config.mask("metadata", '{"id": "x' + escape + '9123456789012"}') == '{"id": "x' + escape + '9123456789012"}'
+
+
 @pytest.mark.parametrize("key", METADATA_KEYS)
 def test_metadata_is_unchanged_when_pii_redaction_is_off(clean_env, key):
     assert TraceConfig(pii_redaction=False).mask(key, EMAIL) == EMAIL

@@ -69,6 +69,12 @@ class CaptureStarts(SpanProcessor):
         self.attributes.append(dict(span.attributes))
 
 
+def ids_exempt_from_pii():
+    """Cores with the issue #195 scope keep identifier fields under PII redaction;
+    older published cores redact them. Metadata is redacted by both."""
+    return FITraceConfig(pii_redaction=True).mask("user.id", CONTACT) == CONTACT
+
+
 def context_attributes():
     return using_attributes(
         prompt_template_variables={"customer": TEMPLATE},
@@ -116,10 +122,12 @@ async def test_context_privacy_at_every_boundary(
             if privacy == "hide_inputs":
                 assert expected != raw
             elif privacy == "pii":
-                # Issue #195: PII redaction exempts identifier fields such as
-                # user.id; free-form metadata stays redacted.
-                assert expected["user.id"] == raw["user.id"]
-                assert expected["metadata"] != raw["metadata"]
+                # Issue #195: cores with the new scope keep identifier fields such
+                # as user.id; free-form metadata stays redacted on every core.
+                if ids_exempt_from_pii():
+                    assert expected["user.id"] == raw["user.id"]
+                else:
+                    assert CONTACT not in expected["user.id"]
                 assert CONTACT not in expected["metadata"]
             if operation == "knowledge":
                 store = VectorStore()
@@ -190,11 +198,12 @@ async def test_context_privacy_at_every_boundary(
                     {a.key: a.value.string_value for a in span.attributes}, expected
                 )
             secret = TEMPLATE if privacy == "hide_inputs" else CONTACT
-            # Issue #195: PII redaction keeps user.id, which still carries CONTACT
-            # here; metadata is redacted (assert_policy pins every value).
+            # Issue #195: PII redaction keeps user.id on cores with the new scope,
+            # and user.id is then the only attribute carrying CONTACT here
+            # (assert_policy pins every value).
             assert (
                 secret.encode() in b"".join(body for _, _, body in receiver[1])
-            ) == (privacy in ("default", "pii"))
+            ) == (privacy == "default" or (privacy == "pii" and ids_exempt_from_pii()))
     finally:
         instrumentation.uninstrument()
         if not endpoint_created:
@@ -229,7 +238,10 @@ def test_composed_policy_keeps_openinference_config_and_provider_isolation(monke
         # identifier fields such as user.id are exempt (issue #195).
         assert CONTACT not in private.attributes["input.value"]
         assert CONTACT not in private.attributes["metadata"]
-        assert private.attributes["user.id"] == CONTACT
+        if ids_exempt_from_pii():
+            assert private.attributes["user.id"] == CONTACT
+        else:
+            assert CONTACT not in private.attributes["user.id"]
         assert other.attributes["user.id"] == CONTACT
         assert other.attributes["input.value"] == f"reach {CONTACT}"
         assert "llm.tools.0.tool.json_schema" not in private.attributes
