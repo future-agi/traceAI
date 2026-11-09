@@ -113,8 +113,13 @@ async def test_context_privacy_at_every_boundary(
                 key: FITraceConfig().mask(key, value) for key, value in raw.items()
             }
             # Pin the installed FI policy, not just absence of some chosen text.
-            if privacy != "default":
+            if privacy == "hide_inputs":
                 assert expected != raw
+            elif privacy == "pii":
+                # Issue #195: PII redaction exempts correlation identifiers and
+                # metadata; this context carries PII only in user.id and metadata.
+                assert expected["user.id"] == raw["user.id"]
+                assert expected["metadata"] == raw["metadata"]
             if operation == "knowledge":
                 store = VectorStore()
                 knowledge = Knowledge(name="context-records", vector_db=store)
@@ -184,9 +189,11 @@ async def test_context_privacy_at_every_boundary(
                     {a.key: a.value.string_value for a in span.attributes}, expected
                 )
             secret = TEMPLATE if privacy == "hide_inputs" else CONTACT
+            # Issue #195: PII redaction keeps user.id and metadata, which are the
+            # only attributes carrying CONTACT here (assert_policy pins the rest).
             assert (
                 secret.encode() in b"".join(body for _, _, body in receiver[1])
-            ) == (privacy == "default")
+            ) == (privacy in ("default", "pii"))
     finally:
         instrumentation.uninstrument()
         if not endpoint_created:
@@ -203,7 +210,11 @@ def test_composed_policy_keeps_openinference_config_and_provider_isolation(monke
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = AgnoTracer(provider.get_tracer("agno"), oi, fi)
     unrelated = OITracer(provider.get_tracer("unrelated"), config)
-    attributes = {"llm.tools.0.tool.json_schema": "SYNTHETIC-TOOL", "user.id": CONTACT}
+    attributes = {
+        "llm.tools.0.tool.json_schema": "SYNTHETIC-TOOL",
+        "user.id": CONTACT,
+        "input.value": f"reach {CONTACT}",
+    }
     try:
         with context_attributes():
             raw = dict(get_attributes_from_context())
@@ -213,8 +224,12 @@ def test_composed_policy_keeps_openinference_config_and_provider_isolation(monke
                 pass
             assert dict(get_attributes_from_context()) == raw
         private, other = exporter.get_finished_spans()
-        assert CONTACT not in json.dumps(dict(private.attributes))
+        # FI PII redaction applies to the agno span's free text; correlation
+        # identifiers and metadata are exempt (issue #195).
+        assert CONTACT not in private.attributes["input.value"]
+        assert private.attributes["user.id"] == CONTACT
         assert other.attributes["user.id"] == CONTACT
+        assert other.attributes["input.value"] == f"reach {CONTACT}"
         assert "llm.tools.0.tool.json_schema" not in private.attributes
         assert "llm.tools.0.tool.json_schema" not in other.attributes
         assert dict(vars(config)) == original
