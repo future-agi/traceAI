@@ -115,10 +115,10 @@ def test_pii_redaction_removes_an_email_from_the_query(fake, monkeypatch, source
     assert PARALLEL_KEY not in wire
     # Redaction is on the span only; the vendor still got the caller's query.
     assert fake.calls[0][2]["search_queries"][0] == query
-    # The patterns also match ids (the README says so): ten digits look like a
-    # phone number.
+    # Digits that are part of a longer identifier are not a phone number
+    # (issue #195): the vendor request id is recorded intact.
     assert SEARCH_ID == "search_0123456789"
-    assert values["parallel.search_id"] == "search_<PHONE_NUMBER>"
+    assert values["parallel.search_id"] == SEARCH_ID
 
 
 def test_without_pii_redaction_the_email_is_recorded(fake):
