@@ -5,7 +5,6 @@
   identifier are no longer read as phone numbers, and card numbers must be card-shaped and pass the
   Luhn check. Free text and metadata are still redacted when the flag is on; hide flags and the image
   cap apply to every field.
-- Manual agent/span contexts now mark `BaseException` interruptions (including `KeyboardInterrupt`, `asyncio.CancelledError` and `GeneratorExit`) as ERROR when exception status recording is enabled, preserving exception propagation, cancellation and caller flags.
 
 ## [1.3.0] - pending release
 ### Added
