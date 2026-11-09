@@ -19,15 +19,11 @@ def native_async_reader(schema, batches):
     if hasattr(AsyncRecordBatchReader, "_from_batches"):
         return AsyncRecordBatchReader._from_batches(schema, batches)
 
-    async def next_batch():
-        try:
-            return await batches.__anext__()
-        except StopAsyncIteration:
-            return None
-
-    return AsyncRecordBatchReader(
-        SimpleNamespace(schema=lambda: schema, next=next_batch)
-    )
+    # 0.25+ validates the constructor input. Keep the real reader methods,
+    # replacing only its stream to inject deferred errors/cancellation.
+    reader = AsyncRecordBatchReader(pa.Table.from_batches([], schema=schema))
+    reader._inner = batches
+    return reader
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

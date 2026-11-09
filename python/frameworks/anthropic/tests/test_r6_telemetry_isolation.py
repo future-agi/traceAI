@@ -22,12 +22,12 @@ def setup():
 def test_event_with_null_usage_reaches_caller_and_rest_is_traced(traced):
     # The SDK accepts a message_start whose usage is null; telemetry must not replace it.
     start=json.loads(json.dumps(START)); start['message']['usage']=None
-    c=client(event(start)+event(BLOCK)+event(TEXT))
+    c=client(event(start)+event(BLOCK)+event(TEXT)+event({'type':'message_stop'}))
     if traced: p,x,i=setup()
     try:
         s=c.messages.create(**PARAMS)
         first=next(s); assert first.type=='message_start' and first.message.usage is None
-        assert [e.type for e in s]==['content_block_start','content_block_delta']
+        assert [e.type for e in s]==['content_block_start','content_block_delta','message_stop']
         assert s.close() is None
         if traced:
             spans=x.get_finished_spans(); assert len(spans)==1
@@ -43,7 +43,7 @@ def test_unreadable_event_keeps_native_item_and_later_telemetry(monkeypatch):
     from anthropic.types.raw_message_start_event import RawMessageStartEvent
     class Broken(Exception): pass
     def role(self): raise Broken()
-    c=client(event(START)+event(BLOCK)+event(TEXT))
+    c=client(event(START)+event(BLOCK)+event(TEXT)+event({'type':'message_stop'}))
     p,x,i=setup()
     try:
         s=c.messages.create(**PARAMS)
@@ -51,7 +51,7 @@ def test_unreadable_event_keeps_native_item_and_later_telemetry(monkeypatch):
         first=next(s)
         monkeypatch.undo()
         assert first.type=='message_start'
-        assert [e.type for e in s]==['content_block_start','content_block_delta']
+        assert [e.type for e in s]==['content_block_start','content_block_delta','message_stop']
         assert s.close() is None
         spans=x.get_finished_spans(); assert len(spans)==1
         assert spans[0].status.status_code.name!='ERROR'

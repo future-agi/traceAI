@@ -52,6 +52,16 @@ def test_langchain_core_range_admits_the_installed_version():
     assert not spec.contains("2.0.0")
 
 
+def test_langchain_core_floor_matches_the_supported_resolution():
+    # Older core versions can resolve with current langgraph-checkpoint but
+    # fail to import MCPAgent (Reviver lacks the allowed_objects argument).
+    spec = _dependency("langchain-core")
+    assert spec.contains("1.6.12")
+    for version in ("1.0.0", "1.6.11"):
+        assert not spec.contains(version), version
+    assert "langchain-core>=1.6.12,<2" in README.read_text()
+
+
 def test_fi_instrumentation_floor_is_1_1_0():
     # 0.1.11/0.1.12 export to the old create_otel_span path and the published
     # 1.0.0 fails while building its headers; 1.1.0 is the first good release.

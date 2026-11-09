@@ -414,6 +414,92 @@ class TracedSearchClientTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "vector, supplied-query, false, false", "vector, supplied-query, false, true",
+        "vector, supplied-query, true, false", "vector, supplied-query, true, true",
+        "vector, , false, false", "vector, , false, true",
+        "vector, , true, false", "vector, , true, true",
+        "filtered, supplied-query, false, false", "filtered, supplied-query, false, true",
+        "filtered, supplied-query, true, false", "filtered, supplied-query, true, true",
+        "filtered, , false, false", "filtered, , false, true",
+        "filtered, , true, false", "filtered, , true, true"
+    })
+    void vectorPageExportsRespectQueryInputCapture(String mode, String searchText,
+                                                   boolean hideInputs, boolean failLaterPage) throws Exception {
+        LinkedBlockingQueue<byte[]> payloads = new LinkedBlockingQueue<>();
+        HttpServer collector = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        collector.createContext("/v1/traces", exchange -> {
+            payloads.add(exchange.getRequestBody().readAllBytes());
+            exchange.getResponseHeaders().set("Content-Type", "application/x-protobuf");
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        collector.start();
+        try (SdkTracerProvider wireProvider = SdkTracerProvider.builder()
+            .addSpanProcessor(SimpleSpanProcessor.create(OtlpHttpSpanExporter.builder()
+                .setEndpoint("http://127.0.0.1:" + collector.getAddress().getPort() + "/v1/traces")
+                .build())).build()) {
+            FITracer wireTracer = new FITracer(wireProvider.get("vector-input-test"),
+                TraceConfig.builder().hideInputs(hideInputs).hideOutputs(true).hideErrorDetails(true).build());
+            TracedSearchClient traced = new TracedSearchClient(client, "index", wireTracer);
+            firstPage = FIRST_PAGE.replace("\"query\"", searchText == null ? "null" : "\"" + searchText + "\"");
+            SearchPagedIterable results = mode.equals("filtered")
+                ? traced.searchWithVectorAndFilter(searchText, List.of(1.0f), "embedding", 2,
+                    "private-filter eq 'secret'")
+                : traced.searchWithVector(searchText, List.of(1.0f), "embedding", 2);
+            assertThat(requests).hasValue(0);
+            assertThat(payloads).isEmpty();
+
+            Iterator<SearchResult> iterator = results.iterator();
+            assertThat(iterator.next().getScore()).isEqualTo(2.0);
+            // Capture settings must not change the query submitted to the real Azure SDK.
+            var body = com.google.gson.JsonParser.parseString(requestBodies.get(0)).getAsJsonObject();
+            String submittedText = body.has("search") && !body.get("search").isJsonNull()
+                ? body.get("search").getAsString() : null;
+            assertThat(submittedText).isEqualTo(searchText);
+            if (failLaterPage) {
+                nextFailure = new IllegalStateException("private-service-error");
+                assertThatThrownBy(iterator::hasNext).isSameAs(nextFailure);
+            } else {
+                assertThat(iterator.next().getScore()).isEqualTo(1.0);
+                assertThat(iterator.hasNext()).isFalse();
+            }
+            assertThat(requests).hasValue(2);
+            assertThat(Span.current().getSpanContext().isValid()).isFalse();
+            wireProvider.forceFlush().join(5, TimeUnit.SECONDS);
+
+            // OTLP requests may complete out of order. Check both pages, not arrival order.
+            List<ExportTraceServiceRequest> exports = new java.util.ArrayList<>();
+            for (int page = 0; page < 2; page++) {
+                byte[] payload = payloads.poll(5, TimeUnit.SECONDS);
+                assertThat(payload).isNotNull();
+                exports.add(ExportTraceServiceRequest.parseFrom(payload));
+            }
+            var spans = exports.stream().flatMap(request -> request.getResourceSpansList().stream())
+                .flatMap(resource -> resource.getScopeSpansList().stream())
+                .flatMap(scope -> scope.getSpansList().stream()).toList();
+            assertThat(spans).hasSize(2).extracting(span -> span.getStatus().getCodeValue())
+                .containsExactlyInAnyOrder(1, failLaterPage ? 2 : 1);
+            // Both the initial page and a successful or failed continuation carry the original input.
+            for (var span : spans) {
+                assertThat(span.getName()).isEqualTo(mode.equals("filtered")
+                    ? "Azure Search Filtered Vector Query" : "Azure Search Vector Query");
+                String capturedText = span.getAttributesList().stream()
+                    .filter(attribute -> attribute.getKey().equals(SemanticConventions.INPUT_VALUE))
+                    .map(attribute -> attribute.getValue().getStringValue()).findFirst().orElse(null);
+                assertThat(capturedText).as("vector page input.value").isEqualTo(hideInputs ? null : searchText);
+                assertThat(span.toString()).doesNotContain("private-service-error");
+                if (hideInputs) {
+                    assertThat(span.toString()).doesNotContain("supplied-query", "private-filter", "secret");
+                }
+            }
+            assertThat(payloads).isEmpty();
+        } finally {
+            collector.stop(0);
+        }
+    }
+
     private List<SpanData> retrievals() {
         return exporter.getFinishedSpanItems().stream()
             .filter(span -> span.getName().startsWith("Azure Search")).toList();

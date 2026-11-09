@@ -2,15 +2,19 @@
 
 OpenTelemetry tracing for the [OpenAI Codex SDK](https://www.npmjs.com/package/@openai/codex-sdk) (`@openai/codex-sdk`), exported to Future AGI through `@traceai/fi-core`. Every `Thread.run()` and `Thread.runStreamed()` becomes one trace: a `codex.turn` span with one child span per thread item (shell commands, file changes, MCP tool calls, web searches, reasoning, agent messages, to-do lists, errors).
 
-Alpha. Tested against `@openai/codex-sdk` 0.166.0 (latest stable on 2026-10-31) and the supported floor 0.44.0, driving the real SDK with a stand-in binary and checking OTLP exports on a loopback receiver (`contract/`). The earlier 0.162.1 test also drove the real `codex` binary; this update does not claim a new live-service test.
+Alpha. Supports `@openai/codex-sdk >=0.162.1 <1`. The floor (0.162.1) and pinned latest (0.166.0) are tested with their real bundled binaries against a loopback Responses API, including four turns, resume-by-id, token accounting and instrumentor replacement. Separate contracts cover tool events and OTLP/HTTP exports. These are offline provider contracts, not live-service tests.
 
 This is not Codex application session tracing (the `codex` TUI or IDE extension exporting through `[otel]` in `config.toml`), and not the OpenAI API instrumentation (`@traceai/openai`). The SDK runs the `codex` binary in a subprocess, so model requests made inside it are not visible to `@traceai/openai`.
 
 | Item | Value |
 |---|---|
 | Tested pin | `@openai/codex-sdk` 0.166.0 (Apache-2.0) with its bundled `@openai/codex` 0.166.0 |
-| Peer range | `>=0.44.0 <1`. The `Thread` shape this package patches was checked on 0.44.0, 0.80.0, 0.100.0, 0.140.0, 0.162.1 and 0.166.0 (`src/__tests__/sdkShape.test.ts` checks the installed one). The real-SDK loopback OTLP contract runs on 0.44.0 and 0.166.0. The cumulative token behavior below was verified with a real binary on 0.162.1 only |
+| Peer range | `>=0.162.1 <1`. The supported floor and pinned latest run the same unit, real-SDK, real-binary and OTLP contracts in CI. Earlier SDKs are no longer supported; see the compatibility note below |
 | Node | `>=18`, same as the SDK |
+
+## Compatibility change
+
+The supported floor is now **0.162.1**, previously 0.44.0. The 0.44.0 binary reports per-turn usage, while the verified 0.162.1 and 0.166.0 binaries report cumulative thread usage. Treating the old events as cumulative silently undercounts later turns. Equal or increasing numbers cannot distinguish these semantics, so this package does not guess from token values. Upgrade older SDKs before using this version. When using `codexPathOverride`, use a binary with the same cumulative-usage behavior as the supported SDK; substituting a legacy binary is not supported. The floor is a tested compatibility limit, not a claim about the first upstream release that changed behavior.
 
 ## Install
 
@@ -53,7 +57,7 @@ instrumentation.unpatch();                                      // undo everythi
 
 `CodexSDKInstrumentation` is not an OpenTelemetry `InstrumentationBase`: there is no module to hook on `require` or `import`, so passing it to `registerInstrumentations()` is not supported. Call `manuallyInstrument()` or the wrap methods.
 
-`wrapThread()` and threads from `wrapCodex()` keep no reference to the thread: after `unpatch()` their patched method stays in place and passes events through untraced.
+`wrapThread()` and threads from `wrapCodex()` are tracked weakly: `unpatch()` restores their original methods and clears the patch marker without retaining dropped threads. A live thread can then be wrapped by another instrumentation instance (and another tracer provider), or picked up by class instrumentation. An active patch is still protected from duplicate wrapping.
 
 ### What the wrapper does and does not do
 
@@ -99,7 +103,7 @@ A fi-core `session.id` the app set (fi-core context helpers) is kept; the thread
 
 ## Token usage
 
-`turn.completed.usage` is the thread's running total, not the turn's own spend. Verified on 0.162.1 only: a second turn on a thread reported 39,318 input tokens after the first reported 19,378, and a third turn resumed from a new process reported 49,397. The Future AGI collector sums `gen_ai.usage.*` over a trace and over a `session.id`, so the turn span holds only the new spend:
+`turn.completed.usage` is the thread's running total for the supported binaries, not the turn's own spend. The 0.162.1 and 0.166.0 real-binary contracts return 100 input / 10 output / 40 cached tokens per provider request and verify SDK totals of 100/200/300/400 input tokens while each exported turn records 100 input / 10 output / 40 cached tokens. The Future AGI collector sums `gen_ai.usage.*` over a trace and over a `session.id`, so the turn span holds only the new spend:
 
 - A new thread's first turn promotes the full value.
 - Later turns promote the total minus the last total this process saw for that thread id (an in-process map, at most 1000 threads). `resumeThread(id)` in the same process uses it too.
@@ -161,7 +165,9 @@ code N`, `Failed to parse item`, or the error class) rather than the raw message
 
 ```bash
 pnpm --filter @traceai/codex-sdk test            # jest: span model, privacy, usage, patching, SDK shape
-pnpm --filter @traceai/codex-sdk test:contract   # build, real SDK + stand-in binary, OTLP/HTTP loopback check
-# For the supported floor, install @openai/codex-sdk@0.44.0 in a separate directory,
-# then set CODEX_SDK_ENTRY to that install's dist/index.js and run contract/otlp_wire.mjs.
+pnpm --filter @traceai/codex-sdk test:contract   # pinned SDK: stand-in and real binary, OTLP/HTTP loopback
+pnpm --filter @traceai/codex-sdk test:compat     # unit + all contracts on pinned latest and supported floor
+# Build fi-core and fi-semantic-conventions first with pnpm run build:deps.
+# test:compat installs the floor into a temporary directory and restores the
+# workspace SDK symlink on exit; it does not modify the workspace lockfile.
 ```

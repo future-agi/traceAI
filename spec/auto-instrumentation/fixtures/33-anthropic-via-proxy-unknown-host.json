@@ -1,0 +1,54 @@
+{
+  "name": "anthropic-via-proxy-unknown-host",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:4000/v1/messages",
+    "headers": {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    "json": {
+      "model": "claude-sonnet-4-5",
+      "max_tokens": 32,
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "msg_p",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 2,
+        "output_tokens": 1
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat claude-sonnet-4-5",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "anthropic_compatible",
+      "server.port": 4000,
+      "output.value": "hello"
+    }
+  }
+}

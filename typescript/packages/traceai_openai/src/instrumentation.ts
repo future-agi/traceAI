@@ -43,6 +43,7 @@ import { isTracingSuppressed } from "@opentelemetry/core";
 
 import {
   FITracer,
+  rememberProviderResponse,
   safelyJSONStringify,
   TraceConfigOptions,
 } from "@traceai/fi-core";
@@ -61,17 +62,25 @@ import {
 
 const MODULE_NAME = "openai";
 
-/**
- * Flag to check if the openai module has been patched
- * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
- */
-let _isFIPatched = false;
+// Both public package entry points (and duplicate package installations) must
+// agree on the owner. A module-local WeakMap lets one build overwrite another's
+// wrappers. Key by SDK class, without writing to immutable module namespaces.
+const patchRegistryKey = Symbol.for("@traceai/openai/patch-registry/v1");
+interface PatchRegistry {
+  owners: WeakMap<object, OpenAIInstrumentation>;
+  count: number;
+}
+const registryHost = globalThis as typeof globalThis & {
+  [patchRegistryKey]?: PatchRegistry;
+};
+const patchRegistry = (registryHost[patchRegistryKey] ??= {
+  owners: new WeakMap<object, OpenAIInstrumentation>(),
+  count: 0,
+});
 
-/**
- * function to check if instrumentation is enabled / disabled
- */
+/** Whether any SDK class is currently patched across the package entry points. */
 export function isPatched() {
-  return _isFIPatched;
+  return patchRegistry.count > 0;
 }
 
 /**
@@ -98,10 +107,9 @@ function getExecContext(span: Span) {
 export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
-  private manuallyPatchedModule?: typeof openai;
-  // Only the instance that applied a patch may remove it. Another instrumentor
-  // sharing the module returns early from patch() but is still asked to unpatch.
-  private readonly patchedModules = new WeakSet<object>();
+  // Lazily initialized: InstrumentationBase can patch during super().
+  // A Set is needed so disable() also undoes every manually patched ESM SDK.
+  private patchedModules?: Set<typeof openai>;
 
   constructor({
     instrumentationConfig,
@@ -148,17 +156,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * @param {openai} module
    */
   manuallyInstrument(module: typeof openai) {
-    if (_isFIPatched) return;
     this.patch(module);
-    if (_isFIPatched) this.manuallyPatchedModule = module;
   }
 
   public override disable(): void {
     super.disable();
-    // The base class tracks require-hook patches, not manually loaded ESM clients.
-    if (this.manuallyPatchedModule) {
-      this.unpatch(this.manuallyPatchedModule);
-      this.manuallyPatchedModule = undefined;
+    for (const module of this.patchedModules ?? []) {
+      this.unpatch(module);
     }
   }
 
@@ -166,11 +170,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
    * Patches the OpenAI module
    */
   private patch(
-    module: typeof openai & { fiPatched?: boolean },
+    module: typeof openai,
     moduleVersion?: string,
   ) {
     // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
-    if (module?.fiPatched || _isFIPatched) {
+    const sdk = module?.OpenAI;
+    if (sdk && patchRegistry.owners.has(sdk)) {
       return module;
     }
     const resources = [
@@ -193,7 +198,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     // Here, we ensure it uses the (potentially updated) Tracer.
     // Accessing FITracer's internal tracer `tracer` for comparison.
     // This assumes FITracer has an internal property named `tracer`.
-    if (!(instrumentation.fiTracer as any).tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
+    if (!(instrumentation.fiTracer as any)?.tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
         // diag.debug(
         //     `OpenAIInstrumentation.patch: fiTracer's internal tracer (${(instrumentation.fiTracer as any).tracer?.constructor?.name}) ` +
         //     `differs from current base tracer (${instrumentation.tracer?.constructor?.name}) or is not set. Re-initializing fiTracer.`
@@ -256,12 +261,14 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           // --- ADD LOG ---
           // diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
 
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
+          const requestStartedAt = performance.now();
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<ChatCompletionCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -281,7 +288,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
             if (isChatCompletionResponse(result)) {
-              span.setAttributes({
+              const responseAttributes = {
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
@@ -292,11 +299,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 ...getChatCompletionLLMOutputMessagesAttributes(result),
                 ...getUsageAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-              });
+              };
+              rememberProviderResponse(span.spanContext(), responseAttributes, "openai.chat");
+              span.setAttributes(responseAttributes);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
             } else {
-              result = observeStream(result, span, (chunks) =>
+              result = observeStream(result, span, requestStartedAt, (chunks) =>
                 consumeChatCompletionStreamChunks(chunks, span),
                 args[1]?.signal,
               );
@@ -341,13 +350,15 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               },
             },
           );
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
 
+          const requestStartedAt = performance.now();
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<CompletionsCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -381,7 +392,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
             } else {
-              result = observeStream(result, span, (chunks) => {
+              result = observeStream(result, span, requestStartedAt, (chunks) => {
                 span.setAttributes({
                   ...getStreamMetadataAttributes(chunks),
                   [SemanticConventions.OUTPUT_VALUE]: chunks
@@ -421,6 +432,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.FI_SPAN_KIND]:
                 FISpanKind.EMBEDDING,
               [SemanticConventions.EMBEDDING_MODEL_NAME]: body.model,
+              [SemanticConventions.LLM_MODEL_NAME]: body.model,
               [SemanticConventions.INPUT_VALUE]: isStringInput
                 ? input
                 : JSON.stringify(input),
@@ -433,12 +445,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           });
-          const execContext = getExecContext(span);
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<EmbeddingsCreateType>
           >(
             () => {
-              return context.with(trace.setSpan(execContext, span), () => {
+              return context.with(trace.setSpan(execContext, contextSpan), () => {
                 return original.apply(this, args);
               });
             },
@@ -459,6 +472,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             if (result) {
               // Record the results
               span.setAttributes({
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                 // Do not record the output data as it can be large
                 ...getEmbeddingEmbeddingsAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -524,12 +538,14 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 },
               },
             );
-            const execContext = getExecContext(span);
+            const contextSpan = span.getContextSpan();
+            const execContext = getExecContext(contextSpan);
+            const requestStartedAt = performance.now();
             const execPromise = safeExecuteInTheMiddle<
               ReturnType<ResponsesCreateType>
             >(
               () => {
-                return context.with(trace.setSpan(execContext, span), () => {
+                return context.with(trace.setSpan(execContext, contextSpan), () => {
                   return original.apply(this, args);
                 });
               },
@@ -581,6 +597,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 result = observeStream(
                   result,
                   span,
+                  requestStartedAt,
                   async (chunks) => {
                     recordSpan(await consumeResponseStreamEvents(chunks), false);
                   },
@@ -597,42 +614,64 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
-    _isFIPatched = true;
-    this.patchedModules.add(module);
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      module.fiPatched = true;
-    } catch (e) {
-      // diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
-    }
+    // Keep the legacy diagnostic property, but never use it as the guard.
+    // Immutable class exports still work via the identity map.
+    try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = true; } catch { /* immutable SDK */ }
+    patchRegistry.owners.set(sdk, this);
+    (this.patchedModules ??= new Set()).add(module);
+    patchRegistry.count++;
 
     return module;
   }
   /**
    * Un-patches the OpenAI module's chat completions API
    */
-  private unpatch(
-    moduleExports: typeof openai & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    // diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
-    if (!moduleExports || !this.patchedModules.delete(moduleExports)) return;
-    this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
-    this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
-    this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
-    if (moduleExports.OpenAI.Responses) {
-      this._unwrap(moduleExports.OpenAI.Responses.prototype, "create");
+  private unpatch(moduleExports: typeof openai, moduleVersion?: string) {
+    const sdk = moduleExports?.OpenAI;
+    if (!sdk || patchRegistry.owners.get(sdk) !== this) return;
+    this._unwrap(sdk.Chat.Completions.prototype, "create");
+    this._unwrap(sdk.Completions.prototype, "create");
+    this._unwrap(sdk.Embeddings.prototype, "create");
+    if (sdk.Responses) this._unwrap(sdk.Responses.prototype, "create");
+    try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = false; } catch { /* immutable SDK */ }
+    patchRegistry.owners.delete(sdk);
+    // An automatic require hook may use a different namespace for this class.
+    for (const module of this.patchedModules ?? []) {
+      if (module.OpenAI === sdk) this.patchedModules!.delete(module);
     }
-
-    _isFIPatched = false;
-    try {
-      // This can fail if the module is made immutable via the runtime or bundler
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
-    }
+    patchRegistry.count--;
   }
+
+}
+
+/** First generated content, not the role/created/usage/terminal bookkeeping.
+ * Only inspect SDK events already being consumed; do not serialize or retain
+ * content for timing. Includes reasoning, refusals, tool calls and audio.
+ */
+function hasGeneratedContent(chunk: any): boolean {
+  const nonempty = (value: unknown) => typeof value === "string" && value.length > 0;
+  const tool = (call: any) => {
+    const fn = call?.function ?? call;
+    // Chat custom tools nest their generated name/input under custom, unlike
+    // Responses custom_tool_call items. Continuation deltas may omit type/id.
+    return nonempty(fn?.name) || nonempty(fn?.arguments) || nonempty(fn?.input) || nonempty(fn?.code)
+      || nonempty(call?.custom?.name) || nonempty(call?.custom?.input);
+  };
+  if (!chunk || typeof chunk !== "object") return false;
+  if (Array.isArray(chunk.choices) && chunk.choices.some((choice: any) => {
+    const delta = choice?.delta;
+    return [choice?.text, delta?.content, delta?.refusal, delta?.reasoning_content,
+      delta?.reasoning, delta?.audio?.transcript, delta?.audio?.data].some(nonempty)
+      || Array.isArray(delta?.tool_calls) && delta.tool_calls.some(tool)
+      || tool(delta?.function_call);
+  })) return true;
+  if (typeof chunk.type !== "string") return false;
+  if (/^response\.(?:output_text|refusal|audio\.transcript|reasoning(?:_summary)?(?:_text)?|function_call_arguments|mcp_call_arguments|code_interpreter_call_code|custom_tool_call_input|audio|output_audio)\.delta$/.test(chunk.type)) {
+    return nonempty(chunk.delta);
+  }
+  return chunk.type === "response.output_item.added"
+    && ["function_call", "tool_call", "custom_tool_call", "mcp_call", "code_interpreter_call"].includes(chunk.item?.type)
+    && tool(chunk.item);
 }
 
 /** Observe the caller's iterator, including errors and early return, without a
@@ -642,6 +681,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 function observeStream<T>(
   stream: Stream<T>,
   span: Span,
+  requestStartedAt: number,
   onComplete: (chunks: T[]) => void | Promise<void>,
   requestSignal?: AbortSignal | null,
   retainChunk: (chunk: T) => boolean = () => true,
@@ -658,6 +698,7 @@ function observeStream<T>(
   );
   let ended = false;
   let awaitingNext = false;
+  let firstTokenRecorded = false;
   const finish = () => {
     if (ended) return;
     ended = true;
@@ -700,6 +741,21 @@ function observeStream<T>(
         },
       };
       for await (const chunk of source) {
+        if (!ended && !firstTokenRecorded) {
+          // Timestamp before classification/aggregation and before yielding to the
+          // consumer. Responses retention keeps only terminal events, so timing
+          // must run before retainChunk. The request clock includes provider wait.
+          const observedAt = performance.now();
+          try {
+            if (hasGeneratedContent(chunk)) {
+              const seconds = (observedAt - requestStartedAt) / 1000;
+              if (Number.isFinite(seconds) && seconds >= 0) {
+                firstTokenRecorded = true;
+                span.setAttribute("gen_ai.response.time_to_first_token", seconds);
+              }
+            }
+          } catch { /* Timing observation must not change SDK delivery. */ }
+        }
         if (!ended && retainChunk(chunk)) chunks.push(chunk);
         yield chunk;
       }
@@ -963,7 +1019,9 @@ function getUsageAttributes(
       [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING]:
         completion.usage.completion_tokens_details?.reasoning_tokens,
     };
-    return usageAttributes;
+    // Absence is not a string or a zero-valued usage detail. Remove it before
+    // any shared privacy coercion or native SDK count admission.
+    return Object.fromEntries(Object.entries(usageAttributes).filter(([, value]) => value !== undefined));
   }
   return {};
 }
@@ -1146,12 +1204,15 @@ async function consumeChatCompletionStreamChunks(
   if (functionName) outputMessage.function_call_name = functionName;
   if (functionArguments) outputMessage.function_call_arguments = functionArguments;
 
-  span.setAttributes({
+  const responseAttributes = {
     ...getStreamMetadataAttributes(allChunks),
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
     [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  });
+  };
+  // Chunks stay buffered until this one export; the shared boundary joins by choice index.
+  rememberProviderResponse(span.spanContext(), { "raw.output": responseAttributes[SemanticConventions.RAW_OUTPUT] }, "openai.chat");
+  span.setAttributes(responseAttributes);
   span.setStatus({ code: SpanStatusCode.OK });
 }

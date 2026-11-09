@@ -137,6 +137,7 @@ def test_execution_methods_and_context_untouched(native):
         validator_tracing.trace,
         runner_tracing.add_step_attributes,
         runner_tracing.add_call_attributes,
+        validator_tracing.add_validator_attributes,
     )
     global_provider = trace.get_tracer_provider()
     native()
@@ -157,6 +158,7 @@ def test_execution_methods_and_context_untouched(native):
         validator_tracing.trace,
         runner_tracing.add_step_attributes,
         runner_tracing.add_call_attributes,
+        validator_tracing.add_validator_attributes,
     ) == bindings
 
 

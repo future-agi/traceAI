@@ -1,6 +1,6 @@
 {
   "name": "@traceai/cursor-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry tracing for the Cursor TypeScript SDK (@cursor/sdk) agent runs",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -20,7 +20,7 @@
     "test": "jest",
     "typecheck:contract": "tsc --noEmit -p contract/tsconfig.json",
     "test:contract": "pnpm run build && pnpm run typecheck:contract && node contract/auto_instrument.cjs && node contract/real_sdk_error.mjs",
-    "test:contract:offline": "pnpm run build && pnpm run typecheck:contract && node contract/auto_instrument.cjs && node contract/otlp_wire.cjs",
+    "test:contract:offline": "pnpm run build && pnpm run typecheck:contract && node contract/auto_instrument.cjs && node contract/otlp_wire.cjs && node --test contract/real_sdk_runs.cjs",
     "prepare": "pnpm run build"
   },
   "keywords": [

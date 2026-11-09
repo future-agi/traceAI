@@ -1,0 +1,38 @@
+{
+  "name": "openai-transcription-large-upload",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/audio/transcriptions",
+    "multipart": {
+      "fields": {
+        "model": "whisper-1"
+      },
+      "files": [
+        {
+          "name": "file",
+          "filename": "long.wav",
+          "content_type": "audio/wav",
+          "size": 5242880
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "text": "a long recording"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription whisper-1",
+    "status": "OK",
+    "attributes": {
+      "traceai.audio.input_bytes": 5242880,
+      "gen_ai.audio.transcript": "a long recording"
+    }
+  }
+}

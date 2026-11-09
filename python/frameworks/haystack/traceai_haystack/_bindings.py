@@ -16,6 +16,9 @@ from wrapt import FunctionWrapper
 pipeline_context: ContextVar[Any] = ContextVar(
     "traceai_haystack_pipeline", default=None
 )
+pipeline_is_async: ContextVar[bool] = ContextVar(
+    "traceai_haystack_pipeline_is_async", default=False
+)
 
 
 def bind_pipeline(method: Any) -> Any:
@@ -23,6 +26,7 @@ def bind_pipeline(method: Any) -> Any:
 
         async def generator(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
             token = pipeline_context.set(instance)
+            mode_token = pipeline_is_async.set(True)
             stream = wrapped(*args, **kwargs)
             try:
                 async for output in stream:
@@ -31,6 +35,7 @@ def bind_pipeline(method: Any) -> Any:
                 try:
                     await stream.aclose()
                 finally:
+                    pipeline_is_async.reset(mode_token)
                     pipeline_context.reset(token)
 
         return FunctionWrapper(method, generator)
@@ -39,18 +44,22 @@ def bind_pipeline(method: Any) -> Any:
 
         async def coroutine(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
             token = pipeline_context.set(instance)
+            mode_token = pipeline_is_async.set(True)
             try:
                 return await wrapped(*args, **kwargs)
             finally:
+                pipeline_is_async.reset(mode_token)
                 pipeline_context.reset(token)
 
         return FunctionWrapper(method, coroutine)
 
     def synchronous(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
         token = pipeline_context.set(instance)
+        mode_token = pipeline_is_async.set(False)
         try:
             return wrapped(*args, **kwargs)
         finally:
+            pipeline_is_async.reset(mode_token)
             pipeline_context.reset(token)
 
     return FunctionWrapper(method, synchronous)

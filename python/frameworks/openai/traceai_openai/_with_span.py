@@ -1,9 +1,11 @@
 import logging
-from typing import Any, Optional
+import traceback
+from typing import Any, Optional, Tuple
 
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import Attributes
+from traceai_openai._privacy import redact
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -22,6 +24,7 @@ _USAGE_ATTRIBUTES = frozenset(
 class _WithSpan:
     __slots__ = (
         "_span",
+        "_secrets",
         "_primary_attributes",
         "_context_attributes",
         "_extra_attributes",
@@ -34,8 +37,10 @@ class _WithSpan:
         context_attributes: Attributes = None,
         extra_attributes: Attributes = None,
         initial_attributes: Attributes = None,
+        secrets: Tuple[str, ...] = (),
     ) -> None:
         self._span = span
+        self._secrets = secrets
         self._primary_attributes = dict(initial_attributes or {})
         self._context_attributes = context_attributes
         self._extra_attributes = extra_attributes
@@ -49,11 +54,25 @@ class _WithSpan:
     def is_finished(self) -> bool:
         return self._is_finished
 
+    def add_secrets(self, secrets: Tuple[str, ...]) -> None:
+        # Credentials resolved by an SDK token provider are available only after
+        # sending the request. Retain all known values for this span's lifetime.
+        self._secrets = tuple(sorted(set((*self._secrets, *secrets)), key=len, reverse=True))
+
     def record_exception(self, exception: BaseException) -> None:
         if self._is_finished:
             return
         try:
-            self._span.record_exception(exception)
+            # Emit the standard event through FITracer's masking API, without
+            # handing raw credential-bearing exception text to an exporter.
+            cls = type(exception)
+            self._span.add_event("exception", attributes={
+                "exception.type": f"{cls.__module__}.{cls.__qualname__}",
+                "exception.message": redact(str(exception), self._secrets),
+                "exception.stacktrace": redact("".join(traceback.format_exception(
+                    cls, exception, exception.__traceback__)), self._secrets),
+                "exception.escaped": "False",
+            })
         except Exception:
             logger.exception("Failed to record exception on span")
 
@@ -96,7 +115,15 @@ class _WithSpan:
                 self.set_attribute(key, value)
         if status is not None:
             try:
-                self._span.set_status(status=status)
+                description = redact(status.description, self._secrets)
+                if description:
+                    # Core removes tracebacks by consulting the in-flight SDK
+                    # exception. Its original message may contain credentials.
+                    # Remove the traceback here so core cannot reconstruct that
+                    # unsanitized message; the redacted event keeps the stack.
+                    description = description.partition("Traceback (most recent call last)")[0]
+                    description = description.rstrip() or None
+                self._span.set_status(status=trace_api.Status(status.status_code, description))
             except Exception:
                 logger.exception("Failed to set status code on span")
         try:
@@ -110,6 +137,7 @@ class _WithSpan:
         if self._is_finished:
             return
         try:
+            value = redact(value, self._secrets)
             self._span.set_attribute(key, value)
             if key in self._primary_attributes and value is not None:
                 self._primary_attributes[key] = value

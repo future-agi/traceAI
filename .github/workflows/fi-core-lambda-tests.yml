@@ -62,5 +62,5 @@ jobs:
           sudo unshare --net sh -c '
             ip link set lo up
             export FI_CORE_PACKAGE_JSON="$1/node_modules/@traceai/fi-core/package.json"
-            "$2" --test --test-concurrency=1 "$3/typescript/packages/fi-core/test/lambda-lifecycle.test.cjs" "$3/typescript/packages/fi-core/test/lambda-runtime.test.cjs" "$3/typescript/packages/fi-core/test/lambda-callback-runtime.test.cjs" "$3/typescript/packages/fi-core/test/lambda-classification.test.cjs"
+            "$2" --test --test-concurrency=1 "$3/typescript/packages/fi-core/test/lambda-lifecycle.test.cjs" "$3/typescript/packages/fi-core/test/lambda-context-exports.test.cjs" "$3/typescript/packages/fi-core/test/lambda-http-status.test.cjs" "$3/typescript/packages/fi-core/test/lambda-runtime.test.cjs" "$3/typescript/packages/fi-core/test/lambda-callback-runtime.test.cjs" "$3/typescript/packages/fi-core/test/lambda-classification.test.cjs"
           ' sh "$RUNNER_TEMP/lambda-fixture" "$NODE" "$GITHUB_WORKSPACE"

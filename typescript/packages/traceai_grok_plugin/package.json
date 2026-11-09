@@ -1,0 +1,45 @@
+{
+  "name": "@traceai/grok-plugin",
+  "version": "0.1.0",
+  "description": "Native Grok Build hooks and turn tracing for Future AGI",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "fi-grok-hook": "./dist/hook.js"
+  },
+  "files": [
+    "dist",
+    "plugin",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepare": "pnpm run build",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_grok_plugin"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}

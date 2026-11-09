@@ -1,9 +1,11 @@
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Mapping, Optional
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from traceai_openai._with_span import _WithSpan
+from traceai_openai._privacy import response_output
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -59,9 +61,8 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
         if eval_input:
             eval_input_str = " \n ".join(map(str, eval_input))
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
-        if eval_input and len(eval_input) > 0:
-            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
-            _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input[0])
+            # Describe the value actually exported (all messages joined), not the first message.
+            _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input_str)
     elif isinstance(input_data, str):
         # A bare prompt (e.g. Responses API ``input="..."``) is already the input
         # text; JSON-encoding it would wrap it in quotes.
@@ -88,7 +89,23 @@ def _set_mime_type(span: _WithSpan, key: str, value: Any) -> None:
     span.set_attribute(key, mime)
 
 
-def _json_output_for(output_data: Any) -> Optional[str]:
+def _embedding_summary(model: Any, data: Any) -> Dict[str, Any]:
+    """Summarize typed or mapping embeddings without copying or exporting vectors."""
+    data = data if isinstance(data, list) else []
+    first = data[0] if data else None
+    vector = (
+        first.get("embedding") if isinstance(first, Mapping)
+        else getattr(first, "embedding", None)
+    )
+    summary: Dict[str, Any] = {"embeddings": len(data)}
+    if isinstance(model, str):
+        summary["model"] = model
+    if isinstance(vector, list):
+        summary["dimensions"] = len(vector)
+    return summary
+
+
+def _json_output_for(output_data: Any, config: Optional[TraceConfig] = None) -> Optional[str]:
     """JSON for responses whose output is not a chat message: the Responses API
     object as JSON, and a compact summary for embeddings (never the vectors)."""
     try:
@@ -98,29 +115,19 @@ def _json_output_for(output_data: Any) -> Optional[str]:
         return None
     if isinstance(output_data, Response):
         # Lead with the answer text (the SDK's `output_text`) so previews show it.
-        # Errors are not assistant output. Keep vendor details out of the raw
-        # output fallback, whose privacy policy is independent of error masking.
-        body = json.loads(
-            output_data.model_dump_json(exclude_none=True, exclude={"error"})
-        )
+        body = response_output(output_data, config)
         output_text = getattr(output_data, "output_text", None)
         if output_text:
             body = {"output_text": output_text, **body}
         return json.dumps(body, ensure_ascii=False)
     if isinstance(output_data, CreateEmbeddingResponse):
-        data = list(output_data.data or [])
-        first = getattr(data[0], "embedding", None) if data else None
-        summary = {
-            "model": output_data.model,
-            "embeddings": len(data),
-            "dimensions": len(first) if isinstance(first, list) else None,
-        }
-        return json.dumps({k: v for k, v in summary.items() if v is not None})
+        return json.dumps(_embedding_summary(output_data.model, output_data.data))
     return None
 
 
 def add_io_to_span_attributes(
-    span: _WithSpan, input_data: Any, output_data: Any, is_streaming: bool = False
+    span: _WithSpan, input_data: Any, output_data: Any, is_streaming: bool = False,
+    config: Optional[TraceConfig] = None
 ) -> None:
     """Add input/output data to span attributes.
 
@@ -139,7 +146,7 @@ def add_io_to_span_attributes(
         if output_data is not None and not is_streaming:
             if hasattr(output_data, "parse") and not hasattr(output_data, "model_dump"):
                 output_data = output_data.parse()
-            if (json_output := _json_output_for(output_data)) is not None:
+            if (json_output := _json_output_for(output_data, config)) is not None:
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, json_output)
                 span.set_attribute(
                     SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value

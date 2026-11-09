@@ -10,7 +10,7 @@ import {
   type SpanStatus,
   trace,
 } from "@opentelemetry/api";
-import { getAttributesFromContext, type TraceConfigOptions } from "@traceai/fi-core";
+import { getAttributesFromContext, rememberSpanValueLimit, type TraceConfigOptions } from "@traceai/fi-core";
 import { mapGenkitAttributes } from "./mapping";
 import {
   type ContentPolicy,
@@ -321,6 +321,8 @@ export class FIGenkitSpanProcessor {
   onStart(span: object, parentContext: Context): void {
     if (this.isShutdown) return;
     try {
+      // Retain native code-only SDK limits before mapping drops private slots.
+      rememberSpanValueLimit(span);
       // Session, user, metadata and tags set with the fi-core context helpers
       // around a flow call. Genkit creates its spans with that context.
       const attributes = getAttributesFromContext(parentContext);
@@ -335,6 +337,10 @@ export class FIGenkitSpanProcessor {
   onEnd(span: GenkitReadableSpan): void {
     if (this.isShutdown) return;
     try {
+      // Record loss at completion before path/identity scrubbing can shorten an
+      // SDK-truncated value. The shared exporter joins this evidence by context;
+      // no raw content or host span is modified or retained.
+      rememberSpanValueLimit(span);
       const contextAttributes = this.contextAttributes.get(span);
       const attributes = mapGenkitAttributes(span.attributes, {
         policy: this.policy,

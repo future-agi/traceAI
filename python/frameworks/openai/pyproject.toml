@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-openai"
-version = "0.1.12"
+version = "0.1.13"
 description = "OpenTelemetry instrumentation for OpenAI"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -15,7 +15,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -27,9 +26,14 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=1.2.3"
 openai = ">=1.69.0"
+
+# Test the release candidate before it exists on PyPI. This dev-only source
+# never appears in the wheel's runtime requirements (which retain >=1.2.3).
+[tool.poetry.group.dev.dependencies]
+fi-instrumentation-otel = {path = "../..", develop = true}
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"

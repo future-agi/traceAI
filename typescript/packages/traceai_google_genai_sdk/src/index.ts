@@ -187,6 +187,71 @@ function retainGenerationHooks(models: object): () => void {
   };
 }
 
+const embeddingKey = Symbol("google.genai.embedding");
+interface EmbeddingScope {
+  owner: symbol;
+  apiClient: object;
+  active: () => boolean;
+  observe: (value: unknown) => void;
+  cleanup: (restore: () => void) => void;
+}
+const embeddingHooks = new WeakMap<
+  object,
+  { owners: number; restore?: () => void }
+>();
+
+/** Observe only the SDK's existing embedding parse, before its response converter
+ * drops usageMetadata. No global HttpResponse/fetch patch, second body read, or
+ * retained response payload. These per-client boundaries are version-tested.
+ */
+function retainEmbeddingHook(apiClient: object): () => void {
+  let hooks = embeddingHooks.get(apiClient);
+  if (!hooks) {
+    hooks = { owners: 0 };
+    hooks.restore = replaceMethod(apiClient, "request", original => function (...args) {
+      const child = context.active();
+      const scope = child.getValue(embeddingKey) as EmbeddingScope | undefined;
+      if (scope?.apiClient !== apiClient || !scope.active() || isTracingSuppressed(child))
+        return Reflect.apply(original, this, args);
+      // In the tested SDKs Gemini uses batchEmbedContents (or embedContent),
+      // while Vertex embedding calls use predict. Ignore all other requests.
+      let embeddingRequest = false;
+      safely(() => {
+        const path = record(args[0]).path;
+        embeddingRequest = typeof path === "string" &&
+          /:(?:batchEmbedContents|embedContent|predict)$/.test(path);
+      });
+      if (!embeddingRequest) return Reflect.apply(original, this, args);
+      const result = Reflect.apply(original, this, args);
+      return Promise.resolve(result).then(response => {
+        safely(() => {
+          if (!scope.active() || !response || typeof response !== "object") return;
+          let restore: (() => void) | undefined;
+          restore = replaceMethod(response, "json", parse => function (...parseArgs) {
+            // Restore before the one SDK-owned parse, even when it throws.
+            safely(() => restore?.());
+            const parsed = Reflect.apply(parse, this, parseArgs);
+            return Promise.resolve(parsed).then(value => {
+              if (scope.active()) safely(() => scope.observe(value));
+              return value;
+            });
+          });
+          if (restore) scope.cleanup(restore);
+        });
+        return response;
+      });
+    });
+    embeddingHooks.set(apiClient, hooks);
+  }
+  hooks.owners++;
+  return () => {
+    if (--hooks.owners === 0) {
+      safely(() => hooks.restore?.());
+      embeddingHooks.delete(apiClient);
+    }
+  };
+}
+
 /** Instruments one modern @google/genai client in place, including existing chats.
  * Duplicate setup returns the existing handle (its original options win).
  * No global module patch, private chat-field rewrite, exporter, or hidden API call is installed.
@@ -213,12 +278,15 @@ export function instrumentGoogleGenAI(
   let disposed = false;
   let activeCalls = 0;
   let releaseGeneration: (() => void) | undefined;
+  let releaseEmbedding: (() => void) | undefined;
+  let embeddingApiClient: object | undefined;
   const restorers: (() => void)[] = [];
   const accessorRestorers: (() => void)[] = [];
   const owner = Symbol("google.genai.handle");
   const restoreMethods = () => {
     for (const restore of restorers.reverse()) safely(restore);
     safely(() => releaseGeneration?.());
+    safely(() => releaseEmbedding?.());
   };
   const patched = new WeakSet<object>();
 
@@ -245,10 +313,12 @@ export function instrumentGoogleGenAI(
               const scope = parent.getValue(generationKey) as
                 | GenerationScope
                 | undefined;
-              const unobserved =
+              let unobserved =
                 scope?.owner === owner
                   ? parent.deleteValue(generationKey)
                   : parent;
+              if ((parent.getValue(embeddingKey) as EmbeddingScope | undefined)?.owner === owner)
+                unobserved = unobserved.deleteValue(embeddingKey);
               return context.with(unobserved, () =>
                 Reflect.apply(original, this, args),
               );
@@ -303,11 +373,24 @@ export function instrumentGoogleGenAI(
                 start,
               } satisfies GenerationScope);
             }
+            const responseCleanups: (() => void)[] = [];
+            child = child.deleteValue(embeddingKey);
+            if (resource === "models" && name === "embedContent" && embeddingApiClient) {
+              child = child.setValue(embeddingKey, {
+                owner,
+                apiClient: embeddingApiClient,
+                active: () => !ended,
+                observe: value => capture?.embeddingUsage(value),
+                cleanup: restore => responseCleanups.push(restore),
+              } satisfies EmbeddingScope);
+            }
             const abortCleanups: (() => void)[] = [];
             const finish = (error = false, cancelled = false) => {
               if (ended) return;
               ended = true;
               for (const cleanup of abortCleanups) safely(cleanup);
+              for (const cleanup of responseCleanups) safely(cleanup);
+              responseCleanups.length = 0;
               safely(() => capture?.finish());
               safely(() => {
                 if (cancelled)
@@ -440,6 +523,13 @@ export function instrumentGoogleGenAI(
   }
   try {
     releaseGeneration = retainGenerationHooks(client.models);
+    safely(() => {
+      const apiClient = record(client.models).apiClient;
+      if (apiClient && typeof apiClient === "object") {
+        releaseEmbedding = retainEmbeddingHook(apiClient);
+        embeddingApiClient = apiClient;
+      }
+    });
     patch(client.models, modelMethods, "models");
     // Preserve the public accessor and resource identity, without private SDK field writes.
     let owner: object | null = client;

@@ -51,8 +51,9 @@ jobs:
         if: matrix.sdk == '5.23.2'
         run: |
           mkdir -p "$RUNNER_TEMP/gateway-pack"
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
           pnpm --dir packages/traceai_openai pack --pack-destination "$RUNNER_TEMP/gateway-pack"
-          npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP"/gateway-pack/*.tgz
+          npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP"/gateway-pack/*.tgz "$RUNNER_TEMP/fi-core.tgz"
           cp packages/traceai_openai/test/moduleTypes.mts packages/traceai_openai/test/moduleTypes.cts "$RUNNER_TEMP/openai-sdk/"
       - name: Network-isolated ESM and CommonJS type contracts
         if: matrix.sdk == '5.23.2'

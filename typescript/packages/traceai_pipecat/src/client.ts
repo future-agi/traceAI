@@ -44,7 +44,7 @@ export function observePipecatClient(
 
   const tracer = options.tracer ?? trace.getTracer("@traceai/fi-instrumentation-pipecat", VERSION);
   const listeners = EVENTS.map((event) => {
-    const listener = () => {
+    const listener = (state: unknown) => {
       // Telemetry must not interrupt application callbacks. Do not log their data.
       try {
         const span = tracer.startSpan(`Pipecat Client Event: ${event}`, {
@@ -55,7 +55,10 @@ export function observePipecatClient(
             "pipecat.event": event,
           },
         }, options.parentContext ?? context.active());
-        span.setStatus({ code: event === "error" || event === "messageError" ? SpanStatusCode.ERROR : SpanStatusCode.OK });
+        // Only inspect the fixed SDK error state; never serialize or coerce event data.
+        const isError = event === "error" || event === "messageError" ||
+          (event === "transportStateChanged" && state === "error");
+        span.setStatus({ code: isError ? SpanStatusCode.ERROR : SpanStatusCode.OK });
         span.end();
       } catch {
         diag.warn("Pipecat client event telemetry failed");

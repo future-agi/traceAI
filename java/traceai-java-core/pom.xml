@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
-        <version>1.0.1</version>
+        <version>1.0.2</version>
     </parent>
 
     <artifactId>traceai-java-core</artifactId>
@@ -53,6 +53,15 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- Only needed when the application explicitly imports the Spring privacy configuration.
+             Provided scope keeps Spring out of non-Spring consumers; Boot manages its runtime version. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>6.1.2</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- Testing -->

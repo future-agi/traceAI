@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-hermes-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Future AGI tracing plugin for Hermes Agent: turns, model calls and tool calls as OpenTelemetry spans"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "Apache-2.0"

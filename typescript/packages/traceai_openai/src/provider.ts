@@ -6,6 +6,7 @@ import { LLMProvider } from "@traceai/fi-semantic-conventions";
 const HOSTS: Readonly<Record<string, string>> = {
   "ai-gateway.vercel.sh": "vercel",
   "api.openai.com": LLMProvider.OPENAI,
+  "openrouter.ai": "openrouter",
   "generativelanguage.googleapis.com": LLMProvider.GOOGLE,
   "api.anthropic.com": LLMProvider.ANTHROPIC,
   "api.mistral.ai": LLMProvider.MISTRALAI,

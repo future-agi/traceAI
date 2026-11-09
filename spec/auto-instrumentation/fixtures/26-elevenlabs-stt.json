@@ -1,0 +1,42 @@
+{
+  "name": "elevenlabs-stt",
+  "request": {
+    "method": "POST",
+    "url": "https://api.elevenlabs.io/v1/speech-to-text",
+    "multipart": {
+      "fields": {
+        "model_id": "scribe_v1"
+      },
+      "files": [
+        {
+          "name": "file",
+          "filename": "x.webm",
+          "content_type": "audio/webm",
+          "size": 512
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "language_code": "eng",
+      "language_probability": 0.98,
+      "text": "cancel my subscription"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription scribe_v1",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.audio.transcript": "cancel my subscription",
+      "gen_ai.audio.language": "eng",
+      "gen_ai.audio.mime_type": "audio/webm",
+      "traceai.audio.input_bytes": 512
+    }
+  }
+}

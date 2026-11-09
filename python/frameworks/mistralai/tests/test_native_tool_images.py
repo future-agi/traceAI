@@ -58,9 +58,11 @@ def test_tool_images_on_wire(
             ),
         )
     )
+    # Since fi-instrumentation-otel 1.3.0 the base64 image cap defaults to 0, so
+    # exporting a base64 image is an explicit opt-in: "visible" sets a large cap.
     config = TraceConfig(
         **(
-            {}
+            {"base64_image_max_length": 1_000_000}
             if policy == "visible"
             else {policy: 30 if policy == "base64_image_max_length" else True}
         )

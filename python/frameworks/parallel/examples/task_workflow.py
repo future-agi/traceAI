@@ -25,7 +25,7 @@ def research(client: Parallel, tracer: FITracer, question: str) -> TaskRunResult
             span.set_attribute("parallel.run_id", run.run_id)
             span.set_attribute("parallel.processor", "base")
             result = client.task_run.result(run.run_id, api_timeout=600, timeout=610)
-        except Exception:
+        except BaseException:
             span.set_status(Status(StatusCode.ERROR, "Task request failed"))
             raise
         span.set_attribute("parallel.task.status", result.run.status)
@@ -48,7 +48,7 @@ async def research_async(client: AsyncParallel, tracer: FITracer, question: str)
             span.set_attribute("parallel.cancelled", True)
             span.set_status(Status(StatusCode.ERROR, "Task wait cancelled"))
             raise
-        except Exception:
+        except BaseException:
             span.set_status(Status(StatusCode.ERROR, "Task request failed"))
             raise
         span.set_attribute("parallel.task.status", result.run.status)
