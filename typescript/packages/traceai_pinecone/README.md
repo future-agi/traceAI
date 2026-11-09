@@ -73,12 +73,22 @@ const instrumentation = new PineconeInstrumentation({
     captureQueryVectors: false,  // Recommended for production
     captureResultVectors: false,
   },
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
 });
 ```
+
+### Input privacy
+
+Set `FI_HIDE_INPUTS=true` or `FI_HIDE_INPUT_TEXT=true` before creating the
+instrumentation to replace `db.vector.query.filter` with `__REDACTED__`. With
+both settings off (the default), this attribute contains the JSON query filter.
+The provider request is unchanged, and operation names, index names, namespace
+metadata and result counts remain available. This rule requires the matching
+`@traceai/fi-core` release containing vector-query-filter masking; updating the
+Pinecone package alone does not update a separately pinned core installation.
+
+For SDKs with per-call namespace overrides, `namespace: ""` selects the default
+namespace rather than the index's scoped namespace. Empty/default namespaces
+omit `db.vector.namespace` and `db.namespace`; nonempty namespaces retain both.
 
 ## Traced Operations
 

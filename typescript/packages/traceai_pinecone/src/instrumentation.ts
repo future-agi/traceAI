@@ -224,7 +224,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     params: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = params?.namespace || this.getNamespace(instance);
+    const namespace = params?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("query", indexName, namespace);
 
     const topK = params?.topK || 10;
@@ -361,7 +361,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     params: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = params?.namespace || this.getNamespace(instance);
+    const namespace = params?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("update", indexName, namespace);
 
     attributes[VectorDBConventions.DB_VECTOR_UPSERT_COUNT] = 1;
@@ -499,7 +499,7 @@ export class PineconeInstrumentation extends InstrumentationBase {
     params?: any
   ): Promise<any> {
     const indexName = this.getIndexName(instance);
-    const namespace = params?.namespace || this.getNamespace(instance);
+    const namespace = params?.namespace ?? this.getNamespace(instance);
     const attributes = this.getCommonAttributes("list", indexName, namespace);
 
     if (params?.limit) {

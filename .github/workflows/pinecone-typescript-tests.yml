@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['2.0.0', '4.1.0', '9.1.0']
+        sdk: ['2.0.0', '3.0.0', '4.1.0', '5.0.0', '6.0.0', '7.0.0', '8.0.0', '9.1.0']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -51,4 +51,5 @@ jobs:
             ip link set lo up
             "$1" ../../node_modules/jest/bin/jest.js --runInBand "--moduleNameMapper=$2"
             "$1" contract/lifecycle.cjs "$3"
+            PINECONE_SDK_DIR="$3" "$1" --test contract/privacy-namespace.cjs
           ' -- "$(command -v node)" "$mapper" "$RUNNER_TEMP/pinecone-sdk"
