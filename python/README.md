@@ -119,6 +119,14 @@ Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument
 
 [Provider setup](fi_instrumentation/otel.py) · [Examples](examples/)
 
+## Troubleshooting: 401 Unauthorized when exporting traces
+
+- **Check the export URL.** Set `FI_BASE_URL` to the deployment you intend to use. The default HTTP exporter sends to `/tracer/v1/traces` and replaces any path in `FI_BASE_URL`; an explicit `HTTPSpanExporter(endpoint=...)` is used unchanged. A successful health check does not validate your export credentials.
+- **Use one pair of keys.** Set `FI_API_KEY` and `FI_SECRET_KEY` from the same key, in the exporting process, before the exporter is created. Do not use a masked secret.
+- **Use one credential source.** Explicit `Authorization`, `X-Api-Key` or `X-Secret-Key` headers take precedence and the environment keys are then not added. Remove an unrelated `Authorization` header rather than mixing sources. An empty credential header is ignored.
+- **Retired or disabled keys.** If the service reports a retired key, create a personal key at `/dashboard/keys`, and confirm that its owner still has access to the organization (and workspace, when scoped).
+- **When reporting an issue**, share the sanitized URL, SDK and exporter versions, the response status, error code and request id, and the header *names* you send. Never share key values, `Authorization` values or an unredacted environment dump.
+
 ## Packages
 
 Each package below links to its own installation instructions, supported SDK versions, and examples. Package availability and framework support are independent; do not assume every package supports the same upstream version.
