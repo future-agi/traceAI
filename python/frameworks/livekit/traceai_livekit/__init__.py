@@ -21,7 +21,7 @@ from .integration import (
 
 from .recording import record_egress, wrap_egress_client
 
-__version__ = "0.2.0"  # x-release-please-version
+__version__ = "0.2.1"  # x-release-please-version
 
 __all__ = [
     "enable_fi_attribute_mapping",

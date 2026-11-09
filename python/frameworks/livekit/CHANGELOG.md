@@ -1,6 +1,11 @@
 
 
-## [0.2.0] - pending release
+## [0.2.1] - pending release
+
+### Fixed
+- The wheel and sdist now include the Apache-2.0 `LICENSE` file.
+
+## [0.2.0] - 2026-11-09
 
 ### Changed
 - Requires Python 3.10 or later and `fi-instrumentation-otel` 1.3.0 or later (0.1.3 accepted Python 3.9 and `fi-instrumentation-otel` 1.1.0). The recording helpers' privacy tests fail with `fi-instrumentation-otel` 1.1.0, and 1.3.0 itself needs Python 3.10. Upgrading from an older core also brings 1.3.0's default base64 image cap of 0; see the `fi-instrumentation-otel` changelog.
