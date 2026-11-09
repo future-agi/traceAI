@@ -4,6 +4,24 @@ OpenTelemetry instrumentation for AI applications. Install the core and the inst
 
 [All languages](../README.md) · [Integration guides](https://docs.futureagi.com/docs/integrations/traceai) · [Core API and configuration](fi_instrumentation/README.md)
 
+## Supported Python versions
+
+Core tracing supports Python 3.10–3.15, with either the default HTTP exporter
+or the optional `grpc` exporter:
+
+```bash
+pip install fi-instrumentation-otel         # HTTP tracing, Python 3.10–3.15
+pip install 'fi-instrumentation-otel[grpc]' # gRPC tracing, Python 3.10–3.15
+```
+
+The optional `evaluation` extra (including `[grpc,evaluation]`) supports Python
+3.10–3.14. Its dependency chain, including LiteLLM/fastuuid, is not yet compatible
+with Python 3.15. Use Python 3.14 or earlier for
+`pip install 'fi-instrumentation-otel[evaluation]'`; installing this extra on
+3.15 can fail while resolving or building those dependencies. It is never
+silently omitted, and it does not restrict core-only or `[grpc]` installs.
+Framework instrumentors have their own runtime constraints.
+
 ## Quickstart
 
 Use Python 3.10–3.13 for this OpenAI example.
@@ -60,6 +78,32 @@ signal.signal(signal.SIGINT, stop)
 ```
 
 In a web server, worker or async service, use the framework's shutdown hook instead of replacing its handlers: stop accepting work, finish or cancel active requests, then call `provider.shutdown()`. `force_flush()` exports ended spans without shutting down the provider; it does not replace shutdown for operations still running.
+
+## AWS Lambda invocation tracing
+
+The core SDK provides `fi_instrumentation.aws_lambda.LambdaTracer`; no separate Lambda instrumentor package is needed. Create one instance outside your synchronous handler and share its provider with model-client instrumentors:
+
+```python
+from fi_instrumentation import register
+from fi_instrumentation.aws_lambda import LambdaTracer
+from fi_instrumentation.fi_types import ProjectType
+
+provider = register(
+    project_name="lambda-orders", project_type=ProjectType.OBSERVE,
+    batch=True, schedule_delay_millis=60_000, timeout=2, verbose=False,
+)
+tracing = LambdaTracer(provider)
+
+@tracing.wrap
+def lambda_handler(event, context):
+    return {"statusCode": 200, "body": "Order accepted"}
+```
+
+The wrapper emits one `lambda.handler` server span with the invocation ID, trigger and cold-start flag. It imports only W3C `traceparent` from API Gateway v1/v2, function URL and ALB events (including multi-value headers). Other events start fresh traces. The invocation wrapper never captures event/result content, request URLs, headers, exception messages or stacks; errors carry only their type. For HTTP triggers it reads only the integer `statusCode` of the returned response: the span records `http.response.status_code`, and a 5xx response marks it as an error with `error.type` set to the code, so frameworks that turn exceptions into 500 responses (Mangum, for example) still report failed requests. Child instrumentors retain their own privacy settings.
+
+After the span ends, it waits up to two seconds for a flush, capped by the remaining invocation time minus 250 ms. Configure those limits with `flush_timeout_millis` and `reserve_millis`. A timed-out flush is **not cancelled** and may continue; later invocations skip flushing while it is in flight, preventing additional flush workers from accumulating. Delivery remains best effort. Use a batch processor and a finite exporter timeout; synchronous span processors can block inside span end, outside this wait budget.
+
+Remove any copied Lambda tracing helper, manual invocation span or explicit flush when adopting the wrapper. Do not combine it with `AwsLambdaInstrumentor` or an auto-instrumenting Lambda layer. Do not shut down the shared provider after each invocation. The old example's `LAMBDA_TRACE_CAPTURE_CONTENT` switch does not apply to this metadata-only wrapper.
 
 ## Context and privacy
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-voyage"
-version = "0.1.0"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for the Voyage AI Python client"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "Apache-2.0"

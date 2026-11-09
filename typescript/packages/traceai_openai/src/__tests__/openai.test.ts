@@ -115,7 +115,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
   "gen_ai.provider.name": "openai",
-  "gen_ai.request.model": "gpt-3.5-turbo-0613",
+  "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo"}",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p",
@@ -294,9 +294,9 @@ describe("OpenAIInstrumentation", () => {
       async (): Promise<unknown> => {
         const iterator = () =>
           (async function* () {
-            yield { choices: [{ delta: { content: "This is " } }] };
-            yield { choices: [{ delta: { content: "a test." } }] };
-            yield { choices: [{ delta: { finish_reason: "stop" } }] };
+            yield { choices: [{ index: 0, delta: { content: "This is " } }] };
+            yield { choices: [{ index: 0, delta: { content: "a test." } }] };
+            yield { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
           })();
         const controller = new AbortController();
         return new Stream(iterator, controller);
@@ -318,7 +318,9 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
@@ -327,12 +329,14 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","stream":true}",
+  "gen_ai.response.finish_reasons": "["stop"]",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-3.5-turbo","stream":true}",
   "output.mime_type": "text/plain",
   "output.value": "This is a test.",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-3.5-turbo","stream":true}",
-  "raw.output": "[{"choices":[{"delta":{"content":"This is "}}]},{"choices":[{"delta":{"content":"a test."}}]},{"choices":[{"delta":{"finish_reason":"stop"}}]}]",
+  "raw.output": "[{"choices":[{"index":0,"delta":{"content":"This is "}}]},{"choices":[{"index":0,"delta":{"content":"a test."}}]},{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}]",
 }
 `);
   });
@@ -571,7 +575,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","tool_calls":[{"id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","type":"function","function":{"name":"getCurrentLocation","arguments":"{}"}}]}]",
   "gen_ai.provider.name": "openai",
-  "gen_ai.request.model": "gpt-3.5-turbo-0613",
+  "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "gen_ai.response.finish_reasons": "["tool_calls"]",
   "gen_ai.response.id": "chatcmpl-8hhqZDFTRD0vzExhqWnMLE7viVl7E",
@@ -596,7 +600,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","tool_calls":[{"id":"call_0LCdYLkdRUt3rV3dawoIFHBf","type":"function","function":{"name":"getWeather","arguments":"{\\n  \\"location\\": \\"Boston\\"\\n}"}}]}]",
   "gen_ai.provider.name": "openai",
-  "gen_ai.request.model": "gpt-3.5-turbo-0613",
+  "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "gen_ai.response.finish_reasons": "["tool_calls"]",
   "gen_ai.response.id": "chatcmpl-8hhsP9eAplUFYB3mHUJxBkq7IwnjZ",
@@ -621,7 +625,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"The weather in Boston this week is expected to be rainy with a temperature of 52 degrees."}]",
   "gen_ai.provider.name": "openai",
-  "gen_ai.request.model": "gpt-3.5-turbo-0613",
+  "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "chatcmpl-8hhtfzSD33tsG7XJiBg4F9MqnXKDp",
@@ -748,15 +752,21 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"What's the weather today?"}]",
   "gen_ai.operation.name": "chat",
-  "gen_ai.output.messages": "[{"role":"assistant","content":"","tool_calls":[{"id":"call_PGkcUg2u6vYrCpTn0e9ofykY","function":{"name":"getWeather","arguments":"{}"}}]}]",
+  "gen_ai.output.messages": "[{"role":"assistant","content":"","tool_calls":[{"id":"call_PGkcUg2u6vYrCpTn0e9ofykY","type":"function","function":{"name":"getWeather","arguments":"{}"}}]}]",
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"stream":true}",
+  "gen_ai.response.finish_reasons": "["tool_calls"]",
+  "gen_ai.response.id": "chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL",
+  "gen_ai.response.model": "gpt-3.5-turbo-0613",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "gen_ai.tool.definitions": "[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]",
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"stream":true}",
@@ -861,7 +871,9 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"What's the weather today?"}]",
@@ -870,6 +882,10 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","functions":[{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}},{"name":"getCurrentLocation","description":"Get the current location of the user.","parameters":{"type":"object","properties":{}}}],"stream":true}",
+  "gen_ai.response.finish_reasons": "["function_call"]",
+  "gen_ai.response.id": "chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL",
+  "gen_ai.response.model": "gpt-3.5-turbo-0613",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","functions":[{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}},{"name":"getCurrentLocation","description":"Get the current location of the user.","parameters":{"type":"object","properties":{}}}],"stream":true}",
   "output.mime_type": "text/plain",
@@ -976,11 +992,11 @@ describe("OpenAIInstrumentation", () => {
     expect(span.attributes).toMatchInlineSnapshot(`
 {
   "fi.span.kind": "LLM",
-  "gen_ai.input.messages": "[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}]",
+  "gen_ai.input.messages": "[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
   "gen_ai.provider.name": "openai",
-  "gen_ai.request.model": "gpt-3.5-turbo-0613",
+  "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo"}",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p",
@@ -989,10 +1005,10 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.usage.output_tokens": 5,
   "gen_ai.usage.total_tokens": 17,
   "input.mime_type": "application/json",
-  "input.value": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}],"model":"gpt-3.5-turbo"}",
+  "input.value": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}],"model":"gpt-3.5-turbo"}",
   "output.mime_type": "application/json",
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
-  "raw.input": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}],"model":"gpt-3.5-turbo"}",
+  "raw.input": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}],"model":"gpt-3.5-turbo"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
 }
 `);
@@ -1219,7 +1235,7 @@ describe("OpenAIInstrumentation with TraceConfig", () => {
   "gen_ai.operation.name": "text_completion",
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo-instruct",
-  "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo-instruct"}",
+  "gen_ai.request.parameters": "__REDACTED__",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9",
   "gen_ai.response.model": "gpt-3.5-turbo-instruct",
@@ -1320,7 +1336,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
-  "gen_ai.provider.name": "openai",
+  "gen_ai.provider.name": "azure",
   "gen_ai.request.model": "gpt-35-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-35-turbo"}",
   "gen_ai.response.finish_reasons": "["stop"]",
@@ -1383,9 +1399,9 @@ describe("AzureOpenAIInstrumentation", () => {
       async (): Promise<unknown> => {
         const iterator = () =>
           (async function* () {
-            yield { choices: [{ delta: { content: "This is " } }] };
-            yield { choices: [{ delta: { content: "a test." } }] };
-            yield { choices: [{ delta: { finish_reason: "stop" } }] };
+            yield { choices: [{ index: 0, delta: { content: "This is " } }] };
+            yield { choices: [{ index: 0, delta: { content: "a test." } }] };
+            yield { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
           })();
         const controller = new AbortController();
         return new Stream(iterator, controller);
@@ -1407,21 +1423,25 @@ describe("AzureOpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
-  "gen_ai.provider.name": "openai",
+  "gen_ai.provider.name": "azure",
   "gen_ai.request.model": "gpt-35-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-35-turbo","stream":true}",
+  "gen_ai.response.finish_reasons": "["stop"]",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-35-turbo","stream":true}",
   "output.mime_type": "text/plain",
   "output.value": "This is a test.",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-35-turbo","stream":true}",
-  "raw.output": "[{"choices":[{"delta":{"content":"This is "}}]},{"choices":[{"delta":{"content":"a test."}}]},{"choices":[{"delta":{"finish_reason":"stop"}}]}]",
+  "raw.output": "[{"choices":[{"index":0,"delta":{"content":"This is "}}]},{"choices":[{"index":0,"delta":{"content":"a test."}}]},{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}]",
 }
 `);
   });

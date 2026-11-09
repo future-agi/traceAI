@@ -1,4 +1,6 @@
 import logging
+import sys
+from urllib.parse import urlsplit
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import safe_json_dumps
@@ -10,11 +12,19 @@ from traceai_deepseek._with_span import _WithSpan
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# DeepSeek base URL patterns
-DEEPSEEK_BASE_URLS = [
-    "api.deepseek.com",
-    "deepseek.com",
-]
+def shared_openai_is_active() -> bool:
+    """The shared instrumentor owns requests when both entry points are enabled.
+
+    Do not import an optional package on the legacy OpenAI 1.0 route. Checking
+    at call time supports either initialization and independent teardown order.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(
+        instrumentor
+        and getattr(instrumentor, "_supports_deepseek_extensions", False)
+        and instrumentor().is_instrumented_by_opentelemetry
+    )
 
 
 def is_deepseek_client(instance: Any) -> bool:
@@ -28,15 +38,15 @@ def is_deepseek_client(instance: Any) -> bool:
                 base_url = getattr(client, "base_url", None)
 
         if base_url is not None:
-            base_url_str = str(base_url).lower()
-            return any(url in base_url_str for url in DEEPSEEK_BASE_URLS)
+            host = urlsplit(str(base_url)).hostname
+            return bool(host and host.lower().rstrip(".") == "api.deepseek.com")
     except Exception:
         pass
     return False
 
 
 def _to_dict(obj: Any) -> Dict[str, Any]:
-    """Convert an object to a dictionary."""
+    """Serialize typed provider data, never arbitrary SDK/request internals."""
     if obj is None:
         return {}
     if isinstance(obj, dict):
@@ -45,9 +55,8 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
         return obj.model_dump()
     if hasattr(obj, "dict"):
         return obj.dict()
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    return {"value": str(obj)}
+    # Unknown objects may carry credentials in __dict__ or even their repr.
+    return {}
 
 
 def _flatten(

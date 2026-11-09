@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "traceai-strands"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for AWS Strands Agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -31,19 +31,20 @@ classifiers = [
 keywords = ["traceai", "strands", "aws", "agents", "observability", "opentelemetry", "tracing", "llm", "ai", "futureagi"]
 
 dependencies = [
-    "fi-instrumentation-otel>=0.1.11",
-    "opentelemetry-api>=1.0.0",
-    "opentelemetry-sdk>=1.0.0",
-    "opentelemetry-exporter-otlp>=1.0.0",
+    "fi-instrumentation-otel>=1.2.2",
+    "opentelemetry-api>=1.30.0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "strands-agents[otel,openai]>=1.24.0",
 ]
 strands = [
-    "strands-agents>=1.0.0",
+    "strands-agents>=1.24.0",
 ]
 
 [project.urls]
@@ -57,6 +58,6 @@ Issues = "https://github.com/future-agi/traceAI/issues"
 packages = ["traceai_strands"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tests_native"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]

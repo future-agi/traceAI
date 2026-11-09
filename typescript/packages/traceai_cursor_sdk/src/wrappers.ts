@@ -13,11 +13,12 @@
  * Nothing is wrapped in a Proxy: callers get the SDK's own agent and run
  * objects back, and `run.stream()` yields the SDK's own event objects
  * unchanged, forwarding `return()` / `throw()`. The local runtime's stream is a
- * single-consumer queue, so the wrapper never reads it on its own: tool spans
- * exist only for events the application reads through `run.stream()`.
+ * single-consumer queue, so the wrapper never reads it on its own. Per-send
+ * callbacks observe available steps even when the application only waits.
  */
 import { Context, Tracer, context as otelContext, diag } from "@opentelemetry/api";
 import { SpanNames } from "./attributes";
+import { deltaEvent, record, stepEvent } from "./events";
 import {
   ContentPolicy,
   RunTracer,
@@ -182,46 +183,96 @@ export function wrapAgent<T>(agent: T, getContext: GetContext): T {
   if (!target || typeof target !== "object" || isPatched(target)) return agent;
   const original = target.send;
   if (typeof original !== "function") return agent;
-  const traced = function tracedSend(this: AgentLike, ...args: unknown[]) {
-    const ctx = getContext();
-    if (!ctx) return original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    let tracer: RunTracer | undefined;
-    try {
-      tracer = new RunTracer({
-        tracer: ctx.tracer,
-        policy: ctx.policy,
-        parentContext: otelContext.active(),
-        agent: this ?? target,
-        message: args[0],
-        sendOptions: args[1] as SendOptionsLike | undefined,
-        startTimeMs: clockMs(),
-      });
-    } catch (error) {
-      diag.debug(`${LOG}: tracing disabled for this run: ${error}`);
-    }
-    if (!tracer) return original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    const runTracer = tracer;
-    let pending: Promise<RunLike>;
-    try {
-      pending = original.apply(this, args as Parameters<NonNullable<AgentLike["send"]>>);
-    } catch (error) {
-      safe(() => runTracer.finish({ kind: "error", error }));
-      throw error;
-    }
-    return Promise.resolve(pending).then(
-      (run) => {
-        safe(() => watchRun(run, runTracer, ctx));
-        return run;
-      },
-      (error) => {
-        safe(() => runTracer.finish({ kind: "error", error }));
-        throw error;
-      },
-    );
-  };
-  if (!defineMethod(target, "send", traced)) return agent;
+  if (!defineMethod(target, "send", function tracedSend(this: AgentLike, ...args: unknown[]) {
+    return traceAgentRun(this, target, original, args, "send", getContext);
+  })) return agent;
+  // summarize() exists only in SDK >= 1.2. Feature-detect it so 1.0.x works unchanged.
+  const summarize = target.summarize;
+  if (typeof summarize === "function") {
+    defineMethod(target, "summarize", function tracedSummarize(this: AgentLike, ...args: unknown[]) {
+      return traceAgentRun(this, target, summarize, args, "summarize", getContext);
+    });
+  }
   markPatched(target);
   return agent;
+}
+
+/** No async wrapper: preserve synchronous throws and the exact returned promise. */
+function observeSend(args: unknown[], tracer: RunTracer): unknown[] {
+  const options = args[1];
+  // Invalid options still belong to the SDK to validate.
+  if (options !== undefined && !record(options)) return args;
+  const descriptors = options ? Object.getOwnPropertyDescriptors(options) : {};
+  const observed = Object.create(options ? Object.getPrototypeOf(options) : Object.prototype);
+  for (const name of ["onDelta", "onStep"] as const) {
+    const original = (options as SendOptionsLike | undefined)?.[name];
+    if (original !== undefined && typeof original !== "function") continue;
+    descriptors[name] = {
+      configurable: true, enumerable: true, writable: true,
+      value: function(this: unknown, ...callbackArgs: unknown[]) {
+        safe(() => {
+          const payload = record(callbackArgs[0]);
+          const event = name === "onDelta" ? deltaEvent(payload?.update) : stepEvent(payload?.step);
+          if (event) tracer.onEvent(event, name);
+        });
+        if (typeof original === "function") {
+          return original.apply(this === observed ? options : this, callbackArgs);
+        }
+      },
+    };
+  }
+  Object.defineProperties(observed, descriptors);
+  const forwarded = args.slice();
+  forwarded[1] = observed;
+  return forwarded;
+}
+
+function traceAgentRun(
+  receiver: AgentLike,
+  target: AgentLike,
+  original: (...args: never[]) => Promise<RunLike>,
+  args: unknown[],
+  operation: "send" | "summarize",
+  getContext: GetContext,
+): Promise<RunLike> {
+  const invoke = () => original.apply(receiver, args as never[]);
+  const ctx = getContext();
+  if (!ctx) return invoke();
+  let tracer: RunTracer | undefined;
+  try {
+    tracer = new RunTracer({
+      tracer: ctx.tracer,
+      policy: ctx.policy,
+      parentContext: otelContext.active(),
+      agent: receiver ?? target,
+      operation,
+      message: operation === "send" ? args[0] : undefined,
+      sendOptions: operation === "send" ? args[1] as SendOptionsLike | undefined : undefined,
+      startTimeMs: clockMs(),
+    });
+  } catch (error) {
+    diag.debug(`${LOG}: tracing disabled for this run: ${error}`);
+  }
+  if (!tracer) return invoke();
+  const runTracer = tracer;
+  if (operation === "send") safe(() => { args = observeSend(args, runTracer); });
+  let pending: Promise<RunLike>;
+  try {
+    pending = invoke();
+  } catch (error) {
+    safe(() => runTracer.finish({ kind: "error", error }));
+    throw error;
+  }
+  return Promise.resolve(pending).then(
+    (run) => {
+      safe(() => watchRun(run, runTracer, ctx));
+      return run;
+    },
+    (error) => {
+      safe(() => runTracer.finish({ kind: "error", error }));
+      throw error;
+    },
+  );
 }
 
 /**
@@ -250,6 +301,13 @@ export class RunWatcher {
     ctx.registry.add(this);
     tracer.attachRun(run);
     this.subscribe();
+    // Subscribe before checking the snapshot so completion during attachment is
+    // not missed. startGrace() is idempotent if subscription notified us inline;
+    // do not finish immediately, since the app may still read buffered events.
+    if (this.handleTerminal()) {
+      this.terminalSeen = true;
+      this.startGrace();
+    }
   }
 
   get finished(): boolean {

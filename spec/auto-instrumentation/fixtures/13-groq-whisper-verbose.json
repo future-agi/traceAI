@@ -1,0 +1,44 @@
+{
+  "name": "groq-whisper-verbose",
+  "request": {
+    "method": "POST",
+    "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+    "multipart": {
+      "fields": {
+        "model": "whisper-large-v3",
+        "response_format": "verbose_json"
+      },
+      "files": [
+        {
+          "name": "file",
+          "filename": "a.wav",
+          "content_type": "audio/wav",
+          "size": 100
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "task": "transcribe",
+      "language": "english",
+      "duration": 3.5,
+      "text": "testing one two"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription whisper-large-v3",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "groq",
+      "gen_ai.audio.duration_secs": 3.5,
+      "gen_ai.audio.language": "english",
+      "gen_ai.audio.transcript": "testing one two"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "@traceai/genkit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Export Firebase Genkit (JavaScript) native OpenTelemetry spans to Future AGI with a mapping span processor",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -17,7 +17,7 @@
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
-    "test": "jest",
+    "test": "jest --runInBand",
     "prepare": "pnpm run build"
   },
   "keywords": [
@@ -60,7 +60,8 @@
     "rimraf": "^6.0.1",
     "ts-jest": "^29.2.5",
     "tsc-alias": "^1.8.10",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "@opentelemetry/context-async-hooks": "2.7.1"
   },
   "peerDependencies": {
     "genkit": "^1.42.0"

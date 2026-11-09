@@ -1,0 +1,219 @@
+[
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "hook_event_name": "SessionStart",
+    "source": "startup"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_use_id": "toolu_agent_21"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_use_id": "toolu_agent_21",
+    "duration_ms": 9
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_23"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "background_tasks": [
+      {
+        "id": "ad98e2f2aaac52a83",
+        "type": "subagent",
+        "status": "running",
+        "description": "Read synthetic sample",
+        "agent_type": "general-purpose"
+      }
+    ],
+    "session_crons": []
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_23",
+    "duration_ms": 4
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_24"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_24",
+    "duration_ms": 2
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "531de9bc-7bb3-4009-9655-70e7a9046111",
+    "permission_mode": "default",
+    "agent_id": "ad98e2f2aaac52a83",
+    "agent_type": "general-purpose",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da/subagents/agent-ad98e2f2aaac52a83.jsonl",
+    "background_tasks": [
+      {
+        "id": "ad98e2f2aaac52a83",
+        "type": "subagent",
+        "status": "running",
+        "description": "Read synthetic sample",
+        "agent_type": "general-purpose"
+      }
+    ],
+    "session_crons": []
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "3bafadd4-78e5-4d32-96a1-549e0f3d3e08",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "3bafadd4-78e5-4d32-96a1-549e0f3d3e08",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_26"
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "3bafadd4-78e5-4d32-96a1-549e0f3d3e08",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Read",
+    "tool_use_id": "toolu_read_26",
+    "duration_ms": 2
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "3bafadd4-78e5-4d32-96a1-549e0f3d3e08",
+    "permission_mode": "default",
+    "effort": {
+      "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "background_tasks": [],
+    "session_crons": []
+  },
+  {
+    "session_id": "f960d5f9-ab0c-4b68-b742-bff0fe7965da",
+    "transcript_path": "/work/homes/subagent/.claude/projects/-work-sample/f960d5f9-ab0c-4b68-b742-bff0fe7965da.jsonl",
+    "cwd": "/work/sample",
+    "prompt_id": "3bafadd4-78e5-4d32-96a1-549e0f3d3e08",
+    "hook_event_name": "SessionEnd",
+    "reason": "other"
+  }
+]

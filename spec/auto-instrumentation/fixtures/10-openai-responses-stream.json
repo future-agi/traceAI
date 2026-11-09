@@ -1,0 +1,91 @@
+{
+  "name": "openai-responses-stream",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-5-mini",
+      "input": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Hi"
+            }
+          ]
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "event": "response.created",
+        "type": "response.created",
+        "response": {
+          "id": "resp_2",
+          "model": "gpt-5-mini",
+          "status": "in_progress",
+          "output": []
+        }
+      },
+      {
+        "event": "response.output_text.delta",
+        "type": "response.output_text.delta",
+        "delta": "Hel"
+      },
+      {
+        "event": "response.output_text.delta",
+        "type": "response.output_text.delta",
+        "delta": "lo"
+      },
+      {
+        "event": "response.completed",
+        "type": "response.completed",
+        "response": {
+          "id": "resp_2",
+          "model": "gpt-5-mini-2025-08-07",
+          "status": "completed",
+          "output": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Hello"
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 5,
+            "output_tokens": 2,
+            "total_tokens": 7
+          }
+        }
+      }
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-5-mini",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.input.messages.0.message.content": "Hi",
+      "output.value": "Hello",
+      "gen_ai.response.model": "gpt-5-mini-2025-08-07",
+      "gen_ai.usage.total_tokens": 7,
+      "gen_ai.request.stream": true
+    }
+  }
+}

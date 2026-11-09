@@ -1,0 +1,54 @@
+{
+  "name": "groq-chat",
+  "request": {
+    "method": "POST",
+    "url": "https://api.groq.com/openai/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "llama-3.3-70b-versatile",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        }
+      ],
+      "top_p": 0.9
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "g",
+      "model": "llama-3.3-70b-versatile",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "hello"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 2,
+        "completion_tokens": 1,
+        "total_tokens": 3
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat llama-3.3-70b-versatile",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "groq",
+      "gen_ai.request.top_p": 0.9
+    }
+  }
+}

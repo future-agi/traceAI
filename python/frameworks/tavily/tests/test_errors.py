@@ -52,12 +52,18 @@ def _exception_events(span: Any) -> list:
     return [event for event in span.events if event.name == "exception"]
 
 
-def _assert_error_span(span: Any, error: BaseException) -> None:
+def _assert_error_span(span: Any, error: BaseException, type_only: bool = False) -> None:
     assert span.status.status_code is StatusCode.ERROR
-    expected = str(error) if NATIVE_ERROR_POLICY else "{0}: {1}".format(type(error).__name__, error)
+    if type_only:
+        expected = type(error).__name__
+    else:
+        expected = str(error) if NATIVE_ERROR_POLICY else "{0}: {1}".format(type(error).__name__, error)
     assert span.status.description == expected
     (event,) = _exception_events(span)
     assert event.attributes["exception.type"].endswith(type(error).__name__)
+    if type_only:
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
     values = attrs(span)
     assert "tavily.result_count" not in values
     assert "tavily.cancelled" not in values
@@ -88,7 +94,7 @@ def test_sync_http_error_sets_error_and_reraises(fake):
         with pytest.raises(requests.HTTPError) as info:
             _sync(fake).search(FAIL_500)
 
-    _assert_error_span(traced.one(), info.value)
+    _assert_error_span(traced.one(), info.value, type_only=True)
 
 
 def test_async_http_error_sets_error_and_reraises(fake):
@@ -98,7 +104,7 @@ def test_async_http_error_sets_error_and_reraises(fake):
         with pytest.raises(httpx.HTTPStatusError) as info:
             asyncio.run(_async(fake, "search", FAIL_500))
 
-    _assert_error_span(traced.one(), info.value)
+    _assert_error_span(traced.one(), info.value, type_only=True)
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

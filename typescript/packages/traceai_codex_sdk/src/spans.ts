@@ -515,7 +515,7 @@ export class TurnTracer {
     if (turnUsage) {
       if (this.threadId) usageBaselines.set(this.threadId, cumulative);
     } else {
-      // The total went down (a reset, or an SDK that reports per-turn usage): use it as
+      // The total went down (a reset within the supported cumulative-usage SDKs): use it as
       // reported, and keep the larger baseline so a later turn is not counted twice.
       turnUsage = cumulative;
       attributes[C.USAGE_NON_MONOTONIC] = true;

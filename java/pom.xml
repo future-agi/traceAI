@@ -1,21 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-parent</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.2</version>
     <packaging>pom</packaging>
 
     <name>TraceAI Java SDK</name>
     <description>Enterprise-grade AI observability for Java applications</description>
     <url>https://github.com/future-agi/traceAI/tree/main/java</url>
 
-    <scm child.scm.connection.inherit.append.path="false"
-         child.scm.developerConnection.inherit.append.path="false"
-         child.scm.url.inherit.append.path="false">
+    <scm child.scm.connection.inherit.append.path="false" child.scm.developerConnection.inherit.append.path="false" child.scm.url.inherit.append.path="false">
         <connection>scm:git:https://github.com/future-agi/traceAI.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/future-agi/traceAI.git</developerConnection>
         <url>https://github.com/future-agi/traceAI</url>
@@ -64,11 +60,13 @@
         <module>traceai-java-mongodb</module>
         <module>traceai-java-redis</module>
         <module>traceai-java-azure-search</module>
+        <module>traceai-java-azure-search-v12</module>
         <module>traceai-java-pgvector</module>
         <module>traceai-java-elasticsearch</module>
 
         <!-- Frameworks -->
         <module>traceai-langchain4j</module>
+        <module>traceai-java-quarkus-langchain4j</module>
         <module>traceai-spring-ai</module>
         <module>traceai-spring-boot-starter</module>
         <module>traceai-java-semantic-kernel</module>
@@ -112,6 +110,7 @@
         <mongodb.version>5.2.0</mongodb.version>
         <jedis.version>5.1.0</jedis.version>
         <azure-search.version>11.6.2</azure-search.version>
+        <azure-search-v12.version>12.0.3</azure-search-v12.version>
     </properties>
 
     <dependencyManagement>
@@ -314,6 +313,8 @@
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
                             <waitUntil>published</waitUntil>
+                            <!-- Central can take over the default 30 minutes to publish a full reactor bundle. -->
+                            <waitMaxTime>3600</waitMaxTime>
                         </configuration>
                     </plugin>
                 </plugins>

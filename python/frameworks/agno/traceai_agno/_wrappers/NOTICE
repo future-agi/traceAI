@@ -1,0 +1,15 @@
+OpenInference instrumentation for Agno 1.1.0
+https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno
+Copyright Arize AI. Licensed under the Apache License, Version 2.0.
+
+The four wrapper modules and installation function are adapted from that
+release. Future AGI maintains changes for recursive credential redaction,
+input hiding, generator lifetime/context isolation, cancellation, dynamic tools,
+optional workflow metadata, and distributed parent propagation.
+
+The upstream instrumentor still owns the single installation and teardown.
+These private modules replace its wrapper implementations; they do not add
+another instrumentation layer. The upstream dependency is pinned because
+installation/teardown and utility APIs are private. Revalidate all adapters
+before updating that pin; remove adaptations when equivalent upstream fixes
+are available. No application-side helper or upstream module mutation is used.
