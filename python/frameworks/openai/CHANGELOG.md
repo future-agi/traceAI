@@ -1,5 +1,6 @@
 ## [Unreleased]
 ### Fixed
+- Add Azure client deployment, API version and endpoint host/explicit port span metadata through the existing OpenAI instrumentor, without recording full URLs or credentials (#154).
 - Normally exhausted Chat Completions streams now export ERROR when at least one
   choice reports a non-null `finish_reason` but a requested choice index never does.
   This honors the effective on-wire `n`, including `extra_body` overrides, for sync
