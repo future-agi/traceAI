@@ -11,7 +11,7 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { getAttributesFromContext, rememberSpanValueLimit, type TraceConfigOptions } from "@traceai/fi-core";
-import { mapGenkitAttributes } from "./mapping";
+import { mapGenkitAttributes, maskAuxiliaryAttributes } from "./mapping";
 import {
   type ContentPolicy,
   defaultScrubContext,
@@ -173,7 +173,7 @@ export function exportEvents(events: TimedEventLike[], privacy: ExportPrivacy = 
             : scrubContent(value, privacy.scrub)
           : value;
     }
-    return { ...event, attributes };
+    return { ...event, attributes: maskAuxiliaryAttributes(attributes, privacy.policy ?? SHOW_ALL) };
   });
 }
 
@@ -225,7 +225,10 @@ export function toExportableSpan(
     endTime: span.endTime,
     status: exportStatus(span.status, span.events, privacy),
     attributes,
-    links: span.links,
+    links: span.links.map((link) => ({
+      ...link,
+      attributes: link.attributes === undefined ? undefined : maskAuxiliaryAttributes(link.attributes, privacy.policy ?? SHOW_ALL),
+    })),
     events: exportEvents(span.events, privacy),
     duration: span.duration,
     ended: span.ended,

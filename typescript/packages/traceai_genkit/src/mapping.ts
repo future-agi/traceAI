@@ -234,6 +234,41 @@ function sideValue(
   return scrubContent(text, scrub);
 }
 
+/** Semantic content copies share one policy on spans, context, events and links. */
+function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy): Attributes {
+  const out = maskAttributes({
+    config: generateTraceConfig({ ...policy, hideInputImages: policy.hideInputImages ?? false,
+      hideErrorDetails: hidesFreeText(policy) }),
+    attributes,
+  });
+  for (const key of Object.keys(out)) {
+    const input = /^(?:input\.|raw\.input$|gen_ai\.input\.)/.test(key);
+    const output = /^(?:output\.|raw\.output$|gen_ai\.output\.)/.test(key);
+    // Exact message blobs retain fi-core's field-level masking. Flattened/opaque
+    // copies have no independently verifiable envelope, so mask the whole value.
+    if (key === "gen_ai.input.messages" || key === "gen_ai.output.messages") continue;
+    if ((input && (policy.hideInputs || policy.hideInputMessages || policy.hideInputText || policy.hideInputImages)) ||
+        (output && (policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText))) {
+      if (key.endsWith("mime_type")) delete out[key];
+      else out[key] = REDACTED_VALUE;
+    }
+  }
+  return out;
+}
+
+/** Events/links carry attribute maps, not native generation envelopes. */
+export function maskAuxiliaryAttributes(attributes: Attributes, policy: ContentPolicy): Attributes {
+  const out = maskSemanticAttributes(attributes, policy);
+  for (const key of Object.keys(out)) {
+    if (GENKIT_NEVER_EXPORTED_KEYS.includes(key) ||
+        (GENKIT_INPUT_KEYS.includes(key) && (policy.hideInputs || policy.hideInputMessages || policy.hideInputText || policy.hideInputImages)) ||
+        (GENKIT_OUTPUT_KEYS.includes(key) && (policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText))) {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
 /**
  * Map one Genkit span's attributes to the attributes exported to Future AGI.
  *
@@ -241,6 +276,9 @@ function sideValue(
  * exporters (dev UI telemetry server, Firebase plugin) read the same span.
  */
 export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}): Attributes {
+  // Merge before masking: a hidden native key must not be repopulated from the
+  // context after its native copy was removed. Native values retain precedence.
+  source = { ...options.contextAttributes, ...source };
   const policy = options.policy ?? SHOW_ALL;
   const scrub = options.scrub ?? {};
   const kind = genkitSpanKind(source);
@@ -345,26 +383,11 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     out[SemanticConventions.SESSION_ID] = agentSession;
   }
 
-  if (options.contextAttributes) {
-    for (const [key, value] of Object.entries(options.contextAttributes)) {
-      if (value === undefined || out[key] !== undefined) continue;
-      if (isPromotedUsageKey(key) && !isModelCall) {
-        out[GENKIT_USAGE_PREFIX + key] = value;
-      } else {
-        out[key] = value;
-      }
-    }
-  }
-
   // Native spans do not pass through FISpan. Apply the same semantic content rules
   // to both native attributes and fi-core context copies before creating aliases
   // from the already field-masked native envelopes below. Otherwise opaque context
   // values can override those aliases, including prompt-template variables.
-  out = maskAttributes({
-    config: generateTraceConfig({ ...policy, hideInputImages: policy.hideInputImages ?? false,
-      hideErrorDetails: hidesFreeText(policy) }),
-    attributes: out,
-  });
+  out = maskSemanticAttributes(out, policy);
 
   // input.value / output.value, the keys Future AGI shows as a span's input and output. A hidden
   // side gets fi-core's "__REDACTED__" and no mime type, as fi-core's own masking does.
