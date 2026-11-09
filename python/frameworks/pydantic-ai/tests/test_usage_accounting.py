@@ -30,6 +30,21 @@ def traced(monkeypatch):
         provider.shutdown()
 
 
+def run_spans(exporter):
+    # Per-request usage belongs to child spans as well. Continue to require
+    # exactly one aggregate span (and the exact delta) per logical agent run.
+    return [span for span in exporter.get_finished_spans()
+            if span.name == "pydantic_ai.agent.run"]
+
+
+def assert_execution_parent(exporter, nested, outer, kind):
+    spans = {span.context.span_id: span for span in exporter.get_finished_spans()}
+    parent = spans[nested.parent.span_id]
+    assert parent.attributes["pydantic_ai.span_kind"] == kind
+    assert parent.parent.span_id == outer.context.span_id
+    assert nested.context.trace_id == outer.context.trace_id
+
+
 def counters(usage):
     input_name = "input_tokens" if hasattr(usage, "input_tokens") else "request_tokens"
     output_name = "output_tokens" if hasattr(usage, "output_tokens") else "response_tokens"
@@ -69,7 +84,7 @@ def test_consecutive_runs_export_only_their_usage_delta(traced, method):
                 tuple(after - prior for after, prior in zip(counters(shared), before))
             )
 
-    spans = traced.get_finished_spans()
+    spans = run_spans(traced)
     assert len(spans) == 2
     keys = ("input_tokens", "output_tokens", "total_tokens")
     for span, delta in zip(spans, expected):
@@ -102,12 +117,12 @@ def test_sync_delegation_does_not_suppress_nested_logical_runs(traced, same_agen
 
     parent = Agent(FunctionModel(invoke_child))
     assert parent.run_sync("parent prompt").output == "parent answer"
-    spans = traced.get_finished_spans()
+    spans = run_spans(traced)
     assert len(spans) == 2
     nested, outer = spans
     assert nested.attributes["pydantic_ai.run.method"] == "run"
     assert outer.attributes["pydantic_ai.run.method"] == "run_sync"
-    assert nested.parent.span_id == outer.context.span_id
+    assert_execution_parent(traced, nested, outer, "model_request")
     assert nested.attributes["gen_ai.usage.input_tokens"] > 0
 
 
@@ -139,8 +154,8 @@ def test_nested_tool_runs_account_for_the_effective_sdk_budget(traced, method, e
     assert actual_usage is budgets[0]
     if explicit_budget:
         assert actual_usage is kwargs["usage"]
-    nested, outer = traced.get_finished_spans()  # Exactly one span per logical operation.
-    assert nested.parent.span_id == outer.context.span_id
+    nested, outer = run_spans(traced)  # Exactly one aggregate per logical operation.
+    assert_execution_parent(traced, nested, outer, "tool_call")
     keys = ("input_tokens", "output_tokens", "total_tokens")
     actual = [tuple(span.attributes[f"gen_ai.usage.{key}"] for key in keys)
               for span in (nested, outer)]
@@ -170,7 +185,7 @@ def test_sync_delegation_marker_is_reset_after_error(traced):
         ).output
         == "ok"
     )
-    failed, recovered = traced.get_finished_spans()
+    failed, recovered = run_spans(traced)
     assert failed.status.status_code.name == "ERROR"
     assert recovered.status.status_code.name == "OK"
     assert recovered.attributes["pydantic_ai.run.method"] == "run"
