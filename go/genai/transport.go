@@ -27,6 +27,8 @@ const (
 
 	methodGenerate       = ":generateContent"
 	methodStreamGenerate = ":streamGenerateContent"
+	methodEmbed          = ":embedContent"
+	methodBatchEmbed     = ":batchEmbedContents"
 	apiKeyHeader         = "x-goog-api-key"
 )
 
@@ -52,7 +54,7 @@ func WithTraceConfig(tc TraceConfig) Option {
 	return func(c *config) { c.tc, c.tcSet = tc, true }
 }
 
-// Transport is an http.RoundTripper that traces Gemini generate calls made by
+// Transport is an http.RoundTripper that traces Gemini generation and embedding calls made by
 // google.golang.org/genai. Build it with [NewTransport].
 type Transport struct {
 	base http.RoundTripper
@@ -60,20 +62,35 @@ type Transport struct {
 }
 
 // NewTransport returns a RoundTripper that sends every request through base
-// (http.DefaultTransport when nil) and spans the GenerateContent and
-// GenerateContentStream calls among them. Any other request (files, caches,
-// tokens, embeddings, models, batches, interactions) passes through untouched
-// and without a span.
+// (http.DefaultTransport when nil) and spans GenerateContent,
+// GenerateContentStream and EmbedContent calls. Both embedContent and
+// batchEmbedContents REST routes are traced. Other requests (files, caches,
+// tokens, models, asynchronous batch jobs, interactions) pass through untouched
+// and without a span. If base is already a *Transport, its configuration is
+// copied and its underlying transport reused, so wrapping does not duplicate
+// spans. New options override the inherited settings without changing base.
 func NewTransport(base http.RoundTripper, opts ...Option) *Transport {
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	c := &config{}
+	if existing, ok := base.(*Transport); ok {
+		*c = *existing.cfg
+		// Inherit the resolved privacy settings rather than rereading the env.
+		c.tcSet = true
+	}
+	for existing, ok := base.(*Transport); ok; existing, ok = base.(*Transport) {
+		base = existing.base
+	}
 	for _, o := range opts {
 		o(c)
 	}
 	if !c.tcSet {
 		c.tc = TraceConfigFromEnv()
 	}
-	if base == nil {
-		base = http.DefaultTransport
+	if c.tc.HideErrorDetails != nil {
+		hide := *c.tc.HideErrorDetails
+		c.tc.HideErrorDetails = &hide
 	}
 	return &Transport{base: base, cfg: c}
 }
@@ -92,7 +109,9 @@ func NewHTTPClient(opts ...Option) *http.Client {
 
 // WrapClient returns a copy of hc whose transport is traced. hc itself is not
 // changed. Use it when you already build your own *http.Client (a proxy, a
-// custom timeout). A nil hc is treated as an empty client.
+// custom timeout). A nil hc is treated as an empty client. Rewrapping a traced
+// client inherits its settings, applies new options and still emits one span
+// per HTTP attempt; the original client and its settings remain unchanged.
 func WrapClient(hc *http.Client, opts ...Option) *http.Client {
 	var out http.Client
 	if hc != nil {
@@ -104,17 +123,15 @@ func WrapClient(hc *http.Client, opts ...Option) *http.Client {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	method, ok := generateMethod(req)
+	method, ok := tracedMethod(req)
 	if !ok {
 		return t.base.RoundTrip(req)
 	}
-	return t.traceGenerate(req, method == methodStreamGenerate)
+	return t.traceRequest(req, method)
 }
 
-// generateMethod reports whether req is a Gemini generate call and which one.
-// The SDK builds {base}/{version}/models/{model}:generateContent and
-// :streamGenerateContent?alt=sse for both backends.
-func generateMethod(req *http.Request) (string, bool) {
+// tracedMethod reports whether req is a supported Gemini REST call and which one.
+func tracedMethod(req *http.Request) (string, bool) {
 	if req == nil || req.URL == nil || req.Method != http.MethodPost {
 		return "", false
 	}
@@ -124,6 +141,10 @@ func generateMethod(req *http.Request) (string, bool) {
 		return methodGenerate, true
 	case strings.HasSuffix(p, methodStreamGenerate):
 		return methodStreamGenerate, true
+	case strings.HasSuffix(p, methodEmbed):
+		return methodEmbed, true
+	case strings.HasSuffix(p, methodBatchEmbed):
+		return methodBatchEmbed, true
 	}
 	return "", false
 }
@@ -157,24 +178,35 @@ func (c *config) tracer() trace.Tracer {
 	return tp.Tracer(ScopeName, trace.WithInstrumentationVersion(Version))
 }
 
-func (t *Transport) traceGenerate(req *http.Request, streaming bool) (*http.Response, error) {
+func (t *Transport) traceRequest(req *http.Request, method string) (*http.Response, error) {
 	c := t.cfg
 	body, out := requestBody(req)
 	model := modelFromPath(req.URL.Path)
-	parsed := parseGenerateRequest(body, c.tc)
+	operation, kind := OperationGenerateContent, SpanKindLLM
+	embedding := method == methodEmbed || method == methodBatchEmbed
+	var parsed parsedRequest
+	if embedding {
+		operation, kind = OperationEmbeddings, SpanKindEmbedding
+		parsed = parseEmbeddingRequest(body, c.tc, method == methodBatchEmbed)
+	} else {
+		parsed = parseGenerateRequest(body, c.tc)
+	}
 
 	attrs := []attribute.KeyValue{
-		attribute.String(GenAISpanKind, SpanKindLLM),
-		attribute.String(GenAIOperationName, OperationGenerateContent),
+		attribute.String(GenAISpanKind, kind),
+		attribute.String(GenAIOperationName, operation),
 		attribute.String(GenAIProviderName, ProviderGoogle),
 	}
 	if model != "" {
 		attrs = append(attrs, attribute.String(GenAIRequestModel, model))
+		if embedding {
+			attrs = append(attrs, attribute.String(EmbeddingModelName, model))
+		}
 	}
 	attrs = append(attrs, parsed.attrs...)
 	attrs = append(attrs, ContextAttributes(req.Context())...)
 
-	name := OperationGenerateContent
+	name := operation
 	if model != "" {
 		name += " " + model
 	}
@@ -202,10 +234,10 @@ func (t *Transport) traceGenerate(req *http.Request, streaming bool) (*http.Resp
 	switch {
 	case res.StatusCode >= 400:
 		c.endHTTPError(span, res, secrets)
-	case streaming:
+	case method == methodStreamGenerate:
 		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc, secrets)
 	default:
-		c.endJSON(reqCtx, span, res)
+		c.endJSON(reqCtx, span, res, method)
 	}
 	return res, nil
 }
@@ -270,7 +302,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // endJSON reads a non-streaming response, restores the body for the SDK and
 // ends the span with the response attributes.
-func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response) {
+func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, method string) {
 	if res.Body == nil {
 		span.End()
 		return
@@ -284,16 +316,31 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 		return
 	}
 	res.Body = io.NopCloser(bytes.NewReader(b))
-	acc := newAccumulator()
-	acc.addResponse(b)
-	span.SetAttributes(c.tc.Filter(acc.attributes())...)
+	if method == methodEmbed || method == methodBatchEmbed {
+		attrs, err := embeddingResponseAttributes(b, method == methodBatchEmbed)
+		if err != nil {
+			// Decoder errors may contain response content. Keep only a safe
+			// classification, and leave the original body for the SDK to decode.
+			endWithFailure(span, failure{"decode", "failed to decode embedding response"})
+			return
+		}
+		span.SetAttributes(c.tc.Filter(attrs)...)
+	} else {
+		acc := newAccumulator()
+		acc.addResponse(b)
+		span.SetAttributes(c.tc.Filter(acc.attributes(c.tc))...)
+		if acc.decodeFailed {
+			endWithFailure(span, failure{"decode", "failed to decode generation response"})
+			return
+		}
+	}
 	span.End()
 }
 
 // endHTTPError ends the span for a 4xx/5xx response. The status token
 // (NOT_FOUND, INVALID_ARGUMENT, ...) is kept; the API's error message only
-// while inputs and outputs are both captured, and never with a credential in
-// it.
+// when error details are allowed by TraceConfig, and never with a credential
+// in it.
 func (c *config) endHTTPError(span trace.Span, res *http.Response, secrets []string) {
 	var b []byte
 	if res.Body != nil {

@@ -1,4 +1,11 @@
+## [Unreleased]
 
+### Fixed
+- Fix offline sync/async streaming tests on `google-genai` 3.x using public HTTP
+  transport options, retaining the 1.8.0 fallback and blocking network access.
+- Preserve distinct parts in streaming responses so parallel function calls,
+  repeated calls to the same tool, and multimedia parts are not overwritten or
+  merged into text parts in exported traces.
 
 ## [0.1.3] - 2026-10-29
 

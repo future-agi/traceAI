@@ -1,270 +1,59 @@
-/**
- * Tests for Instructor instrumentation.
- */
-
-import { InstructorInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
+import { InstructorInstrumentation, isPatched } from "../instrumentation";
 import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
-describe("InstructorInstrumentation", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
+const instances: InstructorInstrumentation[] = [];
+function make() {
+  const inst = new InstructorInstrumentation({ instrumentationConfig: { enabled: false } });
+  instances.push(inst);
+  return inst;
+}
+afterEach(() => { for (const inst of instances.splice(0)) inst.disable(); });
 
-  const instrumentation = new InstructorInstrumentation();
-  instrumentation.disable();
-  instrumentation.setTracerProvider(tracerProvider);
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  afterAll(() => {
-    instrumentation.disable();
-  });
-
-  describe("VERSION", () => {
-    it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
-    });
-  });
-
-  describe("InstructorInstrumentation", () => {
-    it("should create instrumentation instance", () => {
-      const inst = new InstructorInstrumentation();
-      expect(inst).toBeInstanceOf(InstructorInstrumentation);
-    });
-
-    it("should accept configuration options", () => {
-      const inst = new InstructorInstrumentation({
-        traceConfig: {
-          hideInputs: true,
-          hideOutputs: true,
-        },
-      });
-      expect(inst).toBeInstanceOf(InstructorInstrumentation);
-    });
-
-    it("should have instrumentationName", () => {
-      const inst = new InstructorInstrumentation();
-      expect(inst.instrumentationName).toBe("@traceai/fi-instrumentation-instructor");
-    });
-
-    it("should have instrumentationVersion", () => {
-      const inst = new InstructorInstrumentation();
-      expect(inst.instrumentationVersion).toBe(VERSION);
-    });
-  });
-
-  describe("isPatched", () => {
-    it("should return false when not patched", () => {
-      instrumentation.disable();
-      expect(isPatched()).toBe(false);
-    });
-  });
-
-  describe("manuallyInstrument", () => {
-    it("should handle null module", () => {
-      const inst = new InstructorInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      // Should not throw
-      inst.manuallyInstrument(null);
-      expect(true).toBe(true);
-    });
-
-    it("should mark module as patched after manual instrumentation", () => {
-      const inst = new InstructorInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-
-      const mockModule = { Instructor: {} };
-      inst.manuallyInstrument(mockModule);
-      expect(mockModule).toHaveProperty("_fiPatched", true);
-    });
-  });
-
-  describe("enable/disable", () => {
-    it("should enable instrumentation", () => {
-      const inst = new InstructorInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-
-    it("should disable instrumentation", () => {
-      const inst = new InstructorInstrumentation();
-      inst.setTracerProvider(tracerProvider);
-      inst.enable();
-      inst.disable();
-      // Should not throw
-      expect(true).toBe(true);
-    });
-  });
+it("retains the public instrumentor name and release-managed version", () => {
+  const inst = make();
+  expect(VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(inst.instrumentationName).toBe("@traceai/fi-instrumentation-instructor");
+  expect(inst.instrumentationVersion).toBe(VERSION);
 });
 
-describe("Instructor Patching", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
-
-  it("should wrap Instructor.chat.completions.create when available", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const originalCreate = jest.fn().mockResolvedValue({
-      name: "John",
-      age: 30,
-    });
-
-    const mockModule = {
-      Instructor: {
-        prototype: {
-          chat: {
-            completions: {
-              create: originalCreate,
-            },
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should wrap default export when it is a function", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockCreate = jest.fn().mockResolvedValue({ extracted: "data" });
-    const mockModule = {
-      default: jest.fn().mockReturnValue({
-        chat: {
-          completions: {
-            create: mockCreate,
-          },
-        },
-      }),
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should not double-patch module", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      _fiPatched: true,
-      Instructor: {
-        prototype: {
-          chat: {
-            completions: {
-              create: jest.fn(),
-            },
-          },
-        },
-      },
-    };
-
-    const original = mockModule.Instructor.prototype.chat.completions.create;
-    inst.manuallyInstrument(mockModule);
-
-    // Should not have changed
-    expect(mockModule.Instructor.prototype.chat.completions.create).toBe(original);
-  });
+it("ignores null and unsupported modules without claiming to patch them", () => {
+  const inst = make();
+  inst.manuallyInstrument(null);
+  inst.manuallyInstrument({ Instructor: {} });
+  expect(isPatched()).toBe(false);
 });
 
-describe("Structured Extraction Tracing", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
+it("does not let a second instrumentor remove the first one's patch", () => {
+  const first = make(); const second = make();
+  const original = () => ({ chat: { completions: { create: async () => ({}) } } });
+  const module = { default: original };
+  first.manuallyInstrument(module); const wrapped = module.default;
+  second.manuallyInstrument(module); second.disable();
+  expect(module.default).toBe(wrapped); expect(isPatched()).toBe(true);
+  first.disable(); expect(module.default).toBe(original); expect(isPatched()).toBe(false);
+});
 
-  beforeEach(() => {
-    memoryExporter.reset();
-    _resetPatchedStateForTesting();
-  });
+it("preserves a later factory wrapper on disable", () => {
+  const inst = make(); const module = { default: () => ({}) };
+  inst.manuallyInstrument(module);
+  const wrapped = module.default;
+  const later = () => wrapped(); module.default = later;
+  inst.disable(); expect(module.default).toBe(later);
+  expect(isPatched()).toBe(false);
+});
 
-  it("should handle response_model parameter", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
+it("restores the legacy prototype route without retaining created clients", () => {
+  const inst = make(); const original = async () => ({});
+  const module = { Instructor: { prototype: { chat: { completions: { create: original } } } } };
+  inst.manuallyInstrument(module);
+  expect(module.Instructor.prototype.chat.completions.create).not.toBe(original);
+  inst.disable(); expect(module.Instructor.prototype.chat.completions.create).toBe(original);
+});
 
-    const mockModule = {
-      Instructor: {
-        prototype: {
-          chat: {
-            completions: {
-              create: jest.fn().mockResolvedValue({ name: "Test" }),
-            },
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should handle responseModel parameter (camelCase)", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Instructor: {
-        prototype: {
-          chat: {
-            completions: {
-              create: jest.fn().mockResolvedValue({ result: "data" }),
-            },
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
-
-  it("should capture model name in span", () => {
-    const inst = new InstructorInstrumentation();
-    inst.setTracerProvider(tracerProvider);
-    inst.enable();
-
-    const mockModule = {
-      Instructor: {
-        prototype: {
-          chat: {
-            completions: {
-              create: jest.fn().mockResolvedValue({ extracted: "value" }),
-            },
-          },
-        },
-      },
-    };
-
-    inst.manuallyInstrument(mockModule);
-    expect((mockModule as any)._fiPatched).toBe(true);
-  });
+it("can instrument a factory again after disabling", () => {
+  const inst = make(); const original = () => ({}); const module = { default: original };
+  inst.manuallyInstrument(module); inst.disable();
+  inst.enable(); inst.manuallyInstrument(module);
+  expect(module.default).not.toBe(original); expect(isPatched()).toBe(true);
+  inst.disable(); expect(module.default).toBe(original);
 });

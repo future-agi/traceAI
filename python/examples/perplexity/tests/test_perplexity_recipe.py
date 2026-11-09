@@ -37,6 +37,19 @@ else:
         == Path(CORE_DISTRIBUTION.locate_file("fi_instrumentation/__init__.py")).resolve()
     )
 
+# The recipe CI deliberately retains the old published SDK as a compatibility
+# control. Only that exact installed distribution exports echoed instructions;
+# current source must not reintroduce them to satisfy legacy expectations.
+try:
+    OPENAI_DISTRIBUTION = distribution("traceAI-openai")
+except PackageNotFoundError:
+    LEGACY_OUTPUT = False
+else:
+    LEGACY_OUTPUT = OPENAI_DISTRIBUTION.version == "0.1.10" and (
+        Path(traceai_openai.__file__).resolve()
+        == Path(OPENAI_DISTRIBUTION.locate_file("traceai_openai/__init__.py")).resolve()
+    )
+
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
 VENDOR_KEY = "placeholder-perplexity-key"
@@ -254,7 +267,10 @@ def test_responses_at_documented_host(tracing):
             assert raw["usage"]["input_tokens_details"][key] == value
         assert raw["usage"]["output_tokens_details"] == fake.USAGE["output_tokens_details"]
         assert raw["usage"]["tool_calls_details"] == fake.USAGE["tool_calls_details"]
-        assert fake.INSTRUCTIONS_MARKER in raw["instructions"]
+        if LEGACY_OUTPUT:
+            assert fake.INSTRUCTIONS_MARKER in raw["instructions"]
+        else:
+            assert "instructions" not in raw
         assert fake.SEARCH_URL in attrs["output.value"]
         assert fake.SEARCH_SNIPPET in attrs["output.value"]
 
@@ -349,9 +365,11 @@ def test_hide_inputs_with_control(tracing, monkeypatch):
             assert _call(handler, prompt=marker) == fake.ANSWER
             span, _ = _assert_export(receiver, provider, project, hide_inputs=hidden)
             assert (marker in json.dumps(span)) is (not hidden)
-            # Output echoes remain visible even when the input itself is hidden.
-            for output_marker in (fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
-                assert output_marker in _attributes(span)["output.value"]
+            # Search queries are response-owned output; instructions are input.
+            output = _attributes(span)["output.value"]
+            assert fake.QUERY_MARKER in output
+            assert (fake.INSTRUCTIONS_MARKER in output) is LEGACY_OUTPUT
+            assert fake.ANSWER in output
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
@@ -363,8 +381,11 @@ def test_hide_outputs_with_control(tracing, monkeypatch, stream):
             span, attrs = _assert_export(receiver, provider, project)
             _assert_usage(attrs)
             assert (fake.ANSWER in json.dumps(span)) is (not hidden)
-            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET, fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
+            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET, fake.QUERY_MARKER):
                 assert (marker in json.dumps(span)) is (not hidden and not stream)
+            assert (fake.INSTRUCTIONS_MARKER in json.dumps(span)) is (
+                LEGACY_OUTPUT and not hidden and not stream
+            )
 
 
 @pytest.mark.parametrize("hidden", [False, True], ids=["visible", "hidden"])
@@ -381,8 +402,9 @@ def test_empty_text_stream_raw_fallback(tracing, monkeypatch, hidden):
             list(client.responses.create(model=fake.REQUEST_MODEL, input="empty stream", stream=True))
         span, attrs = _assert_export(receiver, provider, project)
         _assert_usage(attrs)
-        for marker in (fake.SEARCH_URL, fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
+        for marker in (fake.SEARCH_URL, fake.QUERY_MARKER):
             assert (marker in json.dumps(span)) is (not hidden)
+        assert (fake.INSTRUCTIONS_MARKER in json.dumps(span)) is (LEGACY_OUTPUT and not hidden)
 
 
 def test_cache_details_require_output_details(tracing):
@@ -457,7 +479,7 @@ def test_subprocess_app(tmp_path, stream, cli_model):
         assert (fake.SEARCH_URL in json.dumps(attrs)) is (not stream)
         assert (fake.SEARCH_SNIPPET in json.dumps(attrs)) is (not stream)
         assert (fake.QUERY_MARKER in json.dumps(attrs)) is (not stream)
-        assert (fake.INSTRUCTIONS_MARKER in json.dumps(attrs)) is (not stream)
+        assert (fake.INSTRUCTIONS_MARKER in json.dumps(attrs)) is (LEGACY_OUTPUT and not stream)
         [export] = receiver.requests()
         assert export["path"] == "/tracer/v1/traces"
         assert export["headers"]["x-api-key"] == FI_KEY

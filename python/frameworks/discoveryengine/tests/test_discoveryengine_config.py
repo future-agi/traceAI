@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from importlib.metadata import version
 
 import pytest
+from packaging.version import Version
 from google.api_core import exceptions as core_exceptions
 from opentelemetry.trace import StatusCode
 
@@ -25,6 +27,9 @@ from _discoveryengine_support import (
     search_request,
 )
 from traceai_discoveryengine import DiscoveryEngineInstrumentor, _wrappers
+
+# Older published cores predate the opaque-payload privacy repair.
+GRANULAR_RAW_PRIVACY = Version(version("fi-instrumentation-otel")) >= Version("1.2.3")
 
 EMAIL = "jane.doe@example.com"
 EMAIL_TOKEN = "<EMAIL_ADDRESS>"
@@ -210,8 +215,8 @@ def test_hide_outputs_changes_nothing_because_no_output_text_is_recorded(fake):
 @pytest.mark.parametrize("source", ["config", "env"])
 @pytest.mark.parametrize("flag", OTHER_CONTENT_HIDE_FLAGS)
 def test_other_content_hide_flags_follow_core_error_policy(fake, monkeypatch, flag, source):
-    # These flags do not hide a retrieval query, but native core derives error
-    # privacy from all content-hide flags, not only hide_inputs. No opt-out.
+    # New cores also hide opaque input.value for input text/message flags.
+    # Output-only flags remain directional; error privacy applies to all.
     plain = _denied(fake, {})
     options = {}
     if source == "config":
@@ -219,7 +224,8 @@ def test_other_content_hide_flags_follow_core_error_policy(fake, monkeypatch, fl
     else:
         monkeypatch.setenv("FI_" + flag.upper(), "true")
     span = _denied(fake, options)
-    assert attrs(span)["input.value"] == DENIED_QUERY
+    private_input = GRANULAR_RAW_PRIVACY and flag in ("hide_input_messages", "hide_input_text")
+    assert attrs(span)["input.value"] == (REDACTED_VALUE if private_input else DENIED_QUERY)
     assert attrs(span)["discoveryengine.error.code"] == 403
     assert attrs(span)["discoveryengine.error.status"] == "PERMISSION_DENIED"
     assert span.status.status_code is StatusCode.ERROR
@@ -262,15 +268,19 @@ def test_pii_straddling_the_cap_is_replaced_before_the_cut(fake):
     assert len(value.encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
 
 
-def test_pii_redaction_also_matches_a_project_number_in_resource_names(fake):
-    # Documented: the phone pattern matches the last ten digits of a GCP
-    # project number, so resource names lose part of it with pii_redaction.
+def test_pii_redaction_and_a_project_number_in_resource_names(fake):
+    # Resource names go through the installed core's PII patterns. Cores with
+    # the issue #195 fix keep a GCP project number intact; older cores read its
+    # last ten digits as a phone number.
+    from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
+
     serving_config = SERVING_CONFIG.replace("projects/test-project/", "projects/123456789012/")
     with instrumented(config=_config(pii_redaction=True)) as traced:
         search_client(fake).search(request=search_request(serving_config=serving_config))
 
     value = attrs(traced.one())["discoveryengine.serving_config"]
-    assert value == serving_config.replace("123456789012", "12<PHONE_NUMBER>")
+    fixed_core = redact_pii_in_string("projects/123456789012/") == "projects/123456789012/"
+    assert value == (serving_config if fixed_core else serving_config.replace("123456789012", "12<PHONE_NUMBER>"))
 
 
 def test_the_query_is_capped_on_a_character_boundary(fake):

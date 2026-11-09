@@ -12,7 +12,7 @@ This package traces the SDK inside your Node process. It is not the Cursor IDE h
 npm install @traceai/cursor-sdk @traceai/fi-core @cursor/sdk
 ```
 
-`@cursor/sdk` is a peer dependency. Nothing in this package imports it at runtime.
+`@cursor/sdk` is a peer dependency. Nothing in this package imports it at runtime. The tested compatibility matrix is **1.0.37, 1.2.0 and 1.3.1** (peer range `>=1.0.37 <2`), on Node **22.13+**, as required by the Cursor SDK. The prior `>=1.0.0` floor was inaccurate: published 1.0.7 has a synchronous `Agent.create()` and no token-usage event, while this wrapper follows the async factory contract verified from 1.0.37 onward. The package preserves 1.0.37 support by checking for newer APIs at runtime.
 
 ## Use
 
@@ -61,8 +61,8 @@ try {
 
 ### What the wrapper does and does not do
 
-- It patches the static `Agent.create` and `Agent.resume`, and `send`, `stream` and `wait` on the agent and run objects they return. You get the SDK's own objects back, and `run.stream()` yields the SDK's own events unchanged.
-- It never reads the run's event stream on its own. The local runtime's stream is a single-consumer queue, so a second reader would steal your events. In this version, tool, thinking and assistant spans exist only for events your code reads through `run.stream()`. (The SDK's per-send `onStep` / `onDelta` callbacks could feed them without the stream; this version does not use them.)
+- It patches the static `Agent.create` and `Agent.resume`, and `send`, `stream` and `wait` on the agent and run objects they return. On SDK 1.2+, it also traces `agent.summarize()` runs and emits content-free `cursor.summary` status/fallback events; a summary error does not imply the run failed (Cursor can fall back to a trimmed transcript). Older SDKs without `summarize()` work unchanged. You get the SDK's own objects back, and `run.stream()` yields the SDK's own events unchanged.
+- It never reads the run's event stream on its own. The local runtime's stream is a single-consumer queue, so a second reader would steal your events. Instead, it composes observers with per-send `onDelta` / `onStep`: available callbacks create child spans even for `wait()`-only runs. Your callbacks keep their receiver, arguments, return values/promises and error behavior; your options are not mutated. Tool calls are deduplicated by call id across callbacks and the stream. Text, thinking and usage each use their first available feed to avoid counting both deltas and completed snapshots.
 - Tracing failures are logged with `diag.debug` and never reach your code.
 
 ## Spans
@@ -72,7 +72,12 @@ Cursor Agent run              AGENT  session.id = agent id, model, tokens, statu
 ├─ Cursor thinking            CHAIN  one per thinking block (deltas joined), cursor.thinking.duration_ms
 ├─ Cursor assistant message   LLM    one per run of consecutive text deltas
 └─ Cursor tool: <name>        TOOL   one per tool_call call_id: running -> completed | error
+   └─ Cursor subagent         AGENT  completed task/Task/Agent result conversationSteps
+      ├─ Cursor tool: <name>  TOOL   nested calls, parented to this subagent
+      └─ Cursor assistant message / Cursor thinking
 ```
+
+Completed task snapshots are reconstructed only when the result exposes `value.conversationSteps`. Nested span times cover their enclosing task interval, not independently measured execution durations. Traversal is limited to 8 subagent levels and 1,000 inspected steps per run; repeated objects, repeated call ids within a conversation and cycles are skipped. Nested inputs, outputs and errors use the same privacy gates as other spans. The enclosing tool output does not embed the conversation transcript again.
 
 | Attribute | Where | Source |
 | --- | --- | --- |
@@ -103,14 +108,16 @@ At the first of: `wait()` resolving or throwing, the stream throwing, the stream
 
 - Stop iterating early (`break`): open tool spans end with `cursor.tool.incomplete=true`, the run span gets `cursor.run.stream_detached=true` and closes when the run ends.
 - A stream read partly and never closed: once the run's end is known, the span closes after `streamDrainTimeoutMs` (default 30000), marked like an early break.
-- `wait()` only, or `Agent.prompt()`: one run span with status, model and tokens, no child spans.
+- `wait()` only, or `Agent.prompt()`: one run span with status, model and tokens, plus child spans for steps exposed through the SDK's per-send callbacks.
 - Neither stream nor wait: the run span closes when the run ends (status listener), after a short grace period (`runEndGraceMs`, default 2000) in which you can still start reading the stream.
 
 ## Token usage
 
 The run span carries the SDK's cumulative run usage (`RunResult.usage` or `run.usage`) when it is present, otherwise the sum of the run's `usage` events (`cursor.usage.source` says which).
 
-Cursor's `inputTokens` excludes cache reads and writes: its `totalTokens` is input + output + cache read + cache write (a live run: 23820 + 258 + 19172 + 0 = 43250). Following the OpenTelemetry GenAI conventions, `gen_ai.usage.input_tokens` is the whole prompt, `inputTokens + cacheReadTokens + cacheWriteTokens` (42992 there), so input + output = total. The other keys: `outputTokens` to `gen_ai.usage.output_tokens`, `totalTokens` to `gen_ai.usage.total_tokens` (as reported; it excludes reasoning tokens), `cacheReadTokens` and `cacheWriteTokens` to the cache keys, `reasoningTokens` (when the model reports them) to `gen_ai.usage.output_tokens.reasoning`. Cursor's own numbers are kept as is in `cursor.usage.input_tokens`, `.output_tokens`, `.cache_read_tokens`, `.cache_write_tokens`, `.total_tokens` and `.reasoning_tokens`. Child spans carry no tokens, so trace totals are not double counted. Dollar cost is not on the stream; `agent.getUsage()` reports it where the account has the feature (it returned `403 feature_unavailable` on the Plus plan).
+Cursor's `inputTokens` excludes cache reads and writes. Following the OpenTelemetry GenAI conventions, `gen_ai.usage.input_tokens` is the whole prompt: `inputTokens + cacheReadTokens + cacheWriteTokens` (missing cache fields count as zero). `outputTokens` maps to `gen_ai.usage.output_tokens`. When both input and output counts are available, `gen_ai.usage.total_tokens` is their normalized sum, including caches. This is consistent across SDK versions: 1.0.37 includes caches in its raw total, whereas 1.2.0 and 1.3.1 omit them. If input or output is unavailable, the normalized total falls back to the SDK's reported `totalTokens`, when present; it does not guess missing counts. Reasoning is a subset of output, not an extra contribution to the total.
+
+`cacheReadTokens` and `cacheWriteTokens` map to the cache keys, and `reasoningTokens` (when reported) to `gen_ai.usage.output_tokens.reasoning`. The SDK's raw numbers remain unchanged in `cursor.usage.input_tokens`, `.output_tokens`, `.cache_read_tokens`, `.cache_write_tokens`, `.total_tokens` and `.reasoning_tokens`. Child spans carry no tokens, so trace totals are not double counted. Dollar cost is not on the stream; `agent.getUsage()` reports it where the account has the feature.
 
 ## Privacy: content is off by default
 
@@ -132,11 +139,11 @@ or with the fi-core environment variables `FI_HIDE_INPUTS=false` (prompts, tool 
 
 ## Not captured / limitations
 
-- **Child spans without the stream.** Tool, thinking and assistant spans need your code to read `run.stream()`; `wait()`-only runs and `Agent.prompt()` get the run span only. This version does not use the SDK's `onStep` / `onDelta` callbacks.
+- **Events not exposed by a runtime.** Callback-only capture depends on the SDK dispatching those callbacks. Some cloud transports expose tool events only through `run.stream()`; those tools still require your code to read the stream. Callback `onStep` tool snapshots lack call ids in the supported SDK types, so they are used as a fallback tool feed rather than duplicated alongside identified delta/stream calls. The wrapper does not invent missing ids.
 - **Per-model-call spans.** The SDK reports usage per turn, not per model request; tokens are on the run span only. No cost on spans (`agent.getUsage()`, where the plan has it).
 - **Runs not started by a traced `send()`**: runs fetched with `Agent.getRun()` or `Agent.listRuns()` are not traced.
 - **System prompt, rules, skills and Cursor's internal context**: the SDK does not expose them on the stream.
-- **Subagent internals**: a subagent started through the `task` tool is one tool span.
+- **Subagent internals absent from the completed result**: tasks without supported `conversationSteps` remain a single tool span. Live nested `tool-call-delta` updates are not reconstructed separately.
 - **Cloud runtime (`bc-` agents)**: handled by the same code, not run end to end (the live runs used the local runtime).
 - **Shell exit codes**: Cursor reports a shell command that exits non-zero as a `completed` call with `status: "success"`, so its span is OK; the exit code is only in the result (content on).
 - **Runs still open when the process exits** without `shutdown()` / `forceFlush()` are lost; `shutdown()` closes runs still in progress with `cursor.run.status=running` and no status.
@@ -149,23 +156,24 @@ Call `await shutdown(tracerProvider)` before a short script exits. It closes eve
 ## Troubleshooting
 
 - No spans: call `manuallyInstrument(CursorSDK)` before `Agent.create()`. With ESM, the automatic require hook does not see `import`.
-- Only a `Cursor Agent create` span, `AuthenticationError (401)`: the API key is wrong (or revoked). Create a user API key in the Cursor dashboard ([grok.com/dashboard](https://grok.com/dashboard); new keys start with `grok_`), or use `Cursor.auth.login()`.
+- Only a `Cursor Agent create` span, `AuthenticationError (401)`: the API key is wrong (or revoked). Create a user API key in the [Cursor dashboard](https://cursor.com/dashboard), or use `Cursor.auth.login()`.
 - A `Cursor Agent run` span with ERROR status and no error code about a second after it starts, with a working key and no tool spans: the model or its settings are not in your plan. With content on, `cursor.error.message` reads `Model unavailable on <plan> ...`. Pass a model and params that `Cursor.models.list()` returns for your key, for example `{ id: "composer-2.5", params: [{ id: "fast", value: "false" }] }` on Plus.
 - A `Cursor Agent run` span with ERROR status (`cursor.run.status=error`) a few seconds after `send()`, and no tool spans: no API key at all (no `apiKey`, no `CURSOR_API_KEY`, no stored login). `Agent.create()` succeeds without a key; the run is rejected once it starts (`[unknown] Invalid User API Key` in `RunResult.error`).
 - `RunResult.error.message` says `Weekly usage limit reached`: the account has exhausted its allowance. Wait for the reset or add credits in Cursor; changing the tracing settings cannot remove this limit. The example exits non-zero for failed runs.
 - A `shell` tool result saying the working directory no longer exists: `local.cwd` was a relative path. Pass an absolute one.
-- Run span but no tool spans on a working key: your code did not read `run.stream()`, or read it after the run span closed. Read the stream before or while you call `wait()`.
+- Run span but no tool spans on a working key: the runtime may not dispatch tool callbacks, or the stream was read after the run span closed. In that runtime, read `run.stream()` before or while you call `wait()`.
 - Extra traces with names like `LocalGitExecutor.exec`: the provider was registered as the global one. Use `setGlobalTracerProvider: false`.
 - Spans missing at exit: await `shutdown()`.
 
 ## Tests
 
 ```bash
-pnpm test                           # jest: fake SDK with the real 1.0.37/1.0.38 shapes and control flow, plus event sequences recorded from live runs
-HOME="$(mktemp -d)" pnpm run test:contract
+pnpm test                           # synthetic SDK flows and recorded 1.0.38 event sequences
+pnpm run test:contract:offline      # real SDK types + loopback OTLP and real-client HTTP/SSE regressions
+HOME="$(mktemp -d)" pnpm run test:contract # optional network-backed error-path check
 ```
 
-`test:contract` builds the package, type-checks the real `@cursor/sdk` types against the structural types the wrapper reads (`contract/sdk_types.ts`), checks the CommonJS auto-instrumentation hook, and runs the real SDK without an account (network to api.cursor.com): wrong-key `Agent.create` / `Agent.prompt` and unknown-agent `Agent.resume` (identical error to the caller, no message, stack or path exported by default, full text with content on), and a missing-key local run through `send()` / `stream()` / `wait()` that asserts the exporter receives only this package's spans.
+`test:contract:offline` builds and type-checks against the installed real SDK, checks the CommonJS require hook, and sends a synthetic `summarize()` run through the actual OTLP HTTP exporter to a localhost receiver (no Cursor account or outbound network). The summarization fixture is synthetic, not a live summarization run. The same command also runs `node --test contract/real_sdk_runs.cjs`: the real installed `@cursor/sdk` Agent/Run HTTP/SSE client talks to a loopback backend with synthetic credentials, verifying terminal lifecycle, streaming/wait usage normalization, available callbacks, default privacy and nested task hierarchy. It does not require a provider account or start a local Cursor runtime. Callback-only tool, wait-only tool, callback-plus-stream deduplication, callback semantics and traversal/privacy edge cases are covered by the synthetic unit fixtures. The separate `test:contract` also runs the real SDK without an account (network to api.cursor.com): wrong-key `Agent.create` / `Agent.prompt` and unknown-agent `Agent.resume` (identical error to the caller, no message, stack or path exported by default, full text with content on), and a missing-key local run through `send()` / `stream()` / `wait()` that asserts the exporter receives only this package's spans.
 
 ## Live vendor verification (2026-10-20)
 

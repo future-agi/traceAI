@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
@@ -13,14 +11,15 @@
 
     <groupId>com.futureagi.examples</groupId>
     <artifactId>arconia-example</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.2</version>
     <name>TraceAI Arconia Example</name>
-    <description>Arconia OpenTelemetry exporting traces to Future AGI. Configuration only, no traceAI module.</description>
+    <description>Native Arconia tracing with shared TraceAI error-detail privacy.</description>
 
     <properties>
         <java.version>21</java.version>
-        <!-- Pre-GA, roughly monthly releases. 0.31.0 is the tested version. 0.30.0 was also run (-Darconia.version=0.30.0). -->
-        <arconia.version>0.31.0</arconia.version>
+        <traceai.version>${project.version}</traceai.version>
+        <!-- Pre-GA, roughly monthly releases. 0.32.0 is the tested version. 0.30.0 was also run (-Darconia.version=0.30.0). -->
+        <arconia.version>0.32.0</arconia.version>
         <opentelemetry-proto.version>1.11.1-alpha</opentelemetry-proto.version>
         <!-- opentelemetry-proto 1.11.1-alpha is generated with protobuf 4.36.2; Spring Boot manages an older runtime. -->
         <protobuf-java.version>4.36.2</protobuf-java.version>
@@ -44,10 +43,17 @@
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
-        <!-- The only observability dependency. The version comes from the BOM. -->
+        <!-- Arconia owns the provider, exporter and batching. The version comes from its BOM. -->
         <dependency>
             <groupId>io.arconia</groupId>
             <artifactId>arconia-opentelemetry-spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- Only the shared privacy configuration is used. Do not initialize TraceAI's SDK. -->
+        <dependency>
+            <groupId>com.futureagi</groupId>
+            <artifactId>traceai-java-core</artifactId>
+            <version>${traceai.version}</version>
         </dependency>
 
         <dependency>

@@ -21,7 +21,7 @@ const ScopeName = "github.com/future-agi/traceAI/go/a2a"
 // version.
 const Version = "0.1.0"
 
-// Option configures [NewInterceptor].
+// Option configures [NewInterceptor] and [NewServerInterceptor].
 type Option func(*settings)
 
 type settings struct {
@@ -45,9 +45,9 @@ func WithTraceConfig(c TraceConfig) Option {
 	return func(s *settings) { s.tc = &c }
 }
 
-// WithPropagator sets how trace context is written onto the outbound A2A
-// request. The default is W3C Trace Context only (traceparent and
-// tracestate), so no baggage leaves the process unless you ask for it.
+// WithPropagator sets how trace context is injected by the client and extracted
+// by the server. The default is W3C Trace Context only (traceparent and
+// tracestate); baggage is neither injected nor extracted unless you ask for it.
 // Passing nil turns propagation off.
 func WithPropagator(p propagation.TextMapPropagator) Option {
 	return func(s *settings) {
@@ -59,7 +59,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // Interceptor is an a2aclient.CallInterceptor that traces A2A client calls.
 // Attach it with a2aclient.WithCallInterceptors when you create the client:
 //
-//	client, err := a2aclient.NewFromCard(ctx, card,
+//	client, err := traceaia2a.NewClientFromCard(ctx, card,
 //		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 //
 // SendMessage, SendStreamingMessage, GetTask, CancelTask and SubscribeToTask
@@ -67,6 +67,11 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
 // transports send as HTTP headers and the gRPC transport as call metadata.
+// Use [NewClientFromCard] or [NewClientFromEndpoints] to record results and stream
+// events after all response policies, even when a policy error skips this After.
+// It also handles clean EOF, early abandonment and recording after auth-required.
+// Without it, auth-required ends the client span as in earlier releases; the SDK's
+// interceptor hooks alone do not observe iterator close or every policy rejection.
 type Interceptor struct {
 	tracer trace.Tracer
 	tc     TraceConfig
@@ -91,6 +96,11 @@ func NewInterceptor(opts ...Option) *Interceptor {
 	tc := TraceConfigFromEnv()
 	if s.tc != nil {
 		tc = *s.tc
+	}
+	// Freeze the optional override just like the other value-type switches.
+	if tc.HideErrorDetails != nil {
+		hide := *tc.HideErrorDetails
+		tc.HideErrorDetails = &hide
 	}
 	prop := s.prop
 	if prop == nil && !s.noProp {
@@ -155,43 +165,8 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 			attrs = append(attrs, attribute.String(A2AAgentCardVer, c.Version))
 		}
 	}
-	if id, ok := SessionIDFromContext(ctx); ok {
-		attrs = append(attrs, attribute.String(SessionID, id))
-		st.sessionSet = true
-	}
-	if id, ok := UserIDFromContext(ctx); ok {
-		attrs = append(attrs, attribute.String(UserID, id))
-	}
-
-	var content []attribute.KeyValue
-	switch p := req.Payload.(type) {
-	case *a2a.SendMessageRequest:
-		if p != nil && p.Message != nil {
-			m := p.Message
-			if m.Role != a2a.MessageRoleUnspecified {
-				attrs = append(attrs, attribute.String(A2AMessageRole, string(m.Role)))
-			}
-			attrs = append(attrs, attribute.Int(A2AMessagePartsCnt, len(m.Parts)))
-			attrs = append(attrs, st.taskInfo(string(m.TaskID), m.ContextID)...)
-			if text := partsText(m.Parts); text != "" {
-				content = append(content,
-					attribute.String(InputValue, truncate(text)),
-					attribute.String(InputMimeType, MimeTypeText))
-			}
-		}
-	case *a2a.GetTaskRequest:
-		if p != nil {
-			attrs = append(attrs, st.taskInfo(string(p.ID), "")...)
-		}
-	case *a2a.CancelTaskRequest:
-		if p != nil {
-			attrs = append(attrs, st.taskInfo(string(p.ID), "")...)
-		}
-	case *a2a.SubscribeToTaskRequest:
-		if p != nil {
-			attrs = append(attrs, st.taskInfo(string(p.ID), "")...)
-		}
-	}
+	requestAttrs, content := st.requestAttributes(ctx, req.Payload)
+	attrs = append(attrs, requestAttrs...)
 
 	ctx, span := i.tracer.Start(ctx, "a2a."+req.Method,
 		trace.WithSpanKind(trace.SpanKindClient),
@@ -211,6 +186,11 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 		}
 	}
 
+	// Keep the interceptor-only client's historical auth-required completion.
+	// Only an owned completion slot can wait for actual iterator completion;
+	// an inherited wrapper slot may belong to a different (outer) call.
+	attached := attachClientCompletion(ctx, req, st)
+	st.authRequiredEndsStream = !attached
 	if st.streaming {
 		// A stream ends without a callback when the caller stops reading
 		// early; the span then ends when the caller's context is done.
@@ -225,33 +205,40 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 }
 
 // After records the result, a streamed event or the error, and ends the span
-// when the call is over. It never changes the response and never fails it.
+// when the call is over. Bound clients defer this to the outer Client so later
+// response policies cannot reject data we have already recorded or end an OK
+// span before the SDK returns an error. It never changes or fails a response.
 func (i *Interceptor) After(ctx context.Context, resp *a2aclient.Response) error {
 	if ctx == nil || resp == nil {
 		return nil
 	}
 	st, _ := ctx.Value(stateKey{}).(*callState)
-	if st == nil || resp.Method != st.method {
+	if st == nil || resp.Method != st.method || st.deferredResponse {
 		return nil
 	}
+	st.recordResponse(resp.Payload, resp.Err)
+	return nil
+}
+
+// recordResponse shares stream, error and privacy handling between both sides.
+func (st *callState) recordResponse(payload any, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.ended {
-		return nil
+		return
 	}
-	if resp.Err != nil {
-		st.fail(resp.Err)
-		return nil
+	if err != nil {
+		st.fail(err)
+		return
 	}
 	if !st.streaming {
-		st.applyResult(resp.Payload)
+		st.applyResult(payload)
 		st.finish()
-		return nil
+		return
 	}
-	if st.applyEvent(resp.Payload) {
+	if st.applyEvent(payload) {
 		st.finish()
 	}
-	return nil
 }
 
 // callState is one traced call, shared by Before, every After and the
@@ -265,14 +252,64 @@ type callState struct {
 	ended     bool
 	stopWatch func() bool
 
+	// Bound clients record results/events returned by the SDK, after all response
+	// policies have run. Immutable once Before publishes the state.
+	deferredResponse bool
+
+	// Legacy client-only fallback; servers and wrapped clients leave this false.
+	authRequiredEndsStream bool
+
 	sessionSet bool
 	taskID     string
 	contextID  string
 	state      a2a.TaskState
 	events     int
 
-	artifacts strings.Builder // artifact text, in order
-	final     string          // reply message or final status message text
+	artifacts artifactState // current artifact text, in first-seen order
+	final     string        // reply message or final status message text
+}
+
+// requestAttributes records only protocol facts and applies the same content
+// handling to inbound and outbound messages. Headers and metadata are excluded.
+func (s *callState) requestAttributes(ctx context.Context, payload any) (attrs, content []attribute.KeyValue) {
+	if id, ok := SessionIDFromContext(ctx); ok {
+		attrs = append(attrs, attribute.String(SessionID, id))
+		s.sessionSet = true
+	}
+	if id, ok := UserIDFromContext(ctx); ok {
+		attrs = append(attrs, attribute.String(UserID, id))
+	}
+
+	switch p := payload.(type) {
+	case *a2a.SendMessageRequest:
+		if p != nil && p.Message != nil {
+			m := p.Message
+			if m.Role != a2a.MessageRoleUnspecified {
+				attrs = append(attrs, attribute.String(A2AMessageRole, string(m.Role)))
+			}
+			attrs = append(attrs, attribute.Int(A2AMessagePartsCnt, len(m.Parts)))
+			attrs = append(attrs, s.taskInfo(string(m.TaskID), m.ContextID)...)
+			if text := partsText(m.Parts); text != "" {
+				content = append(content,
+					attribute.String(InputValue, truncate(text)),
+					attribute.String(InputMimeType, MimeTypeText))
+			}
+		}
+	case *a2a.GetTaskRequest:
+		if p != nil {
+			attrs = append(attrs, s.taskInfo(string(p.ID), "")...)
+		}
+	case *a2a.CancelTaskRequest:
+		if p != nil {
+			attrs = append(attrs, s.taskInfo(string(p.ID), "")...)
+		}
+	case *a2a.SubscribeToTaskRequest:
+		if p != nil {
+			attrs = append(attrs, s.taskInfo(string(p.ID), "")...)
+		}
+	}
+
+	return attrs, content
 }
 
 // taskInfo returns the task and context attributes not yet recorded. The A2A
@@ -329,9 +366,12 @@ func (s *callState) applyTask(t *a2a.Task) {
 	// earlier artifact events added.
 	s.artifacts.Reset()
 	for _, a := range t.Artifacts {
-		s.addArtifact(a)
+		s.addArtifact(a, false)
 	}
-	if endsStream(t.Status.State) && t.Status.Message != nil {
+	// Keep the latest snapshot's status text, including an auth prompt at EOF.
+	// A later status replaces it so an active stream never retains a stale prompt.
+	s.final = ""
+	if t.Status.Message != nil {
 		s.final = partsText(t.Status.Message.Parts)
 	}
 }
@@ -344,19 +384,14 @@ func (s *callState) applyMessage(m *a2a.Message) {
 	s.final = partsText(m.Parts)
 }
 
-func (s *callState) addArtifact(a *a2a.Artifact) {
+func (s *callState) addArtifact(a *a2a.Artifact, appendParts bool) {
 	if a == nil {
 		return
 	}
 	if t := partsKind(a.Parts); t != "" {
 		s.span.SetAttributes(attribute.String(A2AArtifactType, t))
 	}
-	if text := partsText(a.Parts); text != "" && s.artifacts.Len() < maxContentLen {
-		if s.artifacts.Len() > 0 {
-			s.artifacts.WriteByte('\n')
-		}
-		s.artifacts.WriteString(text)
-	}
+	s.artifacts.update(a, appendParts)
 }
 
 // applyEvent handles one streamed event and reports whether the stream is
@@ -373,7 +408,7 @@ func (s *callState) applyEvent(payload any) bool {
 			if v.Status.State != a2a.TaskStateUnspecified {
 				ev = append(ev, attribute.String(A2ATaskState, string(v.Status.State)))
 			}
-			done = endsStream(v.Status.State)
+			done = s.endsStream(v.Status.State)
 		}
 	case *a2a.Message:
 		ev = append(ev, attribute.String(A2AEventType, "message"))
@@ -387,18 +422,17 @@ func (s *callState) applyEvent(payload any) bool {
 			if v.Status.State != a2a.TaskStateUnspecified {
 				ev = append(ev, attribute.String(A2ATaskState, string(v.Status.State)))
 			}
-			if endsStream(v.Status.State) {
-				done = true
-				if v.Status.Message != nil {
-					s.final = partsText(v.Status.Message.Parts)
-				}
+			s.final = ""
+			if v.Status.Message != nil {
+				s.final = partsText(v.Status.Message.Parts)
 			}
+			done = s.endsStream(v.Status.State)
 		}
 	case *a2a.TaskArtifactUpdateEvent:
 		ev = append(ev, attribute.String(A2AEventType, "artifact-update"))
 		if v != nil {
 			s.setTaskInfo(string(v.TaskID), v.ContextID)
-			s.addArtifact(v.Artifact)
+			s.addArtifact(v.Artifact, v.Append)
 			if v.Artifact != nil {
 				if t := partsKind(v.Artifact.Parts); t != "" {
 					ev = append(ev, attribute.String(A2AArtifactType, t))
@@ -410,10 +444,12 @@ func (s *callState) applyEvent(payload any) bool {
 	return done
 }
 
-// endsStream reports whether a2a-go closes a stream at this state: the
-// terminal states and the two interrupted ones.
-func endsStream(state a2a.TaskState) bool {
-	return state.Terminal() || state == a2a.TaskStateInputRequired || state == a2a.TaskStateAuthRequired
+// endsStream reports a terminal/interrupted state, plus the historical
+// auth-required boundary for interceptor-only clients. Wrapped clients and
+// servers can receive more events after auth-required in the supported SDK.
+func (s *callState) endsStream(state a2a.TaskState) bool {
+	return state.Terminal() || state == a2a.TaskStateInputRequired ||
+		(s.authRequiredEndsStream && state == a2a.TaskStateAuthRequired)
 }
 
 func (s *callState) output() {
@@ -445,7 +481,7 @@ func (s *callState) finish() {
 	s.output()
 	if s.state == a2a.TaskStateFailed || s.state == a2a.TaskStateRejected {
 		s.span.SetAttributes(attribute.String(ErrorType, string(s.state)))
-		s.span.SetStatus(codes.Error, string(s.state))
+		s.setErrorStatus(string(s.state))
 	} else {
 		s.span.SetStatus(codes.Ok, "")
 	}
@@ -466,7 +502,7 @@ func (s *callState) fail(err error) {
 	if agentMsg != "" && s.tc.errorMessageAllowed() {
 		s.tc.SetAttributes(s.span, attribute.String(ErrorMessage, truncate(agentMsg)))
 	}
-	s.span.SetStatus(codes.Error, errType)
+	s.setErrorStatus(errType)
 	s.span.End()
 }
 
@@ -483,4 +519,12 @@ func (s *callState) endWithContextError(ctx context.Context) {
 		err = context.Canceled
 	}
 	s.fail(err)
+}
+
+// Error class attributes remain useful even when descriptions are hidden.
+func (s *callState) setErrorStatus(description string) {
+	if !s.tc.errorMessageAllowed() {
+		description = ""
+	}
+	s.span.SetStatus(codes.Error, description)
 }

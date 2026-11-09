@@ -1,0 +1,60 @@
+{
+  "name": "usage-failure-before-any-chunk",
+  "description": "A failure before the first response chunk exports neither usage nor milestones, and is still an error.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "choices": [],
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 2,
+          "total_tokens": 11
+        }
+      }
+    ],
+    "arrival_offsets_ms": [
+      10
+    ],
+    "error_after_chunks": 0
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_chunk",
+      "gen_ai.response.time_to_first_text",
+      "gen_ai.usage.input_tokens",
+      "gen_ai.usage.output_tokens",
+      "gen_ai.usage.total_tokens",
+      "gen_ai.usage.cache_read_tokens",
+      "gen_ai.usage.cache_write_tokens",
+      "gen_ai.usage.output_tokens.reasoning",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

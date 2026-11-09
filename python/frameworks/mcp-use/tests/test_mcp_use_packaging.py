@@ -52,6 +52,16 @@ def test_langchain_core_range_admits_the_installed_version():
     assert not spec.contains("2.0.0")
 
 
+def test_langchain_core_floor_matches_the_supported_resolution():
+    # Older core versions can resolve with current langgraph-checkpoint but
+    # fail to import MCPAgent (Reviver lacks the allowed_objects argument).
+    spec = _dependency("langchain-core")
+    assert spec.contains("1.6.12")
+    for version in ("1.0.0", "1.6.11"):
+        assert not spec.contains(version), version
+    assert "langchain-core>=1.6.12,<2" in README.read_text()
+
+
 def test_fi_instrumentation_floor_is_1_1_0():
     # 0.1.11/0.1.12 export to the old create_otel_span path and the published
     # 1.0.0 fails while building its headers; 1.1.0 is the first good release.
@@ -76,8 +86,9 @@ def test_classifiers_and_python_range_match_the_tested_versions():
 
 def test_version_matches_pyproject_and_changelog():
     version = re.search(r'^version\s*=\s*"([^"]+)"', PYPROJECT.read_text(), re.M).group(1)
-    assert traceai_mcp_use.__version__ == version == "0.1.0"
-    assert re.search(r"^## (\S+)", CHANGELOG.read_text(), re.M).group(1) == version
+    assert traceai_mcp_use.__version__ == version
+    # Hand-written "## x.y.z" or release-please "## [x.y.z](compare-url) (date)".
+    assert re.search(r"^## \[?([^\]\s(]+)", CHANGELOG.read_text(), re.M).group(1) == version
     assert re.search(r'^name\s*=\s*"traceAI-mcp-use"', PYPROJECT.read_text(), re.M)
 
 
@@ -102,4 +113,3 @@ def test_package_source_imports_neither_langfuse_nor_traceai_mcp_nor_patches():
         r"setattr\(",
     ):
         assert not re.search(forbidden, source, re.M), forbidden
-    assert Version(traceai_mcp_use.__version__) == Version("0.1.0")

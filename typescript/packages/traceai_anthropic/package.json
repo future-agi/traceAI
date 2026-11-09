@@ -1,6 +1,6 @@
 {
   "name": "@traceai/anthropic",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "OpenTelemetry instrumentation for Anthropic",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -38,6 +38,7 @@
   "homepage": "https://docs.futureagi.com/docs/integrations/traceai/anthropic",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.1",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
@@ -53,7 +54,8 @@
     "ts-jest": "^29.1.4",
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "@opentelemetry/core": "^2.0.1"
   },
   "keywords": [
     "opentelemetry",

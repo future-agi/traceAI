@@ -8,9 +8,9 @@
 
 Trace LLM calls, agents, tools, and retrieval. Keep your application code and your observability stack.
 
-**79 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
+**80 integration families · 5 languages · OpenTelemetry-native · Apache 2.0**
 
-[Get started](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
+[Zero-code Node.js](#zero-code-tracing-for-nodejs) · [SDK quickstarts](#quickstart) · [Integrations](#integrations) · [Documentation](https://docs.futureagi.com/docs/tracing) · [Contribute](CONTRIBUTING.md)
 
 [![PyPI](https://img.shields.io/pypi/v/fi-instrumentation-otel?label=PyPI&color=555555)](https://pypi.org/project/fi-instrumentation-otel/)
 [![npm](https://img.shields.io/npm/v/%40traceai%2Ffi-core?label=npm&color=555555)](https://www.npmjs.com/package/@traceai/fi-core)
@@ -31,9 +31,24 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 - **Follow the request.** Connect model calls, retrieval, and tool execution with OpenTelemetry spans and context.
 - **Choose what leaves your app.** Configure content masking and export through your own OpenTelemetry pipeline.
 
+## Zero-code tracing for Node.js
+
+**See your AI calls without adding tracing code.** Install [`@traceai/auto`](typescript/packages/traceai_auto/) and preload it before your app (Node.js 20.6+, ESM or CommonJS):
+
+```bash
+npm install @traceai/auto
+FI_API_KEY="your-api-key" FI_SECRET_KEY="your-secret-key" \
+FI_PROJECT_NAME="my-ai-app" \
+node --import @traceai/auto/register app.mjs
+```
+
+Keep your provider credentials configured as usual. Make an AI request, consume the response, then open **Observe → my-ai-app** in [Future AGI](https://app.futureagi.com). OpenAI instrumentation is included; recognized AI calls through global `fetch` are captured too. Optional framework integrations retain their own coverage limits.
+
+**Prompts and responses are captured by default.** Set `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true FI_HIDE_ERROR_DETAILS=true` before startup to hide content. [Setup, supported libraries, privacy and framework recipes →](typescript/packages/traceai_auto/)
+
 ## Quickstart
 
-Pick your language. These examples send traces to [Future AGI](https://app.futureagi.com); you can also supply your own OpenTelemetry tracer provider and exporter.
+Prefer explicit instrumentation or another language? Pick your language. These examples send traces to [Future AGI](https://app.futureagi.com); you can also supply your own OpenTelemetry tracer provider and exporter.
 
 | Language | Instrumentation | Install / coordinates |
 | :--- | :--- | :--- |
@@ -299,11 +314,11 @@ After a call finishes, open the `traceai-quickstart` project in **Observe** in F
 
 ## Integrations
 
-**79 integration families, with language coverage you can inspect.** Each SDK link opens its package source. A dash means no dedicated framework package in this repository—not a promise of unsupported runtime behavior.
+**80 integration families, with language coverage you can inspect.** Each SDK link opens its package source. A dash means no dedicated framework package in this repository—not a promise of unsupported runtime behavior.
 
 Python and TypeScript provide framework instrumentors; Java provides client wrappers and framework modules; Go provides middleware and framework integrations. **C# provides [manual spans and activities](csharp/src/FIInstrumentation/), not automatic framework instrumentation**, so its framework cells are intentionally empty.
 
-All 79 families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
+All 80 families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
 
 [Model providers](#model-providers) · [Agent frameworks](#agent-frameworks) · [RAG & vector databases](#rag-vector-databases) · [Tools & search](#tools-search) · [Voice & realtime](#voice-realtime) · [Gateways & proxies](#gateways-proxies) · [Coding agents](#coding-agents) · [Java frameworks](#java-frameworks) · [Other](#other)
 
@@ -315,14 +330,14 @@ Hosted and local model inference, embeddings, and reranking.
 
 | Integration | Python | TypeScript | Java | Go | C# |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| <img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Amazon Bedrock | [SDK](python/frameworks/bedrock/ "traceAI-bedrock") | [SDK](typescript/packages/traceai_bedrock/ "@traceai/bedrock") | [SDK](java/traceai-java-bedrock/ "traceai-java-bedrock") | — | — |
+| <img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Amazon Bedrock | [SDK](python/frameworks/bedrock/ "traceAI-bedrock") | [SDK](typescript/packages/traceai_bedrock/ "@traceai/bedrock") | [SDK](java/traceai-java-bedrock/ "traceai-java-bedrock") | [SDK](go/bedrock/ "github.com/future-agi/traceAI/go/bedrock") | — |
 | <img src=".github/assets/integrations/anthropic-tile.svg" width="24" height="24" alt=""> Anthropic | [SDK](python/frameworks/anthropic/ "traceAI-anthropic") | [SDK](typescript/packages/traceai_anthropic/ "@traceai/anthropic") | [SDK](java/traceai-java-anthropic/ "traceai-java-anthropic") | [SDK](go/anthropic/ "github.com/future-agi/traceAI/go/anthropic") | — |
 | <img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> Azure OpenAI | — | — | [SDK](java/traceai-java-azure-openai/ "traceai-java-azure-openai") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cerebras | [SDK](python/frameworks/cerebras/ "traceAI-cerebras") | [SDK](typescript/packages/traceai_cerebras/ "@traceai/cerebras") | — | — | — |
 | <img src=".github/assets/integrations/cohere-tile.svg" width="24" height="24" alt=""> Cohere | [SDK](python/frameworks/cohere/ "traceAI-cohere") | [SDK](typescript/packages/traceai_cohere/ "@traceai/cohere") | [SDK](java/traceai-java-cohere/ "traceai-java-cohere") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> DeepSeek | [SDK](python/frameworks/deepseek/ "traceAI-deepseek") | [SDK](typescript/packages/traceai_deepseek/ "@traceai/deepseek") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Fireworks AI | [SDK](python/frameworks/fireworks/ "traceAI-fireworks") | [SDK](typescript/packages/traceai_fireworks/ "@traceai/fireworks") | — | — | — |
-| <img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Google GenAI (Gemini) | [SDK](python/frameworks/google-genai/ "traceAI-google-genai") · [Live](python/frameworks/google-genai-live/ "traceAI-google-genai-live") | [SDK](typescript/packages/traceai_google_genai/ "@traceai/google-genai") | [SDK](java/traceai-java-google-genai/ "traceai-java-google-genai") | [SDK](go/genai/ "github.com/future-agi/traceAI/go/genai") | — |
+| <img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Google GenAI (Gemini) | [SDK](python/frameworks/google-genai/ "traceAI-google-genai") · [Live](python/frameworks/google-genai-live/ "traceAI-google-genai-live") | [Legacy SDK only](typescript/packages/traceai_google_genai/ "@google/generative-ai compatibility; not @google/genai") | [SDK](java/traceai-java-google-genai/ "traceai-java-google-genai") | [SDK](go/genai/ "github.com/future-agi/traceAI/go/genai") | — |
 | <img src=".github/assets/integrations/groq-tile.svg" width="24" height="24" alt=""> Groq | [SDK](python/frameworks/groq/ "traceAI-groq") | [SDK](typescript/packages/traceai_groq/ "@traceai/groq") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Hugging Face | [SDK](python/frameworks/huggingface/ "traceAI-huggingface") | [SDK](typescript/packages/traceai_huggingface/ "@traceai/huggingface") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> IBM watsonx | — | — | [SDK](java/traceai-java-watsonx/ "traceai-java-watsonx") | — | — |
@@ -358,6 +373,7 @@ Agent orchestration, application frameworks, and agent-to-agent communication.
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Hermes Agent | [SDK](python/frameworks/hermes-agent/ "traceAI-hermes-agent") | — | — | — | — |
 | <img src=".github/assets/integrations/langchain-tile.svg" width="24" height="24" alt=""> LangChain / LangGraph | [SDK](python/frameworks/langchain/ "traceAI-langchain") | [SDK](typescript/packages/traceai_langchain/ "@traceai/langchain") | — | — | — |
 | <img src=".github/assets/integrations/mastra-tile.svg" width="24" height="24" alt=""> Mastra | — | [SDK](typescript/packages/traceai_mastra/ "@traceai/mastra") | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> n8n (self-hosted) | — | [SDK](typescript/packages/traceai_n8n/ "@traceai/n8n") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> MCP-use | [SDK](python/frameworks/mcp-use/ "traceAI-mcp-use") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Microsoft Agent Framework | [SDK](python/frameworks/agent-framework/ "traceAI-agent-framework") | — | — | — | — |
 | <img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> OpenAI Agents | [SDK](python/frameworks/openai-agents/ "traceAI-openai-agents") | [SDK](typescript/packages/traceai_openai_agents/ "@traceai/openai-agents") | — | — | — |
@@ -380,11 +396,12 @@ Retrieval pipelines, vector stores, and search backends.
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Azure AI Search | — | — | [SDK](java/traceai-java-azure-search/ "traceai-java-azure-search") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Chroma | [SDK](python/frameworks/chromadb/ "traceAI-chromadb") | [SDK](typescript/packages/traceai_chromadb/ "@traceai/chromadb") | [SDK](java/traceai-java-chromadb/ "traceai-java-chromadb") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cognee | [SDK](python/frameworks/cognee/ "traceai-cognee") | — | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Open WebUI | [SDK](python/frameworks/openwebui/ "traceAI-openwebui") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Elasticsearch | — | — | [SDK](java/traceai-java-elasticsearch/ "traceai-java-elasticsearch") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Google Discovery Engine | [SDK](python/frameworks/discoveryengine/ "traceAI-discoveryengine") | — | — | — | — |
 | <img src=".github/assets/integrations/haystack-tile.svg" width="24" height="24" alt=""> Haystack | [SDK](python/frameworks/haystack/ "traceAI-haystack") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> LanceDB | [SDK](python/frameworks/lancedb/ "traceAI-lancedb") | [SDK](typescript/packages/traceai_lancedb/ "@traceai/lancedb") | — | — | — |
-| <img src=".github/assets/integrations/llamaindex-tile.svg" width="24" height="24" alt=""> LlamaIndex | [SDK](python/frameworks/llama_index/ "traceAI-llamaindex") | [SDK](typescript/packages/traceai_llamaindex/ "@traceai/llamaindex") | — | — | — |
+| <img src=".github/assets/integrations/llamaindex-tile.svg" width="24" height="24" alt=""> LlamaIndex | [SDK](python/frameworks/llama_index/ "traceAI-llamaindex") | [Deprecated](typescript/packages/traceai_llamaindex/ "@traceai/llamaindex") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Milvus | [SDK](python/frameworks/milvus/ "traceAI-milvus") | [SDK](typescript/packages/traceai_milvus/ "@traceai/milvus") | [SDK](java/traceai-java-milvus/ "traceai-java-milvus") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> MongoDB Atlas Vector Search | [SDK](python/frameworks/mongodb-vector/ "traceAI-mongodb") | [SDK](typescript/packages/traceai_mongodb/ "@traceai/mongodb") | [SDK](java/traceai-java-mongodb/ "traceai-java-mongodb") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> pgvector | [SDK](python/frameworks/pgvector/ "traceAI-pgvector") | [SDK](typescript/packages/traceai_pgvector/ "@traceai/pgvector") | [SDK](java/traceai-java-pgvector/ "traceai-java-pgvector") | — | — |

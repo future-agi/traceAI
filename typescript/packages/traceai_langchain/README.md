@@ -4,21 +4,31 @@ OpenTelemetry instrumentation for LangChain.js. This package provides automatic 
 
 ## Installation
 
+Use Node.js 22 or later. The Quick Start uses the OpenAI adapter with LangChain
+core 1.x. Install every package imported by the example and a TypeScript runner:
+
 ```bash
-npm install @traceai/langchain
-# or
-yarn add @traceai/langchain
-# or
-pnpm add @traceai/langchain
+npm install @traceai/langchain @traceai/fi-core @langchain/core@^1 @langchain/openai@^1 \
+  @opentelemetry/api@^1.9.0 @opentelemetry/instrumentation@^0.202.0
+npm install --save-dev tsx@^4
 ```
 
 ## Quick Start
 
-```typescript
-// export Future AGI API KEYS
-// export FI_API_KEY=your_api_key
-// export FI_SECRET_KEY=your_secret_key
+Set your Future AGI API keys and an OpenAI API key in the same terminal where you
+will run the example. Replace the placeholder values with your own credentials;
+the OpenAI key is required for the model call, separately from tracing.
 
+```bash
+export FI_API_KEY="your_future_agi_api_key"
+export FI_SECRET_KEY="your_future_agi_secret_key"
+export OPENAI_API_KEY="your_openai_api_key"
+```
+
+Save the following as `quickstart.mts`. The `.mts` extension enables ES modules
+and top-level `await` without changing your project's module settings.
+
+```typescript
 import { register, ProjectType } from "@traceai/fi-core";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { LangChainInstrumentation } from "@traceai/langchain";
@@ -26,6 +36,9 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import * as CallbackManagerModule from "@langchain/core/callbacks/manager";
+import * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import * as RunnableModule from "@langchain/core/runnables";
+import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -45,49 +58,120 @@ registerInstrumentations({
 });
 
 // 3. Manually instrument LangChain (required as it doesn't have a traditional module structure)
-lcInstrumentation.manuallyInstrument(CallbackManagerModule);
+lcInstrumentation.manuallyInstrument(CallbackManagerModule, ChatModelModule, RunnableModule);
 
 // 4. Use LangChain as normal
 const chatModel = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
   metadata: {
     session_id: "your-session-id",
   },
 });
 
-// Your LangChain code here...
-
-// 5. Don't forget to shutdown the tracer provider when done
 try {
+  const response = await chatModel.invoke([new HumanMessage("What is OpenTelemetry?")]);
+  console.log(response.content);
+} finally {
+  // LangChain runs tracing callbacks in the background. Finish them before
+  // shutting down the provider so the root span is not lost.
+  await awaitAllCallbacks();
   await tracerProvider.shutdown();
-  console.log("Tracer provider shut down successfully.");
-} catch (error) {
-  console.error("Error shutting down tracer provider:", error);
 }
 ```
 
-## Environment Variables
-
-The following environment variables are required for telemetry:
+Run the example from the directory where you installed the packages:
 
 ```bash
-FI_API_KEY=your_api_key
-FI_SECRET_KEY=your_secret_key
+npx tsx quickstart.mts
 ```
 
+The terminal prints the model's response. Open the `your-project-name` project in
+Future AGI to inspect the `ChatOpenAI` span.
 
+For a long-running service, leave the provider running between requests. When the
+service stops, finish in-flight chains, await `awaitAllCallbacks()`, then shut down
+the provider. Before an explicit `forceFlush()`, drain callbacks in the same order.
+
+Pass all three modules to `manuallyInstrument()` when using composed streams.
+The chat-model and Runnable patches handle `break`, iterator `return()`, and
+cancellation for models, nested `RunnableSequence` chains, and streaming Runnable
+transforms. Unfinished spans end with an error and `langchain.stream.cancelled=true`,
+without reporting partial output or usage as a successful response. The two-module
+form covers model streams only; the original one-module form covers callbacks
+only. Fully consume or explicitly close every stream; an iterator abandoned
+without `return()` cannot be observed.
+
+Streaming LLM spans record `gen_ai.response.time_to_first_token` in **seconds**
+from run start to the first token callback or delivered model chunk. It is recorded
+once, including for streams later cancelled, and remains available when input and
+output content are hidden. Runs with no observed streaming token/chunk omit it.
 
 ## Features
 
 - Automatic tracing of LangChain operations
+- LangGraph graphs: an `interrupt()` pause or a `Command` handoff is a successful span, not an error; a paused node is marked `langgraph.interrupt`
 - Support for both ESM and CommonJS modules
-- Compatible with LangChain.js v0.2.0 and v0.3.0
+- Compatible with `@langchain/core` 0.2.x, 0.3.x, and 1.x
 - Integration with TraceAI's observability platform
+
+## Remote LangGraph SDK calls
+
+The local graph callback instrumentation above traces graph nodes in your process.
+For a graph served by a remote LangGraph server, wrap the SDK client to trace
+`runs.wait` and `runs.stream` as client operations. Install the LangGraph SDK
+and this package's required LangChain core peer:
+
+```bash
+npm install @traceai/langchain @traceai/fi-core @langchain/core @langchain/langgraph-sdk @opentelemetry/core @opentelemetry/api
+```
+
+For SDK releases with `ClientConfig.onRequest` (such as 1.12.9), use its
+official hook to send the client span's W3C trace context to the server:
+
+```typescript
+import { Client } from "@langchain/langgraph-sdk";
+import { register, ProjectType } from "@traceai/fi-core";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import { propagation } from "@opentelemetry/api";
+import { wrapLangGraphClient, langGraphTraceRequestHook } from "@traceai/langchain";
+
+propagation.setGlobalPropagator(new W3CTraceContextPropagator());
+const provider = register({ projectName: "my-remote-graphs", projectType: ProjectType.OBSERVE });
+const client = wrapLangGraphClient(new Client({
+  apiUrl: process.env.LANGGRAPH_API_URL!,
+  apiKey: process.env.LANGGRAPH_API_KEY,
+  onRequest: langGraphTraceRequestHook(),
+}), { tracerProvider: provider });
+try {
+  const state = await client.runs.wait("my-thread-id", "my-assistant-id", {
+    input: { question: "What is OpenTelemetry?" },
+  });
+  console.log(state);
+} finally {
+  await provider.shutdown();
+}
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, `LANGGRAPH_API_URL`, and (if your remote
+server requires one) `LANGGRAPH_API_KEY` in your environment. Configure a W3C
+propagator once at startup, as shown above. Older SDK releases without
+`onRequest` still support client spans,
+but cannot inject headers through the official hook. Instrument the remote
+server separately to see its node, model, and tool spans; sending a trace
+header alone does not cause server spans to appear. Stream spans end after the
+stream is fully consumed or closed, not when `runs.stream()` returns.
+Requests and outputs are not copied onto these client spans.
 
 ## Peer Dependencies
 
 This package requires the following peer dependencies:
-- `@langchain/core`: ^0.2.0 || ^0.3.0
+- `@langchain/core`: ^0.2.0 || ^0.3.0 || ^1.0.0
+
+Keep your LangChain adapters on a release compatible with your core version. For
+example, use `@langchain/openai` 1.x with core 1.x. On core 0.3.80 and 1.x,
+CommonJS applications can use the automatic require hook when instrumentation is
+initialized before importing LangChain. For ESM, an already-loaded module, core
+0.2.x, or earlier 0.3.x, use `manuallyInstrument()` as above.
 
 ## Development
 

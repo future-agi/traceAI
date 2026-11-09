@@ -40,3 +40,5 @@ export {
 } from "./errorDetails";
 export { FITracer } from "./FITracer";
 export { type FISpan } from "./FISpan";
+export { redactPiiInString, redactPiiInValue } from "./piiRedaction";
+export { maskAttributes } from "./maskingRules";

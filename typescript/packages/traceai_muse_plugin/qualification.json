@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "releaseStatus": "HOLD",
+  "private": true,
+  "host": {
+    "version": "Muse Code 1.4.14 (1.4.14-R7309.1)",
+    "platform": "linux-x64",
+    "binarySha256": "0809aac7cb58d18f5022b6d05e02aa1974683c0ec430e5f04d25b60ed17de2da"
+  },
+  "nativeEvidence": {
+    "run": "muse-native-1106-final",
+    "nativePhase": "passed",
+    "distribution": "five locally packed npm tarballs installed into a fresh npm prefix",
+    "isolation": "dedicated uid inside a loopback-only Linux network namespace; no paid model or Cloud calls",
+    "providerProtocol": "documented first-party muse-code/models catalog and responses SSE protocol",
+    "realSessionSpans": 7,
+    "realTurnRoots": 3,
+    "echoTurnRoots": 1,
+    "echoLlmSpans": 0,
+    "modelTurnRootsInSameSession": 2,
+    "llmSpans": 3,
+    "toolSpans": 1,
+    "modelRequestsReceived": 3,
+    "additiveInputTokens": 33,
+    "additiveOutputTokens": 15,
+    "separateNativeHookTestSpans": 1,
+    "checks": [
+      "setup leaves executable hooks unapproved",
+      "no export before approval",
+      "repeated setup preserves existing approval without duplicates",
+      "absolute Node path and one unique relative source file per hook",
+      "normal hooks use saved private credentials despite cleared environment",
+      "two real prompts share session identity and have separate traces",
+      "request and tool children use their turn root as parent",
+      "echo provider is not represented as an LLM call",
+      "cumulative counters are differenced only across contiguous first-attempt successes",
+      "disable prevents later native exports",
+      "uninstall leaves the unrelated fixture plugin installed"
+    ],
+    "exitCode": 0
+  },
+  "regressionEvidence": {
+    "run": "muse-regressions-1106-r12",
+    "exitCode": 0,
+    "museTests": 3,
+    "coreTests": 38,
+    "cliTests": 3,
+    "mdxSyntax": "passed"
+  },
+  "openGates": [
+    "Full-content enrichment needs a bounded versioned retained-session reader: real hook transcript_path is null and model hooks expose previews, not full requests/responses.",
+    "Verified child ancestry needs retained-session linkage: real SubagentStart names the child session itself and supplies no parent session/turn anchor. Do not infer ancestry from event arrival order.",
+    "Stop is a request-to-stop hook that another hook can veto. Terminal confirmation, continuation after a veto, interruption, retry and real compaction lifecycle qualification remain open.",
+    "Per-project routing and policy persistence are implemented but need native multi-project and privacy-ceiling scenarios beyond the happy path.",
+    "Full Astro/catalog/link validation and real Future AGI trace-view screenshots/GIF have not been completed.",
+    "The integration owner must regenerate the monorepo lockfile and wire release inventory only after qualification; npm publication and public clean-install verification remain separate gates."
+  ],
+  "references": [
+    "https://meta-models.github.io/muse-code-sdk/next/guides/plugins/reference/manifest/",
+    "https://meta-models.github.io/muse-code-sdk/next/guides/plugins/reference/hook-events/",
+    "https://meta-models.github.io/muse-code-sdk/next/guides/plugins/reference/cli/",
+    "https://github.com/meta-models/muse-code-sdk/blob/main/clients/sdk-quickstart/src/provider.ts"
+  ]
+}
