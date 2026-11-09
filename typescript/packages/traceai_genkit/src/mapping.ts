@@ -211,8 +211,11 @@ function maskOperation(operation: Record<string, unknown>, policy: ContentPolicy
 function generationOutput(value: AttributeValue, policy: ContentPolicy, operation = false, model = false): AttributeValue {
   if (!hidesOperationMetadata(policy)) return value;
   const response = parseJson(value);
-  // Truncated native envelopes cannot be safely field-masked.
-  if (!isRecord(response)) return REDACTED_VALUE;
+  // A valid scalar model result cannot contain nested request/operation fields.
+  // Preserve it under input-only hiding; malformed/truncated envelopes fail closed.
+  if (!isRecord(response)) {
+    return response === null || ["string", "number", "boolean"].includes(typeof response) ? value : REDACTED_VALUE;
+  }
   if (operation) maskOperation(response, policy, model, 0);
   else maskGeneration(response, policy, 0);
   return JSON.stringify(response);
@@ -371,7 +374,7 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
       out[SemanticConventions.INPUT_VALUE] = REDACTED_VALUE;
     } else {
       out[SemanticConventions.INPUT_VALUE] = out[GenkitAttributes.INPUT] as string;
-      out[SemanticConventions.INPUT_MIME_TYPE] = MimeType.JSON;
+      if (out[SemanticConventions.INPUT_VALUE] !== REDACTED_VALUE) out[SemanticConventions.INPUT_MIME_TYPE] = MimeType.JSON;
     }
   }
   const output = source[GenkitAttributes.OUTPUT];
@@ -380,7 +383,7 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
       out[SemanticConventions.OUTPUT_VALUE] = REDACTED_VALUE;
     } else {
       out[SemanticConventions.OUTPUT_VALUE] = out[GenkitAttributes.OUTPUT] as string;
-      out[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
+      if (out[SemanticConventions.OUTPUT_VALUE] !== REDACTED_VALUE) out[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
     }
   }
 
