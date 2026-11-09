@@ -12,6 +12,7 @@ Each directory is an independent Go module. All require **Go 1.26.0 or later**.
 | [Anthropic](anthropic/README.md) | `traceaianthropic` | `anthropic-sdk-go` middleware | Messages, including streaming and tool calls |
 | [Amazon Bedrock](bedrock/README.md) | `traceaibedrock` | AWS SDK v2 typed client adapter | Converse sync/stream; Anthropic Messages InvokeModel sync/stream |
 | [Google Gen AI](genai/README.md) | `traceaigenai` | HTTP transport | Gemini Developer API content generation and streaming |
+| [LangChainGo](langchaingo/README.md) | `traceailangchaingo` | LangChainGo callbacks and embedder wrapper | Chains, chat models, tools, retrievers and embeddings |
 | [Eino](eino/README.md) | `traceaieino` | Eino callbacks | Agents, graphs, models, tools, retrieval and embedding components |
 | [A2A](a2a/README.md) | `traceaia2a` | `a2a-go/v2` client interceptor | Remote-agent calls over JSON-RPC, REST and gRPC |
 | [AWS Lambda](lambda/README.md) | `traceailambda` | Maintained `otellambda` adapter | Invocation spans, HTTP-v2 parents and bounded flushing |
@@ -34,6 +35,7 @@ go get github.com/future-agi/traceAI/go/anthropic@latest
 go get github.com/future-agi/traceAI/go/bedrock@latest
 go get github.com/future-agi/traceAI/go/genai@latest
 go get github.com/future-agi/traceAI/go/eino@latest
+go get github.com/future-agi/traceAI/go/langchaingo@latest
 go get github.com/future-agi/traceAI/go/a2a@latest
 go get github.com/future-agi/traceAI/go/lambda@latest
 ```
@@ -149,6 +151,7 @@ Each module has its own semantic version. The first planned release is **v0.1.0*
 | Anthropic | `go/anthropic/v0.1.0` |
 | Bedrock | `go/bedrock/v0.1.0` |
 | Eino | `go/eino/v0.1.0` |
+| LangChainGo | `go/langchaingo/v0.1.0` |
 | Gen AI | `go/genai/v0.1.0` |
 | Lambda | `go/lambda/v0.1.0` |
 | OpenAI | `go/openai/v0.1.0` |
@@ -167,4 +170,4 @@ go build -o /tmp/traceai-example ./example
 go doc .
 ```
 
-Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all seven modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.
+Tests use local servers and in-memory exporters, not live credentials. The [Go CI workflow](../.github/workflows/go-ci.yml) checks all eight modules independently at the minimum Go version and the current stable Go version, checks module paths and rejects local replacements, and builds every example. Package documentation lives in each module's `doc.go` for `go doc` and pkg.go.dev.

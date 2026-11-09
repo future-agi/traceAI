@@ -19,12 +19,16 @@ calls. See [Other tracing in the same process](#other-tracing-in-the-same-proces
 pip install traceAI-mcp-use
 ```
 
-It accepts `mcp-use>=1.7.1,<2`, `langchain-core>=1.0.0,<2` and
+It accepts `mcp-use>=1.7.1,<2`, `langchain-core>=1.6.12,<2` and
 `fi-instrumentation-otel>=1.1.0`, on Python `>=3.11,<3.14` (mcp-use itself
 requires 3.11). The suite runs with mcp-use 1.7.1 (the latest release on
 2026-10-16) on Python 3.11, 3.12 and 3.13, and was run end to end against a
 real model and a real stdio MCP server with mcp-use 1.7.1, langchain-core
 1.6.12, langchain-openai 1.7.2 and langgraph 1.2.16.
+LangChain Core 1.6.12 is the supported floor: older versions can resolve
+with newer LangGraph checkpoint packages but fail when importing `MCPAgent`.
+The dependency-floor CI job freshly resolves all three declared minimum
+versions and runs the full suite on Python 3.11, 3.12 and 3.13.
 
 ## Usage
 
@@ -85,7 +89,8 @@ call (for example an HTTP client span) is not a child of the tool span.
 | `gen_ai.request.model` | LLM | From LangChain's `ls_model_name`, else the invocation `model` / `model_name` / `model_id` |
 | `gen_ai.provider.name`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens` | LLM | From LangChain's `ls_provider`, `ls_temperature`, `ls_max_tokens` |
 | `gen_ai.response.model`, `gen_ai.response.finish_reasons` | LLM | From the response metadata |
-| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens`, `gen_ai.usage.cache_read_tokens` | LLM | From the message's `usage_metadata` (or the provider's `token_usage`) |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens` | LLM | From the message's `usage_metadata` (or the provider's `token_usage`) |
+| `gen_ai.usage.cache_read_tokens`, `gen_ai.usage.cache_write_tokens` | LLM | From `usage_metadata.input_token_details.cache_read` / `.cache_creation`, when reported; these do not add to the total token count |
 | `mcp_use.llm.input_message_count` | LLM | Messages sent to the model |
 | `mcp_use.llm.tool_call_count` | LLM | Tool calls the model asked for |
 | `mcp_use.llm.chunk_count` | LLM | Streamed tokens, when streamed |

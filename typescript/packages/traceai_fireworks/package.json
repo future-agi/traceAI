@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fireworks",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deprecated: use @traceai/openai for Fireworks AI tracing",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",

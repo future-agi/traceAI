@@ -25,6 +25,8 @@ export interface SendOptionsLike {
   model?: ModelSelectionLike;
   mode?: string;
   mcpServers?: Record<string, unknown>;
+  onDelta?: unknown;
+  onStep?: unknown;
 }
 
 /** `AgentOptions` (`options.d.ts`). Only the fields read here; `apiKey` is never read. */

@@ -8,7 +8,7 @@ Trace Chroma collection operations in Node.js with OpenTelemetry and view their 
 npm install chromadb @traceai/chromadb @traceai/fi-core @opentelemetry/api @opentelemetry/context-async-hooks
 ```
 
-The instrumentor supports the Chroma 1.x, 2.x, and 3.x Node clients. The example below uses Chroma 3.x and a Chroma server at `localhost:8000`. It supplies embeddings directly, so no embedding-provider key is needed.
+The instrumentor supports Chroma **1.1.0 or later within 1.x**, plus the 2.x and 3.x Node clients. Chroma 1.0.0 has no Node entry point and cannot be imported; upgrade it to at least 1.1.0. The example below uses Chroma 3.x and a Chroma server at `localhost:8000`. It supplies embeddings directly, so no embedding-provider key is needed.
 
 ## Configure tracing
 
@@ -90,13 +90,23 @@ Operation attributes include the collection name when available, query result li
 
 The instrumentor does not record document contents or embedding vectors. The existing `captureDocuments`, `captureQueryVectors`, and `captureResultVectors` options remain accepted for compatibility but do not enable content capture.
 
-Query `where` filters and collection names are recorded; avoid putting secrets in either. Error messages can also contain application data. To hide error messages and exception details, configure the instrumentor with:
+Query `where` filters and collection names are recorded by default and can contain sensitive data. As in the Python integration, `FI_HIDE_INPUTS=true` omits both collection-name attributes (`db.namespace` and `db.vector.collection.name`) and filters. Set shared privacy flags before creating the instrumentor:
+
+```bash
+export FI_HIDE_INPUTS=true
+export FI_HIDE_OUTPUTS=true
+export FI_HIDE_ERROR_DETAILS=true
+```
+
+You can instead pass explicit options, which take precedence over the environment:
 
 ```javascript
 const instrumentation = new ChromaDBInstrumentation({
-  traceConfig: { hideErrorDetails: true },
+  traceConfig: { hideInputs: true, hideOutputs: true, hideErrorDetails: true },
 });
 ```
+
+System and operation names, counts, dimensions, and query limits remain available. These settings change exported telemetry only, not collection names, SDK arguments, results, or exceptions returned to your application. `hideErrorDetails` removes error messages and exception details; if unset, hiding inputs or outputs also hides error details. Configure any separate embedding-provider or HTTP transport instrumentors independently.
 
 ## Troubleshooting
 

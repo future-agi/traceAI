@@ -178,6 +178,10 @@ from pydantic.v1.json import pydantic_encoder
 from typing_extensions import assert_never
 from wrapt import FunctionWrapper
 
+from ._provider import provider_name
+from ._stream import _AsyncResponseStream, _ResponseStream, _response_span, _stream_capture
+from ._usage import token_counts
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -228,7 +232,8 @@ class _Span(BaseSpan):
     _span_kind: Optional[str] = PrivateAttr()
     _parent: Optional["_Span"] = PrivateAttr()
     _first_token_timestamp: Optional[int] = PrivateAttr()
-    _end_time: Optional[int] = PrivateAttr()
+    _waiting_for_streaming: bool = PrivateAttr()
+    _response_streaming: bool = PrivateAttr()
     _last_updated_at: float = PrivateAttr()
     _stream_chunks: List[str] = PrivateAttr()
     _stream_content: str = PrivateAttr()
@@ -253,7 +258,8 @@ class _Span(BaseSpan):
         self._parent = parent
         self._first_token_timestamp = None
         self._attributes = {}
-        self._end_time = None
+        self._waiting_for_streaming = False
+        self._response_streaming = False
         self._last_updated_at = time()
         self._list_attr_len: DefaultDict[str, int] = defaultdict(int)
         self._stream_chunks = []
@@ -277,7 +283,7 @@ class _Span(BaseSpan):
 
     def finish(self, exception: Optional[BaseException] = None) -> None:
         """End the span, treating cancellation exceptions as cancellation."""
-        if isinstance(exception, (asyncio.CancelledError, *_cancelled_by_user_exceptions)):
+        if isinstance(exception, (GeneratorExit, asyncio.CancelledError, *_cancelled_by_user_exceptions)):
             self.cancel(
                 WORKFLOW_CANCELLED_BY_USER
                 if isinstance(exception, _cancelled_by_user_exceptions)
@@ -309,11 +315,11 @@ class _Span(BaseSpan):
         self[GEN_AI_SPAN_KIND] = self._span_kind or CHAIN
         self._otel_span.set_status(status=status)
         self._otel_span.set_attributes(self._attributes)
-        self._otel_span.end(end_time=self._end_time)
+        self._otel_span.end()
 
     @property
     def waiting_for_streaming(self) -> bool:
-        return self._active and bool(self._end_time)
+        return self._active and self._waiting_for_streaming
 
     @property
     def active(self) -> bool:
@@ -334,6 +340,11 @@ class _Span(BaseSpan):
             pass
 
     def process_output(self, instance: Any, result: Any) -> None:
+        if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+            # Their __str__ consumes the generator, including provider I/O.
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(result))
+            self[OUTPUT_MIME_TYPE] = JSON
+            return
         if OUTPUT_VALUE in self._attributes:
             # If the output value was set up by event handling, we don't
             # need to continue
@@ -377,6 +388,8 @@ class _Span(BaseSpan):
     @process_instance.register(BaseLLM)
     @process_instance.register(MultiModalLLM)
     def _(self, instance: Union[BaseLLM, MultiModalLLM]) -> None:
+        if provider := provider_name(instance):
+            self["gen_ai.provider.name"] = provider
         if metadata := instance.metadata:
             self[GEN_AI_REQUEST_MODEL] = metadata.model_name
             self[GEN_AI_REQUEST_PARAMETERS] = metadata.json(exclude_unset=True)
@@ -422,18 +435,36 @@ class _Span(BaseSpan):
                 self._first_token_timestamp = timestamp
             self._last_updated_at = time()
             self.notify_parent(_StreamingStatus.IN_PROGRESS)
-        elif isinstance(event, ExceptionEvent):
+        elif isinstance(event, (ExceptionEvent, StreamChatErrorEvent)):
             self.finish(event.exception)
-            self.notify_parent(_StreamingStatus.FINISHED)
+            self.notify_parent(_StreamingStatus.FINISHED, event.exception)
 
-    def notify_parent(self, status: _StreamingStatus) -> None:
+    def process_response_chunk(self, chunk: Any) -> None:
+        if not self.active:
+            return
+        if isinstance(chunk, str):
+            self._stream_content += chunk
+            self[OUTPUT_VALUE] = self._stream_content
+            self._attributes.pop(OUTPUT_MIME_TYPE, None)
+        self._last_updated_at = time()
+        self.notify_parent(_StreamingStatus.IN_PROGRESS)
+
+    def notify_parent(
+        self, status: _StreamingStatus, exception: Optional[BaseException] = None
+    ) -> None:
         if not (parent := self._parent) or not parent.waiting_for_streaming:
             return
         if status is _StreamingStatus.IN_PROGRESS:
             parent._last_updated_at = time()
         else:
-            parent.end()
-        parent.notify_parent(status)
+            if parent._response_streaming:
+                # A container can synthesize more tokens after the model ends.
+                # Its observer owns the final outcome, including errors/close.
+                return
+            if self._cancelled:
+                parent.cancel(self._cancel_reason)
+            parent.finish(exception)
+        parent.notify_parent(status, exception)
 
     @singledispatchmethod
     def _process_event(self, event: BaseEvent) -> None:
@@ -457,7 +488,9 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        # Error payloads can echo hidden inputs even when outputs are visible.
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepStartEvent) -> None:
@@ -542,8 +575,10 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: StreamChatErrorEvent) -> None:
-        self.record_exception(event.exception)
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        if not self.waiting_for_streaming:
+            self.record_exception(event.exception)
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatEndEvent) -> None:
@@ -723,13 +758,10 @@ class _Span(BaseSpan):
     def _extract_token_counts(
         self, response: Union[ChatResponse, CompletionResponse]
     ) -> None:
-        if (
-            (raw := getattr(response, "raw", None))
-            and hasattr(raw, "get")
-            and (usage := raw.get("usage"))
-        ):
-            for k, v in _get_token_counts(usage):
-                self[k] = v
+        raw = getattr(response, "raw", None)
+        usage = raw.get("usage") if isinstance(raw, Mapping) else getattr(raw, "usage", None)
+        for k, v in _get_token_counts(usage):
+            self[k] = v
         if (
             (raw := getattr(response, "raw", None))
             and (model_extra := getattr(raw, "model_extra", None))
@@ -893,7 +925,7 @@ class _ExportQueue:
 
     def _del(self, item: _QueueItem) -> None:
         with self.lock:
-            del self.spans[item.span.id_]
+            self.spans.pop(item.span.id_, None)
 
     def _sweep(self, q: "SimpleQueue[Optional[_QueueItem]]") -> None:
         while True:
@@ -910,7 +942,9 @@ class _ExportQueue:
                     self._del(item)
                     continue
                 if t - span._last_updated_at > 60:
+                    span.cancel("stream idle timeout")
                     span.end()
+                    span.notify_parent(_StreamingStatus.FINISHED)
                     self._del(item)
                     continue
                 item.last_touched_at = t
@@ -942,6 +976,13 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             parent = self.open_spans.get(parent_span_id) if parent_span_id else None
+        if parent is None and parent_span_id:
+            # A lazy stream can create model spans after its call has returned.
+            parent = self._export_queue.find(parent_span_id)
+        if parent is None:
+            parent = _response_span.get()
+            if parent is not None:
+                parent_span_id = parent.id_
         otel_span = self._otel_tracer.start_span(
             name=id_.partition("-")[0],
             start_time=time_ns(),
@@ -980,20 +1021,56 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         if span and span._workflow_run:
             return self._exit_workflow_run(span, instance, result)
         if span:
+            if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+                span.process_output(instance, result)
+                if result.response_gen is not None and result.response_txt is None:
+                    span._waiting_for_streaming = span._response_streaming = True
+                    stream = result.response_gen
+                    if isinstance(stream, _ResponseStream):
+                        stream._self_spans.append(span)
+                    else:
+                        proxy = (
+                            _AsyncResponseStream
+                            if isinstance(result, AsyncStreamingResponse)
+                            else _ResponseStream
+                        )
+                        result.response_gen = proxy(
+                            stream, [span], self._finish_response_children
+                        )
+                    self._export_queue.put(span)
+                    return span
             if isinstance(instance, (BaseLLM, MultiModalLLM)) and (
                 isinstance(result, Generator)
                 and result.gi_frame is not None
                 or isinstance(result, AsyncGenerator)
                 and result.ag_frame is not None
             ):
-                span._end_time = time_ns()
+                span._waiting_for_streaming = True
                 self._export_queue.put(span)
+                if (capture := _stream_capture.get()) is not None:
+                    capture.append(span)
                 return span
             span.process_output(instance, result)
             span.end()
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
+
+    def _finish_response_children(self, span: _Span, error: Optional[BaseException]) -> None:
+        # Closing a synthesis generator need not close the LLM generators held
+        # inside its frame. Finish only this response's still-pending descendants,
+        # including models created lazily after the response was returned.
+        with self._export_queue.lock:
+            pending = list(self._export_queue.spans.values())
+        for child in pending:
+            if not child.active:
+                continue
+            parent = child._parent
+            while parent is not None:
+                if parent is span:
+                    child.finish(error)
+                    break
+                parent = parent._parent
 
     def prepare_to_drop_span(
         self,
@@ -1007,11 +1084,14 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             span = self.open_spans.get(id_)
+        if span is None:
+            span = self._export_queue.find(id_)
         if span:
             if err and isinstance(err, _workflow_done_exceptions):
                 span.end()
                 return span
             span.finish(err)
+            span.notify_parent(_StreamingStatus.FINISHED, err)
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
@@ -1205,33 +1285,8 @@ def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
             yield TOOL_CALL_FUNCTION_ARGUMENTS_JSON, arguments
 
 
-def _get_token_counts(
-    usage: Union[object, Mapping[str, Any]]
-) -> Iterator[Tuple[str, Any]]:
-    if isinstance(usage, Mapping):
-        return _get_token_counts_from_mapping(usage)
-    if isinstance(usage, object):
-        return _get_token_counts_from_object(usage)
-
-
-def _get_token_counts_from_object(usage: object) -> Iterator[Tuple[str, Any]]:
-    if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
-    if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
-    if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
-
-
-def _get_token_counts_from_mapping(
-    usage_mapping: Mapping[str, Any],
-) -> Iterator[Tuple[str, Any]]:
-    if (prompt_tokens := usage_mapping.get("prompt_tokens")) is not None:
-        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
-    if (completion_tokens := usage_mapping.get("completion_tokens")) is not None:
-        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
-    if (total_tokens := usage_mapping.get("total_tokens")) is not None:
-        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
+def _get_token_counts(usage: Any) -> Iterator[Tuple[str, Any]]:
+    return token_counts(usage)
 
 
 @singledispatch
@@ -1371,6 +1426,14 @@ def _to_dict(obj: Any) -> Any:
     """
     Convert any class instance to a dictionary.
     """
+    if isinstance(obj, (StreamingResponse, AsyncStreamingResponse)):
+        # dataclasses.asdict deep-copies the live generator; str drains it.
+        # Keep only already available data until the consumer reads tokens.
+        return {
+            "response_txt": obj.response_txt,
+            "metadata": _to_dict(obj.metadata),
+            "source_nodes": [_show_repr_str(node) for node in obj.source_nodes],
+        }
     if dataclasses.is_dataclass(obj):
         return dataclasses.asdict(obj)
     elif isinstance(obj, BaseModel):

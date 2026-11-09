@@ -41,6 +41,7 @@ export interface ContentPolicy {
   hideInputText: boolean;
   hideOutputText: boolean;
   hideEmbeddingVectors: boolean;
+  hideLLMInvocationParameters?: boolean;
 }
 
 /** Content captured, nothing hidden: fi-core's defaults (`DEFAULT_HIDE_* = false`). */
@@ -52,6 +53,7 @@ export const SHOW_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: DEFAULT_HIDE_INPUT_TEXT,
   hideOutputText: DEFAULT_HIDE_OUTPUT_TEXT,
   hideEmbeddingVectors: DEFAULT_HIDE_EMBEDDING_VECTORS,
+  hideLLMInvocationParameters: false,
 });
 
 /** Every content flag on. */
@@ -63,6 +65,7 @@ export const HIDE_ALL: Readonly<ContentPolicy> = Object.freeze({
   hideInputText: true,
   hideOutputText: true,
   hideEmbeddingVectors: true,
+  hideLLMInvocationParameters: true,
 });
 
 /**
@@ -82,7 +85,7 @@ function flag(option: boolean | undefined, envKey: string, fallback: boolean): b
  * `captureContent: false` option, which must never export more than it asked for).
  */
 export function resolveContentPolicy(
-  traceConfig?: TraceConfigOptions,
+  traceConfig?: TraceConfigOptions & { hideLLMInvocationParameters?: boolean },
   fallback: Partial<ContentPolicy> = {},
 ): ContentPolicy {
   const d = { ...SHOW_ALL, ...fallback };
@@ -94,6 +97,7 @@ export function resolveContentPolicy(
     hideInputText: flag(traceConfig?.hideInputText, FI_HIDE_INPUT_TEXT, d.hideInputText),
     hideOutputText: flag(traceConfig?.hideOutputText, FI_HIDE_OUTPUT_TEXT, d.hideOutputText),
     hideEmbeddingVectors: flag(traceConfig?.hideEmbeddingVectors, FI_HIDE_EMBEDDING_VECTORS, d.hideEmbeddingVectors),
+    hideLLMInvocationParameters: flag(traceConfig?.hideLLMInvocationParameters, "FI_HIDE_LLM_INVOCATION_PARAMETERS", d.hideLLMInvocationParameters ?? false),
   };
 }
 

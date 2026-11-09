@@ -1,6 +1,6 @@
 # Trace Agno with Future AGI
 
-Send Agno agent, model, tool, team, and workflow spans to Future AGI using `traceai-agno`. The package maintains wrappers based on the [OpenInference Agno instrumentor](https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno), with input privacy and stream lifecycle handling, and installs only one span tree.
+Send Agno agent, model, tool, team, knowledge retrieval, and workflow spans to Future AGI using `traceai-agno`. The package maintains wrappers based on the [OpenInference Agno instrumentor](https://github.com/Arize-ai/openinference/tree/main/python/instrumentation/openinference-instrumentation-agno), with input privacy and stream lifecycle handling, and installs only one span tree.
 
 ## Install
 
@@ -81,11 +81,19 @@ finally:
 
 ## Choose what content to capture
 
-Use `openinference.instrumentation.TraceConfig` or `OPENINFERENCE_*` environment variables. To include inputs and outputs, pass `TraceConfig(hide_inputs=False, hide_outputs=False)`. Without an explicit config, OpenInference uses its environment settings and defaults, which capture content.
+Use `openinference.instrumentation.TraceConfig`, `OPENINFERENCE_*` environment variables, or the shared `FI_HIDE_*` controls. Both configuration families apply to supplied providers and providers created from an endpoint. A hide flag enabled in either family wins: `TraceConfig(hide_inputs=False)` cannot undo `FI_HIDE_INPUTS=true`. With no hide flags enabled, content is captured by default.
 
-`hide_inputs=True` also hides tool arguments in tool spans. Model invocation attributes redact authentication parameters and header containers regardless of input/output capture settings.
+`FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` hide inputs and outputs, including tool arguments and retrieved documents. The shared message, text, image, invocation-parameter, and embedding-vector hide flags are also bridged to OpenInference. OpenInference-specific options remain supported; neither configuration object is mutated.
 
-The `FI_HIDE_*` variables do not automatically apply to this integration. Input/output hiding is not a blanket secret scrubber: names, custom metadata, and exception details can still contain sensitive text. Keep secrets out of those fields or apply your application's export filtering policy.
+`FI_HIDE_ERROR_DETAILS=true` removes error status descriptions, exception messages and stack traces, and error-message attributes while retaining error status and exception types. By default this protection is also enabled when input/output or message/text hiding is enabled. Set `FI_HIDE_ERROR_DETAILS=false` only if you deliberately want error details despite hidden content. Model invocation attributes redact authentication parameters and header containers regardless of content settings.
+
+Input/output hiding is not a blanket secret scrubber: names, data-source identities and custom metadata can still contain sensitive text. Keep secrets out of those fields. These controls affect Agno spans, not unrelated instrumentation on a shared provider.
+
+## Knowledge retrieval
+
+`Knowledge.search` and `Knowledge.asearch` emit an OpenInference `RETRIEVER` span with the query, knowledge name (`gen_ai.data_source.id`), document count and returned document IDs/content. Content obeys the privacy controls above; embeddings and arbitrary document metadata are not serialized. Span start/end timestamps provide duration.
+
+These are framework-level `INTERNAL` spans. The package does not wrap vector-store clients or suppress their instrumentation. If a vector-store instrumentor is enabled independently, its database/client span remains a single child of the framework retrieval span, rather than a duplicate client operation.
 
 ## Configuration and helpers
 

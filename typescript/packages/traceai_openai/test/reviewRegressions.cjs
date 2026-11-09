@@ -404,11 +404,15 @@ if (OpenAI.Responses) {
           server_url: "https://example.invalid",
         },
       ];
-      assert.deepEqual(JSON.parse(attrs["gen_ai.tool.definitions"]), expected);
-      assert.deepEqual(
-        JSON.parse(attrs["gen_ai.request.parameters"]).tools,
-        expected,
-      );
+      if (config.hideInputs) {
+        // Schemas and their invocation-parameter copies are opaque inputs too.
+        assert.equal(attrs["gen_ai.tool.definitions"], "__REDACTED__");
+        assert.equal(attrs["gen_ai.request.parameters"], "__REDACTED__");
+      } else {
+        assert.deepEqual(JSON.parse(attrs["gen_ai.tool.definitions"]), expected);
+        assert.deepEqual(JSON.parse(attrs["gen_ai.request.parameters"]).tools, expected);
+      }
+      assert.equal(attrs["gen_ai.request.model"], "synthetic");
     });
   }
   for (const flag of [
@@ -452,12 +456,16 @@ if (OpenAI.Responses) {
       await c.responses.create(body);
       assert.deepEqual(sent, before);
       assert.deepEqual(body, before);
-      assert.deepEqual(
-        JSON.parse(span().attributes["gen_ai.request.parameters"]).prompt,
-        { id: "pmpt_synthetic", version: "2" },
-      );
-      if (flag) assertNoMarker(marker);
-      else assert.ok(JSON.stringify(span().attributes).includes(marker));
+      const attrs = span().attributes;
+      assert.equal(attrs["gen_ai.request.model"], "synthetic");
+      if (flag) {
+        assert.equal(attrs["gen_ai.request.parameters"], "__REDACTED__");
+        assertNoMarker(marker);
+      } else {
+        assert.deepEqual(JSON.parse(attrs["gen_ai.request.parameters"]).prompt,
+          { id: "pmpt_synthetic", version: "2" });
+        assert.ok(JSON.stringify(attrs).includes(marker));
+      }
     });
   }
   test("streamed custom inputs are also covered by granular output hiding", async () => {

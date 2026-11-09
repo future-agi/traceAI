@@ -1,0 +1,617 @@
+import { createServer, Server } from "node:http";
+import { AddressInfo } from "node:net";
+import {
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { SemanticConventions as S } from "@traceai/fi-semantic-conventions";
+import { TraceConfigOptions } from "@traceai/fi-core";
+import { CerebrasInstrumentation } from "../instrumentation";
+
+// The CI matrix supplies both the minimum and current real SDK, not a resource mock.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const sdk = require(
+  process.env.CEREBRAS_SDK_PATH || "@cerebras/cerebras_cloud_sdk",
+);
+const positional = {
+  model: "UNSENT_MODEL",
+  messages: [{ role: "user", content: "UNSENT_INPUT" }],
+  temperature: 0.9,
+};
+const effective = {
+  model: "effective-model",
+  messages: [{ role: "user", content: "EFFECTIVE_INPUT" }],
+  temperature: 0.2,
+};
+const message = { role: "assistant", content: "OUTPUT_SENTINEL" };
+const totals = { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 };
+
+async function consume(result: unknown, streaming: boolean) {
+  if (!streaming) return result;
+  const chunks = [];
+  for await (const chunk of result as AsyncIterable<unknown>) chunks.push(chunk);
+  return chunks;
+}
+
+describe("Cerebras effective request and usage HTTP contracts", () => {
+  let server: Server;
+  let baseURL: string;
+  let wire: string[];
+  let optionHeaders: unknown[];
+  let reply: unknown;
+  let streaming: boolean;
+  let exporter: InMemorySpanExporter;
+  let provider: NodeTracerProvider;
+  let instrumentation: CerebrasInstrumentation | undefined;
+
+  beforeEach(async () => {
+    wire = [];
+    optionHeaders = [];
+    streaming = false;
+    reply = { model: "response-model", choices: [], usage: totals };
+    exporter = new InMemorySpanExporter();
+    provider = new NodeTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk.toString()));
+      req.on("end", () => {
+        wire.push(body);
+        optionHeaders.push(req.headers["x-offline-option"]);
+        if (streaming) {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const chunk of reply as unknown[])
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          res.end("data: [DONE]\n\n");
+        } else {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(reply));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    instrumentation?.disable();
+    instrumentation = undefined;
+    await provider.shutdown();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  });
+
+  function client(traceConfig?: TraceConfigOptions) {
+    instrumentation = new CerebrasInstrumentation({ traceConfig });
+    instrumentation.setTracerProvider(provider);
+    instrumentation.manuallyInstrument(sdk);
+    return new sdk.Cerebras({
+      apiKey: "synthetic-offline-key",
+      baseURL,
+      warmTCPConnection: false,
+      maxRetries: 0,
+    });
+  }
+
+  describe.each([false, true])("stream=%s", (stream) => {
+    it.each([false, true])(
+      "captures the replacement body, never positional data or options, hideInputs=%s",
+      async (hideInputs) => {
+        streaming = stream;
+        if (stream) reply = [{ choices: [], usage: totals }];
+        const c = client({ hideInputs });
+        // Newer SDKs also expose native text completions.
+        const operations = [
+          { resource: c.chat.completions, input: positional, body: effective },
+          ...(c.completions
+            ? [{
+                resource: c.completions,
+                input: { model: "UNSENT_MODEL", prompt: "UNSENT_INPUT", temperature: 0.9 },
+                body: { model: "effective-model", prompt: "EFFECTIVE_INPUT", temperature: 0.2 },
+              }]
+            : []),
+        ];
+        for (const { resource, input, body } of operations) {
+          const original = Object.freeze({ ...input, stream });
+          const replacement = Object.freeze({ ...body, stream });
+          const options = Object.freeze({
+            body: replacement,
+            headers: { "x-offline-option": "OPTION_SENTINEL" },
+          });
+          expect(await consume(await resource.create(original, options), stream)).toEqual(reply);
+          const sent = JSON.parse(wire[wire.length - 1]);
+          expect(sent).toEqual(replacement);
+          expect(optionHeaders[optionHeaders.length - 1]).toBe("OPTION_SENTINEL");
+          const span = exporter.getFinishedSpans()[wire.length - 1];
+          expect(span.attributes[S.LLM_MODEL_NAME]).toBe(sent.model);
+          const serialized = JSON.stringify(span.attributes);
+          expect(serialized).not.toMatch(/UNSENT_|OPTION_SENTINEL|synthetic-offline-key/);
+          if (hideInputs) {
+            expect(serialized).not.toContain("EFFECTIVE_INPUT");
+          } else {
+            expect(JSON.parse(span.attributes[S.INPUT_VALUE] as string)).toEqual(sent);
+            expect(JSON.parse(span.attributes[S.RAW_INPUT] as string)).toEqual(sent);
+            const { messages, prompt: _prompt, ...parameters } = sent;
+            expect(JSON.parse(span.attributes[S.LLM_INVOCATION_PARAMETERS] as string)).toEqual(parameters);
+            if (messages)
+              expect(JSON.parse(span.attributes[S.LLM_INPUT_MESSAGES] as string)).toEqual(messages);
+            else expect(span.attributes[S.LLM_INPUT_MESSAGES]).toBeUndefined();
+          }
+        }
+        expect(exporter.getFinishedSpans()).toHaveLength(wire.length);
+      },
+    );
+
+    it.each(["generated", "one-shot"])(
+      "preserves an enumerable %s body accessor without tracing discarded input",
+      async (kind) => {
+        streaming = stream;
+        if (stream) reply = [{ choices: [], usage: totals }];
+        const c = client();
+        const operations = [
+          { resource: c.chat.completions, input: positional, body: effective },
+          ...(c.completions
+            ? [{
+                resource: c.completions,
+                input: { model: "UNSENT_MODEL", prompt: "UNSENT_INPUT" },
+                body: { model: "effective-model", prompt: "EFFECTIVE_INPUT" },
+              }]
+            : []),
+        ];
+        for (const { resource, input, body } of operations) {
+          async function invoke() {
+            let reads = 0;
+            const getter = jest.fn(function () {
+              if (++reads > 1 && kind === "one-shot")
+                throw new Error("body accessor was consumed twice");
+              return { ...body, model: `model-${reads}`, stream };
+            });
+            const options = Object.freeze(Object.defineProperty({
+              headers: { "x-offline-option": "OPTION_SENTINEL" },
+            }, "body", { enumerable: true, get: getter }));
+            const start = wire.length;
+            let value: unknown;
+            let error: unknown;
+            try {
+              value = await consume(
+                await resource.create({ ...input, stream }, options),
+                stream,
+              );
+            } catch (failure) {
+              error = failure;
+            }
+            expect(getter.mock.contexts.every((receiver) => receiver === options)).toBe(true);
+            return {
+              reads, value, error,
+              bodies: wire.slice(start),
+              headers: optionHeaders.slice(start),
+            };
+          }
+          instrumentation!.disable();
+          const expected = await invoke();
+          expect(expected).toMatchObject({
+            reads: 1,
+            value: reply,
+            error: undefined,
+            headers: ["OPTION_SENTINEL"],
+          });
+          expect(expected.bodies.map((sent) => JSON.parse(sent))).toEqual([
+            { ...body, model: "model-1", stream },
+          ]);
+          instrumentation!.enable();
+          expect(await invoke()).toEqual(expected);
+          // An accessor is opaque: do not export its value or the unsent input.
+          expect(exporter.getFinishedSpans()).toHaveLength(0);
+        }
+      },
+    );
+
+    describe.each([false, true])("accessor body hideInputs=%s", (hideInputs) => {
+      it.each([
+        "model", "temperature", "messages", "message content", "tool description",
+      ])("preserves %s accessors without extra reads or unsent telemetry", async (field) => {
+        streaming = stream;
+        if (stream) reply = [{ choices: [], usage: totals }];
+        const c = client({ hideInputs });
+        const originalError = new Error("request field accessor failure");
+        for (const kind of ["one-shot", "changing", "throws"] as const) {
+          for (const override of [false, true]) {
+            async function invoke() {
+              let reads = 0;
+              const content = { role: "user", content: "EFFECTIVE_INPUT" };
+              const tool = { name: "offline_tool", description: "public description" };
+              const body = {
+                ...effective, stream, messages: [content],
+                tools: [{ type: "function", function: tool }],
+              };
+              const holder = field === "message content" ? content
+                : field === "tool description" ? tool : body;
+              const key = field === "message content" ? "content"
+                : field === "tool description" ? "description" : field;
+              const getter = jest.fn(function () {
+                reads++;
+                if (kind === "throws") throw originalError;
+                if (kind === "one-shot" && reads > 1)
+                  throw new Error("request field accessor read twice");
+                const text = kind === "changing" && reads === 1
+                  ? "PRIVATE_UNSENT_SENTINEL" : "public-value";
+                return key === "temperature" ? 0.2
+                  : key === "messages" ? [{ role: "user", content: text }] : text;
+              });
+              Object.defineProperty(holder, key, { enumerable: true, get: getter });
+              const start = wire.length;
+              let value: unknown;
+              let error: unknown;
+              try {
+                value = await consume(await c.chat.completions.create(
+                  override ? { ...positional, stream } : body,
+                  override ? { body } : undefined,
+                ), stream);
+              } catch (failure) {
+                error = failure;
+              }
+              expect(getter.mock.contexts.every((receiver) => receiver === holder)).toBe(true);
+              return { reads, value, error, bodies: wire.slice(start) };
+            }
+            instrumentation!.disable();
+            const expected = await invoke();
+            expect(expected.reads).toBe(1);
+            expect(expected.error).toBe(kind === "throws" ? originalError : undefined);
+            expect(expected.value).toEqual(kind === "throws" ? undefined : reply);
+            expect(expected.bodies).toHaveLength(kind === "throws" ? 0 : 1);
+            instrumentation!.enable();
+            const actual = await invoke();
+            expect(actual.error).toBe(expected.error);
+            expect(actual).toEqual(expected);
+            // Accessors are opaque even under privacy controls. Only the SDK
+            // may evaluate them; do not export a different evaluation's value.
+            expect(exporter.getFinishedSpans()).toHaveLength(0);
+          }
+        }
+      });
+    });
+
+    describe.each([
+      "own method",
+      "inherited method",
+      "own accessor",
+      "inherited accessor",
+    ])("toJSON=%s", (placement) => {
+      it.each(["generated", "one-shot", "private fields"])(
+        "preserves a %s serializer without tracing raw or discarded input",
+        async (kind) => {
+          streaming = stream;
+          if (stream) reply = [{ choices: [], usage: totals }];
+          const c = client();
+          const operations = [
+            { resource: c.chat.completions, input: positional, body: effective },
+            ...(c.completions
+              ? [{
+                  resource: c.completions,
+                  input: { model: "UNSENT_MODEL", prompt: "UNSENT_INPUT" },
+                  body: { model: "effective-model", prompt: "EFFECTIVE_INPUT" },
+                }]
+              : []),
+          ];
+          for (const { resource, input, body } of operations) {
+            async function invoke() {
+              let calls = 0;
+              const serializer = jest.fn(function () {
+                if (++calls > 1 && kind === "one-shot")
+                  throw new Error("request serialized twice");
+                return {
+                  ...body,
+                  model: kind === "private fields" ? body.model : `model-${calls}`,
+                  stream,
+                };
+              });
+              const getter = jest.fn(() => serializer);
+              class SerializedBody {
+                model = "INTERNAL_MODEL";
+                messages = [{ role: "user", content: "INTERNAL_ONLY_SECRET" }];
+                prompt = "INTERNAL_ONLY_SECRET";
+              }
+              const replacement = new SerializedBody();
+              Object.defineProperty(
+                placement.startsWith("inherited") ? SerializedBody.prototype : replacement,
+                "toJSON",
+                {
+                  enumerable: !placement.startsWith("inherited"),
+                  ...(placement.endsWith("accessor")
+                    ? { get: getter }
+                    : { value: serializer }),
+                },
+              );
+              const options = Object.freeze({
+                body: Object.freeze(replacement),
+                headers: { "x-offline-option": "OPTION_SENTINEL" },
+              });
+              const start = wire.length;
+              let value: unknown;
+              let error: unknown;
+              try {
+                value = await consume(
+                  await resource.create(Object.freeze({ ...input, stream }), options),
+                  stream,
+                );
+              } catch (failure) {
+                error = failure;
+              }
+              return {
+                calls,
+                getterReads: getter.mock.calls.length,
+                receiversPreserved: [...serializer.mock.contexts, ...getter.mock.contexts]
+                  .every((receiver) => receiver === replacement),
+                value, error,
+                bodies: wire.slice(start),
+                headers: optionHeaders.slice(start),
+              };
+            }
+            instrumentation!.disable();
+            const expected = await invoke();
+            expect(expected).toMatchObject({
+              calls: 1,
+              getterReads: placement.endsWith("accessor") ? 1 : 0,
+              receiversPreserved: true,
+              value: reply,
+              error: undefined,
+              headers: ["OPTION_SENTINEL"],
+            });
+            expect(expected.bodies.map((sent) => JSON.parse(sent))).toEqual([{
+              ...body,
+              model: kind === "private fields" ? body.model : "model-1",
+              stream,
+            }]);
+            instrumentation!.enable();
+            const actual = await invoke();
+            if (kind === "private fields") {
+              expect(JSON.stringify(exporter.getFinishedSpans().map((span) => span.attributes)))
+                .not.toMatch(/INTERNAL_|UNSENT_|OPTION_SENTINEL|synthetic-offline-key/);
+            }
+            expect(actual).toEqual(expected);
+            // A serializer is opaque, just like an options.body accessor.
+            expect(exporter.getFinishedSpans()).toHaveLength(0);
+          }
+        },
+      );
+    });
+
+    describe.each([
+      undefined,
+      "hideOutputs",
+      "hideOutputMessages",
+      "hideOutputText",
+    ] as const)("privacy=%s", (flag) => {
+      it.each([
+        { cached: 8, reasoning: 4 },
+        { cached: 0, reasoning: 0 },
+        { cached: undefined, reasoning: 4 },
+        { cached: 8, reasoning: undefined },
+        { cached: null, reasoning: null },
+        { cached: "8", reasoning: "4" },
+      ])("retains numeric usage details independently: %j", async ({ cached, reasoning }) => {
+        const usage = {
+          ...totals,
+          prompt_tokens_details: { cached_tokens: cached },
+          completion_tokens_details: { reasoning_tokens: reasoning },
+        };
+        streaming = stream;
+        reply = stream
+          ? [
+              { choices: [{ index: 0, delta: message, finish_reason: "stop" }] },
+              // Usage-only chunk followed by a chunk without usage must not erase it.
+              { choices: [], usage },
+              { choices: [] },
+            ]
+          : { choices: [{ index: 0, message, finish_reason: "stop" }], usage };
+        const c = client(flag ? { [flag]: true } : {});
+        expect(await consume(await c.chat.completions.create({ ...effective, stream }), stream)).toEqual(reply);
+        expect(exporter.getFinishedSpans()).toHaveLength(1);
+        const attrs = exporter.getFinishedSpans()[0].attributes;
+        expect(attrs[S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]).toBe(
+          typeof cached === "number" ? cached : undefined,
+        );
+        expect(attrs[S.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING]).toBe(
+          typeof reasoning === "number" ? reasoning : undefined,
+        );
+        expect(attrs).toMatchObject({
+          [S.LLM_TOKEN_COUNT_PROMPT]: 12,
+          [S.LLM_TOKEN_COUNT_COMPLETION]: 6,
+          [S.LLM_TOKEN_COUNT_TOTAL]: 18,
+        });
+        expect(JSON.stringify(attrs).includes("OUTPUT_SENTINEL")).toBe(!flag);
+        if (flag) {
+          expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+          expect(attrs[S.LLM_OUTPUT_MESSAGES]).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  it.each(["inherited model", "non-enumerable model", "symbol"])(
+    "does not evaluate a body accessor ignored by JSON: %s",
+    async (kind) => {
+      const c = client();
+      const getter = jest.fn(() => { throw new Error("unsent accessor evaluated"); });
+      const holder = Object.defineProperty({}, kind === "symbol" ? Symbol("private") : "model", {
+        enumerable: kind !== "non-enumerable model", get: getter,
+      });
+      const body = Object.assign(kind === "inherited model" ? Object.create(holder) : holder, {
+        messages: effective.messages,
+      });
+      instrumentation!.disable();
+      const expected = await c.chat.completions.create(positional, { body });
+      instrumentation!.enable();
+      expect(await c.chat.completions.create(positional, { body })).toEqual(expected);
+      expect(wire).toHaveLength(2);
+      expect(wire[1]).toBe(wire[0]);
+      expect(getter).not.toHaveBeenCalled();
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    },
+  );
+
+  it("forwards setter-only request fields without invoking or tracing them", async () => {
+    const c = client();
+    const setter = jest.fn();
+    const body = Object.defineProperty({ ...effective }, "temperature", {
+      enumerable: true, set: setter,
+    });
+    instrumentation!.disable();
+    const expected = await c.chat.completions.create(positional, { body });
+    instrumentation!.enable();
+    expect(await c.chat.completions.create(positional, { body })).toEqual(expected);
+    expect(wire).toHaveLength(2);
+    expect(wire[1]).toBe(wire[0]);
+    expect(setter).not.toHaveBeenCalled();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it("preserves nested one-shot serializers without exporting private fields", async () => {
+    const c = client();
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      let calls = 0;
+      const message = {
+        private: "NESTED_UNSENT_SENTINEL",
+        toJSON() {
+          if (++calls > 1) throw new Error("nested serializer called twice");
+          return effective.messages[0];
+        },
+      };
+      expect(await c.chat.completions.create(positional, {
+        body: { ...effective, messages: [message] },
+      })).toEqual(reply);
+      expect(calls).toBe(1);
+      expect(JSON.parse(wire[wire.length - 1])).toEqual(effective);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
+
+  it("traces ordinary data with repeated nested references", async () => {
+    const c = client();
+    const body = { ...effective, messages: [effective.messages[0], effective.messages[0]] };
+    await c.chat.completions.create(positional, { body });
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+    const attrs = exporter.getFinishedSpans()[0].attributes;
+    expect(JSON.parse(attrs[S.INPUT_VALUE] as string)).toEqual(JSON.parse(wire[0]));
+    expect(attrs[S.LLM_MODEL_NAME]).toBe(effective.model);
+  });
+
+  it.each([undefined, null, "replacement", false, 0, []])(
+    "forwards a non-request override %j without tracing replaced input",
+    async (body) => {
+      const c = client();
+      const options = { body };
+      // Compare with the same SDK uninstrumented, including SDK coercion to no body.
+      instrumentation!.disable();
+      const expected = await c.chat.completions.create(positional, options);
+      instrumentation!.enable();
+      expect(await c.chat.completions.create(positional, options)).toEqual(expected);
+      expect(wire).toHaveLength(2);
+      expect(wire[1]).toBe(wire[0]);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    "own method", "inherited method", "own accessor", "inherited accessor",
+  ])("toJSON=%s preserves the original serialization error without tracing input", async (placement) => {
+    const c = client();
+    const error = new Error("serializer failure");
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      const fail = jest.fn(() => { throw error; });
+      const holder = Object.defineProperty({}, "toJSON", {
+        enumerable: false,
+        ...(placement.endsWith("accessor") ? { get: fail } : { value: fail }),
+      });
+      const body = placement.startsWith("inherited") ? Object.create(holder) : holder;
+      await expect((async () => c.chat.completions.create(positional, { body }))())
+        .rejects.toBe(error);
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(fail.mock.contexts[0]).toBe(body);
+      expect(wire).toHaveLength(0);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
+
+  it("preserves a body accessor's original error without issuing HTTP or tracing input", async () => {
+    const c = client();
+    const error = new Error("body accessor failure");
+    const getter = jest.fn(() => { throw error; });
+    const options = Object.defineProperty({}, "body", {
+      enumerable: true,
+      get: getter,
+    });
+    for (const enabled of [false, true]) {
+      if (enabled) instrumentation!.enable();
+      else instrumentation!.disable();
+      await expect((async () => c.chat.completions.create(positional, options))())
+        .rejects.toBe(error);
+      expect(getter).toHaveBeenCalledTimes(enabled ? 2 : 1);
+      expect(wire).toHaveLength(0);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    }
+  });
+
+  it("forwards a setter-only body override without tracing unsent input", async () => {
+    const c = client();
+    const setter = jest.fn();
+    const options = Object.defineProperty({}, "body", {
+      enumerable: true,
+      set: setter,
+    });
+    instrumentation!.disable();
+    const expected = await c.chat.completions.create(positional, options);
+    instrumentation!.enable();
+    expect(await c.chat.completions.create(positional, options)).toEqual(expected);
+    expect(wire).toHaveLength(2);
+    expect(wire[1]).toBe(wire[0]);
+    expect(setter).not.toHaveBeenCalled();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it.each(["inherited accessor", "non-enumerable accessor"])(
+    "does not read an ignored %s body property",
+    async (kind) => {
+      const getter = jest.fn(() => { throw new Error("ignored body getter"); });
+      const holder = Object.defineProperty({}, "body", {
+        enumerable: kind === "inherited accessor",
+        get: getter,
+      });
+      const options = kind === "inherited accessor" ? Object.create(holder) : holder;
+      const c = client();
+      await c.chat.completions.create(positional, options);
+      expect(getter).not.toHaveBeenCalled();
+      expect(JSON.parse(wire[0])).toEqual(positional);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(JSON.parse(exporter.getFinishedSpans()[0].attributes[S.INPUT_VALUE] as string))
+        .toEqual(positional);
+    },
+  );
+
+  it.each(["inherited", "non-enumerable"])(
+    "does not treat an %s options.body as an SDK override",
+    async (kind) => {
+      const options = kind === "inherited"
+        ? Object.create({ body: effective })
+        : Object.defineProperty({}, "body", { value: effective });
+      const c = client();
+      await c.chat.completions.create(positional, options);
+      const sent = JSON.parse(wire[0]);
+      expect(sent).toEqual(positional);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      const attrs = exporter.getFinishedSpans()[0].attributes;
+      expect(JSON.parse(attrs[S.INPUT_VALUE] as string)).toEqual(sent);
+      expect(JSON.parse(attrs[S.RAW_INPUT] as string)).toEqual(sent);
+      expect(JSON.parse(attrs[S.LLM_INPUT_MESSAGES] as string)).toEqual(sent.messages);
+      expect(attrs[S.LLM_MODEL_NAME]).toBe(sent.model);
+    },
+  );
+});

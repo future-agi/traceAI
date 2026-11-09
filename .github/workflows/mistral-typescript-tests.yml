@@ -48,6 +48,6 @@ jobs:
         run: pnpm --filter '@traceai/mistral' run test:types
       - name: Native SDK regressions with outbound network disabled
         run: |
-          sudo unshare --net bash -c 'set -e; ip link set lo up; "$1" node_modules/jest/bin/jest.js --config packages/traceai_mistral/jest.config.js --runInBand; exec "$1" --test packages/traceai_mistral/test/native.test.cjs' _ "$(command -v node)"
+          sudo unshare --net bash -c 'set -e; ip link set lo up; "$1" node_modules/jest/bin/jest.js --config packages/traceai_mistral/jest.config.js --runInBand; exec "$1" --test packages/traceai_mistral/test/*.test.cjs' _ "$(command -v node)"
       - name: Pack the release artifact
         run: pnpm --filter '@traceai/mistral' pack --pack-destination "$RUNNER_TEMP/mistral-package"

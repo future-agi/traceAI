@@ -135,12 +135,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("resolve agent card: %w", err)
 	}
-	sdkClient, err := a2aclient.NewFromCard(ctx, card,
+	client, err := traceaia2a.NewClientFromCard(ctx, card,
 		a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 	if err != nil {
 		return err
 	}
-	client := traceaia2a.WrapClient(sdkClient)
 	defer func() { _ = client.Destroy() }()
 
 	sessionCtx := traceaia2a.ContextWithSessionID(ctx, *session)

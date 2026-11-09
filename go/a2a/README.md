@@ -42,13 +42,12 @@ The second command installs the exporter and SDK used by the setup below and res
 
 ```go
 // tp is an *sdktrace.TracerProvider that exports to Future AGI (see below).
-sdkClient, err := a2aclient.NewFromCard(ctx, card,
+client, err := traceaia2a.NewClientFromCard(ctx, card,
 	a2aclient.WithCallInterceptors(traceaia2a.NewInterceptor(traceaia2a.WithTracerProvider(tp))))
 
 if err != nil {
 	return err
 }
-client := traceaia2a.WrapClient(sdkClient)
 defer client.Destroy()
 
 ctx = traceaia2a.ContextWithSessionID(ctx, "session-123") // optional
@@ -56,7 +55,23 @@ resp, err := client.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg})
 ```
 
 Without `WithTracerProvider` the OpenTelemetry global provider is used. Attach the interceptor
-first when you also use other interceptors, so its span covers theirs.
+first when you also use other interceptors, so its span covers theirs. The constructor
+accepts all `a2aclient.FactoryOption` values, including custom transports and client config.
+Use `NewClientFromEndpoints` instead when you have endpoints rather than an agent card.
+
+These constructors install a private entry interceptor before your policies. It binds completion
+to the exact SDK request before a policy can make a nested call. Unary spans record the result
+or error returned **after all response policies**, even when rejection skips the tracing `After`.
+Policies can run before or after tracing, replace the request or response, and call other clients
+without sharing completion state or content-hiding settings. The entry interceptor does not add
+a span or change the request.
+
+**Migrating from `WrapClient`:** construct the client with `NewClientFromCard` or
+`NewClientFromEndpoints` instead of `a2aclient.NewFromCard` / `NewFromEndpoints` plus `WrapClient`.
+`WrapClient` is deprecated: it retains its earlier stream-only completion behavior, but cannot
+safely add final unary completion to an already-created SDK client. Its unary calls therefore
+retain bare-interceptor semantics, which cannot observe every response-policy rejection.
+Call the returned wrapper, not its embedded `.Client`, to use bound completion.
 
 Export with the stock OTLP/HTTP exporter. Future AGI needs both auth headers, the `project_name`
 resource attribute and an uncompressed body:
@@ -138,7 +153,8 @@ extraction; the default extracts W3C trace context only, not baggage. Session/us
 are process-local: the A2A context ID becomes the server's `session.id` unless set on its context.
 Headers, authenticated user details and request metadata are never copied to spans.
 
-Use `WrapClient` and `WrapHandler` for streaming calls. They observe normal iterator exhaustion
+Use the client returned by `NewClientFromCard` / `NewClientFromEndpoints` and `WrapHandler`
+for streaming calls. They observe normal iterator exhaustion
 and early abandonment because the SDK does not call `After` on iterator close. A persisted
 nonterminal task snapshot can reach clean EOF without a final event; its span completes as OK,
 not canceled. Breaking out early completes an unfinished span as ERROR/canceled and cancels only
@@ -167,7 +183,8 @@ A stream is one span. Every streamed event is a span event named `a2a.event` (wi
 `gen_ai.a2a.event.type`, and the task state or artifact type when the event has one), and the span
 ends at the agent's reply message or when the task reaches a terminal state (`completed`,
 `failed`, `canceled`, `rejected`) or `input-required`, which is when a2a-go closes the stream.
-With `WrapClient` and `WrapHandler`, `auth-required` keeps an active stream's span open for later
+With the bound client constructors and `WrapHandler`, `auth-required` keeps an active stream's
+span open for later
 events and its final result. Clean EOF also ends the span, including a persisted snapshot with no
 active executor. The latest snapshot/status message is included in `output.value`, including an
 authorization prompt at EOF; a later status replaces it.
@@ -175,7 +192,8 @@ authorization prompt at EOF; a later status replaces it.
 Existing clients using only `WithCallInterceptors(NewInterceptor(...))` retain their previous
 behavior: an `auth-required` task or status event ends the client span successfully. This keeps
 persisted authorization snapshots complete without requiring a client migration, but misses later
-events if the same stream continues. Use `WrapClient` to capture those events and to observe clean
+events if the same stream continues. Use the bound client constructors to capture those events
+and to observe clean
 EOF and early iterator abandonment.
 
 ## Attributes
@@ -213,7 +231,8 @@ here, and no token or cost attribute is invented.
 - A task the agent reports as `failed` or `rejected` is ERROR with `error.type` set to the state.
   `canceled`, `input-required` and `auth-required` are recorded in `gen_ai.a2a.task.state` and
   are not errors.
-- With `WrapClient` / `WrapHandler`, normal EOF completes an unfinished span successfully;
+- With the bound client constructors / `WrapHandler`, normal EOF completes an unfinished span
+  successfully;
   stopping iteration early ends it as ERROR `canceled`. Without them, early abandonment requires
   caller context cancellation to finish the span, and clean EOF cannot be distinguished.
 - The interceptor never changes a request, a response or an error, and never fails a call.

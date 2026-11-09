@@ -306,9 +306,15 @@ test("automatic-tool usage includes every hop, not only the last response", asyn
                   promptTokenCount: 60,
                   candidatesTokenCount: 40,
                   totalTokenCount: 100,
+                  promptTokensDetails: [{ modality: "AUDIO", tokenCount: 6 }],
+                  candidatesTokensDetails: [{ modality: "AUDIO", tokenCount: 4 }, { modality: "IMAGE", tokenCount: 1 }],
                 },
               }
-            : answer("sunny");
+            : answer("sunny", {
+                promptTokenCount: 4, candidatesTokenCount: 2, totalTokenCount: 6,
+                promptTokensDetails: [{ modality: "AUDIO", tokenCount: 2 }],
+                candidatesTokensDetails: [{ modality: "AUDIO", tokenCount: 1 }, { modality: "IMAGE", tokenCount: 1 }],
+              });
         if (streaming)
           sse(res, [
             { usageMetadata: { ...body.usageMetadata, totalTokenCount: 1 } },
@@ -352,6 +358,9 @@ test("automatic-tool usage includes every hop, not only the last response", asyn
     assert.equal(attrs()["gen_ai.usage.total_tokens"], 106);
     assert.equal(attrs()["gen_ai.usage.input_tokens"], 64);
     assert.equal(attrs()["gen_ai.usage.output_tokens"], 42);
+    assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 8);
+    assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 5);
+    assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 2);
     assert.equal(Number((await exported())["gen_ai.usage.total_tokens"]), 106);
   }
 });
@@ -803,5 +812,570 @@ test("untraced nested calls never contribute usage to an active automatic-tool c
       await provider.forceFlush();
     }
     assert.equal(ai.models.generateContentInternal, original);
+  }
+});
+
+// Exercise the real SDK response classes, including cumulative SSE snapshots,
+// at both supported checkpoints. Content hiding must not erase cost metadata.
+// Google reports built-in tool results as additional input, not as generated
+// output. Use the provider's counters; never estimate tokens from tool content.
+for (const streaming of [false, true]) {
+  for (const hidden of [false, true]) {
+    const label = `streaming=${streaming} hidden=${hidden}`;
+    const invoke = async (ai, params) => {
+      const result = await ai.models[streaming ? "generateContentStream" : "generateContent"](params);
+      const delivered = [];
+      if (streaming) {
+        for await (const chunk of result) delivered.push(JSON.parse(JSON.stringify(chunk)));
+      } else delivered.push(JSON.parse(JSON.stringify(result)));
+      return delivered;
+    };
+    const traceConfig = { hideInputs: hidden, hideOutputs: hidden };
+    const params = {
+      model: "gemini-test", contents: "PRIVATE_INPUT",
+      config: { tools: [{ codeExecution: {} }] },
+    };
+    test(`built-in tool input billing preserves native behavior and cumulative snapshots ${label}`, async () => {
+      reset();
+      const ai = client();
+      const usage = {
+        promptTokenCount: 31, toolUsePromptTokenCount: 73,
+        candidatesTokenCount: 73, thoughtsTokenCount: 77, totalTokenCount: 254,
+        cachedContentTokenCount: 2,
+        promptTokensDetails: [{ modality: "TEXT", tokenCount: 31 }],
+        privateField: "PRIVATE_USAGE",
+      };
+      handler = (_, res) => streaming ? sse(res, [
+        { usageMetadata: { promptTokenCount: 2, toolUsePromptTokenCount: 3 } },
+        answer("PRIVATE_OUTPUT", usage), { usageMetadata: usage },
+      ]) : json(res, answer("PRIVATE_OUTPUT", usage));
+      const native = await invoke(ai, params);
+      assert.equal(spans().length, 0);
+      const nativeRequests = structuredClone(requests);
+      requests = [];
+      const h = instrumentGoogleGenAI(ai, { traceConfig });
+      try {
+        const delivered = await invoke(ai, params);
+        assert.deepEqual(delivered, native);
+        assert.deepEqual(requests, nativeRequests);
+        assert.equal(requests.length, 1);
+        assert.equal(delivered.at(-1).usageMetadata.toolUsePromptTokenCount, 73);
+        const wireAttrs = await exported();
+        for (const a of [attrs(), wireAttrs]) {
+          assert.equal(Number(a["gen_ai.usage.input_tokens"]), 104);
+          assert.equal(Number(a["gen_ai.usage.output_tokens"]), 73);
+          assert.equal(Number(a["gen_ai.usage.output_tokens.reasoning"]), 77);
+          assert.equal(Number(a["gen_ai.usage.total_tokens"]), 254);
+          assert.equal(Number(a["gen_ai.usage.cache_read_tokens"]), 2);
+          // Do not attribute tool results to a guessed modality or add them to output.
+          assert.equal(Number(a["gen_ai.usage.input_tokens.text"]), 31);
+          assert.doesNotMatch(JSON.stringify(a), /PRIVATE_USAGE|synthetic-google-key/);
+          if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+          else assert.match(JSON.stringify(a), /PRIVATE_OUTPUT/);
+        }
+      } finally { h.dispose(); await provider.forceFlush(); }
+    });
+    if (streaming) test(`built-in tool input billing retains omitted fields in sparse cumulative snapshots ${label}`, async () => {
+      for (const last of [{ promptTokenCount: 31 }, { toolUsePromptTokenCount: 73 }]) {
+        reset();
+        const ai = client();
+        const h = instrumentGoogleGenAI(ai, { traceConfig });
+        handler = (_, res) => sse(res, [
+          answer("PRIVATE_OUTPUT", { promptTokenCount: 31, toolUsePromptTokenCount: 73, candidatesTokenCount: 5, totalTokenCount: 109 }),
+          { usageMetadata: last }, { usageMetadata: last },
+        ]);
+        try {
+          await invoke(ai, params);
+          assert.equal(requests.length, 1);
+          const wireAttrs = await exported();
+          for (const a of [attrs(), wireAttrs]) {
+            assert.equal(Number(a["gen_ai.usage.input_tokens"]), 104);
+            assert.equal(Number(a["gen_ai.usage.output_tokens"]), 5);
+            assert.equal(Number(a["gen_ai.usage.total_tokens"]), 109);
+          }
+        } finally { h.dispose(); await provider.forceFlush(); }
+      }
+    });
+    test(`built-in tool input billing accepts only reported finite nonnegative counts ${label}`, async () => {
+      const cases = [
+        { usage: { promptTokenCount: 31 }, input: 31 },
+        { usage: { promptTokenCount: 31, toolUsePromptTokenCount: 0 }, input: 31 },
+        { usage: { promptTokenCount: 0, toolUsePromptTokenCount: 73 }, input: 73 },
+        { usage: { toolUsePromptTokenCount: 73 }, input: 73 },
+        { usage: { toolUsePromptTokenCount: 0 }, input: 0 },
+        { usage: {} },
+        ...[-1, "73", null].map(value => ({
+          usage: { promptTokenCount: 31, toolUsePromptTokenCount: value }, input: 31,
+        })),
+        // JSON numeric overflow reaches the real SDK as Infinity (not a mock).
+        { usage: { promptTokenCount: 31, toolUsePromptTokenCount: "NONFINITE" }, input: 31 },
+      ];
+      for (const c of cases) {
+        reset();
+        const ai = client();
+        const h = instrumentGoogleGenAI(ai, { traceConfig });
+        handler = (_, res) => {
+          const body = answer("PRIVATE_OUTPUT", { candidatesTokenCount: 5, ...c.usage });
+          const raw = JSON.stringify(body).replace('"NONFINITE"', '1e400');
+          res.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json" });
+          res.end(streaming ? `data: ${raw}\n\ndata: ${raw}\n\n` : raw);
+        };
+        try {
+          await invoke(ai, params);
+          assert.equal(requests.length, 1);
+          const wireAttrs = await exported();
+          for (const a of [attrs(), wireAttrs]) {
+            assert.equal(a["gen_ai.usage.input_tokens"] === undefined ? undefined : Number(a["gen_ai.usage.input_tokens"]), c.input);
+            assert.equal(Number(a["gen_ai.usage.output_tokens"]), 5);
+            assert.equal(a["gen_ai.usage.total_tokens"], undefined, "never invent a provider total");
+            if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+          }
+        } finally { h.dispose(); await provider.forceFlush(); }
+      }
+    });
+    test(`built-in tool input billing sums independent automatic-tool hops exactly once ${label}`, async () => {
+      async function run(tracing) {
+        reset();
+        const ai = client();
+        const h = tracing && instrumentGoogleGenAI(ai, { traceConfig });
+        let executions = 0, resolutions = 0;
+        const tool = {
+          async tool() { resolutions++; return { functionDeclarations: [{ name: "weather" }] }; },
+          async callTool() { executions++; return toolResult; },
+        };
+        handler = (_, res) => {
+          const first = requests.length === 1;
+          const body = first ? answer("unused", {
+            promptTokenCount: 60, toolUsePromptTokenCount: 7,
+            candidatesTokenCount: 40, totalTokenCount: 107,
+          }) : answer("PRIVATE_OUTPUT", {
+            promptTokenCount: 4, toolUsePromptTokenCount: 5,
+            candidatesTokenCount: 2, totalTokenCount: 11,
+          });
+          if (first) body.candidates[0].content.parts = [{ functionCall: { name: "weather", args: {} } }];
+          if (streaming) sse(res, [{ usageMetadata: body.usageMetadata }, body]);
+          else json(res, body);
+        };
+        try {
+          const delivered = await invoke(ai, { ...params, config: {
+            tools: [tool, { codeExecution: {} }], automaticFunctionCalling: { maximumRemoteCalls: 2 },
+          } });
+          return { delivered, requests: structuredClone(requests), executions, resolutions };
+        } finally { if (h) h.dispose(); await provider.forceFlush(); }
+      }
+      const native = await run(false);
+      const observed = await run(true);
+      assert.deepEqual(observed, native);
+      assert.equal(observed.requests.length, 2);
+      assert.equal(observed.executions, 1);
+      const wireAttrs = await exported();
+      for (const a of [attrs(), wireAttrs]) {
+        assert.equal(Number(a["gen_ai.usage.input_tokens"]), 76); // (60 + 7) + (4 + 5)
+        assert.equal(Number(a["gen_ai.usage.output_tokens"]), 42);
+        assert.equal(Number(a["gen_ai.usage.total_tokens"]), 118);
+        if (hidden) assert.doesNotMatch(JSON.stringify(a), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+      }
+    });
+  }
+}
+const modalityUsage = {
+  promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 23,
+  thoughtsTokenCount: 5, cachedContentTokenCount: 2,
+  promptTokensDetails: [{ modality: "TEXT", tokenCount: 5 }, { modality: "AUDIO", tokenCount: 6 }],
+  candidatesTokensDetails: [{ modality: "TEXT", tokenCount: 2 }, { modality: "AUDIO", tokenCount: 4 }, { modality: "IMAGE", tokenCount: 1 }],
+  cacheTokensDetails: [{ modality: "AUDIO", tokenCount: 2 }],
+};
+for (const streaming of [false, true]) {
+  test(`generation modality cost inputs survive ${streaming ? "cumulative SSE" : "generation"} and hiding`, async () => {
+    for (const hidden of [false, true]) {
+      reset();
+      const ai = client();
+      const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden } });
+      const body = answer("PRIVATE_OUTPUT", modalityUsage);
+      handler = (_, res) => streaming ? sse(res, [
+        { usageMetadata: { promptTokenCount: 1, promptTokensDetails: [{ modality: "AUDIO", tokenCount: 1 }] } },
+        body, { usageMetadata: modalityUsage },
+      ]) : json(res, body);
+      try {
+        let response = await ai.models[streaming ? "generateContentStream" : "generateContent"]({ model: "gemini-test", contents: "PRIVATE_INPUT" });
+        if (streaming) for await (const chunk of response) response = chunk;
+        assert.deepEqual(response.usageMetadata.promptTokensDetails, modalityUsage.promptTokensDetails);
+        assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 6);
+        assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 4);
+        assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 1);
+        assert.equal(attrs()["gen_ai.usage.cache_read_tokens.audio"], 2);
+        assert.equal(attrs()["gen_ai.usage.input_tokens"], 11);
+        assert.equal(attrs()["gen_ai.usage.total_tokens"], 23);
+        const data = await exported();
+        assert.equal(Number(data["gen_ai.usage.input_tokens.audio"]), 6);
+        assert.equal(Number(data["gen_ai.usage.output_tokens.image"]), 1);
+        assert.equal(Number(data["gen_ai.usage.cache_read_tokens.audio"]), 2);
+        if (hidden) assert.doesNotMatch(JSON.stringify(data), /PRIVATE_INPUT|PRIVATE_OUTPUT/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    }
+  });
+  test(`Interactions modality cost inputs survive ${streaming ? "cumulative SSE" : "generation"}`, async () => {
+    reset();
+    const ai = client();
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true } });
+    const usage = {
+      total_input_tokens: 11, total_output_tokens: 7, total_tokens: 23,
+      input_tokens_by_modality: [{ modality: "audio", tokens: 2 }, { modality: "AUDIO", tokens: 4 }, { modality: "text", tokens: 5 }],
+      output_tokens_by_modality: [{ modality: "audio", tokens: 4 }, { modality: "image", tokens: 1 }],
+    };
+    const body = { id: "i-modality", status: "completed", usage };
+    const { eventType } = require("./interaction-fixtures.cjs");
+    const events = [
+      { event_type: eventType("interaction.start"), interaction: { id: "i-modality", status: "in_progress", usage } },
+      { event_type: eventType("interaction.complete"), interaction: body },
+    ];
+    handler = (_, res) => streaming ? sse(res, events) : json(res, body);
+    try {
+      const response = await ai.interactions.create({ model: "gemini-test", input: "PRIVATE_INPUT", stream: streaming, automatic_continuation: false });
+      if (streaming) { const received = []; for await (const event of response) received.push(event); assert.deepEqual(received, events); }
+      else assert.deepEqual(response.usage, usage);
+      assert.equal(attrs()["gen_ai.usage.input_tokens.audio"], 6);
+      assert.equal(attrs()["gen_ai.usage.output_tokens.audio"], 4);
+      assert.equal(attrs()["gen_ai.usage.output_tokens.image"], 1);
+      assert.equal(attrs()["gen_ai.usage.total_tokens"], 23);
+      assert.equal(Number((await exported())["gen_ai.usage.output_tokens.audio"]), 4);
+    } finally { h.dispose(); await provider.forceFlush(); }
+  });
+}
+
+for (const spelling of ['promptTokenDetails', 'promptTokensDetails']) {
+  for (const hidden of [false, true]) {
+    test(`embedding captures ${spelling} before SDK conversion; hidden=${hidden}`, async () => {
+      reset();
+      const ai = client();
+      const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden, hideEmbeddingVectors: true } });
+      handler = (_, res) => json(res, {
+        embeddings: [{ values: [0.123456789] }],
+        usageMetadata: { promptTokenCount: 10,
+          [spelling]: [{ modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 }],
+          privateField: 'USAGE_PRIVATE_SENTINEL' },
+      });
+      try {
+        const result = await ai.models.embedContent({ model: 'gemini-embedding-2', contents: [
+          { parts: [{ text: 'INPUT_SENTINEL' }, { inlineData: { mimeType: 'audio/wav', data: 'U1lOVEhFVElD' } }] },
+        ] });
+        assert.deepEqual(result.embeddings[0].values, [0.123456789]);
+        assert.equal(requests.length, 1);
+        assert.equal(attrs()['gen_ai.usage.input_tokens'], 10);
+        assert.equal(attrs()['gen_ai.usage.total_tokens'], 10);
+        assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
+        assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
+        assert.doesNotMatch(JSON.stringify(attrs()), /USAGE_PRIVATE_SENTINEL|0\.123456789|U1lOVEhFVElD|synthetic-google-key/);
+        const wireAttrs = await exported();
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 10);
+        assert.equal(Number(wireAttrs['gen_ai.usage.total_tokens']), 10);
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens.audio']), 8);
+        assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens.text']), 2);
+        if (hidden) assert.doesNotMatch(JSON.stringify(wireAttrs), /INPUT_SENTINEL/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    });
+  }
+}
+
+for (const hidden of [false, true]) {
+  test(`Vertex embedding statistics supply complete input and total usage; hidden=${hidden}`, async () => {
+    reset();
+    const ai = new GoogleGenAI({
+      vertexai: true,
+      apiKey: 'synthetic-vertex-key',
+      httpOptions: { baseUrl, retryOptions: { attempts: 1 } },
+    });
+    const paths = [];
+    handler = (request, res) => {
+      paths.push(request.url);
+      json(res, {
+        predictions: [7, 11].map(token_count => ({
+          embeddings: { statistics: { truncated: false, token_count }, values: [0.123456789] },
+        })),
+        metadata: { billableCharacterCount: 50 },
+      });
+    };
+    const params = { model: 'text-embedding-005', contents: ['INPUT_SENTINEL_ONE', 'INPUT_SENTINEL_TWO'] };
+    const baseline = await ai.models.embedContent(params);
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: hidden, hideOutputs: hidden } });
+    try {
+      const result = await ai.models.embedContent(params);
+      assert.deepEqual(result, baseline);
+      assert.deepEqual(result.embeddings.map(e => e.statistics.tokenCount), [7, 11]);
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0], requests[1]);
+      assert.equal(paths[0], paths[1]);
+      assert.match(paths[1], /:predict/);
+      assert.equal(attrs()['embedding.count'], 2);
+      assert.equal(attrs()['gen_ai.usage.input_tokens'], 18);
+      assert.equal(attrs()['gen_ai.usage.total_tokens'], 18);
+      assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined);
+      const wireAttrs = await exported();
+      assert.equal(Number(wireAttrs['gen_ai.usage.input_tokens']), 18);
+      assert.equal(Number(wireAttrs['gen_ai.usage.total_tokens']), 18);
+      assert.doesNotMatch(JSON.stringify(wireAttrs), /0\.123456789|synthetic-vertex-key/);
+      if (hidden) assert.doesNotMatch(JSON.stringify(wireAttrs), /INPUT_SENTINEL/);
+    } finally { h.dispose(); await provider.forceFlush(); }
+  });
+}
+
+test('embedding statistics fallback prefers aggregates and never invents partial totals', async () => {
+  const cases = [
+    { label: 'complete', counts: [7, 11], input: 18, total: 18 },
+    { label: 'zero', counts: [0, 0], input: 0, total: 0 },
+    { label: 'empty', counts: [] },
+    ...[undefined, null, '11', -1, NaN, Infinity].map(count => ({
+      label: `invalid ${String(count)}`, counts: [7, count],
+    })),
+    { label: 'overflow', counts: [Number.MAX_VALUE, Number.MAX_VALUE] },
+    { label: 'aggregate input', counts: [7, 11], usage: { promptTokenCount: 30 }, input: 30, total: 30 },
+    { label: 'aggregate zero', counts: [7, 11], usage: { promptTokenCount: 0 }, input: 0, total: 0 },
+    { label: 'explicit total', counts: [7, 11], usage: { totalTokenCount: 40 }, input: 18, total: 40 },
+    { label: 'aggregate both', counts: [7, 11], usage: { promptTokenCount: 30, totalTokenCount: 40 }, input: 30, total: 40 },
+    { label: 'partial stats with aggregate', counts: [7, undefined], usage: { promptTokenCount: 30 }, input: 30, total: 30 },
+    { label: 'partial stats with only total', counts: [7, undefined], usage: { totalTokenCount: 40 }, total: 40 },
+  ];
+  // Older SDKs discard aggregate metadata; newer SDKs may expose it again on the
+  // public result. Neither path may add that snapshot to per-embedding counts.
+  for (const retainUsage of [false, true]) {
+    for (const c of cases) {
+      reset();
+      const raw = { usageMetadata: c.usage };
+      let reads = 0;
+      const response = { async json() { reads++; return raw; } };
+      const apiClient = { async request() { return response; } };
+      const result = {
+        embeddings: c.counts.map(tokenCount => ({ values: [0.123456789], statistics: { tokenCount } })),
+        ...(retainUsage ? { usageMetadata: c.usage } : {}),
+      };
+      const ai = { models: { apiClient, async embedContent() {
+        await (await apiClient.request({ path: 'models/test:predict' })).json();
+        return result;
+      } } };
+      const h = instrumentGoogleGenAI(ai);
+      try {
+        assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+        assert.equal(reads, 1);
+        assert.equal(attrs()['gen_ai.usage.input_tokens'], c.input, c.label);
+        assert.equal(attrs()['gen_ai.usage.total_tokens'], c.total, c.label);
+        assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined, c.label);
+        assert.doesNotMatch(JSON.stringify(attrs()), /0\.123456789/);
+      } finally { h.dispose(); await provider.forceFlush(); }
+    }
+  }
+});
+
+test('embedding modality aliases are alternatives with numeric allowlisted counts only', async () => {
+  for (const both of [false, true]) {
+    reset();
+    const ai = client();
+    const h = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true, hideOutputs: true } });
+    const details = [
+      { modality: 'AUDIO', tokenCount: 8 }, { modality: 'TEXT', tokenCount: 2 },
+      { modality: 'IMAGE', tokenCount: 0 }, { modality: 'PRIVATE_MODALITY', tokenCount: 100 },
+      { modality: 'AUDIO', tokenCount: -1 }, { modality: 'AUDIO', tokenCount: '100' },
+      { modality: 'VIDEO', tokenCount: null },
+    ];
+    handler = (_, res) => json(res, {
+      embeddings: [{ values: [0.123456789] }],
+      usageMetadata: { promptTokenCount: 10, promptTokenDetails: details,
+        ...(both ? { promptTokensDetails: details } : {}) },
+    });
+    try {
+      await ai.models.embedContent({ model: 'gemini-embedding-2', contents: 'INPUT_SENTINEL' });
+      assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 8);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.text'], 2);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.image'], 0);
+      assert.equal(attrs()['gen_ai.usage.input_tokens.video'], undefined);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_MODALITY|INPUT_SENTINEL|0\.123456789/);
+    } finally { h.dispose(); await provider.forceFlush(); }
+  }
+});
+
+test('embedding parse scope isolates concurrent clients and survives disposal until calls drain', { timeout: 15000 }, async () => {
+  reset();
+  const { context } = req('@opentelemetry/api');
+  const { suppressTracing } = req('@opentelemetry/core');
+  const a = client(), b = client(), untraced = client();
+  const originalA = a.models.apiClient.request;
+  const originalB = b.models.apiClient.request;
+  const originalUntraced = untraced.models.apiClient.request;
+  const h = instrumentGoogleGenAI(a), other = instrumentGoogleGenAI(b);
+  const waiting = [];
+  let allArrived;
+  const arrived = new Promise(resolve => { allArrived = resolve; });
+  handler = (request, res) => {
+    const tokens = request.url.includes('alpha') ? 11 : request.url.includes('beta') ? 22 : 99;
+    waiting.push(() => json(res, { embeddings: [{ values: [0.9] }],
+      usageMetadata: { promptTokenCount: tokens, totalTokenCount: tokens } }));
+    if (waiting.length === 4) allArrived();
+  };
+  const embed = (ai, model) => ai.models.embedContent({ model, contents: 'private text' });
+  try {
+    const pending = [embed(a, 'alpha'), embed(b, 'beta'), embed(untraced, 'untraced'),
+      context.with(suppressTracing(context.active()), () => embed(a, 'suppressed'))];
+    await arrived;
+    h.dispose();
+    assert.notEqual(a.models.apiClient.request, originalA, 'in-flight parse must remain observed');
+    waiting.reverse().forEach(respond => respond());
+    await Promise.all(pending);
+    assert.equal(requests.length, 4);
+    assert.equal(spans().length, 2);
+    const byModel = Object.fromEntries(spans().map(s => [s.attributes['gen_ai.request.model'], s.attributes['gen_ai.usage.input_tokens']]));
+    assert.deepEqual(byModel, { alpha: 11, beta: 22 });
+    assert.equal(a.models.apiClient.request, originalA);
+    assert.equal(untraced.models.apiClient.request, originalUntraced);
+    handler = (_, res) => json(res, { embeddings: [{ values: [0.9] }], usageMetadata: { promptTokenCount: 55 } });
+    other.disable();
+    await embed(b, 'disabled');
+    await embed(a, 'disposed');
+    assert.equal(spans().length, 2);
+    other.enable();
+    await embed(b, 'enabled');
+    assert.equal(spans().length, 3);
+    assert.equal(spans()[2].attributes['gen_ai.usage.input_tokens'], 55);
+  } finally {
+    waiting.forEach(respond => { try { respond(); } catch {} });
+    h.dispose(); other.dispose();
+    assert.equal(b.models.apiClient.request, originalB);
+  }
+});
+
+test('embedding parse observation preserves identity and errors, reads once, and allowlists numbers only', async () => {
+  reset();
+  let reads = 0, clones = 0, calls = 0, result, parsedValue, failure;
+  const vectors = { get embeddings() { throw new Error('must never inspect raw vectors'); } };
+  const raw = Object.assign(vectors, { usageMetadata: {
+    promptTokenCount: 7, totalTokenCount: 9, candidatesTokenCount: 'PRIVATE_STRING',
+    cachedContentTokenCount: Infinity, thoughtsTokenCount: NaN,
+    promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 5 }, { modality: 'PRIVATE_MODALITY', tokenCount: 100 }],
+    credential: 'PRIVATE_USAGE',
+  } });
+  const response = {
+    json() { reads++; return failure ? Promise.reject(failure) : Promise.resolve(raw); },
+    clone() { clones++; throw new Error('must never clone'); },
+  };
+  const originalParse = response.json;
+  const apiClient = { async request() { calls++; return response; } };
+  const originalRequest = apiClient.request;
+  const ai = { models: {
+    apiClient,
+    async embedContent() {
+      const received = await apiClient.request({ path: 'models/test:batchEmbedContents' });
+      assert.equal(received, response);
+      parsedValue = await received.json();
+      assert.equal(parsedValue, raw);
+      return result;
+    },
+  } };
+  result = { embeddings: [{ values: [1, 2] }] };
+  const h = instrumentGoogleGenAI(ai);
+  try {
+    assert.equal(await ai.models.embedContent({ model: 'test', contents: 'hi' }), result);
+    assert.equal(response.json, originalParse);
+    assert.equal(reads, 1); assert.equal(clones, 0); assert.equal(calls, 1);
+    assert.equal(attrs()['gen_ai.usage.input_tokens'], 7);
+    assert.equal(attrs()['gen_ai.usage.total_tokens'], 9);
+    assert.equal(attrs()['gen_ai.usage.input_tokens.audio'], 5);
+    assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_STRING|PRIVATE_MODALITY|PRIVATE_USAGE/);
+    assert.equal(attrs()['gen_ai.usage.output_tokens'], undefined);
+    memory.reset();
+    failure = new Error('PROVIDER_PRIVATE_ERROR');
+    await assert.rejects(ai.models.embedContent({ model: 'test' }), e => e === failure);
+    assert.equal(reads, 2); assert.equal(clones, 0); assert.equal(calls, 2);
+    assert.equal(response.json, originalParse);
+    assert.equal(spans()[0].status.code, 2);
+    assert.doesNotMatch(JSON.stringify(attrs()), /PROVIDER_PRIVATE_ERROR/);
+  } finally {
+    h.dispose();
+    assert.equal(apiClient.request, originalRequest);
+  }
+});
+
+test('embedding observation fails open on frozen boundaries and capture getters', async () => {
+  for (const frozen of ['request', 'json', 'usage']) {
+    reset();
+    const raw = frozen === 'usage' ? { get usageMetadata() { throw new Error('PRIVATE_GETTER'); } }
+      : { usageMetadata: { promptTokenCount: 4 } };
+    const response = { json: async () => raw };
+    const apiClient = { request: async () => response };
+    if (frozen === 'request') Object.freeze(apiClient);
+    if (frozen === 'json') Object.freeze(response);
+    const result = { embeddings: [{ values: [0.8] }] };
+    const ai = { models: { apiClient, async embedContent() {
+      const httpResponse = await apiClient.request({ path: 'models/test:embedContent' });
+      assert.equal(await httpResponse.json(), raw);
+      return result;
+    } } };
+    const h = instrumentGoogleGenAI(ai);
+    try {
+      assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+      assert.equal(spans().length, 1);
+      assert.notEqual(spans()[0].status.code, 2);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_GETTER/);
+    } finally { h.dispose(); }
+  }
+});
+
+test('embedding response hooks drain correctly when a client is re-instrumented in flight', { timeout: 15000 }, async () => {
+  reset();
+  const ai = client();
+  const originalRequest = ai.models.apiClient.request;
+  const originalEmbed = ai.models.embedContent;
+  const h = instrumentGoogleGenAI(ai);
+  const waiting = [];
+  let arrived;
+  const firstArrival = new Promise(resolve => { arrived = resolve; });
+  handler = (request, res) => {
+    const count = request.url.includes('old') ? 13 : 27;
+    waiting.push(() => json(res, { embeddings: [{ values: [0.6] }],
+      usageMetadata: { promptTokenCount: count, totalTokenCount: count } }));
+    arrived();
+  };
+  let replacement;
+  try {
+    const old = ai.models.embedContent({ model: 'old', contents: 'INPUT_SENTINEL' });
+    await firstArrival;
+    h.dispose();
+    replacement = instrumentGoogleGenAI(ai, { traceConfig: { hideInputs: true } });
+    const secondArrival = new Promise(resolve => { arrived = resolve; });
+    const next = ai.models.embedContent({ model: 'new', contents: 'INPUT_SENTINEL' });
+    await secondArrival;
+    waiting[0](); await old;
+    assert.notEqual(ai.models.apiClient.request, originalRequest, 'new handle still owns request hook');
+    waiting[1](); await next;
+    assert.equal(spans().length, 2);
+    assert.deepEqual(spans().map(s => s.attributes['gen_ai.usage.input_tokens']), [13, 27]);
+    assert.match(JSON.stringify(spans()[0].attributes), /INPUT_SENTINEL/);
+    assert.doesNotMatch(JSON.stringify(spans()[1].attributes), /INPUT_SENTINEL/);
+    replacement.dispose();
+    assert.equal(ai.models.apiClient.request, originalRequest);
+    assert.equal(ai.models.embedContent, originalEmbed);
+  } finally { h.dispose(); replacement?.dispose(); }
+});
+
+test('embedding hook ignores unrelated paths and tolerates capture-only path getters', async () => {
+  for (const path of ['models/test:generateContent', 'models/test:predictLongRunning', undefined]) {
+    reset();
+    const raw = { usageMetadata: { promptTokenCount: 999 } };
+    let parsed = 0;
+    const response = { async json() { parsed++; return raw; } };
+    const originalParse = response.json;
+    const apiClient = { async request() { return response; } };
+    const params = path ? { path } : { get path() { throw new Error('PRIVATE_PATH_GETTER'); } };
+    const result = { embeddings: [{ values: [1] }] };
+    const ai = { models: { apiClient, async embedContent() {
+      const received = await apiClient.request(params);
+      assert.equal(received.json, originalParse);
+      assert.equal(await received.json(), raw);
+      return result;
+    } } };
+    const h = instrumentGoogleGenAI(ai);
+    try {
+      assert.equal(await ai.models.embedContent({ model: 'test' }), result);
+      assert.equal(parsed, 1);
+      assert.equal(attrs()['gen_ai.usage.input_tokens'], undefined);
+      assert.doesNotMatch(JSON.stringify(attrs()), /PRIVATE_PATH_GETTER/);
+    } finally { h.dispose(); }
   }
 });

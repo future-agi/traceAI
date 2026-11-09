@@ -318,7 +318,9 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
@@ -328,6 +330,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.request.model": "gpt-3.5-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo","stream":true}",
   "gen_ai.response.finish_reasons": "["stop"]",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-3.5-turbo","stream":true}",
   "output.mime_type": "text/plain",
@@ -749,7 +752,9 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"What's the weather today?"}]",
@@ -761,6 +766,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.response.finish_reasons": "["tool_calls"]",
   "gen_ai.response.id": "chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL",
   "gen_ai.response.model": "gpt-3.5-turbo-0613",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "gen_ai.tool.definitions": "[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}]",
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"stream":true}",
@@ -865,7 +871,9 @@ describe("OpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"What's the weather today?"}]",
@@ -877,6 +885,7 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.response.finish_reasons": "["function_call"]",
   "gen_ai.response.id": "chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL",
   "gen_ai.response.model": "gpt-3.5-turbo-0613",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","functions":[{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}},{"name":"getCurrentLocation","description":"Get the current location of the user.","parameters":{"type":"object","properties":{}}}],"stream":true}",
   "output.mime_type": "text/plain",
@@ -983,7 +992,7 @@ describe("OpenAIInstrumentation", () => {
     expect(span.attributes).toMatchInlineSnapshot(`
 {
   "fi.span.kind": "LLM",
-  "gen_ai.input.messages": "[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}]",
+  "gen_ai.input.messages": "[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
   "gen_ai.provider.name": "openai",
@@ -996,10 +1005,10 @@ describe("OpenAIInstrumentation", () => {
   "gen_ai.usage.output_tokens": 5,
   "gen_ai.usage.total_tokens": 17,
   "input.mime_type": "application/json",
-  "input.value": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}],"model":"gpt-3.5-turbo"}",
+  "input.value": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}],"model":"gpt-3.5-turbo"}",
   "output.mime_type": "application/json",
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
-  "raw.input": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}],"model":"gpt-3.5-turbo"}",
+  "raw.input": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"[image-redacted]"}}]}],"model":"gpt-3.5-turbo"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
 }
 `);
@@ -1226,7 +1235,7 @@ describe("OpenAIInstrumentation with TraceConfig", () => {
   "gen_ai.operation.name": "text_completion",
   "gen_ai.provider.name": "openai",
   "gen_ai.request.model": "gpt-3.5-turbo-instruct",
-  "gen_ai.request.parameters": "{"model":"gpt-3.5-turbo-instruct"}",
+  "gen_ai.request.parameters": "__REDACTED__",
   "gen_ai.response.finish_reasons": "["stop"]",
   "gen_ai.response.id": "cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9",
   "gen_ai.response.model": "gpt-3.5-turbo-instruct",
@@ -1414,7 +1423,9 @@ describe("AzureOpenAIInstrumentation", () => {
     expect(spans.length).toBe(1);
     const span = spans[0];
     expect(span.name).toBe("OpenAI Chat Completions");
-    expect(span.attributes).toMatchInlineSnapshot(`
+    expect(span.attributes).toMatchInlineSnapshot(
+      { "gen_ai.response.time_to_first_token": expect.any(Number) },
+      `
 {
   "fi.span.kind": "LLM",
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
@@ -1424,6 +1435,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "gen_ai.request.model": "gpt-35-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-35-turbo","stream":true}",
   "gen_ai.response.finish_reasons": "["stop"]",
+  "gen_ai.response.time_to_first_token": Any<Number>,
   "input.mime_type": "application/json",
   "input.value": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-35-turbo","stream":true}",
   "output.mime_type": "text/plain",

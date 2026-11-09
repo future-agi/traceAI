@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import * as InstalledCodexSDK from "@openai/codex-sdk";
-import { ProjectType, register } from "@traceai/fi-core";
+import { ROOT_CONTEXT } from "@opentelemetry/api";
+import { FITracer, ProjectType, register, setSession } from "@traceai/fi-core";
 import { CodexSDKInstrumentation, shutdown } from "../dist/esm/index.js";
 
 const CodexSDK = process.env.CODEX_SDK_ENTRY
@@ -35,6 +36,11 @@ try {
     .startThread({ skipGitRepoCheck: true });
   const result = await thread.run("synthetic prompt WIRE-SECRET-PROMPT");
   assert.equal(result.items.length, 3);
+  // fi-core 1.2.0 exports only a session bound through the typed context API.
+  // A plain instrumentation attribute (Codex's thread-derived session) stays masked.
+  const tracer = new FITracer({ tracer: provider.getTracer("typed-session-wire-contract") });
+  tracer.startActiveSpan("typed-session-control", {},
+    setSession(ROOT_CONTEXT, { sessionId: "typed-wire-session" }), (span) => span.end());
   await shutdown(provider);
   instrumentation.unpatch();
   assert.ok(received.length > 0, "collector must receive OTLP export");
@@ -54,7 +60,9 @@ try {
   assert.equal(command.traceId, turn.traceId);
   assert.equal(command.parentSpanId, turn.spanId);
   assert.ok(turn.attributes.some((attribute) => attribute.key === "gen_ai.usage.input_tokens" && String(attribute.value.intValue) === "100"));
-  assert.ok(turn.attributes.some((attribute) => attribute.key === "session.id" && attribute.value.stringValue === "thread-contract-1"));
+  assert.ok(turn.attributes.some((attribute) => attribute.key === "session.id" && attribute.value.stringValue === "<redacted>"));
+  const typed = spans.find((span) => span.name === "typed-session-control");
+  assert.ok(typed?.attributes.some((attribute) => attribute.key === "session.id" && attribute.value.stringValue === "typed-wire-session"));
   assert.equal(JSON.stringify(spans).includes("WIRE-SECRET-PROMPT"), false, "private prompt leaked to OTLP");
   console.log(`PASS OTLP wire (${process.env.CODEX_SDK_ENTRY ?? "installed SDK"}): ${received.length} exports`);
 } finally {

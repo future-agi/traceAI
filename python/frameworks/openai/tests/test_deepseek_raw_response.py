@@ -134,9 +134,9 @@ def test_raw_stream_failure_status(wire, asynchronous, route_name):
     assert b"PRIVATE_STREAM_ERROR" not in spans[0].SerializeToString()
 
 
-@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("asynchronous,close_method", [(False, "close"), (True, "close"), (True, "aclose")])
 @pytest.mark.parametrize("parse_first", [False, True])
-def test_raw_stream_close_before_exhaustion(wire, asynchronous, parse_first):
+def test_raw_stream_close_before_exhaustion(wire, asynchronous, parse_first, close_method):
     spans = wire("shared")
     params = dict(
         model="deepseek-reasoner",
@@ -155,8 +155,8 @@ def test_raw_stream_close_before_exhaustion(wire, asynchronous, parse_first):
             if parse_first:
                 stream = raw.parse()
                 await stream.__anext__()
-            await raw.aclose()
-            await raw.aclose()
+            await getattr(raw, close_method)()
+            await getattr(raw, close_method)()
 
     if asynchronous:
         asyncio.run(run())

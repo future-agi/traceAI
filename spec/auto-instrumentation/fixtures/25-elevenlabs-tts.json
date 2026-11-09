@@ -1,0 +1,35 @@
+{
+  "name": "elevenlabs-tts",
+  "request": {
+    "method": "POST",
+    "url": "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/stream?output_format=mp3_44100_128",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "text": "Welcome back!",
+      "model_id": "eleven_flash_v2_5"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "audio/mpeg"
+    },
+    "binary": {
+      "size": 9000,
+      "content_type": "audio/mpeg"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_to_speech eleven_flash_v2_5",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "elevenlabs",
+      "gen_ai.request.voice": "21m00Tcm4TlvDq8ikWAM",
+      "gen_ai.audio.transcript": "Welcome back!",
+      "traceai.audio.output_bytes": 9000
+    }
+  }
+}

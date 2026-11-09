@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.6] - pending release
+### Fix
+- Function-call arguments are kept in exported messages. Legacy OpenAI `function_call.arguments` was read as `args`, so `gen_ai.input.messages` / `gen_ai.output.messages` dropped the arguments; `args` is still accepted as a fallback.
+
+## [0.1.5](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.4...npm-traceai-langchain-v0.1.5) (2026-11-05)
+
+
+### Bug Fixes
+
+* **langchain:** keep LangGraph pauses and handoffs out of error spans ([#508](https://github.com/future-agi/traceAI/issues/508)) ([054b9ba](https://github.com/future-agi/traceAI/commit/054b9ba94b8084a9da57a573859edd6183b966ee))
+* **langchain:** protect retrieval outputs and close cancelled streams ([#561](https://github.com/future-agi/traceAI/issues/561)) ([8396fcc](https://github.com/future-agi/traceAI/commit/8396fcc3874186408615f44d8925c9cd9285cea4))
+
 ## [0.1.4](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.3...npm-traceai-langchain-v0.1.4) (2026-11-01)
 
 

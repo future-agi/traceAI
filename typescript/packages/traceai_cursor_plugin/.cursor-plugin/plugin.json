@@ -1,0 +1,8 @@
+{
+  "name": "futureagi-tracing",
+  "version": "0.1.0",
+  "description": "Future AGI tracing configuration companion. Capture uses the maintained user hook installation; this bundle intentionally registers no duplicate hooks.",
+  "author": { "name": "Future AGI" },
+  "homepage": "https://docs.futureagi.com",
+  "license": "Apache-2.0"
+}

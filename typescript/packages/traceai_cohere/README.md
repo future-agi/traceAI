@@ -99,6 +99,25 @@ await client.rerank({
 
 Embeddings use the `EMBEDDING` span kind; reranking uses `RERANKER`, including result indices and relevance scores. Chat uses `LLM`. The instrumentor reads the SDK's camelCase properties, including `chatHistory`, `toolCalls`, `inputTokens` and `relevanceScore`, and retains support for v1 payloads.
 
+## Usage, provenance and streaming timing
+
+The following numeric attributes are captured independently of input/output hiding:
+
+| Attribute | Meaning |
+| --- | --- |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens` | Actual tokens when supplied. For older responses without `tokens`, input/output billed units remain the fallback. |
+| `gen_ai.usage.cache_read_tokens` | Cohere's supplied `cachedTokens` (cached prompt tokens); not added to the total again. |
+| `cohere.usage.billed_units.input_tokens`, `cohere.usage.billed_units.output_tokens` | Separately supplied billable tokens, which can differ from actual tokens. |
+| `cohere.usage.billed_units.search_units`, `cohere.usage.billed_units.classifications` | Supplied billable operation units, not token counts. |
+| `cohere.usage.billed_units.images`, `cohere.usage.billed_units.image_tokens` | Supplied billable image counts and image tokens, respectively. |
+| `cohere.stream.time_to_first_token_ms` | Monotonic elapsed milliseconds from SDK request invocation until the first consumed nonempty generated text, reasoning, tool plan, or tool name/argument fragment. |
+
+Missing usage is not synthesized. First-token timing includes request/headers latency and any delay before the consumer reads the first content event; it is not server-side inference timing. Metadata-only, empty, or cancelled-before-content streams have no timing value. A recorded value survives later cancellation or failure and is not replaced by subsequent chunks.
+
+`gen_ai.response.id` retains the provider generation/response ID, including IDs delivered at stream start, even when content is hidden or the stream later fails or is cancelled.
+
+With output capture enabled, v2 streamed citations are accumulated by index in `gen_ai.output.messages` and `raw.output`, including partial streams. Input hiding retains citation offsets, generated citation text and source IDs/types but removes source document/tool bodies. Output hiding omits citations along with the rest of the generated content. These projections never change the SDK events or responses delivered to your application.
+
 ## Existing v1 applications
 
 Keep using `CohereClient`, `CohereInstrumentation` and `manuallyInstrument` with the same setup. Calls through `CohereClient.v2` and `CohereClientV2` are also traced when available in your SDK. Disable/enable applies to subsequent calls, including already-bound v2 methods; in-flight calls finish their spans normally.
