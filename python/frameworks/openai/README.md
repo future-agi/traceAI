@@ -175,6 +175,16 @@ streaming. Spans from resource hosts under `openai.azure.com` and
 retain their existing provider label. If you use Microsoft Entra ID, keep the
 SDK token-provider configuration for your cloud instead of the API-key setup.
 
+For `AzureOpenAI` and `AsyncAzureOpenAI` instances, including custom gateways,
+spans also record `azure.openai.deployment` (the client's `azure_deployment`,
+otherwise the request's `model`), `azure.openai.api_version` (when present in the
+client's default query), `server.address` (lowercase endpoint host only), and
+`server.port` (when explicitly present in the endpoint URL). Unavailable values
+are omitted; this metadata excludes full URLs, credentials and other query
+parameters. Plain `OpenAI`/`AsyncOpenAI` clients, including the v1 example above,
+keep provider attribution only. Explicit `set_client_provider(...)` overrides
+still take precedence for `gen_ai.provider.name`.
+
 Azure Government does not change the trace export destination. Configure an
 approved Future AGI destination and content settings before tracing sensitive
 workloads; prompts and responses are captured by default.

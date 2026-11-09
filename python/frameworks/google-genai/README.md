@@ -11,6 +11,7 @@ This integration provides support for using OpenTelemetry with the Google Gen AI
 pip install traceAI-google-genai
 ```
 
+Supported SDK: `google-genai>=1.8.0`; offline sync/async streaming trace tests verified on **1.8.0**, **1.24.0**, and **3.0.0**.
 
 ### Set Environment Variables
 Set up your environment variables to authenticate with FutureAGI

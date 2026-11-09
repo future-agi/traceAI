@@ -4,10 +4,10 @@ Export normalized `vitest-evals` harness spans and scores as OTLP traces to Futu
 
 ## Install
 
-Requires Node.js 20.19+, `vitest-evals` 0.17.x and Vitest 4.1.x or later in the 4.x series. Vitest 4.0.0 cannot run the `vitest-evals` 0.17.0 `describeEval` fixture (`evalTest.override is not a function`); upgrade Vitest to at least 4.1.0.
+Requires Node.js 20.19+, `vitest-evals` 0.17.x and Vitest 4.1.x or later in the 4.x series (`vitest-evals` 0.18 requires Vitest 5 and is not supported yet). Vitest 4.0.0 cannot run the `vitest-evals` 0.17.0 `describeEval` fixture (`evalTest.override is not a function`); upgrade Vitest to at least 4.1.0.
 
 ```sh
-npm install -D @traceai/vitest-evals vitest-evals vitest
+npm install -D @traceai/vitest-evals vitest-evals@0.17 vitest@4
 ```
 
 Set `FI_API_KEY` and `FI_SECRET_KEY` in the test process. In `vitest.config.ts`:

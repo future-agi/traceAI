@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import socket
 
 import httpx
 import pytest
@@ -62,6 +63,33 @@ def _assert_calls(span, calls):
             )
             == call.args
         )
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Fail before DNS or connection attempts if transport injection regresses."""
+
+    def blocked(*args, **kwargs):
+        raise AssertionError("Network access is forbidden in google-genai tests")
+
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_network_guard_blocks_unmocked_http(asynchronous):
+    with pytest.raises(AssertionError, match="Network access is forbidden"):
+        if asynchronous:
+
+            async def request():
+                async with httpx.AsyncClient(trust_env=False) as client:
+                    await client.get("https://genai.invalid")
+
+            asyncio.run(request())
+        else:
+            with httpx.Client(trust_env=False) as client:
+                client.get("https://genai.invalid")
 
 
 @pytest.fixture
@@ -243,6 +271,8 @@ def test_real_sdk_stream_exports_all_tool_calls(tracing, asynchronous, monkeypat
 
     def respond(request):
         requests.append(request)
+        assert request.url.host == "genai.invalid"
+        assert request.method == "POST"
         assert ":streamGenerateContent" in request.url.path
         assert request.url.params["alt"] == "sse"
         data = "".join(
@@ -254,13 +284,30 @@ def test_real_sdk_stream_exports_all_tool_calls(tracing, asynchronous, monkeypat
         )
 
     transport = httpx.MockTransport(respond)
-    sync_http = httpx.Client(transport=transport)
-    async_http = httpx.AsyncClient(transport=transport)
-    # Inject at the HTTP boundary so SDK versions before HttpOptions.client_args
-    # also exercise real request building, SSE parsing and response conversion.
-    monkeypatch.setattr(_api_client, "SyncHttpxClient", lambda **kwargs: sync_http)
-    monkeypatch.setattr(_api_client, "AsyncHttpxClient", lambda **kwargs: async_http)
-    client = genai.Client(api_key="offline-test-key")
+    http_options = {"base_url": "https://genai.invalid"}
+    # SDK 3.x selects its HTTP backend from these public transport arguments;
+    # patching SyncHttpxClient alone misses its default httpx2 backend.
+    monkeypatch.delenv("GOOGLE_GENAI_HTTP_CLIENT", raising=False)
+    if {"client_args", "async_client_args"} <= types.HttpOptions.model_fields.keys():
+        http_options.update(
+            client_args={"transport": transport, "trust_env": False},
+            async_client_args={"transport": transport, "trust_env": False},
+        )
+    else:
+        # The 1.8.0 floor predates these options. Keep real request building,
+        # SSE parsing and response conversion by injecting at its HTTP boundary.
+        sync_http = httpx.Client(transport=transport, trust_env=False)
+        async_http = httpx.AsyncClient(transport=transport, trust_env=False)
+        monkeypatch.setattr(_api_client, "SyncHttpxClient", lambda **kwargs: sync_http)
+        monkeypatch.setattr(_api_client, "AsyncHttpxClient", lambda **kwargs: async_http)
+    client = genai.Client(
+        api_key="offline-test-key",
+        vertexai=False,
+        http_options=types.HttpOptions(**http_options),
+    )
+    # Older SDKs have no public close/aclose methods; own both clients' cleanup.
+    sync_http = client._api_client._httpx_client
+    async_http = client._api_client._async_httpx_client
     instrumentor = GoogleGenAIInstrumentor()
     instrumentor.instrument(tracer_provider=provider)
     try:

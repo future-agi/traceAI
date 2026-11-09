@@ -27,6 +27,7 @@
     "traceAI-temporal",
     "traceAI-typesafe",
     "traceAI-voyage",
-    "traceAI-transformers"
+    "traceAI-transformers",
+    "traceAI-openrouter"
   ]
 }
