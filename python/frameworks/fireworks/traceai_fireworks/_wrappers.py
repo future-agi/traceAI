@@ -9,6 +9,13 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 from urllib.parse import urlsplit
 
 from fi_instrumentation import REDACTED_VALUE, TraceConfig, safe_json_dumps
+
+try:
+    from fi_instrumentation.instrumentation.config import ChatInput
+except ImportError:
+    # The declared published 1.2.2 floor predates the structured-input API and
+    # the opaque-input guard. Retain its existing path, not a validation fallback.
+    ChatInput = None
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
@@ -57,8 +64,18 @@ class _WithTracer(ABC):
         attributes: Dict[str, AttributeValue],
     ) -> Iterator[Span]:
         """Start a span with the given name and attributes."""
+        # Structured input belongs on the supported FI span setter. A sampler
+        # is allowed to return/replace opaque attributes, which core must mask
+        # fail-closed again. Never turn its returned JSON into a trusted string.
+        structured = attributes.get(SpanAttributes.INPUT_VALUE)
+        if ChatInput is not None and type(structured) is ChatInput:
+            attributes = {k: v for k, v in attributes.items() if k != SpanAttributes.INPUT_VALUE}
+        else:
+            structured = None
         try:
             span = self._tracer.start_span(name=span_name, attributes=attributes)
+            if structured is not None:
+                span.set_attribute(SpanAttributes.INPUT_VALUE, structured)
         except Exception:
             span = INVALID_SPAN
 
@@ -96,6 +113,122 @@ def _shared_instrumentor_enabled() -> bool:
     return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
+_SDK_PLAIN_NODES = 10000  # same allowance as core's ChatInput copy budget
+_type_mro = type.__dict__["__mro__"].__get__
+_type_dict = type.__dict__["__dict__"].__get__
+_type_name = type.__dict__["__name__"].__get__
+
+
+class _OverBudget(Exception):
+    pass
+
+
+def _exported_openai_class(kind: type) -> bool:
+    """True only for the exact class exported by its already-loaded openai.* module."""
+    module_name = _type_dict(kind).get("__module__")
+    # __name__ is stored in type's native slot, not the class namespace.
+    class_name = _type_name(kind)
+    if (type(module_name) is not str or not module_name.startswith("openai.")
+            or type(class_name) is not str):
+        return False
+    # ModuleType's native dict descriptor and dict.get avoid user attribute hooks.
+    from types import ModuleType
+    module = __import__("sys").modules.get(module_name)
+    if type(module) is not ModuleType:
+        return False
+    return ModuleType.__dict__["__dict__"].__get__(module).get(class_name) is kind
+
+
+def _genuine_sdk_model(kind: type, sdk_model: type) -> bool:
+    """Classify canonical OpenAI classes without metaclass equality/descriptors."""
+    try:
+        mro = _type_mro(kind)
+        found_base = False
+        for base in mro:
+            if base is sdk_model:  # identity only; tuple membership may call metaclass __eq__
+                found_base = True
+                break
+            # A subclass override can install its own serializer or metaclass hooks.
+            if "model_dump" in _type_dict(base):
+                return False
+        if not found_base:
+            return False
+        if _exported_openai_class(kind):
+            return True
+        # parse() returns runtime pydantic parametrizations such as
+        # ParsedChatCompletionMessage[T], which their module does not export.
+        # Accept one only when its recorded generic origin is itself an exported
+        # OpenAI class and sits in its own MRO (identity comparison only).
+        metadata = _type_dict(kind).get("__pydantic_generic_metadata__")
+        if type(metadata) is not dict:
+            return False
+        origin = metadata.get("origin")
+        if origin is None or origin is kind:
+            return False
+        if not any(base is origin for base in mro):
+            return False
+        return _exported_openai_class(origin)
+    except Exception:
+        return False
+
+
+def _sdk_plain(value: Any) -> Any:
+    """Copy built-in containers, converting only genuine OpenAI SDK models to plain JSON.
+
+    Mirrors what the SDK sends on the wire: SDK models become JSON and exact-int
+    dict keys (e.g. logit_bias token ids) become strings. Everything else,
+    including user subclasses of SDK types, is returned unchanged so core's
+    strict validator rejects it without evaluating it. Bounded by the same node
+    budget as core; past it the original value is returned (and fails closed).
+    Caller objects are never modified.
+    """
+    try:
+        from openai._models import BaseModel as sdk_model
+    except ImportError:  # pragma: no cover - openai is a hard dependency
+        return value
+    budget = [_SDK_PLAIN_NODES]
+
+    def walk(item: Any, depth: int) -> Any:
+        budget[0] -= 1
+        if budget[0] < 0 or depth > 32:
+            raise _OverBudget
+        kind = type(item)
+        if kind is dict:
+            copied = {}
+            for key, child in item.items():
+                key_kind = type(key)
+                if key_kind is str:
+                    normalized = key
+                elif key_kind is int:
+                    try:
+                        # This is the SDK/JSON wire normalization for integer keys.
+                        normalized = str(key)
+                    except (ValueError, OverflowError):
+                        return item
+                else:
+                    # Never rehash or stringify a caller-controlled key. Core's
+                    # strict validator will fail this original mapping closed.
+                    return item
+                copied[normalized] = walk(child, depth + 1)
+            return copied
+        if kind is list or kind is tuple:
+            return [walk(child, depth + 1) for child in item]
+        if _genuine_sdk_model(kind, sdk_model):
+            try:
+                # pydantic's own implementation, never an override; warnings off
+                # so mismatched values are not written to the warning stream.
+                dumped = sdk_model.model_dump(item, mode="json", exclude_unset=True, warnings=False)
+            except Exception:
+                return item
+            return walk(dumped, depth + 1)
+        return item
+
+    try:
+        return walk(value, 0)
+    except (_OverBudget, RecursionError):
+        return value
+
+
 def _get_input_attributes(
     model: str,
     messages: Any,
@@ -110,6 +243,49 @@ def _get_input_attributes(
         SpanAttributes.GEN_AI_PROVIDER_NAME: "fireworks",
         SpanAttributes.GEN_AI_REQUEST_MODEL: model,
     }
+
+    # Resolve SDK types only at the request boundary; package import must stay
+    # usable without OpenAI. Never infer omission from names, equality or hooks.
+    from openai import _types as sdk_types
+
+    omission_types = tuple(
+        kind for name in ("NotGiven", "Omit")
+        if (kind := getattr(sdk_types, name, None)) is not None
+    )
+    kwargs = {k: v for k, v in kwargs.items()
+              if not any(type(v) is kind for kind in omission_types)}
+    if ChatInput is not None and any((config.hide_inputs, config.hide_input_messages,
+                                      config.hide_input_text, config.hide_input_images,
+                                      config.pii_redaction)):
+        # Pass the ORIGINAL typed input, not a previously sanitized string.
+        # Core applies policy independently for this copy and at the span setter.
+        # SDK models (e.g. a ChatCompletionMessage appended in a tool loop) are
+        # converted to the plain JSON the SDK itself sends; core still validates.
+        # Hidden inputs are never projected, so skip conversion entirely there.
+        convert = (lambda value: value) if config.hide_inputs else _sdk_plain
+        raw_input = {"model": model}
+        if type(messages) is list or type(messages) is tuple:
+            raw_input["messages"] = messages if config.hide_input_messages else convert(messages)
+        raw_input.update({k: convert(v) for k, v in kwargs.items() if k in _REQUEST_BODY_FIELDS})
+        structured = ChatInput(raw_input)
+        attributes[SpanAttributes.INPUT_VALUE] = structured
+        telemetry = ChatInput.masked(structured, config)
+        invocation_params = None
+        if telemetry is not None:
+            for i, message in enumerate(telemetry.get("messages", [])):
+                prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}"
+                attributes[f"{prefix}.{MessageAttributes.MESSAGE_ROLE}"] = message["role"]
+                if "content" in message:
+                    content = message["content"]
+                    attributes[f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = str(content) if content else ""
+            invocation_params = {k: v for k, v in telemetry.items() if k not in ("model", "messages")}
+        else:
+            # Typed invocation metadata is allowed independently of whether the
+            # messages could be projected; input core rejects stays fail-closed.
+            invocation_params = ChatInput.masked_invocation_parameters(structured, config)
+        if invocation_params:
+            attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(invocation_params)
+        return attributes
 
     # Add invocation parameters
     invocation_params = {}

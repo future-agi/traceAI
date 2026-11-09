@@ -1,0 +1,111 @@
+---
+title: "Trace OpenCode with Future AGI"
+description: "Connect OpenCode V2 to Future AGI to inspect each prompt, model request, and tool call."
+---
+
+See each OpenCode prompt as a trace in Future AGI, with model requests and tools underneath it. Prompts from the same conversation appear together in **Sessions**.
+
+Use OpenCode V2 **2.2.5** and Node.js **22.16+** or **24**. This plugin uses the V2 API; it does not load in OpenCode V1.
+
+## Connect OpenCode
+
+<Steps>
+<Step title="Get your Future AGI keys">
+
+Open [API keys](https://app.futureagi.com/dashboard/keys). Keep the API key and secret key ready for the setup prompt. Do not put them in an OpenCode conversation or commit them to a repository.
+
+</Step>
+<Step title="Run setup">
+
+```bash
+npx @traceai/agents setup opencode --project coding-agents
+```
+
+Setup asks for your keys without echoing them, checks the tracing endpoint, saves a private profile, and installs the OpenCode plugin. A saved profile works when you open OpenCode from a new terminal; you do not need to export keys each time.
+
+Prompts, model messages, and tool input/output are captured by default. To keep only structure, timing, and usage, add `--no-capture-content` to the setup command.
+
+Restart OpenCode after setup. If you use its shared background service, run `opencode service restart`.
+
+Already have a Future AGI profile? The native alternative is:
+
+```bash
+opencode plugin add @traceai/opencode-plugin@0.1.0
+```
+
+</Step>
+<Step title="Use OpenCode and inspect the trace">
+
+```bash
+opencode run "Read README.md and explain how to run this project"
+```
+
+In Future AGI, open **Observe**, choose `coding-agents`, and open the newest trace. Expand a generation to see its model, messages, and token counts. Expand a tool to inspect its input, result, or error. Open **Sessions** to follow the conversation across prompts.
+
+</Step>
+</Steps>
+
+## Configuration
+
+Environment variables take precedence, but saved keys remain bound to the endpoint and Future AGI project you approved during setup. Changing `FI_PROJECT_NAME`, `FI_BASE_URL`, or `FI_OTLP_ENDPOINT` alone stops tracing with `DESTINATION_NOT_APPROVED` if it changes that destination.
+
+To switch projects with saved keys, run:
+
+```bash
+npx @traceai/agents setup opencode --project my-project
+```
+
+Check the displayed destination and project, then approve reuse of your saved keys when prompted. Restart OpenCode afterward. Remove any old destination environment overrides first so they do not override your new profile.
+
+For noninteractive setup or a process-only destination override, supply a complete `FI_API_KEY` and `FI_SECRET_KEY` pair through your secret manager along with the destination environment variables. Never pass keys as command arguments. A key pair does not approve a destination or profile chosen by a repository.
+
+| Setting | Purpose |
+| --- | --- |
+| `FI_PROJECT_NAME` | Future AGI project for new traces; destination approval rules above apply. |
+| `FI_USER_ID` | Optional identifier to associate traces with a user. |
+| `FI_AGENT_CAPTURE_CONTENT=false` | Omit prompt, model, and tool bodies. |
+| `FI_AGENT_ENABLED=false` | Stop collection and sending in the process that starts OpenCode. |
+| `FI_BASE_URL` | API origin for a self-hosted Future AGI deployment. |
+| `FI_OTLP_ENDPOINT` | Exact OTLP traces URL; takes precedence over `FI_BASE_URL`. |
+
+The user settings file is `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/futureagi.json`. You can reduce capture for a project in `.opencode/futureagi.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "captureContent": false
+}
+```
+
+Project settings cannot raise a user-approved privacy limit or redirect saved or environment credentials to an unapproved destination. After the plugin is installed, configure a project-specific destination with `npx @traceai/agents setup opencode --scope project --project-dir . --project my-project --configure-only` and approve the displayed destination. The approval is bound to this checkout.
+
+## Status and troubleshooting
+
+```bash
+npx @traceai/agents status opencode --check
+```
+
+Run status from your OpenCode project's directory. Both `status opencode` and `doctor opencode` use the current directory by default, including `.opencode/futureagi.json` privacy settings and native plugin disables. Use `--project-dir /path/to/project` to inspect another project.
+
+Status separates registration, observed activation, credential validation, and accepted exports. An accepted export is not confirmation that a trace has appeared in the product.
+
+- **No traces:** confirm OpenCode is version 2.2.5, run `opencode plugin list`, and restart the shared service after setup. The plugin stays inactive without a configured profile or a complete environment key pair.
+- **Authentication rejected:** run `npx @traceai/agents setup opencode --project coding-agents` in an interactive terminal (without `--json`). If your saved keys are rejected, setup asks for a replacement API key and secret key without echoing them, validates them, and saves them only on success. If keys are set in your environment, replace both there or unset both to use the saved-profile recovery prompt. Restart OpenCode after replacing keys.
+- **Duplicate traces:** remove the old copied `futureagi-otlp.ts` plugin before using this package. Keep a single registration rather than both project and global copies.
+- **Bodies are absent:** check `FI_AGENT_CAPTURE_CONTENT`, the user and project settings, and any stricter `FI_HIDE_*` policy.
+
+Disable tracing without credentials or a network connection:
+
+```bash
+npx @traceai/agents disable opencode
+```
+
+This also fences queued exports in a running plugin. Use `enable opencode`, then restart OpenCode, to start a new collection lifecycle.
+
+## Privacy and delivery
+
+Captured content can include source files, shell output, and secrets that OpenCode reads. Text fields are capped at 20,000 characters, with best-effort secret redaction. Redaction is not a data-loss-prevention guarantee. Use `--no-capture-content` for projects whose content must not leave your machine.
+
+Credentials are stored outside your repository with owner-only permissions. The plugin does not read unrelated transcripts, change your provider, consume model response streams, or install a model gateway. Failed exports do not change OpenCode's result. Pending trace data stays in bounded memory and may be lost if the process is terminated.
+
+Auxiliary title generation and requests made outside a conversation are not included. OpenCode's catalog-derived cost estimates are not exported as provider billing. A manual compaction without an active prompt does not create an invented user turn.

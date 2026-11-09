@@ -58,6 +58,8 @@ public class TraceConfig {
         private final TraceConfig config = new TraceConfig();
         private Boolean hideInputs;
         private Boolean hideOutputs;
+        private Boolean hideInputMessages;
+        private Boolean hideOutputMessages;
         private Boolean hideErrorDetails;
 
         /**
@@ -86,7 +88,7 @@ public class TraceConfig {
          * @return this builder
          */
         public Builder hideInputMessages(boolean hide) {
-            config.hideInputMessages = hide;
+            hideInputMessages = hide;
             return this;
         }
 
@@ -96,7 +98,7 @@ public class TraceConfig {
          * @return this builder
          */
         public Builder hideOutputMessages(boolean hide) {
-            config.hideOutputMessages = hide;
+            hideOutputMessages = hide;
             return this;
         }
 
@@ -195,8 +197,10 @@ public class TraceConfig {
         /**
          * Builds the TraceConfig instance.
          * Fields not explicitly set will fall back to environment variables:
-         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME, FI_HIDE_INPUTS,
-         * FI_HIDE_OUTPUTS, FI_HIDE_ERROR_DETAILS. Explicit boolean values (including false) win.
+         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME,
+         * FI_HIDE_INPUTS, FI_HIDE_OUTPUTS, FI_HIDE_INPUT_MESSAGES,
+         * FI_HIDE_OUTPUT_MESSAGES, FI_HIDE_ERROR_DETAILS.
+         * Explicit boolean values (including false) win.
          * @return the configured TraceConfig
          */
         public TraceConfig build() {
@@ -216,6 +220,10 @@ public class TraceConfig {
                 ? hideInputs : Boolean.parseBoolean(System.getenv("FI_HIDE_INPUTS"));
             config.hideOutputs = hideOutputs != null
                 ? hideOutputs : Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUTS"));
+            config.hideInputMessages = hideInputMessages != null
+                ? hideInputMessages : Boolean.parseBoolean(System.getenv("FI_HIDE_INPUT_MESSAGES"));
+            config.hideOutputMessages = hideOutputMessages != null
+                ? hideOutputMessages : Boolean.parseBoolean(System.getenv("FI_HIDE_OUTPUT_MESSAGES"));
             config.hideErrorDetails = hideErrorDetails != null
                 ? hideErrorDetails : Boolean.parseBoolean(System.getenv("FI_HIDE_ERROR_DETAILS"));
             return config;

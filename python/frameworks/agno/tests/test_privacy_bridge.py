@@ -31,7 +31,10 @@ def test_fi_hides_cannot_be_undone_by_openinference(monkeypatch, name):
     assert getattr(fi, name) is True
     assert getattr(supplied, name) is False
     for field in fields(supplied):
-        if field.name != name:
+        if field.name == "base64_image_max_length":
+            # F2 (RL 2310bu): a supplied OI config without an explicit cap resolves to the FI default 0.
+            assert getattr(effective, field.name) == 0
+        elif field.name != name:
             assert getattr(effective, field.name) == getattr(supplied, field.name)
 
 

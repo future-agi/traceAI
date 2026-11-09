@@ -37,7 +37,7 @@ jobs:
             distribution: wheel
           - python: '3.13'
             parallel: '1.3.7'
-            openai: '3.42.0'
+            openai: '3.45.0'
             distribution: sdist
     env:
       FI_BASE_URL: http://127.0.0.1:9
@@ -57,15 +57,22 @@ jobs:
         run: |
           python -m venv .parallel-test-venv
           .parallel-test-venv/bin/pip install build
+          .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python
           .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/parallel
           .parallel-test-venv/bin/python -m build "--$DISTRIBUTION" python/frameworks/openai
           if [ "$DISTRIBUTION" = wheel ]; then
-            packages=(python/frameworks/{parallel,openai}/dist/*.whl)
+            packages=(python/dist/*.whl python/frameworks/{parallel,openai}/dist/*.whl)
           else
-            packages=(python/frameworks/{parallel,openai}/dist/*.tar.gz)
+            packages=(python/dist/*.tar.gz python/frameworks/{parallel,openai}/dist/*.tar.gz)
           fi
           .parallel-test-venv/bin/pip install "${packages[@]}" \
-            "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" pytest pytest-asyncio
+            "parallel-web==$PARALLEL_VERSION" "openai==$OPENAI_VERSION" \
+            ./python/frameworks/{deepseek,fireworks,vllm} pytest pytest-asyncio
+      - name: Prevent source-tree imports from shadowing installed distributions
+        shell: bash
+        run: |
+          mv python/frameworks/openai/traceai_openai "$RUNNER_TEMP/openai-source"
+          mv python/frameworks/parallel/traceai_parallel "$RUNNER_TEMP/parallel-source"
       - name: Test with only loopback networking
         shell: bash
         run: |

@@ -1,0 +1,152 @@
+{
+  "name": "milestone-a10-mistral-list-scaffolds",
+  "description": "Type/ID/language metadata, empty content lists, citations, stop events and tool results are not model-output deltas.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.mistral.ai/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": []
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": []
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": [
+                    {}
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": [
+                    {
+                      "type": "citation",
+                      "text": "metadata"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "c-r6",
+        "model": "fixture-model",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": [
+                {
+                  "type": "citation",
+                  "text": "metadata"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

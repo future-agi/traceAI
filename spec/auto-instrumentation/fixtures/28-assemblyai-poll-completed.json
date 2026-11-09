@@ -1,0 +1,33 @@
+{
+  "name": "assemblyai-poll-completed",
+  "request": {
+    "method": "GET",
+    "url": "https://api.assemblyai.com/v2/transcript/abc123"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "abc123",
+      "status": "completed",
+      "text": "hello world",
+      "audio_duration": 4,
+      "language_code": "en_us",
+      "speech_model": "universal"
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription universal",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.provider.name": "assemblyai",
+      "gen_ai.audio.transcript": "hello world",
+      "gen_ai.audio.duration_secs": 4,
+      "gen_ai.audio.language": "en_us",
+      "gen_ai.response.id": "abc123"
+    }
+  }
+}

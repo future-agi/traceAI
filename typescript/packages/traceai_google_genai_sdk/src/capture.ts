@@ -18,6 +18,8 @@ export class Capture {
   private firstContent = false;
   private truncated = false;
   private generation = false;
+  private embedding = false;
+  private embeddingUsageSnapshot = new Map<string, number>();
   private hops = 0;
   private capturedTools = false;
   private usageTotals = new Map<string, number>();
@@ -111,8 +113,9 @@ export class Capture {
   input(params: RecordValue, operation: string): void {
     this.generation =
       operation === "generateContent" || operation === "generateContentStream";
+    this.embedding = operation === "embedContent";
     this.string(S.LLM_MODEL_NAME, params.model);
-    if (operation === "embedContent") {
+    if (this.embedding) {
       this.string(S.EMBEDDING_MODEL_NAME, params.model);
       // Text batch semantics. Multimodal embedding models group parts differently;
       // omit a speculative input count for those shapes.
@@ -187,10 +190,25 @@ export class Capture {
     this.hops++;
     this.tools(record(params.config).tools);
     const previous = new Map<string, number>();
+    let promptInput: number | undefined;
+    let toolInput: number | undefined;
     return (value) => {
-      for (const [key, count] of this.usage(
-        record(record(value).usageMetadata),
-      )) {
+      const usage = record(record(value).usageMetadata);
+      const counts = this.usage(usage);
+      const prompt = counts.get(S.LLM_TOKEN_COUNT_PROMPT);
+      if (prompt !== undefined) promptInput = prompt;
+      const tool = usage.toolUsePromptTokenCount;
+      if (typeof tool === "number" && Number.isFinite(tool) && tool >= 0)
+        toolInput = tool;
+      // Built-in tool results are additional input, not generated output. Keep
+      // each counter's latest snapshot even when a later chunk omits one, then
+      // let the existing hop accounting deduplicate the combined input count.
+      if (toolInput !== undefined) {
+        const input = (promptInput ?? 0) + toolInput;
+        if ((promptInput ?? 0) >= 0 && Number.isFinite(input))
+          counts.set(S.LLM_TOKEN_COUNT_PROMPT, input);
+      }
+      for (const [key, count] of counts) {
         const total =
           (this.usageTotals.get(key) ?? 0) + count - (previous.get(key) ?? 0);
         if (!previous.has(key))
@@ -237,7 +255,50 @@ export class Capture {
         .find((v) => typeof v === "number" && Number.isFinite(v));
       if (typeof count === "number") result.set(key, count);
     }
+    // These are numeric cost inputs, not media content. Keep them even when all
+    // content is hidden. Fixed modality names avoid provider-controlled keys.
+    for (const [prefix, details] of [
+      // EmbeddingUsageMetadata uses singular Token; generation uses Tokens.
+      // These are aliases of one snapshot, not independent counts to add.
+      [S.LLM_TOKEN_COUNT_PROMPT, usage.promptTokensDetails ?? usage.promptTokenDetails ?? usage.input_tokens_by_modality],
+      [S.LLM_TOKEN_COUNT_COMPLETION, usage.candidatesTokensDetails ?? usage.output_tokens_by_modality],
+      [S.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, usage.cacheTokensDetails ?? usage.cached_tokens_by_modality],
+    ] as const) {
+      for (const value of list(details)) {
+        const detail = record(value);
+        const modality = typeof detail.modality === "string" ? detail.modality.toLowerCase() : "";
+        const count = detail.tokenCount ?? detail.tokens;
+        if (
+          ["text", "audio", "image", "video", "document"].includes(modality) &&
+          typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) {
+          const key = `${prefix}.${modality}`;
+          result.set(key, (result.get(key) ?? 0) + count);
+        }
+      }
+    }
     return result;
+  }
+  /** Only numeric, allowlisted billing fields from the SDK-owned JSON parse. */
+  embeddingUsage(value: unknown): void {
+    for (const [key, count] of this.usage(record(record(value).usageMetadata))) {
+      this.embeddingUsageSnapshot.set(key, count);
+      this.span.setAttribute(key, count);
+    }
+  }
+  /** Vertex exposes billing counts on the converted embeddings, not usageMetadata.
+   * Missing or invalid statistics must not turn a partial sum into a call total.
+   */
+  private embeddingTokens(embeddings: unknown): number | undefined {
+    if (!Array.isArray(embeddings) || embeddings.length === 0) return undefined;
+    let total = 0;
+    for (const embedding of embeddings) {
+      const count = record(record(embedding).statistics).tokenCount;
+      if (typeof count !== "number" || !Number.isFinite(count) || count < 0)
+        return undefined;
+      total += count;
+    }
+    return Number.isFinite(total) ? total : undefined;
   }
   response(value: unknown): void {
     const response = record(value);
@@ -267,8 +328,21 @@ export class Capture {
           response.usage ??
           record(response.metadata).total_usage,
       );
-      for (const [key, count] of this.usage(usage))
-        this.span.setAttribute(key, count);
+      const counts = this.usage(usage);
+      if (this.embedding) {
+        // The parse hook and public result describe the same response. Preserve
+        // aggregate fields stripped by SDK conversion, without adding snapshots.
+        for (const [key, count] of this.embeddingUsageSnapshot)
+          if (!counts.has(key)) counts.set(key, count);
+        if (!counts.has(S.LLM_TOKEN_COUNT_PROMPT)) {
+          const input = this.embeddingTokens(response.embeddings);
+          if (input !== undefined) counts.set(S.LLM_TOKEN_COUNT_PROMPT, input);
+        }
+        const input = counts.get(S.LLM_TOKEN_COUNT_PROMPT);
+        if (input !== undefined && !counts.has(S.LLM_TOKEN_COUNT_TOTAL))
+          counts.set(S.LLM_TOKEN_COUNT_TOTAL, input);
+      }
+      for (const [key, count] of counts) this.span.setAttribute(key, count);
     }
     const candidates = list(response.candidates);
     const reasons = candidates

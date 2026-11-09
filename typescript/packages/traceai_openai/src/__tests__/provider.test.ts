@@ -3,6 +3,7 @@ import { providerForResource } from "../provider";
 describe("providerForResource", () => {
   it.each([
     ["api.openai.com", "openai"],
+    ["openrouter.ai", "openrouter"],
     ["generativelanguage.googleapis.com", "google"],
     ["api.anthropic.com", "anthropic"],
     ["api.mistral.ai", "mistralai"],

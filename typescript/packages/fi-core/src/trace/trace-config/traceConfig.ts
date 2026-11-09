@@ -26,6 +26,15 @@ function parseOption({
   optionMetadata: TraceConfigOptionMetadata;
 }): number | boolean | undefined {
   if (optionValue !== undefined) {
+    if (optionMetadata.type === "number") {
+      if (typeof optionValue === "number" && Number.isSafeInteger(optionValue) && optionValue >= 0) {
+        return optionValue;
+      }
+      // The numeric option is the image cap. Invalid input never restores a
+      // positive default or environment cap, and caller data never enters logs.
+      diag.warn("Invalid base64 image cap; using 0.");
+      return 0;
+    }
     return optionValue;
   }
   const envValue = process.env[optionMetadata.envKey];
@@ -33,9 +42,13 @@ function parseOption({
     switch (optionMetadata.type) {
       case "number": {
         const maybeEnvNumber = safelyParseInt(envValue);
-        return maybeEnvNumber != null && !isNaN(maybeEnvNumber)
-          ? maybeEnvNumber
-          : optionMetadata.default;
+        if (/^\s*\d+\s*$/.test(envValue) && maybeEnvNumber != null && Number.isSafeInteger(maybeEnvNumber) && maybeEnvNumber >= 0) {
+          return maybeEnvNumber;
+        }
+        // Keep the existing complete-integer grammar, including valid "0";
+        // never truncate a fractional/partial value or throw for invalid text.
+        diag.warn("Invalid base64 image cap; using 0.");
+        return 0;
       }
       case "boolean":
         return envValue.toLowerCase() === "true";

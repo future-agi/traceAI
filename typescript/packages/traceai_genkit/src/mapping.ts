@@ -42,6 +42,8 @@ export interface MapOptions {
    * only where the span does not already carry the key.
    */
   contextAttributes?: Attributes;
+  /** Automatic exports separate Genkit generation config into its governed family. */
+  separateInvocationParameters?: boolean;
 }
 
 /**
@@ -163,8 +165,24 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   // FI_HIDE_EMBEDDING_VECTORS: the vectors are in an embedder span's output.
   const hideVectors = kind === FISpanKind.EMBEDDING && policy.hideEmbeddingVectors === true;
   const out: Attributes = {};
+  let generationInput = source[GenkitAttributes.INPUT];
+  if (options.separateInvocationParameters && (isModelCall ||
+      (source[GenkitAttributes.TYPE] === GenkitSpanType.UTIL && source[GenkitAttributes.NAME] === "generate"))) {
+    const request = parseJson(generationInput);
+    if (isRecord(request)) {
+      const { config, ...content } = request;
+      generationInput = JSON.stringify(content);
+      if (config !== undefined && !policy.hideLLMInvocationParameters) {
+        out["gen_ai.request.parameters"] = scrubContent(JSON.stringify(config), scrub);
+      }
+    } else if (generationInput !== undefined) {
+      // Truncated JSON cannot safely separate config from prompt content.
+      generationInput = REDACTED_VALUE;
+    }
+  }
 
-  for (const [key, value] of Object.entries(source)) {
+  for (const [key, original] of Object.entries(source)) {
+    const value = key === GenkitAttributes.INPUT ? generationInput : original;
     if (value === undefined) continue;
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
     if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {

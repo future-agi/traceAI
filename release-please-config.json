@@ -601,10 +601,13 @@
         "src/version.ts"
       ]
     },
-    "typescript/packages/traceai_apollo_graphql": {
+    "typescript/packages/traceai_auto": {
       "release-type": "node",
-      "component": "npm-traceai-apollo-graphql",
-      "package-name": "@traceai/apollo-graphql"
+      "component": "npm-traceai-auto",
+      "package-name": "@traceai/auto",
+      "extra-files": [
+        "src/index.ts"
+      ]
     },
     "typescript/packages/traceai_bedrock": {
       "release-type": "node",
@@ -1109,6 +1112,236 @@
       "extra-files": [
         "src/version.ts"
       ]
+    },
+    "python/frameworks/transformers": {
+      "release-type": "python",
+      "component": "traceai-transformers",
+      "package-name": "traceAI-transformers",
+      "extra-files": [
+        "traceai_transformers/version.py"
+      ]
+    },
+    "typescript/packages/traceai_agent_core": {
+      "release-type": "node",
+      "component": "npm-traceai-agent-core",
+      "package-name": "@traceai/agent-core",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "typescript/packages/traceai_agents": {
+      "release-type": "node",
+      "component": "npm-traceai-agents",
+      "package-name": "@traceai/agents"
+    },
+    "typescript/packages/traceai_codex_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-codex-plugin",
+      "package-name": "@traceai/codex-plugin",
+      "extra-files": [
+        "src/index.ts",
+        {
+          "type": "json",
+          "path": "plugin/.codex-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_opencode_v1_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-opencode-v1-plugin",
+      "package-name": "@traceai/opencode-v1-plugin"
+    },
+    "typescript/packages/traceai_antigravity_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-antigravity-plugin",
+      "package-name": "@traceai/antigravity-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_copilot": {
+      "release-type": "node",
+      "component": "npm-traceai-copilot",
+      "package-name": "@traceai/copilot",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_hermes_agent": {
+      "release-type": "node",
+      "component": "npm-traceai-hermes-agent",
+      "package-name": "@traceai/hermes-agent",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_openclaw": {
+      "release-type": "node",
+      "component": "npm-traceai-openclaw",
+      "package-name": "@traceai/openclaw",
+      "extra-files": [
+        "src/adapter.ts",
+        {
+          "type": "json",
+          "path": "native/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_grok_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-grok-plugin",
+      "package-name": "@traceai/grok-plugin",
+      "extra-files": [
+        "src/adapter.ts",
+        {
+          "type": "json",
+          "path": "plugin/.grok-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript/packages/traceai_muse_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-muse-plugin",
+      "package-name": "@traceai/muse-plugin",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_gemini_cli": {
+      "release-type": "node",
+      "component": "npm-traceai-gemini-cli",
+      "package-name": "@traceai/gemini-cli",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_kiro_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-kiro-plugin",
+      "package-name": "@traceai/kiro-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_augment_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-augment-plugin",
+      "package-name": "@traceai/augment-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_devin_cascade": {
+      "release-type": "node",
+      "component": "npm-traceai-devin-cascade",
+      "package-name": "@traceai/devin-cascade",
+      "extra-files": [
+        "src/registration.ts"
+      ]
+    },
+    "typescript/packages/traceai_claude_code": {
+      "release-type": "node",
+      "component": "npm-traceai-claude-code",
+      "package-name": "@traceai/claude-code",
+      "extra-files": [
+        "src/transcript.ts"
+      ]
+    },
+    "typescript/packages/traceai_cursor_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-cursor-plugin",
+      "package-name": "@traceai/cursor-plugin",
+      "extra-files": [
+        "src/events.ts",
+        "src/cli/capabilities.ts"
+      ]
+    },
+    "typescript/packages/traceai_goose": {
+      "release-type": "node",
+      "component": "npm-traceai-goose",
+      "package-name": "@traceai/goose",
+      "extra-files": [
+        "src/paths.ts"
+      ]
+    },
+    "typescript/packages/traceai_oh_my_pi_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-oh-my-pi-plugin",
+      "package-name": "@traceai/oh-my-pi-plugin",
+      "extra-files": [
+        "src/adapter.ts"
+      ]
+    },
+    "typescript/packages/traceai_opencode_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-opencode-plugin",
+      "package-name": "@traceai/opencode-plugin",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_pi_plugin": {
+      "release-type": "node",
+      "component": "npm-traceai-pi-plugin",
+      "package-name": "@traceai/pi-plugin",
+      "extra-files": [
+        "src/version.ts"
+      ]
+    },
+    "typescript/packages/traceai_vscode_extension": {
+      "release-type": "node",
+      "component": "npm-traceai-vscode-extension",
+      "package-name": "@traceai/vscode-extension"
+    },
+    "typescript/packages/traceai_openrouter": {
+      "release-type": "node",
+      "component": "npm-traceai-openrouter",
+      "package-name": "@traceai/openrouter",
+      "extra-files": [
+        "src/index.ts"
+      ]
+    },
+    "typescript/packages/traceai_vitest_evals": {
+      "release-type": "node",
+      "component": "npm-traceai-vitest-evals",
+      "package-name": "@traceai/vitest-evals"
+    },
+    "python/frameworks/openrouter": {
+      "release-type": "python",
+      "component": "traceai-openrouter",
+      "package-name": "traceAI-openrouter",
+      "extra-files": [
+        "traceai_openrouter/version.py"
+      ]
+    },
+    "go/langchaingo": {
+      "release-type": "go",
+      "component": "go/langchaingo",
+      "package-name": "github.com/future-agi/traceAI/go/langchaingo",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "ruby/roast": {
+      "release-type": "ruby",
+      "component": "traceai-roast",
+      "package-name": "traceai-roast",
+      "version-file": "lib/traceai/roast/version.rb"
+    },
+    "typescript/packages/traceai_n8n": {
+      "release-type": "node",
+      "component": "npm-traceai-n8n",
+      "package-name": "@traceai/n8n",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
+    },
+    "typescript/packages/traceai_apollo_graphql": {
+      "release-type": "node",
+      "component": "npm-traceai-apollo-graphql",
+      "package-name": "@traceai/apollo-graphql"
     }
   }
 }

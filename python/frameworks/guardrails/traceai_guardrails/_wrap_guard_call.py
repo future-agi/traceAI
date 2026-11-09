@@ -156,10 +156,12 @@ def _get_raw_output(response: Any) -> str:
         # Project only the materialized application outputs: input privacy must
         # work independently of output privacy, and validator metadata is not
         # an output payload. Do not mutate the history returned to the caller.
-        output = {
-            "rawOutput": response.raw_output,
-            "guardedOutput": response.guarded_output,
-        }
+        output = {"guardedOutput": response.guarded_output}
+        # A parse/validate candidate is caller input, not generated LLM output.
+        # It is already captured by _get_step_input under input privacy. Keep
+        # independently permitted validated output, without mutating the SDK.
+        if response.inputs.llm_output is None:
+            output["rawOutput"] = response.raw_output
     else:
         output = _to_dict(response)
     return safe_json_dumps({"response": output}, cls=SafeJSONEncoder)
@@ -297,6 +299,22 @@ class _GuardrailsSpan(ObjectProxy):
         for key, value in attributes.items():
             self.set_attribute(key, value)
 
+    def add_event(self, name, attributes=None, timestamp=None):
+        if name.endswith("_result") and attributes:
+            # The legacy validator service writes to the current Runner span.
+            # Its input/output aliases otherwise bypass FI's canonical masks.
+            aliases = {"input": INPUT_VALUE, "output": OUTPUT_VALUE}
+            structural = {
+                "validator_name", "attempt_number", "result", "result_type",
+                "start_time", "end_time", "instance_id",
+            }
+            attributes = {
+                aliases.get(key, key): value
+                for key, value in attributes.items()
+                if key in aliases or key in structural
+            }
+        self.__wrapped__.add_event(name, attributes=attributes, timestamp=timestamp)
+
 
 class _PromptCallableWrapper(_WithTracer):
     @contextmanager
@@ -371,16 +389,8 @@ class _AsyncPromptCallableWrapper(_PromptCallableWrapper):
 
 
 class _ParseCallableWrapper(_WithTracer):
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return wrapped(*args, **kwargs)
-
+    @contextmanager
+    def _trace_step(self, wrapped, instance, args, kwargs):
         if instance:
             span_name = f"{instance.__class__.__name__}.{wrapped.__name__}"
         else:
@@ -398,8 +408,11 @@ class _ParseCallableWrapper(_WithTracer):
         ) as span:
             span.set_attributes(dict(get_attributes_from_context()))
             try:
-                response = wrapped(*args, **kwargs)
-                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
+                with trace_api.use_span(
+                    _GuardrailsSpan(span), end_on_exit=False,
+                    record_exception=False, set_status_on_exception=False,
+                ):
+                    yield span
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
@@ -407,6 +420,23 @@ class _ParseCallableWrapper(_WithTracer):
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        with self._trace_step(wrapped, instance, args, kwargs) as span:
+            response = wrapped(*args, **kwargs)
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
+        return response
+
+
+class _AsyncParseCallableWrapper(_ParseCallableWrapper):
+    async def __call__(self, wrapped, instance, args, kwargs):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return await wrapped(*args, **kwargs)
+        with self._trace_step(wrapped, instance, args, kwargs) as span:
+            response = await wrapped(*args, **kwargs)
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
         return response
 
 

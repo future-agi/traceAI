@@ -1,12 +1,14 @@
 """Compose FI privacy policy with OpenInference's attribute conventions."""
 
 import os
+import re
 from dataclasses import fields, replace
 from functools import wraps
 from inspect import signature
 from typing import Any, Callable, cast
 
 from fi_instrumentation.instrumentation import TraceConfig as FITraceConfig
+from fi_instrumentation.instrumentation._image_cap import _normalize_image_cap
 from fi_instrumentation.instrumentation._spans import FiSpan
 from openinference.instrumentation import OITracer, TraceConfig
 from opentelemetry.util.types import AttributeValue
@@ -20,10 +22,15 @@ def privacy_configs(config: TraceConfig | None) -> tuple[TraceConfig, FITraceCon
     FI's error policy derives from the effective content flags unless explicitly
     overridden by FI_HIDE_ERROR_DETAILS, just as for the shared FI tracer.
     """
-    config = config if config is not None else TraceConfig()
+    fi_config = FITraceConfig()
+    # A bridge-created config uses FI default/env policy; a supplied OI
+    # config is explicit policy because constructor provenance is absent.
+    supplied = config is not None
+    config = config if config is not None else TraceConfig(
+        base64_image_max_length=fi_config.base64_image_max_length
+    )
     if not isinstance(config, TraceConfig):
         raise TypeError("config must be an OpenInference TraceConfig")
-    fi_config = FITraceConfig()
     shared_flags: dict[str, Any] = {
         field.name: bool(getattr(config, field.name) or getattr(fi_config, field.name))
         for field in fields(fi_config)
@@ -31,7 +38,38 @@ def privacy_configs(config: TraceConfig | None) -> tuple[TraceConfig, FITraceCon
     }
     # An explicit FI limit may tighten OI's limit. Do not replace a caller's
     # larger OI limit with an FI default when no FI limit was requested.
-    image_limit = cast(int, config.base64_image_max_length)
+    image_limit = _normalize_image_cap(config.base64_image_max_length)
+    # Match FI's nonnegative decimal cap grammar, including explicit zero.
+    # Empty, negative or unparseable OI env caps do not authorize a default cap.
+    oi_cap_env = os.getenv("OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH")
+    oi_cap_is_explicit = False
+    if oi_cap_env is not None and re.fullmatch(r"[+-]?[0-9]+", oi_cap_env.strip()):
+        try:
+            oi_cap_is_explicit = int(oi_cap_env, 10) >= 0
+        except ValueError:
+            # Python can reject overlong decimal strings; treat them as absent.
+            pass
+    if supplied and not oi_cap_is_explicit:
+        # Constructor provenance is absent: even an explicitly supplied value
+        # equal to OI's default takes the FI ceiling. Read the invariant default
+        # from the dataclass, never TraceConfig() under the rejected OI env cap.
+        try:
+            cap_field = next(
+                field for field in fields(TraceConfig)
+                if field.name == "base64_image_max_length"
+            )
+            oi_default = cap_field.metadata.get("default_value", cap_field.default)
+            if (
+                not isinstance(oi_default, int)
+                or isinstance(oi_default, bool)
+                or oi_default < 0
+            ):
+                oi_default = None
+        except (StopIteration, TypeError):
+            oi_default = None
+        if oi_default is None or image_limit == oi_default:
+            # Never above r5 (F2-R6-DELTA-SEC-001): the FI cap may only tighten OI's default.
+            image_limit = min(image_limit, _normalize_image_cap(fi_config.base64_image_max_length))
     if os.getenv("FI_BASE64_IMAGE_MAX_LENGTH") is not None:
         image_limit = min(image_limit, cast(int, fi_config.base64_image_max_length))
     return (

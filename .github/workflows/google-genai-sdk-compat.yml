@@ -7,6 +7,8 @@ on:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - '.github/workflows/google-genai-sdk-compat.yml'
+      - '.github/scripts/loopback-network-diagnostics.cjs'
+      - '.github/scripts/check-loopback-network.cjs'
   workflow_dispatch:
 
 permissions:
@@ -14,7 +16,7 @@ permissions:
 
 jobs:
   packed-consumer:
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -31,7 +33,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Build and pack with published shared dependencies
+      - name: Build and pack candidate shared dependencies
+        working-directory: typescript
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.30.1
+          pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/fi-semantic-conventions run build
+          pnpm --filter @traceai/fi-core run build
+          pnpm --dir packages/fi-semantic-conventions pack --out "$RUNNER_TEMP/semconv.tgz"
+          pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
+      - name: Build adapter against published shared dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -48,8 +61,12 @@ jobs:
           mkdir "$RUNNER_TEMP/consumer"
           cd "$RUNNER_TEMP/consumer"
           npm init -y
+          # Exercise this PR's core fix, including the legacy coexistence adapter,
+          # rather than silently resolving the already-published broken core.
+          npm pkg set 'overrides.@traceai/fi-core=$@traceai/fi-core' 'overrides.@traceai/fi-semantic-conventions=$@traceai/fi-semantic-conventions'
           tarball=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'traceai-google-genai-sdk-*.tgz' -print)
-          npm install --ignore-scripts "$tarball" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
+          npm install --ignore-scripts "$tarball" "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/semconv.tgz" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
+          npm ls @traceai/fi-core @traceai/fi-semantic-conventions
       - name: Real SDK, OTLP, privacy and exact customer snippet without internet
         shell: bash
         env:
@@ -57,4 +74,13 @@ jobs:
         run: |
           set -euo pipefail
           tests="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk/test"
-          sandbox-exec -f "$tests/network.sb" node --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          # Verify the unchanged OS-level network boundary before the SDK suite.
+          sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" "$GITHUB_WORKSPACE/.github/scripts/check-loopback-network.cjs" --check-denial
+          # Repetitions fail immediately; they are a stability check, not retries.
+          for repetition in 1 2 3 4 5; do
+            echo "Loopback stability repetition $repetition/5"
+            sandbox-exec -f "$tests/network.sb" node --require "$GITHUB_WORKSPACE/.github/scripts/loopback-network-diagnostics.cjs" --test "$tests/compat.test.cjs" "$tests/advanced.test.cjs" "$tests/edges.test.cjs" "$tests/regressions.test.cjs" "$tests/readme.test.cjs" "$tests/coexistence.test.cjs"
+          done
+      - name: Sandbox denial diagnostics
+        if: failure()
+        run: /usr/bin/log show --last 5m --style compact --predicate 'eventMessage CONTAINS "Sandbox"'
