@@ -87,9 +87,9 @@ async function child(mode) {
       // just the query-filter attribute inspected above.
       assert.equal(JSON.stringify(exports).includes(marker), !hidden);
     } else {
-      // Per-call namespace overrides are part of the SDK 9 object-argument API.
+      // Per-call namespace overrides are part of the SDK 7+ object-argument API.
       // Older SDKs are still checked for their normal scoped namespace.
-      const namespaces = major >= 9 ? [undefined, "", "override-namespace"] : [undefined];
+      const namespaces = major >= 7 ? [undefined, "", "override-namespace"] : [undefined];
       const methods = ["query", "update"];
       if (typeof index.listPaginated === "function") methods.push("listPaginated");
       for (const method of methods) {

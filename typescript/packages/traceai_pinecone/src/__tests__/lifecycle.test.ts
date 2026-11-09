@@ -1,4 +1,5 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import { createRequire } from "node:module";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -12,6 +13,11 @@ class TestInstrumentation extends PineconeInstrumentation {
     return this.init();
   }
 }
+
+// Resolve the selected real SDK, including Jest's compatibility-matrix mapper.
+// Object arguments arrived in SDK 7, before the searchDocuments API in SDK 9.
+const sdkVersion = createRequire(require.resolve("@pinecone-database/pinecone"))("../package.json").version;
+const usesObjectArguments = Number(sdkVersion.split(".")[0]) >= 7;
 
 const methods = [
   "query", "upsert", "fetch", "update", "deleteOne", "deleteMany",
@@ -32,14 +38,14 @@ function createIndex() {
   }), { status: 200, headers: { "content-type": "application/json" } }));
   const Index = pinecone.Index as any;
   const config = { apiKey: "offline-test-key", fetchApi };
-  const index: pinecone.Index = typeof Index.prototype.searchDocuments === "function"
+  const index: pinecone.Index = usesObjectArguments
     ? new Index({ name: "test-index", namespace: "test-namespace", host: "https://pinecone.invalid" }, config)
     : new Index("test-index", config, "test-namespace", "https://pinecone.invalid");
   return { index, fetchApi };
 }
 
 async function callOperations(index: pinecone.Index) {
-  const modern = typeof (pinecone.Index.prototype as any).searchDocuments === "function";
+  const modern = usesObjectArguments;
   await index.query({ vector: [0.1, 0.2], topK: 1 });
   if (modern) {
     await (index as any).upsert({ records: [{ id: "record", values: [0.1, 0.2] }, { id: "other", values: [0.3, 0.4] }] });
@@ -186,7 +192,7 @@ describe("Pinecone lifecycle with the real SDK and tracer", () => {
   });
 
   it("records latest SDK object arguments and forwards optional operation options", async () => {
-    if (typeof (pinecone.Index.prototype as any).searchDocuments !== "function") return;
+    if (!usesObjectArguments) return;
     const { index, fetchApi } = createIndex();
     instrumentation.manuallyInstrument(pinecone);
     await callOperations(index);
