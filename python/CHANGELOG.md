@@ -5,6 +5,10 @@
   identifier are no longer read as phone numbers, and card numbers must be card-shaped and pass the
   Luhn check. Free text and metadata are still redacted when the flag is on; hide flags and the image
   cap apply to every field.
+- Exporter credentials (#155): an empty `Authorization` header no longer hides valid
+  `FI_API_KEY`/`FI_SECRET_KEY` environment keys, and explicit `X-Api-Key`/`X-Secret-Key`
+  headers are sent once instead of alongside case-variant copies from the environment.
+  Explicit credential headers still take precedence; header names are sent lower-case.
 
 ## [1.3.0] - pending release
 ### Added
