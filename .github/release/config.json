@@ -3,7 +3,8 @@
   "skip": {
     "traceai": "the PyPI name traceai belongs to another publisher; the package has no registry name yet",
     "futureagi-hermes-plugin": "Hermes plugin dependency manifest, explicitly not a buildable distribution",
-    "traceai-roast": "RubyGems publishing is not wired into release.yml; register a trusted publisher and add a gated Ruby publisher before removing this hold"
+    "traceai-roast": "RubyGems publishing is not wired into release.yml; register a trusted publisher and add a gated Ruby publisher before removing this hold",
+    "@traceai/vitest-evals": "held: the clean-consumer install of its tarball crashes npm on the release runner (Cannot read properties of null (reading edgesOut)); publish after the fix is proven on the runner npm version"
   },
   "_pypi_bootstrap_comment": "PyPI allows only three pending trusted publishers per organization, so these projects are created by their first upload with the PYPI_BOOTSTRAP_TOKEN secret instead, and keep uploading with it: an upload that switches to trusted publishing before the project has a trusted publisher is rejected (403). To move a project to trusted publishing: add it to the futureagi organization, add its trusted publisher (release.yml, blank environment), then remove it from this list. Once the list is empty, delete the token on PyPI and the secret.",
   "pypi_bootstrap_token": [
