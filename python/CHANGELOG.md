@@ -1,3 +1,11 @@
+## [Unreleased]
+### Fixed
+- PII redaction (`pii_redaction` / `FI_PII_REDACTION`) no longer corrupts correlation identifiers (#195):
+  `session.id`, `user.id` and conversation ids are exported unchanged, numbers inside a longer
+  identifier are no longer read as phone numbers, and card numbers must be card-shaped and pass the
+  Luhn check. Free text and metadata are still redacted when the flag is on; hide flags and the image
+  cap apply to every field.
+
 ## [1.3.0] - pending release
 ### Added
 - Semantic conventions for agent cost, time to first token and coding-agent spans in

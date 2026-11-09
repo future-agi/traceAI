@@ -268,15 +268,19 @@ def test_pii_straddling_the_cap_is_replaced_before_the_cut(fake):
     assert len(value.encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
 
 
-def test_pii_redaction_also_matches_a_project_number_in_resource_names(fake):
-    # Documented: the phone pattern matches the last ten digits of a GCP
-    # project number, so resource names lose part of it with pii_redaction.
+def test_pii_redaction_and_a_project_number_in_resource_names(fake):
+    # Resource names go through the installed core's PII patterns. Cores with
+    # the issue #195 fix keep a GCP project number intact; older cores read its
+    # last ten digits as a phone number.
+    from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
+
     serving_config = SERVING_CONFIG.replace("projects/test-project/", "projects/123456789012/")
     with instrumented(config=_config(pii_redaction=True)) as traced:
         search_client(fake).search(request=search_request(serving_config=serving_config))
 
     value = attrs(traced.one())["discoveryengine.serving_config"]
-    assert value == serving_config.replace("123456789012", "12<PHONE_NUMBER>")
+    fixed_core = redact_pii_in_string("projects/123456789012/") == "projects/123456789012/"
+    assert value == (serving_config if fixed_core else serving_config.replace("123456789012", "12<PHONE_NUMBER>"))
 
 
 def test_the_query_is_capped_on_a_character_boundary(fake):

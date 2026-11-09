@@ -68,3 +68,11 @@ response = client.models.generate_content(
 print(response)
 ```
 
+## Streaming output
+
+For synchronous and asynchronous `generate_content_stream` calls, the exported
+`output.value` preserves each candidate's parts in arrival order. Parallel tool
+calls, repeated calls to the same function, and media parts remain distinct.
+Text chunks are still concatenated in the message-content span attribute.
+The response chunks delivered to your application are unchanged.
+

@@ -100,6 +100,103 @@ with OpenAI() as client:
 trace_provider.force_flush()  # Flush before a short-lived script exits.
 ```
 
+## Azure OpenAI
+
+Use the same `traceAI-openai` package and `OpenAIInstrumentor` for Azure OpenAI.
+Keep the tracer registration and instrumentation above, and replace the OpenAI
+client and request with one of the following examples. Do not enable a second
+OpenAI instrumentor for the same calls.
+
+Set your Azure resource key and **deployment name** (not the underlying model ID).
+You do not need an OpenAI API key:
+
+```bash
+export AZURE_OPENAI_API_KEY="your-azure-resource-key"
+export AZURE_OPENAI_DEPLOYMENT="your-deployment-name"
+```
+
+### v1 API
+
+For a resource that supports the [Azure OpenAI v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle),
+set its complete base URL, including `/openai/v1/`:
+
+```bash
+export AZURE_OPENAI_BASE_URL="https://your-resource.openai.azure.com/openai/v1/"
+```
+
+```python
+import os
+from openai import OpenAI
+
+with OpenAI(
+    base_url=os.environ["AZURE_OPENAI_BASE_URL"],
+    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+) as client:
+    response = client.chat.completions.create(
+        model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+        messages=[{"role": "user", "content": "Say hello in five words."}],
+    )
+    print(response.choices[0].message.content)
+trace_provider.force_flush()
+```
+
+### Versioned Azure API
+
+For an existing `AzureOpenAI` application, keep your resource endpoint and an
+API version supported by your deployment. Public Azure resources use
+`https://your-resource.openai.azure.com`; [Azure Government](https://learn.microsoft.com/en-us/azure/azure-government/compare-azure-government-global-azure)
+resources use `https://your-resource.openai.azure.us`:
+
+```bash
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.us"
+export AZURE_OPENAI_API_VERSION="<supported-api-version>"
+```
+
+```python
+import os
+from openai import AzureOpenAI
+
+with AzureOpenAI(
+    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+) as client:
+    response = client.chat.completions.create(
+        model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+        messages=[{"role": "user", "content": "Say hello in five words."}],
+    )
+    print(response.choices[0].message.content)
+trace_provider.force_flush()
+```
+
+Both clients use the existing instrumentation, including async clients and
+streaming. Spans from resource hosts under `openai.azure.com` and
+`openai.azure.us` are labelled `gen_ai.provider.name="azure"`; custom gateways
+retain their existing provider label. If you use Microsoft Entra ID, keep the
+SDK token-provider configuration for your cloud instead of the API-key setup.
+
+Azure Government does not change the trace export destination. Configure an
+approved Future AGI destination and content settings before tracing sensitive
+workloads; prompts and responses are captured by default.
+## Baseten
+
+Use the same `OpenAIInstrumentor` with Baseten's OpenAI-compatible clients; no
+second instrumentor is needed. After the Quickstart tracer setup, create your
+client with `api_key=os.environ["BASETEN_API_KEY"]` and the appropriate base URL:
+
+- Model APIs: `https://inference.baseten.co/v1`.
+- Dedicated deployments: your deployment's OpenAI-compatible base URL, such as
+  `https://model-abc123.api.baseten.co/environments/production/sync/v1`.
+
+The hosted endpoint and dedicated `model-*.api.baseten.co` endpoints, including
+regional model endpoints, are attributed to `baseten`. Unknown proxies retain
+`openai` unless you set an explicit client provider override. Supported API
+routes and model names depend on the deployment; use the values in
+[Baseten's inference API reference](https://docs.baseten.co/reference/inference-api/overview).
+The standalone Model APIs recipe in `python/examples/baseten` accepts only Model
+APIs URLs; use the OpenAI client directly for a dedicated deployment. Baseten's
+separate Performance Client and non-OpenAI protocols need their own tracing setup.
+
 ## Vercel AI Gateway
 
 Use the same `OpenAIInstrumentor` for Chat Completions sent to Vercel AI Gateway;

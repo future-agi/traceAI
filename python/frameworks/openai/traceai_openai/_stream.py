@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from typing import Any, AsyncIterator, Callable, Generator, Iterator, Optional, Protocol, Tuple
 
 from openai.types.chat import ChatCompletionChunk
@@ -60,7 +61,8 @@ class _ResponseCloseProxy(ObjectProxy):
         self._self_stream = stream
 
     def close(self) -> None:
-        error = None
+        # High-level SDK contexts close this proxy while unwinding the caller.
+        error: Optional[BaseException] = sys.exc_info()[1]
         try:
             self.__wrapped__.close()
         except BaseException as exc:
@@ -70,7 +72,8 @@ class _ResponseCloseProxy(ObjectProxy):
             _finish_on_exit(self._self_stream, error)
 
     async def aclose(self) -> None:
-        error = None
+        # High-level SDK contexts close this proxy while unwinding the caller.
+        error: Optional[BaseException] = sys.exc_info()[1]
         try:
             await self.__wrapped__.aclose()
         except BaseException as exc:
@@ -527,6 +530,10 @@ class _AsyncStream(ObjectProxy):
             raise
         finally:
             _finish_on_exit(self, error)
+
+    async def aclose(self) -> None:
+        # Keep the SDK alias on the traced, idempotent close path.
+        await self.close()
 
     def __aiter__(self):
         return self

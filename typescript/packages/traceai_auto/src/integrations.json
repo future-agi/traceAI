@@ -332,6 +332,17 @@
     ]
   },
   {
+    "name": "n8n",
+    "package": "@traceai/n8n",
+    "targets": [
+      "n8n-core"
+    ],
+    "className": "N8nInstrumentation",
+    "modules": [
+      "n8n-core"
+    ]
+  },
+  {
     "name": "ollama",
     "package": "@traceai/ollama",
     "targets": [
@@ -363,6 +374,15 @@
     "modules": [
       "@openai/agents"
     ]
+  },
+  {
+    "name": "openrouter",
+    "package": "@traceai/openrouter",
+    "targets": [
+      "@openrouter/sdk"
+    ],
+    "manual": "Requires createOpenRouterTracingClient() as the OpenRouter SDK HTTP client; no import hooks are installed.",
+    "modules": []
   },
   {
     "name": "pgvector",
@@ -483,6 +503,15 @@
     "modules": [
       "@google-cloud/vertexai"
     ]
+  },
+  {
+    "name": "vitest-evals",
+    "package": "@traceai/vitest-evals",
+    "targets": [
+      "vitest-evals"
+    ],
+    "manual": "Test-time reporter: add VitestEvalsReporter to the Vitest reporters; it is not a runtime instrumentation.",
+    "modules": []
   },
   {
     "name": "vllm",

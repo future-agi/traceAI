@@ -129,9 +129,11 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 | `milvus` | `@zilliz/milvus2-sdk-node` | `@traceai/milvus` | Import hook |
 | `mistral` | `@mistralai/mistralai` | `@traceai/mistral` | Import hook |
 | `mongodb` | `mongodb` | `@traceai/mongodb` | Import hook |
+| `n8n` | `n8n-core` | `@traceai/n8n` | Import hook |
 | `ollama` | `ollama` | `@traceai/ollama` | Import hook |
 | `openai` | `openai` | `@traceai/openai` (included) | Import hook |
 | `openai-agents` | `@openai/agents` | `@traceai/openai-agents` | Import hook |
+| `openrouter` | `@openrouter/sdk` | `@traceai/openrouter` | Manual |
 | `pgvector` | `pg`, `pgvector` | `@traceai/pgvector` | Import hook |
 | `pi-coding-agent` | `@mariozechner/pi-coding-agent` | `@traceai/pi-coding-agent` | Manual |
 | `pinecone` | `@pinecone-database/pinecone` | `@traceai/pinecone` | Import hook |
@@ -143,6 +145,7 @@ The table below is generated from [`src/integrations.json`](https://github.com/f
 | `together` | `together-ai` | `@traceai/together` | Import hook |
 | `vercel` | `ai` | `@traceai/vercel` | Enable entry |
 | `vertexai` | `@google-cloud/vertexai` | `@traceai/fi-instrumentation-vertexai` | Import hook |
+| `vitest-evals` | `vitest-evals` | `@traceai/vitest-evals` | Manual |
 | `vllm` | `openai` | `@traceai/vllm` | Import hook |
 | `voltagent` | `@voltagent/core` | `@traceai/voltagent` | Manual |
 | `weaviate` | `weaviate-client` | `@traceai/weaviate` | Import hook |
