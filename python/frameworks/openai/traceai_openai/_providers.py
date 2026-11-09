@@ -20,6 +20,7 @@ _HOSTS = {
     "ollama.com": "ollama",
     "generativelanguage.googleapis.com": FiLLMProviderValues.GOOGLE.value,
     "api.anthropic.com": FiLLMProviderValues.ANTHROPIC.value,
+    "api.cometapi.com": "cometapi",
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
     "api.x.ai": FiLLMProviderValues.XAI.value,
