@@ -1,7 +1,7 @@
 import type { Attributes } from '@opentelemetry/api';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace';
-import { generateTraceConfig, redactPiiInString, type TraceConfig, type TraceConfigOptions } from '@traceai/fi-core';
+import { generateTraceConfig, redactPiiInString, REDACTED_VALUE, type TraceConfig, type TraceConfigOptions } from '@traceai/fi-core';
 
 export interface PrivacyOptions extends TraceConfigOptions {
   /**
@@ -24,6 +24,22 @@ const metadata = new Set([
   'http.request.method', 'http.response.status_code', 'http.method', 'http.status_code',
 ]);
 
+// Operation names and response paths (including aliases) are query input, not schema metadata.
+const inputIdentifiers = new Set(['graphql.operation.name', 'graphql.field.path']);
+const fixedGraphQLNames = new Set(['graphql.parse', 'graphql.validate', 'graphql.parseSchema', 'graphql.execute']);
+
+function hiddenGraphQLName(span: ReadableSpan): string {
+  const field = span.attributes['graphql.field.name'];
+  // GraphQLResolveInfo.fieldName is schema-derived; the upstream span name uses the alias-bearing path.
+  if (typeof field === 'string' && /^[_A-Za-z][_0-9A-Za-z]*$/.test(field)) return `graphql.resolve ${field}`;
+  const operation = span.attributes['graphql.operation.type'];
+  if (operation === 'query' || operation === 'mutation' || operation === 'subscription') {
+    return `${operation} ${REDACTED_VALUE}`;
+  }
+  // Unknown/future upstream span names must not become another input channel.
+  return fixedGraphQLNames.has(span.name) ? span.name : REDACTED_VALUE;
+}
+
 type PrivacyPolicy = Readonly<TraceConfig & Pick<PrivacyOptions, 'captureContent'>>;
 const resolvePolicy = (options: PrivacyOptions): PrivacyPolicy => Object.freeze({
   ...generateTraceConfig(options), captureContent: options.captureContent,
@@ -36,7 +52,8 @@ export function sanitizeSpan(span: ReadableSpan, options: PrivacyOptions = {}): 
 
 function sanitizeWithPolicy(span: ReadableSpan, policy: PrivacyPolicy): ReadableSpan {
   if (!scopes.has(span.instrumentationScope.name)) return span;
-  const keepSource = policy.captureContent && !policy.hideInputs && !policy.hideInputMessages && !policy.hideInputText;
+  const hideInputIdentifiers = policy.hideInputs || policy.hideInputMessages || policy.hideInputText;
+  const keepSource = policy.captureContent && !hideInputIdentifiers;
   const keepErrors = policy.captureContent && !policy.hideErrorDetails;
   const text = (value: string): string => policy.piiRedaction ? redactPiiInString(value) : value;
   const redact = (value: Attributes[string]): Attributes[string] => {
@@ -47,7 +64,7 @@ function sanitizeWithPolicy(span: ReadableSpan, policy: PrivacyPolicy): Readable
   const attributes: Attributes = {};
   for (const [key, value] of Object.entries(span.attributes)) {
     if (metadata.has(key) || (keepSource && key === 'graphql.source')) {
-      attributes[key] = redact(value);
+      attributes[key] = hideInputIdentifiers && inputIdentifiers.has(key) ? REDACTED_VALUE : redact(value);
     }
   }
   // Unknown event names and link attributes can themselves contain payloads.
@@ -60,8 +77,10 @@ function sanitizeWithPolicy(span: ReadableSpan, policy: PrivacyPolicy): Readable
   });
   const status = { code: span.status.code, ...(keepErrors && span.status.message !== undefined
     ? { message: text(span.status.message) } : {}) };
+  const name = hideInputIdentifiers && span.instrumentationScope.name === '@opentelemetry/instrumentation-graphql'
+    ? hiddenGraphQLName(span) : span.name;
   return Object.create(span, {
-    name: { value: typeof span.name === 'string' ? text(span.name) : span.name, enumerable: true },
+    name: { value: typeof name === 'string' ? text(name) : name, enumerable: true },
     attributes: { value: attributes, enumerable: true },
     events: { value: events, enumerable: true },
     links: { value: span.links.map(link => ({ ...link, attributes: {} })), enumerable: true },

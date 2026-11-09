@@ -39,10 +39,17 @@ for (const scenario of cases) test(`exported Apollo spans: ${scenario.name}`, ()
   });
   assert.equal(result.status, 0, result.stderr);
   const spans = JSON.parse(result.stdout.trim());
-  assert.ok(spans.some(span => span.name === 'query Review'), 'real instrumented operation exported');
+  const hiddenIdentifiers = ['FI_HIDE_INPUTS', 'FI_HIDE_INPUT_MESSAGES', 'FI_HIDE_INPUT_TEXT']
+    .some(flag => scenario.env?.[flag] === 'true') || options.hideInputs === true;
+  const operation = spans.find(span => span.attributes['graphql.operation.type'] === 'query');
+  assert.ok(operation, 'real instrumented operation exported');
+  assert.equal(operation.name, hiddenIdentifiers ? 'query __REDACTED__' : 'query Review');
+  assert.equal(operation.attributes['graphql.operation.name'], hiddenIdentifiers ? '__REDACTED__' : 'Review');
   const sources = spans.map(s => s.attributes['graphql.source']).filter(Boolean);
   const errors = spans.flatMap(s => s.events).map(e => e.attributes?.['exception.message']).filter(Boolean);
-  const probe = spans.find(s => s.name === 'privacy-boundary');
+  const probe = spans.find(s => Array.isArray(s.attributes['graphql.field.type']));
+  assert.ok(probe, 'privacy boundary probe exported');
+  assert.equal(probe.name, hiddenIdentifiers ? '__REDACTED__' : 'privacy-boundary');
   assert.equal(sources.length > 0, scenario.source);
   assert.equal(sources.join().includes('PRIVATE_ENUM'), scenario.source);
   assert.equal(errors.some(e => e.includes('PRIVATE_ERROR')), scenario.errors);

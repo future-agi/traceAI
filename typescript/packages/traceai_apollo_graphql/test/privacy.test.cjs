@@ -83,7 +83,9 @@ test('shared policy is resolved once and PII redaction never mutates the origina
     span.events[1].attributes['exception.message'] = 'review.person@example.test';
     exporter.export([span], () => {});
     assert.equal(exported.attributes['graphql.source'], undefined);
-    assert.equal(exported.name, '<EMAIL_ADDRESS>');
+    assert.equal(exported.name, '__REDACTED__');
+    assert.equal(exported.attributes['graphql.operation.name'], '__REDACTED__');
+    assert.equal(span.name, 'review.person@example.test');
     assert.equal(exported.status.message, '<EMAIL_ADDRESS>');
     assert.equal(exported.events[0].attributes['exception.message'], '<EMAIL_ADDRESS>');
     assert.equal(span.status.message, 'review.person@example.test');
