@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Added
+- Registry entries for `@traceai/n8n` (import hook on `n8n-core`), `@traceai/openrouter` and `@traceai/vitest-evals` (both manual setup), so `traceai-auto` reports them and the coverage table lists them.
+
 ## [0.1.3] - pending release
 
 ### Added
