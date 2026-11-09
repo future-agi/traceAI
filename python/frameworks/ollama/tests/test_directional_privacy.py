@@ -6,6 +6,7 @@ import httpx
 import ollama
 import pytest
 from fi_instrumentation import TraceConfig
+from fi_instrumentation.instrumentation.config import REDACTED_VALUE
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk.trace import TracerProvider
@@ -13,6 +14,21 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from traceai_ollama import OllamaInstrumentor
+from traceai_ollama._request_attributes_extractor import _RequestAttributesExtractor
+from traceai_ollama._response_attributes_extractor import _ResponseAttributesExtractor
+
+
+def detached_input(flag, request):
+    """Adapter sanitization is separate from core's opaque aggregate policy."""
+    return dict(_RequestAttributesExtractor(
+        TraceConfig(**{flag: True})
+    ).get_extra_attributes_from_request(request))["input.value"]
+
+
+def detached_output(flag, response, request):
+    return dict(_ResponseAttributesExtractor(
+        TraceConfig(**{flag: True})
+    ).get_extra_attributes(response, request))["output.value"]
 
 
 PROMPT = "SYNTHETIC_PROMPT_49"
@@ -55,8 +71,10 @@ def test_chat_input_text_not_in_serialized_request(client_span, flag):
                         {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
     assert PROMPT not in json.dumps(attrs)
     assert messages[0]["content"] == PROMPT  # telemetry must never mutate SDK parameters
+    assert attrs["input.value"] == REDACTED_VALUE
     if flag == "hide_input_text":
-        assert json.loads(attrs["input.value"])["messages"][0]["role"] == "user"
+        assert json.loads(detached_input(flag, {"messages": messages}))["messages"][0]["role"] == "user"
+        assert attrs["gen_ai.input.messages.0.message.role"] == "user"
 
 
 @pytest.mark.parametrize("flag", ["hide_input_text", "hide_input_messages"])
@@ -76,7 +94,8 @@ def test_chat_input_thinking_and_tool_arguments_hidden(client_span):
                         {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
     assert "SYNTHETIC_INPUT_THINK_83" not in json.dumps(attrs)
     assert "SYNTHETIC_INPUT_TOOL_83" not in json.dumps(attrs)
-    message = json.loads(attrs["input.value"])["messages"][0]
+    assert attrs["input.value"] == REDACTED_VALUE
+    message = json.loads(detached_input("hide_input_text", {"messages": messages}))["messages"][0]
     assert message["role"] == "user"
     assert message["tool_calls"][0]["function"]["name"] == "lookup"
     assert messages[0]["tool_calls"][0]["function"]["arguments"]["query"] == "SYNTHETIC_INPUT_TOOL_83"
@@ -87,7 +106,8 @@ def test_chat_none_messages_keeps_span(client_span):
     attrs = client_span("hide_input_text", "chat", {"messages": None},
                         {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
     assert attrs["gen_ai.provider.name"] == "ollama"
-    assert json.loads(attrs["input.value"]) == {"messages": []}
+    assert attrs["input.value"] == REDACTED_VALUE
+    assert json.loads(detached_input("hide_input_text", {"messages": None})) == {"messages": []}
 
 
 def test_chat_images_hidden_in_all_attributes(client_span):
@@ -96,7 +116,8 @@ def test_chat_images_hidden_in_all_attributes(client_span):
                         {"model": "synthetic-model", "message": {"role": "assistant", "content": "ok"}, "done": True})
     assert IMAGE not in json.dumps(attrs)
     assert messages[0]["images"] == [IMAGE]
-    assert "images" not in json.loads(attrs["input.value"])["messages"][0]
+    assert attrs["input.value"] == REDACTED_VALUE
+    assert "images" not in json.loads(detached_input("hide_input_images", {"messages": messages}))["messages"][0]
     assert not any(key.endswith(".images") for key in attrs)
 
 
@@ -106,7 +127,10 @@ def test_generated_tool_arguments_hidden_under_output_text(client_span):
                     {"function": {"name": "lookup", "arguments": {"query": "SYNTHETIC_TOOL_ARGUMENT_83"}}}]}}
     attrs = client_span("hide_output_text", "chat", {"messages": [{"role": "user", "content": "ok"}]}, response)
     assert "SYNTHETIC_TOOL_ARGUMENT_83" not in json.dumps(attrs)
-    assert json.loads(attrs["output.value"])["message"]["tool_calls"][0]["function"]["name"] == "lookup"
+    assert attrs["output.value"] == REDACTED_VALUE
+    output = json.loads(detached_output("hide_output_text", response, {"messages": [{"role": "user", "content": "ok"}]}))
+    assert output["message"]["tool_calls"][0]["function"]["name"] == "lookup"
+    assert output["message"]["tool_calls"][0]["function"]["arguments"] == REDACTED_VALUE
     assert attrs["gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name"] == "lookup"
     assert response["message"]["tool_calls"][0]["function"]["arguments"]["query"] == "SYNTHETIC_TOOL_ARGUMENT_83"
 
@@ -129,4 +153,5 @@ def test_logprob_tokens_hidden_on_output_wire(client_span, flag, endpoint):
     assert TOKEN not in output
     assert ALTERNATE not in output
     assert "SYNTHETIC_OUTPUT_49" not in output
-    assert "logprobs" not in json.loads(attrs["output.value"])
+    assert attrs["output.value"] == REDACTED_VALUE
+    assert "logprobs" not in json.loads(detached_output(flag, response, request))

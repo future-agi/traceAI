@@ -13,6 +13,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from traceai_ollama import OllamaInstrumentor
+from traceai_ollama._request_attributes_extractor import _RequestAttributesExtractor
 
 
 MARKER = "SYNTHETIC_TYPED_TOOL_ARGUMENT_426"
@@ -87,7 +88,15 @@ async def test_typed_tool_input_text_privacy(
         attributes = dict(spans[0].attributes)
         if hidden:
             assert MARKER.encode() not in wire
-            tool = json.loads(attributes["input.value"])["messages"][0]["tool_calls"][0]
+            # Core hides opaque aggregates in full. Independently retain the
+            # adapter's detached-copy assertions so core masking cannot conceal
+            # a regression in typed tool/function normalization.
+            assert attributes["input.value"] == REDACTED_VALUE
+            detached = dict(_RequestAttributesExtractor(
+                TraceConfig(hide_input_text=True)
+            ).get_extra_attributes_from_request({"messages": [message]}))
+            assert MARKER not in detached["input.value"]
+            tool = json.loads(detached["input.value"])["messages"][0]["tool_calls"][0]
             assert tool["function"]["name"] == "lookup"
             assert tool["function"]["arguments"] == REDACTED_VALUE
         else:
