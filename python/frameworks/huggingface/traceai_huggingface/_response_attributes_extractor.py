@@ -1,16 +1,45 @@
 import logging
-from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
+from typing import Any, Iterator, Mapping, Optional, Tuple
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     MessageAttributes,
     SpanAttributes,
+    ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
 
+from traceai_huggingface._utils import _to_dict
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def _without_prefill(response: Any) -> Mapping[str, Any]:
+    """Copy telemetry details without input-origin tokens; never edit SDK objects."""
+    data = dict(_to_dict(response))
+    if data.get("details") is None:
+        return data
+    def copy_sequence(sequence: Any) -> Mapping[str, Any]:
+        item = dict(_to_dict(sequence))
+        item.pop("prefill", None)
+        # Older SDKs use dataclasses for generated tokens and enums for reasons.
+        # Keep their JSON fields, rather than the objects' repr strings.
+        if item.get("tokens") is not None:
+            item["tokens"] = [dict(_to_dict(token)) for token in item["tokens"]]
+        if item.get("finish_reason") is not None:
+            reason = item["finish_reason"]
+            item["finish_reason"] = getattr(reason, "value", reason)
+        return item
+
+    details = dict(copy_sequence(data["details"]))
+    if details.get("best_of_sequences") is not None:
+        details["best_of_sequences"] = [
+            copy_sequence(sequence) for sequence in details["best_of_sequences"]
+        ]
+    data["details"] = details
+    return data
 
 
 class _TextGenerationResponseAttributesExtractor:
@@ -25,31 +54,25 @@ class _TextGenerationResponseAttributesExtractor:
         if response is None:
             return
 
-        # For TextGenerationOutput or TextGenerationStreamOutput
-        if hasattr(response, "details") and response.details:
-            details = response.details
-            # Token counts
-            if hasattr(details, "generated_tokens"):
-                yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, details.generated_tokens
-            if hasattr(details, "prefill") and details.prefill:
-                yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, len(details.prefill)
-
-        # For dict response
-        if isinstance(response, dict):
-            details = response.get("details", {})
-            if details:
-                if "generated_tokens" in details:
-                    yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, details["generated_tokens"]
+        details = _to_dict(_to_dict(response).get("details"))
+        if details.get("generated_tokens") is not None:
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, details["generated_tokens"]
+        if details.get("prefill"):
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, len(details["prefill"])
 
     def get_extra_attributes(
         self,
         response: Optional[Any],
         request_parameters: Mapping[str, Any],
         is_streaming: bool = False,
+        *,
+        hide_input_text: bool = False,
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes including output."""
         if response is None:
             return
+        if hide_input_text and not isinstance(response, str):
+            response = _without_prefill(response)
 
         # Get generated text
         generated_text = ""
@@ -76,7 +99,9 @@ class _TextGenerationResponseAttributesExtractor:
                 finish_reason = details.get("finish_reason")
 
         if finish_reason:
-            yield "huggingface.finish_reason", str(finish_reason)
+            finish_reason = str(getattr(finish_reason, "value", finish_reason))
+            yield "huggingface.finish_reason", finish_reason
+            yield SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS, [finish_reason]
 
         # Raw response
         if isinstance(response, dict):
@@ -139,6 +164,7 @@ class _ChatCompletionResponseAttributesExtractor:
         elif isinstance(response, dict):
             choices = response.get("choices", [])
 
+        finish_reasons = []
         for i, choice in enumerate(choices):
             message = None
             if hasattr(choice, "message"):
@@ -174,17 +200,17 @@ class _ChatCompletionResponseAttributesExtractor:
 
                 if tool_calls:
                     yield f"huggingface.choices.{i}.tool_calls_count", len(tool_calls)
-                    for j, tc in enumerate(tool_calls[:5]):  # Limit to 5
-                        if hasattr(tc, "function"):
-                            func = tc.function
-                            if hasattr(func, "name"):
-                                yield f"huggingface.choices.{i}.tool_calls.{j}.name", func.name
-                            if hasattr(func, "arguments"):
-                                yield f"huggingface.choices.{i}.tool_calls.{j}.arguments", func.arguments
-                        elif isinstance(tc, dict):
-                            func = tc.get("function", {})
-                            yield f"huggingface.choices.{i}.tool_calls.{j}.name", func.get("name", "")
-                            yield f"huggingface.choices.{i}.tool_calls.{j}.arguments", func.get("arguments", "")
+                    for j, tc in enumerate(tool_calls):
+                        tool = _to_dict(tc)
+                        func = _to_dict(tool.get("function"))
+                        # Output content must stay under the FITracer privacy boundary.
+                        prefix = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{j}"
+                        if tool.get("id") is not None:
+                            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tool["id"]
+                        if func.get("name") is not None:
+                            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}", func["name"]
+                        if func.get("arguments") is not None:
+                            yield f"{prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}", func["arguments"]
 
             # Finish reason
             finish_reason = None
@@ -194,7 +220,17 @@ class _ChatCompletionResponseAttributesExtractor:
                 finish_reason = choice.get("finish_reason")
 
             if finish_reason:
-                yield f"huggingface.choices.{i}.finish_reason", str(finish_reason)
+                finish_reason = str(getattr(finish_reason, "value", finish_reason))
+                yield f"huggingface.choices.{i}.finish_reason", finish_reason
+                finish_reasons.append(finish_reason)
+
+        if finish_reasons:
+            yield SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons
+        response_data = _to_dict(response)
+        if response_data.get("model"):
+            yield SpanAttributes.GEN_AI_RESPONSE_MODEL, response_data["model"]
+        if response_data.get("id"):
+            yield SpanAttributes.GEN_AI_RESPONSE_ID, response_data["id"]
 
         # Raw response
         if isinstance(response, dict):
@@ -251,7 +287,7 @@ class _FeatureExtractionResponseAttributesExtractor:
                 yield "huggingface.embedding_dimensions", len(embeddings)
                 yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.0.{EmbeddingAttributes.EMBEDDING_VECTOR}", safe_json_dumps(embeddings[:10])
 
-            yield SpanAttributes.OUTPUT_VALUE, f"[embeddings generated]"
+            yield SpanAttributes.OUTPUT_VALUE, "[embeddings generated]"
         else:
             yield SpanAttributes.OUTPUT_VALUE, str(response)[:500]
 
