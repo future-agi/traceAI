@@ -1,0 +1,1014 @@
+{
+  "fixture": true,
+  "description": "Synthetic incident lifecycle only; never publish as customer evidence.",
+  "runs": [
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1001",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1001",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "21b536fef73d0d5c768d33ed6cceeedad7e2a7b40d8b0d6c0b3f5c1f83db1212",
+        "planned_case_ids": [
+          "python-openai-published-latest-eligible"
+        ],
+        "started_at": "2026-10-26T04:00:00Z",
+        "completed_at": "2026-10-26T04:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-published-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "published",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.92.0",
+              "selected_version": "1.92.0"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.92.0"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.92.0",
+              "requested_version": "1.92.0",
+              "resolved_version": "1.92.0",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "passed",
+                "duration_seconds": 0.1,
+                "failure_signature": null,
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "passed",
+          "failure": null,
+          "started_at": "2026-10-26T04:00:00Z",
+          "completed_at": "2026-10-26T04:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-published-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1002",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1002",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "21b536fef73d0d5c768d33ed6cceeedad7e2a7b40d8b0d6c0b3f5c1f83db1212",
+        "planned_case_ids": [
+          "python-openai-published-latest-eligible"
+        ],
+        "started_at": "2026-10-27T04:00:00Z",
+        "completed_at": "2026-10-27T04:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-published-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "published",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "failure",
+                "duration_seconds": 0.1,
+                "failure_signature": "84b6cebaabf888a2dee12d8dcd7b54acf98a786cddc96cad2e34c292883cd437",
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "failed",
+          "failure": {
+            "kind": "contract",
+            "signature": "84b6cebaabf888a2dee12d8dcd7b54acf98a786cddc96cad2e34c292883cd437",
+            "summary": "SYNTHETIC FIXTURE: AssertionError: missing span",
+            "test_ids": [
+              "tests/test_fixture.py::test_stream"
+            ]
+          },
+          "started_at": "2026-10-27T04:00:00Z",
+          "completed_at": "2026-10-27T04:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-published-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1003",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1003",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "21b536fef73d0d5c768d33ed6cceeedad7e2a7b40d8b0d6c0b3f5c1f83db1212",
+        "planned_case_ids": [
+          "python-openai-published-latest-eligible"
+        ],
+        "started_at": "2026-10-27T05:00:00Z",
+        "completed_at": "2026-10-27T05:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-published-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "published",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "failure",
+                "duration_seconds": 0.1,
+                "failure_signature": "84b6cebaabf888a2dee12d8dcd7b54acf98a786cddc96cad2e34c292883cd437",
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "failed",
+          "failure": {
+            "kind": "contract",
+            "signature": "84b6cebaabf888a2dee12d8dcd7b54acf98a786cddc96cad2e34c292883cd437",
+            "summary": "SYNTHETIC FIXTURE: AssertionError: missing span",
+            "test_ids": [
+              "tests/test_fixture.py::test_stream"
+            ]
+          },
+          "started_at": "2026-10-27T05:00:00Z",
+          "completed_at": "2026-10-27T05:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-published-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1004",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1004",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "f50962abe80f37e42f71dc7f49eb9137b5e8845b67ed59cbd56ca571fb3226a7",
+        "planned_case_ids": [
+          "python-openai-source-latest-eligible"
+        ],
+        "started_at": "2026-10-27T06:00:00Z",
+        "completed_at": "2026-10-27T06:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-source-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "source",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "passed",
+                "duration_seconds": 0.1,
+                "failure_signature": null,
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "passed",
+          "failure": null,
+          "started_at": "2026-10-27T06:00:00Z",
+          "completed_at": "2026-10-27T06:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-source-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1005",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1005",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "f50962abe80f37e42f71dc7f49eb9137b5e8845b67ed59cbd56ca571fb3226a7",
+        "planned_case_ids": [
+          "python-openai-source-latest-eligible"
+        ],
+        "started_at": "2026-10-27T07:00:00Z",
+        "completed_at": "2026-10-27T07:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-source-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "source",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "passed",
+                "duration_seconds": 0.1,
+                "failure_signature": null,
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "passed",
+          "failure": null,
+          "started_at": "2026-10-27T07:00:00Z",
+          "completed_at": "2026-10-27T07:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-source-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1006",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1006",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "21b536fef73d0d5c768d33ed6cceeedad7e2a7b40d8b0d6c0b3f5c1f83db1212",
+        "planned_case_ids": [
+          "python-openai-published-latest-eligible"
+        ],
+        "started_at": "2026-10-28T04:00:00Z",
+        "completed_at": "2026-10-28T04:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-published-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "published",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "passed",
+                "duration_seconds": 0.1,
+                "failure_signature": null,
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "passed",
+          "failure": null,
+          "started_at": "2026-10-28T04:00:00Z",
+          "completed_at": "2026-10-28T04:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-published-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "run": {
+        "repository": "future-agi/traceAI",
+        "run_id": "1007",
+        "run_attempt": 1,
+        "workflow": "Compatibility canary",
+        "event": "workflow_dispatch",
+        "url": "https://github.com/future-agi/traceAI/actions/runs/1007",
+        "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "workflow_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+        "plan_sha256": "21b536fef73d0d5c768d33ed6cceeedad7e2a7b40d8b0d6c0b3f5c1f83db1212",
+        "planned_case_ids": [
+          "python-openai-published-latest-eligible"
+        ],
+        "started_at": "2026-10-28T05:00:00Z",
+        "completed_at": "2026-10-28T05:00:00Z",
+        "cooldown_hours": 72,
+        "cooldown_cutoff": "2026-10-20T00:00:00Z",
+        "self_test": false
+      },
+      "cases": [
+        {
+          "case_id": "python-openai-published-latest-eligible",
+          "integration_id": "python-openai",
+          "language": "python",
+          "source_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+          "mode": "published",
+          "selector": "latest_eligible",
+          "qualification": "pilot_pending",
+          "runtime": {
+            "implementation": "cpython",
+            "version": "3.11.9",
+            "os": "linux",
+            "arch": "x86_64"
+          },
+          "requested": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "requirement": "openai==1.93.1",
+              "selected_version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "requirement": "traceAI-openai==0.1.10",
+              "selected_version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "requirement": "fi-instrumentation-otel==1.1.0",
+              "selected_version": "1.1.0"
+            }
+          ],
+          "resolved": [
+            {
+              "name": "openai",
+              "role": "upstream",
+              "version": "1.93.1"
+            },
+            {
+              "name": "traceAI-openai",
+              "role": "instrumentation",
+              "version": "0.1.10"
+            },
+            {
+              "name": "fi-instrumentation-otel",
+              "role": "core",
+              "version": "1.1.0"
+            }
+          ],
+          "discovery": [
+            {
+              "name": "openai",
+              "absolute_latest": "1.94.0",
+              "latest_eligible": "1.93.1",
+              "requested_version": "1.93.1",
+              "resolved_version": "1.93.1",
+              "published_at": "2026-10-20T00:00:00Z",
+              "first_seen_at": "2026-10-20T00:00:00Z",
+              "yanked": false
+            }
+          ],
+          "dependency_lock": {
+            "format": "pip-freeze",
+            "path": "locks/fixture.txt",
+            "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"
+          },
+          "contract": {
+            "suite_sha256": "21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95",
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_fixture.py"
+            ],
+            "scenarios": [
+              "real-sdk",
+              "sync",
+              "async",
+              "streaming",
+              "error-propagation",
+              "span-lifecycle",
+              "privacy"
+            ],
+            "junit_paths": [
+              "junit/fixture.xml"
+            ],
+            "tests": [
+              {
+                "test_id": "tests/test_fixture.py::test_stream",
+                "outcome": "passed",
+                "duration_seconds": 0.1,
+                "failure_signature": null,
+                "exception_id": null
+              }
+            ],
+            "collected": 1,
+            "executed": 1,
+            "unexpected_skips": 0
+          },
+          "status": "passed",
+          "failure": null,
+          "started_at": "2026-10-28T05:00:00Z",
+          "completed_at": "2026-10-28T05:00:00Z",
+          "attempt": 1,
+          "reproduction": [
+            "python",
+            ".github/compat/run_case.py",
+            "--plan",
+            "compat-plan.json",
+            "--case",
+            "python-openai-published-latest-eligible"
+          ],
+          "notes": [
+            "SYNTHETIC FIXTURE - not observed compatibility evidence"
+          ]
+        }
+      ]
+    }
+  ]
+}
