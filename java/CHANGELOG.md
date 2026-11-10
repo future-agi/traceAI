@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0](https://github.com/future-agi/traceAI/compare/java-v1.0.3...java-v1.1.0) (2026-11-10)
+
+### Features
+
+* **java-core:** add Python-aligned `GEN_AI_*` names for every GenAI attribute in `SemanticConventions`. The 16 legacy `LLM_*` names stay as deprecated compile-time aliases with identical values, so existing source and binaries keep working; `LLM_SYSTEM` maps to `GEN_AI_PROVIDER_NAME` (`gen_ai.provider.name`) ([#654](https://github.com/future-agi/traceAI/pull/654), TH-3776).
+
 ## [1.0.3](https://github.com/future-agi/traceAI/compare/java-v1.0.2...java-v1.0.3) (2026-11-10)
 
 ### Features
@@ -46,7 +52,6 @@
 
 ## Unreleased
 
-- Add Python-aligned `GEN_AI_*` names for all existing GenAI attributes and deprecate the 16 legacy `LLM_*` names as compile-time constant aliases. Existing attribute values and source/binary compatibility are preserved; `LLM_SYSTEM` maps to `GEN_AI_PROVIDER_NAME`, not `GEN_AI_SYSTEM`.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.

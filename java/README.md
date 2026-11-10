@@ -6,7 +6,7 @@ OpenTelemetry instrumentation for Java AI applications. Trace LLM calls, embeddi
 
 Release coordinates use **`com.futureagi`**. Artifact names are unchanged, and **Java package names remain `ai.traceai.*`**; existing imports do not change.
 
-The install examples track Java SDK `1.0.3`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
+The install examples track Java SDK `1.1.0`, matching [`pom.xml`](pom.xml); release-please updates them together. All SDK modules inherit that version, and the BOM aligns them. <!-- x-release-please-version -->
 
 > **Unreleased API:** the [provider ownership and shutdown](#provider-ownership-and-shutdown) behavior below, including `TraceAI.init(TraceConfig, OpenTelemetry)`, is not in the immutable Central releases `1.0.0` or `1.0.1`. Until a new release containing it is published and passes the [external-consumer check](#validate-readme-coordinates), that section requires a verified source build of this checkout. Installing an older Central release or the historical JitPack commit below is not sufficient. The basic OpenAI quickstart remains available from Central.
 
@@ -20,7 +20,7 @@ Import the BOM once, then add the instrumentation you need:
         <dependency>
             <groupId>com.futureagi</groupId>
             <artifactId>traceai-bom</artifactId>
-            <version>1.0.3</version> <!-- x-release-please-version -->
+            <version>1.1.0</version> <!-- x-release-please-version -->
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -42,7 +42,7 @@ Import the BOM once, then add the instrumentation you need:
 </dependencies>
 ```
 
-Without the BOM, specify `<version>1.0.3</version>` on each traceAI dependency. <!-- x-release-please-version -->
+Without the BOM, specify `<version>1.1.0</version>` on each traceAI dependency. <!-- x-release-please-version -->
 
 For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
 
@@ -63,7 +63,7 @@ repositories {
 }
 
 dependencies {
-    implementation platform('com.futureagi:traceai-bom:1.0.3') // x-release-please-version
+    implementation platform('com.futureagi:traceai-bom:1.1.0') // x-release-please-version
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
     // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
@@ -190,7 +190,7 @@ Add `com.futureagi:traceai-java-core` to your application using the BOM above, o
 <dependency>
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-core</artifactId>
-    <version>1.0.3</version> <!-- x-release-please-version -->
+    <version>1.1.0</version> <!-- x-release-please-version -->
 </dependency>
 ```
 
