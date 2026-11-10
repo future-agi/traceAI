@@ -12,7 +12,9 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { genkit } from 'genkit';
 import { enableTelemetry, flushTracing } from 'genkit/tracing';
 import { register, ProjectType, setAttributes } from '@traceai/fi-core';
-import { FIGenkitSpanProcessor } from '@traceai/genkit';
+import { FIGenkitSpanProcessor, enable } from '@traceai/genkit';
+import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
+import { createRequire } from 'node:module';
 
 const pkg = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packages = path.resolve(pkg, '..');
@@ -105,7 +107,8 @@ function defaultMediaOmission(key) {
 const rows = [...inventory].sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, sources]) =>
   [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), defaultMediaOmission: defaultMediaOmission(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
 const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText'];
-const cases = ['span', 'context', 'event', 'link', 'resource'].flatMap(surface => flags.map(flag => ({ name: `${surface}-${flag}`, surface, flag })));
+const cases = ['manual', 'automatic'].flatMap(route => ['span', 'context', 'event', 'link', 'resource'].flatMap(surface =>
+  flags.map(flag => ({ name: `${route}-${surface}-${flag}`, route, surface, flag }))));
 if (!process.argv[2]) {
   let failed = 0;
   for (const test of cases) {
@@ -131,14 +134,32 @@ if (!process.argv[2]) {
     ? JSON.stringify([{ role: 'user', content: [{ type: 'text', text: row.marker }] }]) : row.marker;
   const resource = resourceFromAttributes({ 'service.name': 'public-service', ...(test.surface === 'resource' ? Object.fromEntries(rows.map(row => [row.key, value(row)])) : {}) });
   const resourceBefore = JSON.stringify(resource.attributes);
-  const provider = register({ projectName: 'genkit-content-contract', projectType: ProjectType.OBSERVE, resource,
-    setGlobalTracerProvider: false, endpoint: origin + '/v1/traces', headers: { 'X-Api-Key': 'synthetic', 'X-Secret-Key': 'synthetic' } });
-  const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig: test.flag === 'off' ? {} : { [test.flag]: true } });
+  const traceConfig = test.flag === 'off' ? {} : { [test.flag]: true };
   const snapshot = span => JSON.stringify({ attributes: span.attributes, events: span.events, links: span.links, status: span.status });
   const capture = { onStart() {}, onEnd(span) { native.push({ span, original: snapshot(span) }); }, async forceFlush() {}, async shutdown() {} };
+  let processor, nativeProvider;
+  if (test.route === 'manual') {
+    const provider = register({ projectName: 'genkit-content-contract', projectType: ProjectType.OBSERVE, resource,
+      setGlobalTracerProvider: false, endpoint: origin + '/v1/traces', headers: { 'X-Api-Key': 'synthetic', 'X-Secret-Key': 'synthetic' } });
+    processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig });
+    await enableTelemetry({ spanProcessors: [capture, processor], autoDetectResources: false });
+  } else {
+    // The real automatic agent attaches its own FI branch to a native provider.
+    // No synthetic processor, symbol injection or recording-exporter substitution.
+    nativeProvider = new BasicTracerProvider({ resource, spanProcessors: [capture] });
+    assert.equal(trace.setGlobalTracerProvider(nativeProvider), true);
+    process.env.TS_NODE_PROJECT = path.join(packages, 'traceai_auto/tsconfig.json');
+    const require = createRequire(import.meta.url);
+    require('ts-node/register/transpile-only');
+    const auto = require('../../traceai_auto/src/index.ts');
+    auto.init({ provider: nativeProvider, apiKey: 'synthetic', secretKey: 'synthetic', projectName: 'genkit-content-contract',
+      baseUrl: origin + '/v1/traces', instrumentations: [], wireCapture: false, traceConfig });
+    assert.equal(auto.report().active, true);
+    assert.equal(enable().status, 'instrumented');
+    processor = { forceFlush: auto.forceFlush, shutdown: auto.shutdown };
+  }
   let active;
   try {
-    await enableTelemetry({ spanProcessors: [capture, processor], autoDetectResources: false });
     const ai = genkit({ plugins: [] });
     const model = ai.defineModel({ name: 'offline/content' }, async request => {
       const attributes = { [active.key]: value(active) };
@@ -149,7 +170,7 @@ if (!process.argv[2]) {
       const ctx = test.surface === 'context' ? setAttributes(context.active(), attributes) : context.active();
       context.with(ctx, () => {
         for (const typed of [true, false]) {
-          const span = trace.getTracer('genkit-privacy-probe').startSpan('content-probe', {
+          const span = trace.getTracer('genkit-tracer').startSpan('content-probe', {
             attributes: typed ? { 'genkit:type': 'action', 'genkit:metadata:subtype': 'model' } : {},
           });
           if (test.surface === 'span') span.setAttributes(attributes);
@@ -184,7 +205,7 @@ if (!process.argv[2]) {
       const attrs = selected.filter(a => a.key === row.key);
       const present = wire.includes(row.marker);
       const placeholder = attrs.length === 0 || attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__'));
-      return { ...row, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
+      return { ...row, route: test.route, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
         passed: hidden ? !present && placeholder : row.defaultMediaOmission
           ? !present && attrs.length > 0 && attrs.every(a => a.value.stringValue === '<omitted: media>')
           : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker)) };
@@ -201,5 +222,9 @@ if (!process.argv[2]) {
     const failed = outcomes.filter(row => !row.passed);
     console.log(JSON.stringify({ case: test.name, attributes: rows.length, passed: rows.length - failed.length, failed: failed.length, failures: failed.map(row => ({ key: row.key, side: row.side, hidden: row.hidden, markerPresent: row.markerPresent })) }));
     assert.equal(failed.length, 0, 'source-derived attributes obey processor policy at the complete OTLP receiver');
-  } finally { await processor.shutdown(); await new Promise(resolve => server.close(resolve)); }
+  } finally {
+    await processor.shutdown();
+    await nativeProvider?.shutdown();
+    await new Promise(resolve => server.close(resolve));
+  }
 }

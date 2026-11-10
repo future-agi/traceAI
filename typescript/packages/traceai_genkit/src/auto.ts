@@ -2,7 +2,7 @@ import { context, diag, ROOT_CONTEXT, trace, type Attributes, type Context, type
 import { getAttributesFromContext, REDACTED_VALUE, type TraceConfigOptions } from "@traceai/fi-core";
 import { GENKIT_CONTENT_KEYS } from "./attributes";
 import { genkitSpanKind, mapGenkitAttributes } from "./mapping";
-import { defaultScrubContext, resolveContentPolicy, SHOW_ALL } from "./privacy";
+import { defaultScrubContext, resolveContentPolicy } from "./privacy";
 import { toExportableSpan, type GenkitReadableSpan } from "./processor";
 
 /** Only the traceAI-owned export branch, never the application's MultiSpanProcessor. */
@@ -117,7 +117,12 @@ export function enable(options: EnableGenkitOptions = {}): EnableGenkitResult {
             delete attributes["output.mime_type"];
           }
         }
-        const copy = toExportableSpan(span, attributes, span.resource, { policy: SHOW_ALL, scrub });
+        // Auxiliary semantic content follows the same policy as span/context
+        // attributes. Error details still belong to the owning export sanitizer:
+        // an embedder may explicitly allow them independently of content hiding.
+        const copy = toExportableSpan(span, attributes, span.resource, {
+          policy: { ...policy, hideErrorDetails: false }, scrub,
+        });
         // Supply SDK data fields for the agent's no-getter sanitizer.
         Object.defineProperties(copy, {
           _spanContext: { value: copy.spanContext() },

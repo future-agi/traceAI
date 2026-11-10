@@ -210,9 +210,9 @@ interface ResourceLike {
 
 /** Detached export view; never change the application/provider resource. */
 function exportResource(resource: unknown, policy: ContentPolicy): unknown {
-  // The automatic adapter delegates privacy to its own export boundary and uses
-  // SHOW_ALL here. Preserve its borrowed resource identity when no policy applies.
-  if (!Object.values(policy).some(Boolean)) return resource;
+  // Both adapters mask their detached resource view under an active content
+  // policy. Preserve the borrowed resource identity only when no policy applies.
+  if (!resource || typeof resource !== "object" || !Object.values(policy).some(Boolean)) return resource;
   const source = resource as ResourceLike;
   const pending = source.asyncAttributesPending === true;
   // Keep attributes as an own data property: fi-core intentionally does not invoke
