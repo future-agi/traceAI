@@ -1,6 +1,7 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { generateTraceConfig, maskAttributes, REDACTED_VALUE } from "@traceai/fi-core";
 import { FISpanKind, MimeType, SemanticConventions } from "@traceai/fi-semantic-conventions";
+import { hideSemanticContent } from "./content-policy";
 import {
   FI_SPAN_KIND,
   GEN_AI_SPAN_KIND,
@@ -242,13 +243,11 @@ function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy): 
     attributes,
   });
   for (const key of Object.keys(out)) {
-    const input = /^(?:input\.|raw\.input$|gen_ai\.input\.|gen_ai\.(?:prompt|system_instructions|tool\.call\.arguments|tool\.description|request\.stop_sequences)(?:\.|$))/.test(key);
-    const output = /^(?:output\.|raw\.output$|gen_ai\.output\.|gen_ai\.(?:completion|tool\.call\.result)(?:\.|$))/.test(key);
-    // Exact message blobs retain fi-core's field-level masking. Flattened/opaque
-    // copies have no independently verifiable envelope, so mask the whole value.
+    // Only canonical message blobs have a verified field-level redactor in
+    // fi-core. All other content, including future and flattened fields, follows
+    // the closed metadata allowlist and explicit side policy.
     if (key === "gen_ai.input.messages" || key === "gen_ai.output.messages") continue;
-    if ((input && (policy.hideInputs || policy.hideInputMessages || policy.hideInputText || policy.hideInputImages)) ||
-        (output && (policy.hideOutputs || policy.hideOutputMessages || policy.hideOutputText))) {
+    if (hideSemanticContent(key, policy)) {
       if (key.endsWith("mime_type")) delete out[key];
       else out[key] = REDACTED_VALUE;
     }
