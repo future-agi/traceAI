@@ -97,33 +97,82 @@ public final class SemanticConventions {
     public static final String GEN_AI_OPERATION_NAME = "gen_ai.operation.name";
     public static final String GEN_AI_SYSTEM = "gen_ai.system";
 
-    // LLM System/Provider — both resolve to gen_ai.provider.name
-    public static final String LLM_SYSTEM = "gen_ai.provider.name";
-    public static final String LLM_PROVIDER = "gen_ai.provider.name";
+    public static final String GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
+
+    /** @deprecated Use {@link #GEN_AI_PROVIDER_NAME}. */
+    @Deprecated
+    public static final String LLM_SYSTEM = GEN_AI_PROVIDER_NAME;
+    /** @deprecated Use {@link #GEN_AI_PROVIDER_NAME}. */
+    @Deprecated
+    public static final String LLM_PROVIDER = GEN_AI_PROVIDER_NAME;
 
     // ── GenAI Request ────────────────────────────────────────────────
-    public static final String LLM_MODEL_NAME = "gen_ai.request.model";
-    public static final String LLM_REQUEST_MODEL = "gen_ai.request.model";
-    public static final String LLM_REQUEST_TEMPERATURE = "gen_ai.request.temperature";
-    public static final String LLM_REQUEST_TOP_P = "gen_ai.request.top_p";
+    public static final String GEN_AI_REQUEST_MODEL = "gen_ai.request.model";
+    public static final String GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature";
+    public static final String GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p";
+
+    /** @deprecated Use {@link #GEN_AI_REQUEST_MODEL}. */
+    @Deprecated
+    public static final String LLM_MODEL_NAME = GEN_AI_REQUEST_MODEL;
+    /** @deprecated Use {@link #GEN_AI_REQUEST_MODEL}. */
+    @Deprecated
+    public static final String LLM_REQUEST_MODEL = GEN_AI_REQUEST_MODEL;
+    /** @deprecated Use {@link #GEN_AI_REQUEST_TEMPERATURE}. */
+    @Deprecated
+    public static final String LLM_REQUEST_TEMPERATURE = GEN_AI_REQUEST_TEMPERATURE;
+    /** @deprecated Use {@link #GEN_AI_REQUEST_TOP_P}. */
+    @Deprecated
+    public static final String LLM_REQUEST_TOP_P = GEN_AI_REQUEST_TOP_P;
     public static final String GEN_AI_REQUEST_TOP_K = "gen_ai.request.top_k";
-    public static final String LLM_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens";
+    public static final String GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens";
+
+    /** @deprecated Use {@link #GEN_AI_REQUEST_MAX_TOKENS}. */
+    @Deprecated
+    public static final String LLM_REQUEST_MAX_TOKENS = GEN_AI_REQUEST_MAX_TOKENS;
     public static final String GEN_AI_REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty";
     public static final String GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty";
-    public static final String LLM_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences";
+    public static final String GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences";
+
+    /** @deprecated Use {@link #GEN_AI_REQUEST_STOP_SEQUENCES}. */
+    @Deprecated
+    public static final String LLM_REQUEST_STOP_SEQUENCES = GEN_AI_REQUEST_STOP_SEQUENCES;
     public static final String GEN_AI_REQUEST_SEED = "gen_ai.request.seed";
     public static final String GEN_AI_REQUEST_PARAMETERS = "gen_ai.request.parameters";
 
     // ── GenAI Response ───────────────────────────────────────────────
-    public static final String LLM_RESPONSE_MODEL = "gen_ai.response.model";
-    public static final String LLM_RESPONSE_ID = "gen_ai.response.id";
-    public static final String LLM_RESPONSE_FINISH_REASON = "gen_ai.response.finish_reasons";
+    public static final String GEN_AI_RESPONSE_MODEL = "gen_ai.response.model";
+
+    /** @deprecated Use {@link #GEN_AI_RESPONSE_MODEL}. */
+    @Deprecated
+    public static final String LLM_RESPONSE_MODEL = GEN_AI_RESPONSE_MODEL;
+    public static final String GEN_AI_RESPONSE_ID = "gen_ai.response.id";
+
+    /** @deprecated Use {@link #GEN_AI_RESPONSE_ID}. */
+    @Deprecated
+    public static final String LLM_RESPONSE_ID = GEN_AI_RESPONSE_ID;
+    public static final String GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons";
+
+    /** @deprecated Use {@link #GEN_AI_RESPONSE_FINISH_REASONS}. */
+    @Deprecated
+    public static final String LLM_RESPONSE_FINISH_REASON = GEN_AI_RESPONSE_FINISH_REASONS;
     public static final String GEN_AI_OUTPUT_TYPE = "gen_ai.output.type";
 
     // ── GenAI Usage / Tokens ─────────────────────────────────────────
-    public static final String LLM_TOKEN_COUNT_PROMPT = "gen_ai.usage.input_tokens";
-    public static final String LLM_TOKEN_COUNT_COMPLETION = "gen_ai.usage.output_tokens";
-    public static final String LLM_TOKEN_COUNT_TOTAL = "gen_ai.usage.total_tokens";
+    public static final String GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
+
+    /** @deprecated Use {@link #GEN_AI_USAGE_INPUT_TOKENS}. */
+    @Deprecated
+    public static final String LLM_TOKEN_COUNT_PROMPT = GEN_AI_USAGE_INPUT_TOKENS;
+    public static final String GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
+
+    /** @deprecated Use {@link #GEN_AI_USAGE_OUTPUT_TOKENS}. */
+    @Deprecated
+    public static final String LLM_TOKEN_COUNT_COMPLETION = GEN_AI_USAGE_OUTPUT_TOKENS;
+    public static final String GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens";
+
+    /** @deprecated Use {@link #GEN_AI_USAGE_TOTAL_TOKENS}. */
+    @Deprecated
+    public static final String LLM_TOKEN_COUNT_TOTAL = GEN_AI_USAGE_TOTAL_TOKENS;
     public static final String GEN_AI_USAGE_CACHE_READ_TOKENS = "gen_ai.usage.cache_read_tokens";
     public static final String GEN_AI_USAGE_CACHE_WRITE_TOKENS = "gen_ai.usage.cache_write_tokens";
 
@@ -137,8 +186,16 @@ public final class SemanticConventions {
     public static final String GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE = "gen_ai.usage.input_tokens.cache_write";
 
     // ── GenAI Messages ───────────────────────────────────────────────
-    public static final String LLM_INPUT_MESSAGES = "gen_ai.input.messages";
-    public static final String LLM_OUTPUT_MESSAGES = "gen_ai.output.messages";
+    public static final String GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages";
+
+    /** @deprecated Use {@link #GEN_AI_INPUT_MESSAGES}. */
+    @Deprecated
+    public static final String LLM_INPUT_MESSAGES = GEN_AI_INPUT_MESSAGES;
+    public static final String GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages";
+
+    /** @deprecated Use {@link #GEN_AI_OUTPUT_MESSAGES}. */
+    @Deprecated
+    public static final String LLM_OUTPUT_MESSAGES = GEN_AI_OUTPUT_MESSAGES;
     public static final String GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions";
 
     // ── GenAI Tools ──────────────────────────────────────────────────
