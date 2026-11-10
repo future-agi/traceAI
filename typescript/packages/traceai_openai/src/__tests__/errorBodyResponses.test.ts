@@ -30,6 +30,7 @@ const spanNames = {
   chat: "OpenAI Chat Completions",
   completion: "OpenAI Completions",
   responses: "OpenAI Responses",
+  embeddings: "OpenAI Embeddings",
 };
 
 function create(client: any, api: API, stream?: boolean) {
@@ -72,7 +73,7 @@ afterEach(async () => {
   process.env = { ...savedEnv };
 });
 
-async function onlySpan(api: API) {
+async function onlySpan(api: API | "embeddings") {
   await provider.forceFlush();
   const spans = exporter.getFinishedSpans();
   expect(spans).toHaveLength(1);
@@ -125,6 +126,143 @@ describe.each(apis)("non-stream response regressions: %s", api => {
     const span = await onlySpan(api);
     expect(span.status.code).toBe(SpanStatusCode.UNSET);
     expectNoOutput(span.attributes);
+  });
+});
+
+const encodings = [undefined, "float", "base64"] as const;
+function createEmbedding(client: any, encoding?: typeof encodings[number]) {
+  return client.embeddings.create({
+    model, input: "hello", ...(encoding === undefined ? {} : { encoding_format: encoding }),
+  });
+}
+
+describe("non-stream response regressions: embeddings", () => {
+  test.each(encodings)("returns an HTTP 200 error body unchanged (encoding=%s)", async encoding => {
+    const { client, fetch } = clientFor(errorBody);
+    const promise = createEmbedding(client, encoding);
+    const result = await promise;
+    expect(result).toEqual(errorBody);
+    expect(await promise).toBe(result);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const span = await onlySpan("embeddings");
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: errorBody.error.message });
+    expectNoOutput(span.attributes);
+  });
+
+  test.each(encodings)("preserves withResponse data and ends once (encoding=%s)", async encoding => {
+    const { client, fetch } = clientFor(errorBody);
+    const promise = createEmbedding(client, encoding);
+    const { data, response } = await promise.withResponse();
+    expect(data).toEqual(errorBody);
+    expect(response.status).toBe(200);
+    expect(await promise).toBe(data);
+    expect((await promise.withResponse()).data).toBe(data);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const span = await onlySpan("embeddings");
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: errorBody.error.message });
+    expectNoOutput(span.attributes);
+  });
+
+  test("prioritizes the error over otherwise valid embedding data", async () => {
+    const body = { ...errorBody, data: [{ index: 0, embedding: [0.5] }] };
+    const { client } = clientFor(body);
+    await expect(createEmbedding(client, "float")).resolves.toEqual(body);
+    const span = await onlySpan("embeddings");
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: errorBody.error.message });
+    expect(span.attributes["embedding.embeddings.0.embedding.vector"]).toBeUndefined();
+    expectNoOutput(span.attributes);
+  });
+
+  test.each([
+    { label: "missing data", body: {} },
+    { label: "null data", body: { data: null } },
+    { label: "object data", body: { data: {} } },
+    { label: "string data", body: { data: "unexpected" } },
+  ])("does not throw while observing $label", async ({ body }) => {
+    // Explicit encoding bypasses the SDK's native base64 decoding validation.
+    const { client } = clientFor(body);
+    await expect(createEmbedding(client, "float")).resolves.toEqual(body);
+    const span = await onlySpan("embeddings");
+    expect(span.attributes["embedding.embeddings.0.embedding.vector"]).toBeUndefined();
+  });
+});
+
+describe("base controls: embeddings", () => {
+  test.each(encodings)("the uninstrumented SDK returns the error body (encoding=%s)", async encoding => {
+    instrumentation.disable();
+    const { client, fetch } = clientFor(errorBody);
+    await expect(createEmbedding(client, encoding)).resolves.toEqual(errorBody);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await provider.forceFlush();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  test.each(encodings)("asResponse leaves the error body unread (encoding=%s)", async encoding => {
+    const { client, fetch } = clientFor(errorBody);
+    const promise = createEmbedding(client, encoding);
+    const response = await promise.asResponse();
+    expect(response.status).toBe(200);
+    expect(response.bodyUsed).toBe(false);
+    expect(await promise.asResponse()).toBe(response);
+    await expect(response.json()).resolves.toEqual(errorBody);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // Raw-only access records HTTP metadata; telemetry must not parse the body.
+    const span = await onlySpan("embeddings");
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.attributes["http.response.status_code"]).toBe(200);
+    expectNoOutput(span.attributes);
+  });
+
+  test("normal embeddings keep vector and usage attributes", async () => {
+    const body = { object: "list", model, data: [{ object: "embedding", index: 0, embedding: [0.5] }],
+      usage: { prompt_tokens: 1, total_tokens: 1 } };
+    const { client } = clientFor(body);
+    await expect(createEmbedding(client, "float")).resolves.toEqual(body);
+    const span = await onlySpan("embeddings");
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.attributes["embedding.embeddings.0.embedding.vector"]).toEqual([0.5]);
+    expect(span.attributes["gen_ai.usage.total_tokens"]).toBe(1);
+  });
+});
+
+describe("base controls: streaming chat errors", () => {
+  test.each([
+    { label: "first error envelope", event: "", afterContent: false },
+    { label: "first named error event", event: "event: error\n", afterContent: false },
+    { label: "error envelope after content", event: "", afterContent: true },
+    { label: "named error event after content", event: "event: error\n", afterContent: true },
+  ])("preserves the SDK rejection for $label", async ({ event, afterContent }) => {
+    const chunk = { id: "chat-fixture", object: "chat.completion.chunk", created: 1, model,
+      choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }] };
+    const sse = (afterContent ? `data: ${JSON.stringify(chunk)}\n\n` : "")
+      + `${event}data: ${JSON.stringify(errorBody)}\n\ndata: [DONE]\n\n`;
+    async function consume() {
+      const { client, fetch } = clientFor(sse, 200, true);
+      const stream = await create(client, "chat", true);
+      const chunks = [];
+      let error: unknown;
+      try { for await (const value of stream) chunks.push(value); }
+      catch (caught) { error = caught; }
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(chunks).toEqual(afterContent ? [chunk] : []);
+      expect(error).toBeInstanceOf(sdk.APIError);
+      expect(error).toMatchObject({ message: errorBody.error.message, error: errorBody.error });
+      return { error, stream };
+    }
+    instrumentation.disable();
+    const native = await consume();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    instrumentation.manuallyInstrument(sdk);
+    const traced = await consume();
+    expect((traced.error as Error).constructor).toBe((native.error as Error).constructor);
+    const span = await onlySpan("chat");
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: errorBody.error.message });
+    expect(span.events.filter(event => event.name === "exception")).toHaveLength(1);
+    expectNoOutput(span.attributes);
+    // SDK cleanup aborts its controller before rejecting; it must not end twice.
+    traced.stream.controller.abort();
+    await provider.forceFlush();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
   });
 });
 

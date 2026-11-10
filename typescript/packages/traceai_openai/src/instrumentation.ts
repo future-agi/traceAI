@@ -473,6 +473,10 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
+            if (hasResponseError(result)) {
+              endNonStreamResponseSpan(span, result);
+              return result;
+            }
             if (result) {
               // Record the results
               span.setAttributes({
@@ -1172,6 +1176,7 @@ function getEmbeddingTextAttributes(
 function getEmbeddingEmbeddingsAttributes(
   response: CreateEmbeddingResponse,
 ): Attributes {
+  if (!Array.isArray(response?.data)) return {};
   return response.data.reduce((acc, embedding, index) => {
     const indexPrefix = `${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.`;
     acc[`${indexPrefix}${SemanticConventions.EMBEDDING_VECTOR}`] =
