@@ -273,6 +273,15 @@ releasedSource = replaceSection(releasedSource, "    image: {", "    audio: {", 
 // The pinned section also replaces the new video branch inside hint().
 releasedSource = replaceSection(releasedSource, "// The third bit is a complete, non-media MIME discriminator.", "const zeroDetailDeferral:", RELEASED_IMAGE_HINTS);
 releasedSource = replaceSection(releasedSource, "    if (declaredImagePayload(path, hints)", "    if (magic(value))", "");
+// Restore the pre-label declarations, string walker and embedded-text branch.
+// Only the historical source changes; candidate tests still use the current runtime.
+releasedSource = replaceSection(releasedSource, "type IncompleteContentKind =", "/** Walk only plain, already-materialized data.", "");
+releasedSource = replaceSection(releasedSource, "    if (isToolArgumentPath(path)) {", "    const clean = replaceMedia(value, path, hints,", "");
+// Restore the pre-context-handoff comment without changing the live runtime.
+releasedSource = replaceSection(releasedSource,
+  "/** @internal FITracer typed-context handoff only; never infer from attributes. */",
+  "\nexport function rememberSessionIdentity(",
+  "/** @internal FITracer startActiveSpan handoff only; never infer from attributes. */");
 if (digest(releasedSource) !== RELEASED_RUNTIME_SHA256) throw new Error("Privacy oracle no longer reconstructs the 1.2.0 runtime");
 let parentSource = replaceSection(releasedSource, "// A warm identity is not proof", "function knownSecretText(", "");
 parentSource = replaceSection(parentSource, "const DISCOVERY_URLS =", "const dataText =", "");
