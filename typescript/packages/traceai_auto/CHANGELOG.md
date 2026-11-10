@@ -1,7 +1,11 @@
-## [Unreleased]
+## [0.1.4] - pending release
 
 ### Added
 - Registry entries for `@traceai/n8n` (import hook on `n8n-core`), `@traceai/openrouter` and `@traceai/vitest-evals` (both manual setup), so `traceai-auto` reports them and the coverage table lists them.
+
+### Fixed
+- OpenAI-compatible Chat Completions and Responses calls that return a provider failure inside a successful HTTP response, including streamed response.failed events, mark the span as an error, with the provider's message when one is given.
+- Gemini capture records every generated candidate, not only the first.
 
 ## [0.1.3] - pending release
 
