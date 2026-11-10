@@ -407,10 +407,12 @@ record delimiter, and partial JSON is never promoted to a completed frame.
   even when the native cancellation promise rejects. Application bytes, promises
   and errors remain unchanged, but the one span can be incomplete, omit later output/
   usage and end too early. Later consumption can still return the complete answer and usage; branch-aware cancellation finalization is not provided.
-- A provider failure carried inside an HTTP 200 stream (for example OpenAI Responses
-  `response.failed`) can retain HTTP-derived OK status without the provider error
-  description, even when `gen_ai.response.finish_reasons` records `failed`. HTTP
-  success is not currently overridden by that in-stream provider failure.
+- Captured OpenAI-compatible chat/completions and Responses JSON/SSE errors
+  (including Responses `status: "failed"` and `response.failed`) override HTTP
+  success in telemetry, retaining partial output and usage. Provider error codes
+  and descriptions pass through the existing privacy scrubbing. Other provider-specific
+  failure envelopes, or failures hidden by unavailable/truncated bodies, can still
+  retain HTTP-derived status; application response bytes and errors remain unchanged.
 - Native `pipeTo`/`pipeThrough` algorithms bypass instance reader methods. These
   paths retain metadata-only completion (`traceai.wire.body_unavailable=true`),
   without replacing the stream/sink or fabricating output bytes. Their completion
