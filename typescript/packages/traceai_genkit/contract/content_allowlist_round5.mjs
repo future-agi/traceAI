@@ -248,6 +248,14 @@ if (!process.argv[2]) {
       const hidden = !canonicalTextUnderImageOnly && test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side));
       const attrs = selected.filter(a => a.key === (row.attributeKey ?? row.key));
       const present = wire.includes(row.marker);
+      // A model positive cannot stand in for its generic-span aggregate copy.
+      // These exact renamed keys must retain controls too, not just avoid leaks.
+      const aggregateExpected = ['span', 'context'].includes(test.surface) && !row.nestedKey && /^(?:gen_ai\.usage\.|llm\.token_count\.|llm\.usage\.|gen_ai\.cost\.|llm\.cost\.)/.test(row.key);
+      const aggregate = selected.filter(a => a.key === `genkit.usage.${row.key}`);
+      const aggregatePassed = !aggregateExpected || (hidden
+        ? aggregate.length === 0 || aggregate.every(a => JSON.stringify(a.value).includes('__REDACTED__'))
+        : row.defaultMediaOmission ? aggregate.length > 0 && aggregate.every(a => a.value.stringValue === '<omitted: media>')
+        : aggregate.length > 0 && aggregate.every(a => JSON.stringify(a.value).includes(row.marker)));
       const nestedValues = row.nestedKey ? attrs.map(a => {
         try {
           let packed = JSON.parse(a.value.stringValue);
@@ -259,9 +267,10 @@ if (!process.argv[2]) {
         ? nestedValues.every(v => v === '__REDACTED__')
         : attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__')));
       return { ...row, route: test.route, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
-        passed: hidden ? !present && placeholder : row.defaultMediaOmission
+        aggregateExpected, aggregateSelectedCount: aggregate.length, aggregatePassed,
+        passed: aggregatePassed && (hidden ? !present && placeholder : row.defaultMediaOmission
           ? !present && attrs.length > 0 && (row.nestedKey ? nestedValues.length > 0 && nestedValues.every(v => v === '<omitted: media>') : attrs.every(a => a.value.stringValue === '<omitted: media>'))
-          : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker)) };
+          : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker))) };
     });
     const evidence = { case: test.name, inventory: rows, requests, payloads, outcomes };
     if (process.env.PRIVACY_EVIDENCE_DIR) writeFileSync(`${process.env.PRIVACY_EVIDENCE_DIR}/${test.name}.json`, JSON.stringify(evidence));

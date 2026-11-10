@@ -2,9 +2,17 @@ import { indexPrivacyHints, mediaReplacement } from "../privacy-runtime";
 import { carryGenkitAliases, isGenkitMappedAlias, rememberGenkitAliases } from "../genkit-content-policy";
 import { privacyFilter } from "../export-privacy";
 
-const counts = ["llm.token_count.prompt_details.audio", "llm.token_count.completion_details.audio", "gen_ai.usage.cache_read_tokens.audio"];
+const canonicalCounts = ["llm.token_count.prompt_details.audio", "llm.token_count.completion_details.audio", "gen_ai.usage.cache_read_tokens.audio"];
+const counts = [...canonicalCounts, ...canonicalCounts.map(key => `genkit.usage.${key}`)];
 
 describe("exact typed audio usage metadata", () => {
+  it("preserves the existing scalar contract on exact aggregate audio usage aliases", () => {
+    for (const key of ["genkit.usage.gen_ai.usage.input_tokens.audio", "genkit.usage.gen_ai.usage.output_tokens.audio"]) {
+      expect(mediaReplacement("SYNTHETIC CONTENT !", key)).toBeUndefined();
+      expect(mediaReplacement(42, key)).toBeUndefined();
+      expect(mediaReplacement(42, key + ".0.content")).toBe("<omitted: media>");
+    }
+  });
   test.each(counts)("keeps valid %s counts but not invalid payloads or hinted media", key => {
     for (const value of [0, 1, 730000001]) expect(mediaReplacement(value, key)).toBeUndefined();
     for (const [value, expected] of [
