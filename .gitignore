@@ -20,6 +20,8 @@ dist
 develop-eggs
 .installed.cfg
 lib
+# Ruby gems store their source in lib/.
+!ruby/roast/lib/
 lib64
 
 # Installer logs
@@ -62,6 +64,8 @@ output/
 *.log
 .DS_Store
 **/package-lock.json
+# Standalone npm example (outside the pnpm workspace): its lockfile pins the tested dependency set.
+!typescript/examples/tanstack-ai/package-lock.json
 **/tsconfig.tsbuildinfo
 **/.fi
 **/.pytest_cache

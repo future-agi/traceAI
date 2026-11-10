@@ -30,7 +30,7 @@ def _get_attributes_from_chat_completion_response(
     response: "ChatCompletionResponse",
 ) -> Iterator[Tuple[str, AttributeValue]]:
     if model := getattr(response, "model", None):
-        yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
+        yield SpanAttributes.GEN_AI_RESPONSE_MODEL, model
     if usage := getattr(response, "usage", None):
         yield from _get_attributes_from_completion_usage(usage)
     if (choices := getattr(response, "choices", None)) and isinstance(
@@ -58,7 +58,7 @@ def _get_attributes_from_stream_chat_completion_response(
 ) -> Iterator[Tuple[str, AttributeValue]]:
     data = response.data
     if model := data.get("model", None):
-        yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
+        yield SpanAttributes.GEN_AI_RESPONSE_MODEL, model
     if usage := data.get("usage", None):
         yield from _get_attributes_from_completion_usage(usage)
     if (choices := data.get("choices", None)) and isinstance(choices, Iterable):

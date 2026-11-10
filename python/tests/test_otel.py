@@ -21,7 +21,6 @@ from fi_instrumentation.otel import (
     PROJECT_VERSION_ID,
     EVAL_TAGS,
     METADATA,
-    SESSION_NAME,
     check_custom_eval_config_exists,
     _exporter_transport,
     _printable_headers,
@@ -41,7 +40,6 @@ class TestConstants:
         assert PROJECT_VERSION_ID == "project_version_id"
         assert EVAL_TAGS == "eval_tags"
         assert METADATA == "metadata"
-        assert SESSION_NAME == "session_name"
 
 
 class TestTransport:
@@ -144,15 +142,13 @@ class TestRegisterFunction:
 
     def test_register_observe_mode(self, mock_dependencies, clean_env):
         """Test register in OBSERVE mode."""
-        result = register(
-            project_type=ProjectType.OBSERVE,
-            session_name="test_session"
-        )
-        
+        result = register(project_type=ProjectType.OBSERVE)
+
+        assert result is not None
+        mock_dependencies['provider_class'].assert_called_once()
         call_args = mock_dependencies['provider_class'].call_args
         resource = call_args[1]['resource']
-        
-        assert resource.attributes[SESSION_NAME] == "test_session"
+        assert resource.attributes[PROJECT_TYPE] == ProjectType.OBSERVE.value == "observe"
 
     def test_register_observe_mode_validation(self, mock_dependencies, clean_env):
         """Test register validation in OBSERVE mode."""
@@ -177,14 +173,18 @@ class TestRegisterFunction:
                 project_version_name="v1.0"
             )
 
-    def test_register_experiment_mode_validation(self, mock_dependencies, clean_env):
-        """Test register validation in EXPERIMENT mode."""
-        # Should reject session_name in EXPERIMENT mode
-        with pytest.raises(Exception):  # Could be ValidationError or other implementation-specific error
-            register(
-                project_type=ProjectType.EXPERIMENT,
-                session_name="test_session"
-            )
+    def test_register_experiment_mode(self, mock_dependencies, clean_env):
+        """Test register in EXPERIMENT mode.
+
+        register() has no EXPERIMENT-only validation (only OBSERVE rejects eval tags); this used
+        to pass only because the removed session_name argument raised a TypeError.
+        """
+        result = register(project_type=ProjectType.EXPERIMENT)
+
+        assert result is not None
+        call_args = mock_dependencies['provider_class'].call_args
+        resource = call_args[1]['resource']
+        assert resource.attributes[PROJECT_TYPE] == ProjectType.EXPERIMENT.value == "experiment"
 
     def test_register_duplicate_eval_names(self, mock_dependencies, clean_env):
         """Test register rejects duplicate custom eval names."""
@@ -246,11 +246,11 @@ class TestRegisterFunction:
         
         result = register(headers=headers)
         
-        # Headers should be passed to processor
-        mock_dependencies['simple_proc'].assert_called_with(
-            headers=headers,
-            transport=Transport.HTTP
-        )
+        # register() batches by default, so headers go to the batch processor
+        mock_dependencies['batch_proc'].assert_called_once()
+        kwargs = mock_dependencies['batch_proc'].call_args.kwargs
+        assert kwargs['headers'] == headers
+        assert kwargs['transport'] == Transport.HTTP
 
     def test_register_grpc_transport(self, mock_dependencies, clean_env):
         """Test register with gRPC transport."""
@@ -312,14 +312,17 @@ class TestTracerProvider:
         assert isinstance(details, str)
         assert len(details) > 0
 
-    @patch('fi_instrumentation.otel.signal.signal')
-    def test_tracer_provider_signal_handlers(self, mock_signal):
-        """Test TracerProvider sets up signal handlers."""
+    @patch('fi_instrumentation.otel.atexit.register')
+    @patch('signal.signal')
+    def test_tracer_provider_signal_handlers(self, mock_signal, mock_atexit):
+        """Cleanup must not take ownership of application signal handlers."""
         provider = TracerProvider()
-        provider.setup_signal_handlers()
-        
-        # Should register signal handlers
-        assert mock_signal.call_count >= 2  # SIGTERM and SIGINT
+        mock_signal.reset_mock()
+        mock_atexit.reset_mock()
+        assert provider.setup_signal_handlers() is provider
+        mock_signal.assert_not_called()
+        mock_atexit.assert_called_once_with(provider.shutdown)
+        provider.shutdown()
 
 
 class TestSpanProcessors:
@@ -509,6 +512,17 @@ class TestIntegration:
         
         assert provider is not None
         assert hasattr(provider, 'add_span_processor')
+
+        # The autouse fixture in conftest.py (_collector_at_a_closed_local_port) points the collector
+        # at a closed local port, so no test reaches the real one.
+        assert os.environ["FI_BASE_URL"] == "http://127.0.0.1:9"
+        assert os.environ["FI_GRPC_URL"] == "http://127.0.0.1:9"
+        exporters = [
+            processor.span_exporter
+            for processor in provider._active_span_processor._span_processors
+        ]
+        assert exporters
+        assert all(exporter._endpoint.startswith("http://127.0.0.1:9/") for exporter in exporters)
 
     def test_error_handling_network_failure(self, mock_requests):
         """Test error handling for network failures."""

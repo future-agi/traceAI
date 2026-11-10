@@ -1,0 +1,374 @@
+{
+  "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+  "conversation_id": "conv_9001k1zph3fkeh5s8xg9z90swaqa",
+  "status": "done",
+  "user_id": "user-{{MARKER}}",
+  "metadata": {
+    "start_time_unix_secs": 1760000000,
+    "call_duration_secs": 42
+  },
+  "has_audio": false,
+  "has_user_audio": false,
+  "has_response_audio": false,
+  "has_auxiliary_audio": false,
+  "transcript": [],
+  "otlp_traces": {
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "elevenlabs-convai"
+              }
+            },
+            {
+              "key": "elevenlabs.conversation_id",
+              "value": {
+                "stringValue": "conv_9001k1zph3fkeh5s8xg9z90swaqa"
+              }
+            },
+            {
+              "key": "host.name",
+              "value": {
+                "stringValue": "alice-laptop-{{MARKER}}.local"
+              }
+            },
+            {
+              "key": "process.executable.path",
+              "value": {
+                "stringValue": "/Users/alice/{{MARKER}}/agent"
+              }
+            },
+            {
+              "key": "project_name",
+              "value": {
+                "stringValue": "someone-elses-project"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "elevenlabs.convai",
+              "version": "1.0.0"
+            },
+            "spans": [
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000001",
+                "name": "elevenlabs.conversation",
+                "kind": 1,
+                "startTimeUnixNano": "1760000000000000000",
+                "endTimeUnixNano": "1760000042000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.conversation_id",
+                    "value": {
+                      "stringValue": "conv_9001k1zph3fkeh5s8xg9z90swaqa"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.agent_id",
+                    "value": {
+                      "stringValue": "agent_7101k5zvyjhmfg983brhmhkd98n6"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.source",
+                    "value": {
+                      "stringValue": "post_call_webhook"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.environment",
+                    "value": {
+                      "stringValue": "production"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.cost_fiat",
+                    "value": {
+                      "doubleValue": 0.0421
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.analysis.transcript_summary",
+                    "value": {
+                      "stringValue": "Caller asked for the USD to EUR rate. {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.dynamic_variable.user_email",
+                    "value": {
+                      "stringValue": "alice.{{MARKER}}@example.com"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.dynamic_variable.account_number",
+                    "value": {
+                      "intValue": "4400123456"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.recording_url",
+                    "value": {
+                      "stringValue": "https://storage.googleapis.com/convai/conv_9001k1zph3fkeh5s8xg9z90swaqa/audio.mp3?X-Goog-Expires=900&X-Goog-Signature=deadbeef"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                }
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000002",
+                "name": "elevenlabs.recv.agent_response",
+                "kind": 1,
+                "startTimeUnixNano": "1760000000000000000",
+                "endTimeUnixNano": "1760000003000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.agent.text",
+                    "value": {
+                      "stringValue": "Hi! I can help with exchange rates. {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.turn.index",
+                    "value": {
+                      "intValue": "0"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000003",
+                "name": "elevenlabs.recv.user_transcript",
+                "kind": 1,
+                "startTimeUnixNano": "1760000004000000000",
+                "endTimeUnixNano": "1760000008000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.user.text",
+                    "value": {
+                      "stringValue": "What is the US dollar to euro rate today? {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.turn.index",
+                    "value": {
+                      "intValue": "1"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000004",
+                "name": "elevenlabs.recv.agent_response",
+                "kind": 1,
+                "startTimeUnixNano": "1760000009000000000",
+                "endTimeUnixNano": "1760000020000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.agent.text",
+                    "value": {
+                      "stringValue": "One US dollar is 0.92 euros right now. {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.producing_llm",
+                    "value": {
+                      "stringValue": "gpt-4o-mini"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.llm_usage.gpt-4o-mini.input",
+                    "value": {
+                      "stringValue": "{'tokens': 412, 'price': 6.18e-05}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.llm_usage.gpt-4o-mini.output_total",
+                    "value": {
+                      "stringValue": "{'tokens': 23, 'price': 1.38e-05}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.reasoning_content",
+                    "value": {
+                      "stringValue": "User wants an FX rate, call the tool. {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.rag.retrieval_query",
+                    "value": {
+                      "stringValue": "usd eur rate {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.rag.embedding_model",
+                    "value": {
+                      "stringValue": "multilingual_e5_large_instruct"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.rag.latency_ms",
+                    "value": {
+                      "doubleValue": 41.5
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.turn.index",
+                    "value": {
+                      "intValue": "2"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000005",
+                "name": "elevenlabs.tool.get_exchange_rate",
+                "kind": 1,
+                "startTimeUnixNano": "1760000010000000000",
+                "endTimeUnixNano": "1760000011000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.tool.params",
+                    "value": {
+                      "stringValue": "{\"base\": \"USD\", \"symbols\": \"EUR\", \"note\": \"{{MARKER}}\"}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.tool.result",
+                    "value": {
+                      "stringValue": "{\"rates\": {\"EUR\": 0.92}, \"echo\": \"{{MARKER}}\"}"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000004"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000006",
+                "name": "elevenlabs.recv.user_transcript",
+                "kind": 1,
+                "startTimeUnixNano": "1760000030000000000",
+                "endTimeUnixNano": "1760000033000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.user.text",
+                    "value": {
+                      "stringValue": "Great, thank you. Goodbye! {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.turn.index",
+                    "value": {
+                      "intValue": "3"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000007",
+                "name": "elevenlabs.recv.agent_response",
+                "kind": 1,
+                "startTimeUnixNano": "1760000034000000000",
+                "endTimeUnixNano": "1760000036000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.agent.text",
+                    "value": {
+                      "stringValue": "Goodbye! {{MARKER}}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.producing_llm",
+                    "value": {
+                      "stringValue": "gpt-4o-mini"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.llm_usage.gpt-4o-mini.input",
+                    "value": {
+                      "stringValue": "{'tokens': 450, 'price': 6.75e-05}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.llm_usage.gpt-4o-mini.output_total",
+                    "value": {
+                      "stringValue": "{'tokens': 4, 'price': 2.4e-06}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.turn.index",
+                    "value": {
+                      "intValue": "4"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              },
+              {
+                "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "spanId": "a000000000000008",
+                "name": "elevenlabs.event.something_new",
+                "kind": 1,
+                "startTimeUnixNano": "1760000037000000000",
+                "endTimeUnixNano": "1760000037000000000",
+                "attributes": [
+                  {
+                    "key": "elevenlabs.event.data",
+                    "value": {
+                      "stringValue": "{\"detail\": \"{{MARKER}}\"}"
+                    }
+                  },
+                  {
+                    "key": "elevenlabs.event.count",
+                    "value": {
+                      "intValue": "3"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 1
+                },
+                "parentSpanId": "a000000000000001"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

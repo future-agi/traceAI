@@ -1,0 +1,72 @@
+name: Release (Go module tags)
+on:
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        required: true
+permissions:
+  contents: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  module:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      DIR: ${{ matrix.dir }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: ${{ matrix.dir }}/go.mod
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Verify and test the module
+        working-directory: ${{ matrix.dir }}
+        run: |
+          go mod download
+          go mod verify
+          go test ./...
+          go vet ./...
+      - name: Tag the module (no binary registry upload)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/release/github_release.py --install "go get $NAME@v$VERSION"
+      - name: Warm and verify the Go proxy index
+        if: inputs.publish
+        run: |
+          # The tag is go/<module>/vX.Y.Z; the proxy URL uses just vX.Y.Z.
+          # traceAI is case-sensitive: Go proxy module paths escape uppercase letters.
+          python3 - <<'PY'
+          import json, os, re, time, urllib.error, urllib.request
+          module = re.sub(r'[A-Z]', lambda m: '!' + m.group().lower(), os.environ['NAME'])
+          version = 'v' + os.environ['VERSION']
+          url = f'https://proxy.golang.org/{module}/@v/{version}.info'
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response: data = json.load(response)
+                  assert data['Version'] == version, data
+                  print(url, data['Version']); break
+              except urllib.error.HTTPError as e:
+                  if e.code not in (404, 410): raise
+                  time.sleep(20)
+          else: raise SystemExit('Go proxy has not indexed the new tag; check module visibility and rerun')
+          PY

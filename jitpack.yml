@@ -1,6 +1,6 @@
+# JitPack is the commit-pinned fallback; releases use Maven Central.
+# Build with JDK 21; the SDK POMs target Java 17 bytecode.
 jdk:
-  - openjdk17
-before_install:
-  - cd java
+  - openjdk21
 install:
-  - mvn install -DskipTests
+  - ./java/mvnw -B -ntp -f java/pom.xml -P jitpack -DskipTests install && python3 -I java/scripts/prepare_jitpack.py --group "${GROUP}.${ARTIFACT}" --version "$VERSION"

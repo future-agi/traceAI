@@ -1,0 +1,93 @@
+{
+  "name": "usage-gemini-json-array-cumulative-prefix",
+  "description": "Merge both complete members in the first chunk; neither sum snapshots nor read the future third member's usage/total.",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": [
+      {
+        "usageMetadata": {
+          "promptTokenCount": 12,
+          "toolUsePromptTokenCount": 3,
+          "cachedContentTokenCount": 10,
+          "candidatesTokenCount": 0,
+          "thoughtsTokenCount": 2
+        }
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "text": "Hi"
+                }
+              ]
+            }
+          }
+        ],
+        "usageMetadata": {
+          "candidatesTokenCount": 5,
+          "thoughtsTokenCount": 8
+        }
+      },
+      {
+        "usageMetadata": {
+          "candidatesTokenCount": 9,
+          "thoughtsTokenCount": 11,
+          "totalTokenCount": 45
+        }
+      }
+    ],
+    "chunk_sizes": [
+      283,
+      91
+    ],
+    "arrival_offsets_ms": [
+      10,
+      40
+    ],
+    "error_after_chunks": 1
+  },
+  "expect": {
+    "captured": true,
+    "name": "generate_content gemini-fixture",
+    "status": "ERROR",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.01,
+      "gen_ai.request.stream": true,
+      "gen_ai.usage.input_tokens": 15,
+      "gen_ai.usage.output_tokens": 13,
+      "gen_ai.usage.total_tokens": 28,
+      "gen_ai.usage.cache_read_tokens": 10,
+      "gen_ai.usage.output_tokens.reasoning": 8
+    },
+    "absent": [
+      "gen_ai.usage.cache_write_tokens",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "id": "chatcmpl-fixture-tool",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "gpt-4.1-mini-2025-04-14",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {"id": "call_fixture_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 52, "completion_tokens": 15, "total_tokens": 67}
+}

@@ -47,7 +47,7 @@ class TestVertexAIInstrumentor:
         instrumentor = VertexAIInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
         assert isinstance(dependencies, Collection)
-        assert "google-cloud-aiplatform >= 1.49.0" in dependencies
+        assert "google-cloud-aiplatform >=1.61.0,<=1.101.0" in dependencies
 
     def test_instrument_with_default_config(self):
         """Test instrumentation with default configuration."""
@@ -508,8 +508,11 @@ class TestUtilityFunctions:
         ]
         
         result = dict(_parse_predictions(predictions))
-        assert "llm.output_messages.0.message_content.image" in result
-        assert result["llm.output_messages.0.message_content.image"] == "base64data"
+        assert result == {
+            "gen_ai.output.messages.0.message.role": "assistant",
+            "gen_ai.output.messages.0.message.content.0.message_content.type": "image",
+            "gen_ai.output.messages.0.message.content.0.message_content.image": "base64data",
+        }
 
     def test_parse_predictions_empty(self):
         """Test _parse_predictions with empty predictions."""
@@ -527,9 +530,11 @@ class TestUtilityFunctions:
         
         result = dict(_parse_usage_metadata(mock_metadata))
         
-        assert "llm.token_count.prompt" in result
-        assert "llm.token_count.completion" in result
-        assert "llm.token_count.total" in result
+        assert result == {
+            "gen_ai.usage.input_tokens": 10,
+            "gen_ai.usage.output_tokens": 5,
+            "gen_ai.usage.total_tokens": 15,
+        }
 
     def test_parse_content_with_role(self):
         """Test _parse_content with role."""
@@ -672,7 +677,7 @@ class TestIntegrationScenarios:
         
         # Test dependencies
         dependencies = instrumentor.instrumentation_dependencies()
-        assert "google-cloud-aiplatform >= 1.49.0" in dependencies
+        assert "google-cloud-aiplatform >=1.61.0,<=1.101.0" in dependencies
 
     def test_wrapper_creation_and_basic_functionality(self):
         """Test wrapper creation and basic functionality."""

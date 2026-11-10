@@ -1,14 +1,18 @@
+import asyncio
 import copy
 import dataclasses
 import inspect
 import json
 import logging
+import re
 import weakref
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
-from functools import singledispatch, singledispatchmethod
-from importlib.metadata import version
+from functools import partial, singledispatch, singledispatchmethod
+from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from queue import SimpleQueue
 from threading import RLock, Thread
 from time import sleep, time, time_ns
@@ -30,7 +34,7 @@ from typing import (
     Union,
 )
 
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -44,7 +48,22 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from llama_index.core import QueryBundle
-from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
+# Legacy agents were removed in 0.13 in favor of workflow agents. Register
+# whichever real SDK types exist, including both on transitional releases.
+_agent_types = []
+try:
+    from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
+except ModuleNotFoundError as exc:
+    if exc.name not in {"llama_index.core.base.agent", "llama_index.core.base.agent.types"}:
+        raise
+else:
+    _agent_types.extend((BaseAgent, BaseAgentWorker))
+try:
+    from llama_index.core.agent.workflow import BaseWorkflowAgent
+except ImportError:
+    pass  # Not present on the supported 0.10 releases.
+else:
+    _agent_types.append(BaseWorkflowAgent)
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
@@ -60,7 +79,7 @@ from llama_index.core.base.response.schema import (
     Response,
     StreamingResponse,
 )
-from llama_index.core.bridge.pydantic import BaseModel
+from llama_index.core.bridge.pydantic import BaseModel, PrivateAttr
 from llama_index.core.instrumentation.event_handlers import BaseEventHandler
 from llama_index.core.instrumentation.events import BaseEvent
 from llama_index.core.instrumentation.events.agent import (
@@ -114,18 +133,63 @@ from llama_index.core.multi_modal_llms import MultiModalLLM
 from llama_index.core.schema import BaseNode, NodeWithScore, QueryType
 from llama_index.core.tools import BaseTool
 from llama_index.core.types import RESPONSE_TEXT_TYPE
-from llama_index.core.workflow.errors import WorkflowDone
+try:
+    from llama_index.core.workflow.errors import WorkflowDone
+except ModuleNotFoundError as exc:
+    if exc.name not in {"llama_index.core.workflow", "llama_index.core.workflow.errors"}:
+        raise
+    _workflow_done_exceptions = ()
+else:
+    _workflow_done_exceptions = (WorkflowDone,)
+
+
+def _cancelled_by_user_types() -> Tuple[type, ...]:
+    """WorkflowCancelledByUser from standalone Workflows and old core, if present."""
+    types: List[type] = []
+    for module_name in ("workflows.errors", "llama_index.core.workflow.errors"):
+        try:
+            cancel_type = getattr(import_module(module_name), "WorkflowCancelledByUser")
+        except (ImportError, AttributeError):
+            continue
+        if cancel_type not in types:
+            types.append(cancel_type)
+    return tuple(types)
+
+
+_cancelled_by_user_exceptions = _cancelled_by_user_types()
+
+# Workflows 2.16+ reports cancellation and step/run output through these
+# instrumentation events. Older releases do not define them.
+try:
+    from workflows.runtime.types.step_function import (
+        SpanCancelledEvent,
+        WorkflowRunOutputEvent,
+        WorkflowStepOutputEvent,
+    )
+except ImportError:
+    SpanCancelledEvent = WorkflowRunOutputEvent = WorkflowStepOutputEvent = None
+
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Span, Status, StatusCode, Tracer, set_span_in_context
 from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import PrivateAttr
 from pydantic.v1.json import pydantic_encoder
 from typing_extensions import assert_never
+from wrapt import FunctionWrapper
+
+from ._provider import provider_name
+from ._stream import _AsyncResponseStream, _ResponseStream, _response_span, _stream_capture
+from ._usage import token_counts
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# Cancellation is not an exception: the span is ERROR "cancelled" with these
+# attributes and no exception event, like the other traceAI integrations.
+LLAMA_INDEX_CANCELLED = "llama_index.cancelled"
+LLAMA_INDEX_CANCEL_REASON = "llama_index.cancel_reason"
+WORKFLOW_CANCELLED_BY_USER = "workflow cancelled by user"
 
 LLAMA_INDEX_VERSION = tuple(map(int, version("llama-index-core").split(".")[:3]))
 
@@ -155,36 +219,55 @@ class _StreamingStatus(Enum):
 
 
 class _Span(BaseSpan):
+    if not hasattr(BaseSpan, "model_fields"):
+        class Config:
+            # Pydantic v1 otherwise turns dispatch descriptors into fields.
+            keep_untouched = (singledispatchmethod,)
+
     _otel_span: Span = PrivateAttr()
+    _config: TraceConfig = PrivateAttr()
     _attributes: Dict[str, AttributeValue] = PrivateAttr()
+    _list_attr_len: DefaultDict[str, int] = PrivateAttr()
     _active: bool = PrivateAttr()
     _span_kind: Optional[str] = PrivateAttr()
     _parent: Optional["_Span"] = PrivateAttr()
     _first_token_timestamp: Optional[int] = PrivateAttr()
-    _end_time: Optional[int] = PrivateAttr()
+    _waiting_for_streaming: bool = PrivateAttr()
+    _response_streaming: bool = PrivateAttr()
     _last_updated_at: float = PrivateAttr()
     _stream_chunks: List[str] = PrivateAttr()
     _stream_content: str = PrivateAttr()
+    _cancelled: bool = PrivateAttr()
+    _cancel_reason: Optional[str] = PrivateAttr()
+    _workflow_run: bool = PrivateAttr()
+    _run_handler: Any = PrivateAttr()
 
     def __init__(
         self,
         otel_span: Span,
+        config: Optional[TraceConfig] = None,
         span_kind: Optional[str] = None,
         parent: Optional["_Span"] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+        self._config = config if config is not None else TraceConfig()
         self._otel_span = otel_span
         self._active = otel_span.is_recording()
         self._span_kind = span_kind
         self._parent = parent
         self._first_token_timestamp = None
         self._attributes = {}
-        self._end_time = None
+        self._waiting_for_streaming = False
+        self._response_streaming = False
         self._last_updated_at = time()
         self._list_attr_len: DefaultDict[str, int] = defaultdict(int)
         self._stream_chunks = []
         self._stream_content = ""
+        self._cancelled = False
+        self._cancel_reason = None
+        self._workflow_run = False
+        self._run_handler = None
 
     def __setitem__(self, key: str, value: AttributeValue) -> None:
         self._attributes[key] = value
@@ -192,11 +275,36 @@ class _Span(BaseSpan):
     def record_exception(self, exception: BaseException) -> None:
         self._otel_span.record_exception(exception)
 
+    def cancel(self, reason: Optional[str] = None) -> None:
+        """Mark the span cancelled; ``end()`` then exports ERROR "cancelled"."""
+        self._cancelled = True
+        if reason and not self._cancel_reason:
+            self._cancel_reason = reason
+
+    def finish(self, exception: Optional[BaseException] = None) -> None:
+        """End the span, treating cancellation exceptions as cancellation."""
+        if isinstance(exception, (GeneratorExit, asyncio.CancelledError, *_cancelled_by_user_exceptions)):
+            self.cancel(
+                WORKFLOW_CANCELLED_BY_USER
+                if isinstance(exception, _cancelled_by_user_exceptions)
+                else None
+            )
+            exception = None
+        self.end(exception)
+
     def end(self, exception: Optional[BaseException] = None) -> None:
         if not self._active:
             return
         self._active = False
-        if exception is None:
+        # A workflow run's handler holds the run's Context; release it on
+        # every way the span ends, including span_drop.
+        self._run_handler = None
+        if exception is None and self._cancelled:
+            self[LLAMA_INDEX_CANCELLED] = True
+            if self._cancel_reason:
+                self[LLAMA_INDEX_CANCEL_REASON] = self._cancel_reason
+            status = Status(status_code=StatusCode.ERROR, description="cancelled")
+        elif exception is None:
             status = Status(status_code=StatusCode.OK)
         else:
             self._otel_span.record_exception(exception)
@@ -207,11 +315,11 @@ class _Span(BaseSpan):
         self[GEN_AI_SPAN_KIND] = self._span_kind or CHAIN
         self._otel_span.set_status(status=status)
         self._otel_span.set_attributes(self._attributes)
-        self._otel_span.end(end_time=self._end_time)
+        self._otel_span.end()
 
     @property
     def waiting_for_streaming(self) -> bool:
-        return self._active and bool(self._end_time)
+        return self._active and self._waiting_for_streaming
 
     @property
     def active(self) -> bool:
@@ -232,6 +340,11 @@ class _Span(BaseSpan):
             pass
 
     def process_output(self, instance: Any, result: Any) -> None:
+        if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+            # Their __str__ consumes the generator, including provider I/O.
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(result))
+            self[OUTPUT_MIME_TYPE] = JSON
+            return
         if OUTPUT_VALUE in self._attributes:
             # If the output value was set up by event handling, we don't
             # need to continue
@@ -275,6 +388,8 @@ class _Span(BaseSpan):
     @process_instance.register(BaseLLM)
     @process_instance.register(MultiModalLLM)
     def _(self, instance: Union[BaseLLM, MultiModalLLM]) -> None:
+        if provider := provider_name(instance):
+            self["gen_ai.provider.name"] = provider
         if metadata := instance.metadata:
             self[GEN_AI_REQUEST_MODEL] = metadata.model_name
             self[GEN_AI_REQUEST_PARAMETERS] = metadata.json(exclude_unset=True)
@@ -298,7 +413,14 @@ class _Span(BaseSpan):
             pass
 
     def process_event(self, event: BaseEvent) -> None:
-        self._process_event(event)
+        try:
+            self._process_event(event)
+        except Exception:
+            # Reading attributes from an event must never keep a finished
+            # stream's span open until the sweeper ends it.
+            logger.exception(
+                f"Error processing event of type {event.__class__.__qualname__}"
+            )
         if not self.waiting_for_streaming:
             return
         if isinstance(event, STREAMING_FINISHED_EVENTS):
@@ -313,26 +435,62 @@ class _Span(BaseSpan):
                 self._first_token_timestamp = timestamp
             self._last_updated_at = time()
             self.notify_parent(_StreamingStatus.IN_PROGRESS)
-        elif isinstance(event, ExceptionEvent):
-            self.end(event.exception)
-            self.notify_parent(_StreamingStatus.FINISHED)
+        elif isinstance(event, (ExceptionEvent, StreamChatErrorEvent)):
+            self.finish(event.exception)
+            self.notify_parent(_StreamingStatus.FINISHED, event.exception)
 
-    def notify_parent(self, status: _StreamingStatus) -> None:
+    def process_response_chunk(self, chunk: Any) -> None:
+        if not self.active:
+            return
+        if isinstance(chunk, str):
+            self._stream_content += chunk
+            self[OUTPUT_VALUE] = self._stream_content
+            self._attributes.pop(OUTPUT_MIME_TYPE, None)
+        self._last_updated_at = time()
+        self.notify_parent(_StreamingStatus.IN_PROGRESS)
+
+    def notify_parent(
+        self, status: _StreamingStatus, exception: Optional[BaseException] = None
+    ) -> None:
         if not (parent := self._parent) or not parent.waiting_for_streaming:
             return
         if status is _StreamingStatus.IN_PROGRESS:
             parent._last_updated_at = time()
         else:
-            parent.end()
-        parent.notify_parent(status)
+            if parent._response_streaming:
+                # A container can synthesize more tokens after the model ends.
+                # Its observer owns the final outcome, including errors/close.
+                return
+            if self._cancelled:
+                parent.cancel(self._cancel_reason)
+            parent.finish(exception)
+        parent.notify_parent(status, exception)
 
     @singledispatchmethod
     def _process_event(self, event: BaseEvent) -> None:
-        logger.warning(f"Unhandled event of type {event.__class__.__qualname__}")
+        # LlamaIndex packages add event types over time; ignoring one is not
+        # a problem the application needs to see.
+        logger.debug("Unhandled event of type %s", event.__class__.__qualname__)
+
+    if SpanCancelledEvent is not None:
+
+        @_process_event.register(SpanCancelledEvent)
+        def _(self, event: Any) -> None:
+            self.cancel(event.reason)
+
+    if WorkflowStepOutputEvent is not None:
+
+        @_process_event.register(WorkflowStepOutputEvent)
+        @_process_event.register(WorkflowRunOutputEvent)
+        def _(self, event: Any) -> None:
+            # The step or run result already reaches prepare_to_exit_span.
+            ...
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        # Error payloads can echo hidden inputs even when outputs are visible.
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepStartEvent) -> None:
@@ -380,15 +538,24 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: EmbeddingEndEvent) -> None:
+        # The chunks are the embedded input text. fi-instrumentation-otel 1.2.2
+        # and earlier do not mask the embedding text or every vector copy, so
+        # the hide flags are applied here as well.
+        hide_text = _hides_embedding_text(self._config)
+        hide_vectors = bool(getattr(self._config, "hide_embedding_vectors", False))
         i = self._list_attr_len[EMBEDDING_EMBEDDINGS]
         for text, vector in zip(event.chunks, event.embeddings):
-            self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_TEXT}"] = text
-            self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_VECTOR}"] = vector
+            if not hide_text:
+                self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_TEXT}"] = text
+            if not hide_vectors:
+                self[f"{EMBEDDING_EMBEDDINGS}.{i}.{EMBEDDING_VECTOR}"] = vector
             i += 1
         self._list_attr_len[EMBEDDING_EMBEDDINGS] = i
-        self[OUTPUT_VALUE] = safe_json_dumps(event.embeddings)
-        self[EMBEDDING_EMBEDDINGS] = safe_json_dumps(event.embeddings)
-        self[OUTPUT_VALUE] = event.model_dump_json()
+        if not hide_vectors:
+            # The output of an embedding call is its vectors, not the chunks.
+            vectors = safe_json_dumps(event.embeddings)
+            self[EMBEDDING_EMBEDDINGS] = vectors
+            self[OUTPUT_VALUE] = vectors
 
     @_process_event.register
     def _(self, event: StreamChatStartEvent) -> None:
@@ -408,14 +575,16 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: StreamChatErrorEvent) -> None:
-        self.record_exception(event.exception)
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
+        if not self.waiting_for_streaming:
+            self.record_exception(event.exception)
+        if not self._config.hide_error_details:
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatEndEvent) -> None:
         self[OUTPUT_VALUE] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
-        self._stream_content.clear()
+        self._stream_content = ""
         self._stream_chunks.clear()
 
     @_process_event.register
@@ -458,7 +627,9 @@ class _Span(BaseSpan):
     def _(self, event: LLMCompletionStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[GEN_AI_PROMPTS] = [event.prompt]
+        # The legacy prompt-list attribute is not masked by older core SDKs.
+        if not (self._config.hide_inputs or self._config.hide_input_messages or self._config.hide_input_text):
+            self[GEN_AI_PROMPTS] = [event.prompt]
         self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
@@ -587,13 +758,10 @@ class _Span(BaseSpan):
     def _extract_token_counts(
         self, response: Union[ChatResponse, CompletionResponse]
     ) -> None:
-        if (
-            (raw := getattr(response, "raw", None))
-            and hasattr(raw, "get")
-            and (usage := raw.get("usage"))
-        ):
-            for k, v in _get_token_counts(usage):
-                self[k] = v
+        raw = getattr(response, "raw", None)
+        usage = raw.get("usage") if isinstance(raw, Mapping) else getattr(raw, "usage", None)
+        for k, v in _get_token_counts(usage):
+            self[k] = v
         if (
             (raw := getattr(response, "raw", None))
             and (model_extra := getattr(raw, "model_extra", None))
@@ -644,7 +812,8 @@ class _Span(BaseSpan):
                     for k, v in _get_tool_call(tool_call):
                         self[f"{prefix}.{i}.{MESSAGE_TOOL_CALLS}.{j}.{k}"] = v
 
-            if block := message.blocks:
+            # ChatMessage.blocks exists from llama-index-core 0.12.3.
+            if block := getattr(message, "blocks", None):
                 for index, block in enumerate(block):
                     if block.block_type == "audio":
                         self[
@@ -756,7 +925,7 @@ class _ExportQueue:
 
     def _del(self, item: _QueueItem) -> None:
         with self.lock:
-            del self.spans[item.span.id_]
+            self.spans.pop(item.span.id_, None)
 
     def _sweep(self, q: "SimpleQueue[Optional[_QueueItem]]") -> None:
         while True:
@@ -773,7 +942,9 @@ class _ExportQueue:
                     self._del(item)
                     continue
                 if t - span._last_updated_at > 60:
+                    span.cancel("stream idle timeout")
                     span.end()
+                    span.notify_parent(_StreamingStatus.FINISHED)
                     self._del(item)
                     continue
                 item.last_touched_at = t
@@ -783,10 +954,12 @@ class _ExportQueue:
 
 class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
     _otel_tracer: Tracer = PrivateAttr()
+    _config: TraceConfig = PrivateAttr()
     _export_queue: _ExportQueue = PrivateAttr()
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
         super().__init__()
+        self._config = config if config is not None else TraceConfig()
         self._otel_tracer = tracer
         self._export_queue = _ExportQueue()
 
@@ -803,6 +976,13 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             parent = self.open_spans.get(parent_span_id) if parent_span_id else None
+        if parent is None and parent_span_id:
+            # A lazy stream can create model spans after its call has returned.
+            parent = self._export_queue.find(parent_span_id)
+        if parent is None:
+            parent = _response_span.get()
+            if parent is not None:
+                parent_span_id = parent.id_
         otel_span = self._otel_tracer.start_span(
             name=id_.partition("-")[0],
             start_time=time_ns(),
@@ -811,6 +991,7 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         )
         span = _Span(
             otel_span=otel_span,
+            config=self._config,
             span_kind=_init_span_kind(instance),
             parent=parent,
             id_=id_,
@@ -818,6 +999,11 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
         )
         span.process_instance(instance)
         span.process_input(instance, bound_args)
+        if (capture := _workflow_run_capture.get()) is not None:
+            workflow, prefixes, captured = capture
+            if not captured and instance is workflow and id_.startswith(prefixes):
+                span._workflow_run = True
+                captured.append(span)
         return span
 
     def prepare_to_exit_span(
@@ -832,21 +1018,59 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             span = self.open_spans.get(id_)
+        if span and span._workflow_run:
+            return self._exit_workflow_run(span, instance, result)
         if span:
+            if isinstance(result, (StreamingResponse, AsyncStreamingResponse)):
+                span.process_output(instance, result)
+                if result.response_gen is not None and result.response_txt is None:
+                    span._waiting_for_streaming = span._response_streaming = True
+                    stream = result.response_gen
+                    if isinstance(stream, _ResponseStream):
+                        stream._self_spans.append(span)
+                    else:
+                        proxy = (
+                            _AsyncResponseStream
+                            if isinstance(result, AsyncStreamingResponse)
+                            else _ResponseStream
+                        )
+                        result.response_gen = proxy(
+                            stream, [span], self._finish_response_children
+                        )
+                    self._export_queue.put(span)
+                    return span
             if isinstance(instance, (BaseLLM, MultiModalLLM)) and (
                 isinstance(result, Generator)
                 and result.gi_frame is not None
                 or isinstance(result, AsyncGenerator)
                 and result.ag_frame is not None
             ):
-                span._end_time = time_ns()
+                span._waiting_for_streaming = True
                 self._export_queue.put(span)
+                if (capture := _stream_capture.get()) is not None:
+                    capture.append(span)
                 return span
             span.process_output(instance, result)
             span.end()
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
+
+    def _finish_response_children(self, span: _Span, error: Optional[BaseException]) -> None:
+        # Closing a synthesis generator need not close the LLM generators held
+        # inside its frame. Finish only this response's still-pending descendants,
+        # including models created lazily after the response was returned.
+        with self._export_queue.lock:
+            pending = list(self._export_queue.spans.values())
+        for child in pending:
+            if not child.active:
+                continue
+            parent = child._parent
+            while parent is not None:
+                if parent is span:
+                    child.finish(error)
+                    break
+                parent = parent._parent
 
     def prepare_to_drop_span(
         self,
@@ -860,22 +1084,159 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             return None
         with self.lock:
             span = self.open_spans.get(id_)
+        if span is None:
+            span = self._export_queue.find(id_)
         if span:
-            if err and isinstance(err, WorkflowDone):
+            if err and isinstance(err, _workflow_done_exceptions):
                 span.end()
                 return span
-            span.end(err)
+            span.finish(err)
+            span.notify_parent(_StreamingStatus.FINISHED, err)
         else:
             logger.warning(f"Open span is missing for {id_=}")
         return span
+
+    def _exit_workflow_run(self, span: _Span, instance: Any, result: Any) -> Optional[_Span]:
+        """End a run span of Workflows < 2.16 with the run's real outcome.
+
+        Those releases exit the run span with ``result=None`` when the run
+        fails, times out or is cancelled, and never drop it. The handler
+        returned by ``run()`` still holds the outcome, so read it from there.
+        """
+        handler = span._run_handler
+        if handler is None and _run_outcome_source(result) is not None:
+            # Workflows 2.14.0 and 2.14.1 return a handler that is not a
+            # Future, so the span exits before the run starts. Keep it open
+            # until the run finishes so steps nest under it.
+            handler = span._run_handler = result
+        source = _run_outcome_source(handler)
+        if source is not None and not source.done():
+            source.add_done_callback(partial(self._finish_workflow_run, span))
+            return None
+        exception = _run_outcome_exception(source)
+        if exception is None:
+            span.process_output(instance, result)
+        span.finish(exception)
+        return span
+
+    def _finish_workflow_run(self, span: _Span, source: "asyncio.Future[Any]") -> None:
+        with self.lock:
+            self.open_spans.pop(span.id_, None)
+        exception = _run_outcome_exception(source)
+        if exception is None:
+            span.process_output(None, source.result())
+        span.finish(exception)
+
+
+def _run_outcome_source(handler: Any) -> "Optional[asyncio.Future[Any]]":
+    """Return the Future that completes with the workflow run's outcome."""
+    for source in (getattr(handler, "_result_task", None), handler):
+        if isinstance(source, asyncio.Future):
+            return source
+    return None
+
+
+def _run_outcome_exception(source: "Optional[asyncio.Future[Any]]") -> Optional[BaseException]:
+    if source is None or not source.done():
+        return None
+    if source.cancelled():
+        return asyncio.CancelledError()
+    return source.exception()
+
+
+# (workflow instance, span id prefixes, captured spans) for the run() call in
+# progress, so new_span can tag the run span that call creates.
+_RunCapture = Tuple[Any, Tuple[str, ...], List[_Span]]
+_workflow_run_capture: "ContextVar[Optional[_RunCapture]]" = ContextVar(
+    "traceai_llamaindex_workflow_run_capture", default=None
+)
+
+
+def _wrap_workflow_run(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+    if instance is None:
+        return wrapped(*args, **kwargs)
+    captured: List[_Span] = []
+    # Standalone Workflows names the span after the subclass ("MyFlow.run-");
+    # the class embedded in core before 0.12.43 uses the function's qualname
+    # ("Workflow.run-").
+    prefixes = (
+        f"{type(instance).__name__}.{wrapped.__name__}-",
+        f"{wrapped.__qualname__}-",
+    )
+    token = _workflow_run_capture.set((instance, prefixes, captured))
+    try:
+        handler = wrapped(*args, **kwargs)
+    finally:
+        _workflow_run_capture.reset(token)
+    if captured and captured[0]._active:
+        # The span exits from a done callback, which the event loop runs
+        # after this returns, so the handler is attached in time.
+        captured[0]._run_handler = handler
+    return handler
+
+
+def _workflows_version() -> Optional[Tuple[int, int]]:
+    try:
+        match = re.match(r"(\d+)\.(\d+)", version("llama-index-workflows"))
+    except PackageNotFoundError:
+        return None
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _legacy_workflow_classes() -> List[type]:
+    """Workflow classes whose run span ignores the run's outcome.
+
+    Workflows 2.16 manages the run span itself and drops it on failure, so
+    only older standalone releases and the old core-embedded class need help.
+    """
+    classes: List[type] = []
+    workflows_version = _workflows_version()
+    if workflows_version is not None and workflows_version < (2, 16):
+        try:
+            from workflows.workflow import Workflow
+        except ImportError:
+            pass
+        else:
+            classes.append(Workflow)
+    try:
+        from llama_index.core.workflow.workflow import Workflow as CoreWorkflow
+    except ImportError:
+        pass
+    else:
+        if CoreWorkflow not in classes and not CoreWorkflow.__module__.startswith("workflows."):
+            classes.append(CoreWorkflow)
+    return classes
+
+
+def _is_run_wrapper(attr: Any) -> bool:
+    return isinstance(attr, FunctionWrapper) and attr._self_wrapper is _wrap_workflow_run
+
+
+def instrument_workflow_runs() -> List[Tuple[type, str]]:
+    patched = []
+    for cls in _legacy_workflow_classes():
+        for name in ("run", "run_from"):
+            attr = cls.__dict__.get(name)
+            if attr is None or _is_run_wrapper(attr):
+                continue
+            setattr(cls, name, FunctionWrapper(attr, _wrap_workflow_run))
+            patched.append((cls, name))
+    return patched
+
+
+def uninstrument_workflow_runs(patched: Iterable[Tuple[type, str]]) -> None:
+    for cls, name in patched:
+        attr = cls.__dict__.get(name)
+        if _is_run_wrapper(attr):
+            setattr(cls, name, attr.__wrapped__)
 
 
 class EventHandler(BaseEventHandler, extra="allow"):
     _span_handler: _SpanHandler = PrivateAttr()
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
         super().__init__()
-        self._span_handler = _SpanHandler(tracer=tracer)
+        self._span_handler = _SpanHandler(tracer=tracer, config=config)
 
     def handle(self, event: BaseEvent, **kwargs: Any) -> Any:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
@@ -895,6 +1256,13 @@ class EventHandler(BaseEventHandler, extra="allow"):
                     f"Error processing event of type {event.__class__.__qualname__}"
                 )
         return event
+
+
+def _hides_embedding_text(config: TraceConfig) -> bool:
+    return any(
+        getattr(config, name, False)
+        for name in ("hide_inputs", "hide_input_messages", "hide_input_text")
+    )
 
 
 def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
@@ -917,33 +1285,8 @@ def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
             yield TOOL_CALL_FUNCTION_ARGUMENTS_JSON, arguments
 
 
-def _get_token_counts(
-    usage: Union[object, Mapping[str, Any]]
-) -> Iterator[Tuple[str, Any]]:
-    if isinstance(usage, Mapping):
-        return _get_token_counts_from_mapping(usage)
-    if isinstance(usage, object):
-        return _get_token_counts_from_object(usage)
-
-
-def _get_token_counts_from_object(usage: object) -> Iterator[Tuple[str, Any]]:
-    if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
-    if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
-    if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
-
-
-def _get_token_counts_from_mapping(
-    usage_mapping: Mapping[str, Any],
-) -> Iterator[Tuple[str, Any]]:
-    if (prompt_tokens := usage_mapping.get("prompt_tokens")) is not None:
-        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
-    if (completion_tokens := usage_mapping.get("completion_tokens")) is not None:
-        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
-    if (total_tokens := usage_mapping.get("total_tokens")) is not None:
-        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
+def _get_token_counts(usage: Any) -> Iterator[Tuple[str, Any]]:
+    return token_counts(usage)
 
 
 @singledispatch
@@ -951,14 +1294,12 @@ def _init_span_kind(_: Any) -> Optional[str]:
     return None
 
 
-@_init_span_kind.register
-def _(_: BaseAgent) -> str:
+def _agent_span_kind(_: Any) -> str:
     return AGENT
 
 
-@_init_span_kind.register
-def _(_: BaseAgentWorker) -> str:
-    return AGENT
+for _agent_type in _agent_types:
+    _init_span_kind.register(_agent_type, _agent_span_kind)
 
 
 @_init_span_kind.register
@@ -1085,11 +1426,19 @@ def _to_dict(obj: Any) -> Any:
     """
     Convert any class instance to a dictionary.
     """
+    if isinstance(obj, (StreamingResponse, AsyncStreamingResponse)):
+        # dataclasses.asdict deep-copies the live generator; str drains it.
+        # Keep only already available data until the consumer reads tokens.
+        return {
+            "response_txt": obj.response_txt,
+            "metadata": _to_dict(obj.metadata),
+            "source_nodes": [_show_repr_str(node) for node in obj.source_nodes],
+        }
     if dataclasses.is_dataclass(obj):
         return dataclasses.asdict(obj)
     elif isinstance(obj, BaseModel):
         try:
-            return obj.model_dump()
+            return obj.model_dump() if hasattr(obj, "model_dump") else obj.dict()
         except Exception:
             return str(obj)
     elif hasattr(obj, "__dict__"):

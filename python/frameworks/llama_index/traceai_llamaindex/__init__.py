@@ -31,6 +31,8 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
         "_event_handler",
         "_use_legacy_callback_handler",  # deprecated
         "_original_global_handler",  # deprecated
+        "_workflow_run_patches",
+        "_stream_instrumentation",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -66,6 +68,8 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
         )
         self._tracer = tracer
         self._event_handler = None
+        self._workflow_run_patches = []
+        self._stream_instrumentation = None
 
         if self._use_legacy_callback_handler:
             import llama_index.core
@@ -76,9 +80,10 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
         else:
             from llama_index.core.instrumentation import get_dispatcher
 
-            from ._handler import EventHandler
+            from ._handler import EventHandler, instrument_workflow_runs
+            from ._stream import StreamInstrumentation
 
-            self._event_handler = EventHandler(tracer=tracer)
+            self._event_handler = EventHandler(tracer=tracer, config=config)
             self._span_handler = self._event_handler._span_handler
             dispatcher = get_dispatcher()
             for span_handler in dispatcher.span_handlers:
@@ -91,6 +96,9 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
                     break
             else:
                 dispatcher.add_event_handler(self._event_handler)
+            self._workflow_run_patches = instrument_workflow_runs()
+            self._stream_instrumentation = StreamInstrumentation()
+            self._stream_instrumentation.install()
 
         if Protect is not None:
             self._original_protect = Protect.protect
@@ -112,6 +120,14 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             if self._event_handler is None:
                 return
             from llama_index.core.instrumentation import get_dispatcher
+
+            from ._handler import uninstrument_workflow_runs
+
+            if self._stream_instrumentation is not None:
+                self._stream_instrumentation.uninstall()
+                self._stream_instrumentation = None
+            uninstrument_workflow_runs(self._workflow_run_patches)
+            self._workflow_run_patches = []
 
             dispatcher = get_dispatcher()
             dispatcher.span_handlers[:] = filter(

@@ -1,0 +1,45 @@
+name: Release (NuGet build)
+on:
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        required: true
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      PROJECT: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build and pack
+        run: dotnet pack "$PROJECT" --configuration Release --output "$RUNNER_TEMP/dist"
+      - name: Install the exact local nupkg in a clean consumer
+        working-directory: ${{ runner.temp }}
+        run: |
+          dotnet new console --framework net10.0 --output smoke
+          dotnet add smoke package "$NAME" --version "$VERSION" --source "$RUNNER_TEMP/dist" --no-restore
+          dotnet restore smoke --source "$RUNNER_TEMP/dist" --source https://api.nuget.org/v3/index.json
+          dotnet build smoke --no-restore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error

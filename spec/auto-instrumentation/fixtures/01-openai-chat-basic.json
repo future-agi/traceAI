@@ -1,0 +1,113 @@
+{
+  "name": "openai-chat-basic",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o-mini",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are terse."
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Say hi"
+            },
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": "https://x/y.png"
+              }
+            }
+          ]
+        }
+      ],
+      "temperature": 0.2,
+      "max_completion_tokens": 64,
+      "seed": 7
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "chatcmpl-1",
+      "object": "chat.completion",
+      "model": "gpt-4o-mini-2024-07-18",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Hi."
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 12,
+        "completion_tokens": 2,
+        "total_tokens": 14,
+        "prompt_tokens_details": {
+          "cached_tokens": 4
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 1
+        }
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-mini",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.span.kind": "LLM",
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-4o-mini",
+      "gen_ai.response.model": "gpt-4o-mini-2024-07-18",
+      "gen_ai.response.id": "chatcmpl-1",
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ],
+      "gen_ai.usage.input_tokens": 12,
+      "gen_ai.usage.output_tokens": 2,
+      "gen_ai.usage.total_tokens": 14,
+      "gen_ai.usage.cache_read_tokens": 4,
+      "gen_ai.usage.output_tokens.reasoning": 1,
+      "gen_ai.request.temperature": 0.2,
+      "gen_ai.request.max_tokens": 64,
+      "gen_ai.request.seed": 7,
+      "gen_ai.input.messages.0.message.role": "system",
+      "gen_ai.input.messages.0.message.content": "You are terse.",
+      "gen_ai.input.messages.1.message.role": "user",
+      "gen_ai.input.messages.1.message.content": "Say hi",
+      "gen_ai.output.messages.0.message.role": "assistant",
+      "gen_ai.output.messages.0.message.content": "Hi.",
+      "output.value": "Hi.",
+      "output.mime_type": "text/plain",
+      "input.mime_type": "application/json",
+      "server.address": "api.openai.com",
+      "server.port": 443,
+      "http.request.method": "POST",
+      "http.response.status_code": 200,
+      "traceai.capture.layer": "wire",
+      "traceai.wire.endpoint": "openai.chat_completions"
+    },
+    "absent": [
+      "gen_ai.request.stream",
+      "gen_ai.request.top_p",
+      "error.type"
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+# Changelog
+
+## [0.1.6] - pending release
+### Fix
+- Function-call arguments are kept in exported messages. Legacy OpenAI `function_call.arguments` was read as `args`, so `gen_ai.input.messages` / `gen_ai.output.messages` dropped the arguments; `args` is still accepted as a fallback.
+
+## [0.1.5](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.4...npm-traceai-langchain-v0.1.5) (2026-11-05)
+
+
+### Bug Fixes
+
+* **langchain:** keep LangGraph pauses and handoffs out of error spans ([#508](https://github.com/future-agi/traceAI/issues/508)) ([054b9ba](https://github.com/future-agi/traceAI/commit/054b9ba94b8084a9da57a573859edd6183b966ee))
+* **langchain:** protect retrieval outputs and close cancelled streams ([#561](https://github.com/future-agi/traceAI/issues/561)) ([8396fcc](https://github.com/future-agi/traceAI/commit/8396fcc3874186408615f44d8925c9cd9285cea4))
+
+## [0.1.4](https://github.com/future-agi/traceAI/compare/npm-traceai-langchain-v0.1.3...npm-traceai-langchain-v0.1.4) (2026-11-01)
+
+
+### Bug Fixes
+
+* **npm:** report the real package version in instrumentation metadata ([9fa1ee0](https://github.com/future-agi/traceAI/commit/9fa1ee02e59618c0f68d63c8959954ff00e59839))
+
+## [0.1.3] - 2026-10-18
+### Fix
+- A failed run's span status description is now the error message only. It was `run.error`, which LangChain builds as the message plus the full stack trace (including local file paths). The status is built from the error object passed to `handleLLMError` / `handleChainError` / `handleToolError` / `handleRetrieverError`; the stack trace stays only in `exception.stacktrace` on the exception event.
+- Error spans get `error.type` (provider error code or error class) and follow `hideErrorDetails` (requires `@traceai/fi-core` 1.1.0).
+- Depends on `@traceai/fi-core` 1.1.0, which also hides `llm.prompt_template.variables` with `hideInputs` and masks attributes passed at span creation. 0.1.2 was published against `@traceai/fi-core` `^0.1.16`.
+
+### Behaviour change
+- With any content-hiding flag on (e.g. `hideInputs` / `FI_HIDE_INPUTS`), error spans have no status description, and the exception event has no `exception.message` or `exception.stacktrace` (it keeps `exception.type`). Set `hideErrorDetails: false` to keep the details.

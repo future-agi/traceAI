@@ -1,28 +1,9 @@
-/**
- * OpenTelemetry instrumentation for Pipecat.
- *
- * Pipecat is a voice AI pipeline framework for building conversational agents.
- * This instrumentation captures pipeline execution, frame processing,
- * and transport events.
- */
-
 import {
   InstrumentationBase,
   InstrumentationNodeModuleDefinition,
 } from "@opentelemetry/instrumentation";
-import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  context,
-  trace,
-} from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-} from "@traceai/fi-semantic-conventions";
+import { context, createContextKey, diag, Span, SpanKind, SpanStatusCode, trace, TracerProvider } from "@opentelemetry/api";
+import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
 
 export interface PipecatInstrumentationConfig {
@@ -30,502 +11,432 @@ export interface PipecatInstrumentationConfig {
   traceConfig?: TraceConfigOptions;
 }
 
-/**
- * Pipecat Instrumentation class.
- *
- * Provides automatic instrumentation for the Pipecat voice AI SDK.
- */
+type ClientMethod = (...args: unknown[]) => unknown;
+type ClientPrototype = Record<string, ClientMethod>;
+const METHODS = {
+  connect: "client.connect",
+  disconnect: "client.disconnect",
+  action: "action",
+  sendMessage: "send_message",
+  sendClientMessage: "client.send_message",
+  sendClientRequest: "client.request",
+  sendText: "client.send_text",
+} as const;
+type ConnectionScope = {
+  instance: object;
+  active: boolean;
+  invoking: boolean;
+  startingBot: boolean;
+  handshaking: boolean;
+  resolver?: unknown;
+  delegatedParams?: { value: unknown };
+};
+type FinishSpan = (code: SpanStatusCode) => void;
+type PendingConnections = {
+  attempts: Map<FinishSpan, ConnectionScope>;
+  claimedResolvers: WeakSet<object>;
+  connected: boolean;
+  successes: number;
+  disconnections: Map<FinishSpan, ConnectionScope>[];
+  detach: () => void;
+};
+const CONNECTION_SCOPE = createContextKey("traceai.pipecat.connection-scope");
+const owners = new WeakMap<object, PipecatInstrumentation>();
+let patchedCount = 0;
+
+/** Node operation tracing. For browser/ESM event tracing use observePipecatClient. */
 export class PipecatInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
-  private _traceConfig?: TraceConfigOptions;
-  private pipelineSpans: Map<string, Span> = new Map();
+  private traceConfig?: TraceConfigOptions;
+  private patches?: Map<ClientPrototype, string[]>;
+  private manualModules?: Set<unknown>;
+  // Iterable so unpatch/disable can finish spans and restore owned callbacks.
+  private pendingConnections = new Map<object, PendingConnections>();
+  private initializingTransports = new WeakSet<object>();
 
   constructor(config: PipecatInstrumentationConfig = {}) {
-    super(
-      "@traceai/fi-instrumentation-pipecat",
-      VERSION,
-      config.instrumentationConfig || {}
-    );
-    this._traceConfig = config.traceConfig;
+    super("@traceai/fi-instrumentation-pipecat", VERSION, config.instrumentationConfig ?? {});
+    this.traceConfig = config.traceConfig;
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this.traceConfig });
+  }
+
+  override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({
-      tracer: this.tracer,
-      traceConfig: this._traceConfig,
-    });
+    this.refreshTracer();
+    for (const module of this.manualModules ?? []) this.patch(module);
+  }
+
+  override disable(): void {
+    super.disable();
+    for (const prototype of this.patches?.keys() ?? []) this.unpatchPrototype(prototype);
   }
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
+    return new InstrumentationNodeModuleDefinition(
       "@pipecat-ai/client-js",
-      ["^0.2.0", "^0.3.0"],
+      ["^0.3.0", "^1.16.0"],
       this.patch.bind(this),
-      this.unpatch.bind(this)
+      this.unpatch.bind(this),
     );
+  }
+
+  /** Supports CommonJS modules and immutable ESM namespace objects. */
+  manuallyInstrument(pipecatModule: unknown): void {
+    if (pipecatModule == null) return;
+    (this.manualModules ??= new Set()).add(pipecatModule);
+    if (this.isEnabled()) this.patch(pipecatModule);
+  }
+
+  private prototypes(module: unknown): ClientPrototype[] {
+    if (!module || typeof module !== "object") return [];
+    const exports = module as Record<string, { prototype?: ClientPrototype } | undefined>;
+    return [exports.RTVIClient?.prototype, exports.PipecatClient?.prototype]
+      .filter((prototype): prototype is ClientPrototype => !!prototype);
+  }
+
+  private patch(module: unknown): unknown {
+    for (const prototype of this.prototypes(module)) {
+      if (owners.has(prototype)) continue;
+      const methods: string[] = [];
+      for (const [method, operation] of Object.entries(METHODS)) {
+        if (typeof prototype[method] !== "function") continue;
+        const instrumentation = this;
+        this._wrap(prototype, method, (original: ClientMethod) => function (this: unknown, ...args: unknown[]) {
+          return instrumentation.traceOperation(original, this, args, operation);
+        });
+        methods.push(method);
+      }
+      // Follow the SDK's endpoint delegation, without reading connection arguments.
+      // These helpers add no spans of their own.
+      for (const method of ["startBotAndConnect", "startBot"] as const) {
+        if (typeof prototype[method] !== "function") continue;
+        const instrumentation = this;
+        this._wrap(prototype, method, (original: ClientMethod) => function (this: unknown, ...args: unknown[]) {
+          return instrumentation.followDelegation(original, this, args, method);
+        });
+        methods.push(method);
+      }
+      // Legacy disconnect() reinitializes the transport after its close callbacks.
+      // initialize()'s default state is not another close boundary: cancellation
+      // still belongs to that disconnect's captured attempts, not a callback retry.
+      if (typeof prototype._initialize === "function") {
+        const instrumentation = this;
+        this._wrap(prototype, "_initialize", (original: ClientMethod) => function (this: object, ...args: unknown[]) {
+          const initializing = instrumentation.initializingTransports;
+          const nested = initializing.has(this);
+          initializing.add(this);
+          try { return original.apply(this, args); }
+          finally { if (!nested) initializing.delete(this); }
+        });
+        methods.push("_initialize");
+      }
+      if (methods.length) {
+        (this.patches ??= new Map()).set(prototype, methods);
+        owners.set(prototype, this);
+        patchedCount++;
+      }
+    }
     return module;
   }
 
-  /**
-   * Manually instrument the @pipecat-ai/client-js module.
-   */
-  manuallyInstrument(pipecatModule: any): void {
-    if (pipecatModule == null) return;
-    this.patch(pipecatModule);
+  private unpatch(module: unknown): void {
+    for (const prototype of this.prototypes(module)) this.unpatchPrototype(prototype);
   }
 
-  private patch(pipecatModule: any & { _fiPatched?: boolean }): any {
-    if (pipecatModule?._fiPatched || _isFIPatched) {
-      return pipecatModule;
-    }
-
-    const instrumentation = this;
-
-    // Wrap RTVIClient.connect
-    if (pipecatModule.RTVIClient?.prototype?.connect) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "connect",
-        (original: Function) => {
-          return function patchedConnect(this: any, ...args: any[]) {
-            return instrumentation.traceClientConnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.disconnect
-    if (pipecatModule.RTVIClient?.prototype?.disconnect) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "disconnect",
-        (original: Function) => {
-          return function patchedDisconnect(this: any, ...args: any[]) {
-            return instrumentation.traceClientDisconnect(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.action
-    if (pipecatModule.RTVIClient?.prototype?.action) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "action",
-        (original: Function) => {
-          return function patchedAction(this: any, ...args: any[]) {
-            return instrumentation.traceAction(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap RTVIClient.sendMessage (for chat/text interactions)
-    if (pipecatModule.RTVIClient?.prototype?.sendMessage) {
-      this._wrap(
-        pipecatModule.RTVIClient.prototype,
-        "sendMessage",
-        (original: Function) => {
-          return function patchedSendMessage(this: any, ...args: any[]) {
-            return instrumentation.traceSendMessage(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap Pipeline class if available
-    if (pipecatModule.Pipeline?.prototype?.run) {
-      this._wrap(
-        pipecatModule.Pipeline.prototype,
-        "run",
-        (original: Function) => {
-          return function patchedRun(this: any, ...args: any[]) {
-            return instrumentation.tracePipelineRun(original, this, args);
-          };
-        }
-      );
-    }
-
-    // Wrap FrameProcessor if available
-    if (pipecatModule.FrameProcessor?.prototype?.processFrame) {
-      this._wrap(
-        pipecatModule.FrameProcessor.prototype,
-        "processFrame",
-        (original: Function) => {
-          return function patchedProcessFrame(this: any, ...args: any[]) {
-            return instrumentation.traceFrameProcess(original, this, args);
-          };
-        }
-      );
-    }
-
-    pipecatModule._fiPatched = true;
-    _isFIPatched = true;
-    return pipecatModule;
-  }
-
-  private unpatch(pipecatModule: any & { _fiPatched?: boolean }): void {
-    if (pipecatModule?.RTVIClient?.prototype?.connect) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "connect");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.disconnect) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "disconnect");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.action) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "action");
-    }
-    if (pipecatModule?.RTVIClient?.prototype?.sendMessage) {
-      this._unwrap(pipecatModule.RTVIClient.prototype, "sendMessage");
-    }
-    if (pipecatModule?.Pipeline?.prototype?.run) {
-      this._unwrap(pipecatModule.Pipeline.prototype, "run");
-    }
-    if (pipecatModule?.FrameProcessor?.prototype?.processFrame) {
-      this._unwrap(pipecatModule.FrameProcessor.prototype, "processFrame");
-    }
-    if (pipecatModule) {
-      pipecatModule._fiPatched = false;
-    }
-    _isFIPatched = false;
-  }
-
-  private async traceClientConnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const config = instance._config || instance.config || {};
-    const baseUrl = config.baseUrl || config.url || "unknown";
-
-    const span = this.fiTracer.startSpan("Pipecat Client Connect", {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "client.connect",
-        "pipecat.base_url": this.sanitizeUrl(baseUrl),
-        "pipecat.transport": config.transport || "unknown",
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({
-          baseUrl: this.sanitizeUrl(baseUrl),
-          transport: config.transport,
-        }),
-      },
-    });
-
-    // Store for lifecycle tracking
-    const clientId = instance._id || generateId();
-    this.pipelineSpans.set(`client:${clientId}`, span);
-    instance._fiClientId = clientId;
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "pipecat.connected": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ connected: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      // Don't end - will be ended on disconnect
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      this.pipelineSpans.delete(`client:${clientId}`);
-      throw error;
-    }
-  }
-
-  private async traceClientDisconnect(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const clientId = instance._fiClientId || "unknown";
-
-    const span = this.fiTracer.startSpan("Pipecat Client Disconnect", {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "client.disconnect",
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        "pipecat.disconnected": true,
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify({ disconnected: true }),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      // End the connection span
-      const connectionSpan = this.pipelineSpans.get(`client:${clientId}`);
-      if (connectionSpan) {
-        connectionSpan.setStatus({ code: SpanStatusCode.OK });
-        connectionSpan.end();
-        this.pipelineSpans.delete(`client:${clientId}`);
+  private unpatchPrototype(prototype: ClientPrototype): void {
+    if (owners.get(prototype) !== this) return;
+    for (const method of this.patches?.get(prototype) ?? []) this._unwrap(prototype, method);
+    this.patches?.delete(prototype);
+    owners.delete(prototype);
+    patchedCount--;
+    for (const [client, pending] of this.pendingConnections ?? []) {
+      if (Object.prototype.isPrototypeOf.call(prototype, client)) {
+        for (const finish of pending.attempts.keys()) finish(SpanStatusCode.ERROR);
+        pending.connected = false;
+        pending.disconnections.length = 0;
+        this.releaseConnections(client, pending);
       }
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
     }
   }
 
-  private async traceAction(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const action = args[0] || {};
-    const actionName = action.action || action.name || "unknown";
-    const service = action.service || "unknown";
-
-    const span = this.fiTracer.startSpan(`Pipecat Action: ${actionName}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.TOOL,
-        "pipecat.operation": "action",
-        "pipecat.action_name": actionName,
-        "pipecat.service": service,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(action),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
+  private releaseConnections(client: object, pending: PendingConnections): void {
+    // A connected client still needs the state boundary even with no pending
+    // spans: a later disconnected-state callback can start a new handshake.
+    if (pending.attempts.size || pending.connected || pending.disconnections.length) return;
+    pending.detach();
+    if (this.pendingConnections.get(client) === pending) this.pendingConnections.delete(client);
   }
 
-  private async traceSendMessage(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const message = args[0];
-    const messageType = typeof message === "object" ? message.type || "message" : "text";
-
-    const span = this.fiTracer.startSpan(`Pipecat Send Message: ${messageType}`, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        "pipecat.operation": "send_message",
-        "pipecat.message_type": messageType,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
-        [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-      },
-    });
-
-    // Add LLM input message as JSON blob
-    if (typeof message === "string") {
-      span.setAttribute(
-        SemanticConventions.LLM_INPUT_MESSAGES,
-        safelyJSONStringify([{ role: "user", content: message }]) ?? "[]"
-      );
-    } else if (message?.content) {
-      span.setAttribute(
-        SemanticConventions.LLM_INPUT_MESSAGES,
-        safelyJSONStringify([{ role: message.role || "user", content: message.content }]) ?? "[]"
-      );
+  private followDelegation(original: ClientMethod, instance: unknown, args: unknown[], method: "startBotAndConnect" | "startBot"): unknown {
+    const scope = context.active().getValue(CONNECTION_SCOPE) as ConnectionScope | undefined;
+    if (!scope?.active || !scope.invoking || scope.instance !== instance) return original.apply(instance, args);
+    if (method === "startBotAndConnect") {
+      scope.handshaking = false;
+      scope.startingBot = true;
+      try { return original.apply(instance, args); }
+      finally { scope.startingBot = false; }
     }
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
+    if (!scope.startingBot) return original.apply(instance, args);
+    // startBot invokes application lifecycle callbacks. Their asynchronous work
+    // must not inherit the internal delegation slot; the SDK's awaiting caller does.
+    const result = context.with(context.active().deleteValue(CONNECTION_SCOPE), () => original.apply(instance, args));
+    if (result instanceof Promise) {
+      return result.then(value => {
+        // Arm only after startBot's callbacks return, and match the returned object
+        // by identity. A callback's independent connect must not consume this slot.
+        if (scope.active) scope.delegatedParams = { value };
+        return value;
       });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-        [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
     }
+    return result;
   }
 
-  private async tracePipelineRun(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const pipelineName = instance.name || instance.constructor?.name || "Pipeline";
-
-    const span = this.fiTracer.startSpan(`Pipecat Pipeline: ${pipelineName}`, {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "pipeline.run",
-        "pipecat.pipeline_name": pipelineName,
-        [SemanticConventions.INPUT_VALUE]: safeJsonStringify({
-          pipeline: pipelineName,
-          args: args.length > 0 ? args[0] : null,
-        }),
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
+  private observeConnections(client: object, pending: PendingConnections): () => void {
+    const restore: (() => void)[] = [];
+    const detach = () => {
+      for (const undo of restore) {
+        try { undo(); }
+        catch { diag.warn("Pipecat client lifecycle telemetry cleanup failed"); }
+      }
+    };
     try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setAttributes({
-        [SemanticConventions.OUTPUT_VALUE]: safeJsonStringify(result),
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private async traceFrameProcess(
-    original: Function,
-    instance: any,
-    args: any[]
-  ): Promise<any> {
-    const frame = args[0];
-    const frameType = frame?.type || frame?.constructor?.name || "unknown";
-    const processorName = instance.name || instance.constructor?.name || "FrameProcessor";
-
-    const span = this.fiTracer.startSpan(`Pipecat Process Frame: ${frameType}`, {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        [SemanticConventions.FI_SPAN_KIND]: FISpanKind.CHAIN,
-        "pipecat.operation": "frame.process",
-        "pipecat.frame_type": frameType,
-        "pipecat.processor": processorName,
-      },
-    });
-
-    const execContext = trace.setSpan(context.active(), span);
-
-    try {
-      const result = await context.with(execContext, () => {
-        return original.apply(instance, args);
-      });
-
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-
-      return result;
-    } catch (error) {
-      span.recordException(error as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: (error as Error).message,
-      });
-      span.end();
-      throw error;
-    }
-  }
-
-  private sanitizeUrl(url: string): string {
-    try {
-      const parsed = new URL(url);
-      return `${parsed.protocol}//${parsed.host}`;
+      // Both supported SDKs share this callback table with the transport. Observe
+      // its dispatch boundary, BEFORE constructor callbacks and public listeners:
+      // either may synchronously create a retry belonging to a new attempt.
+      // This internal SDK contract is exercised with the real floor/latest clients.
+      const callbacks = (client as { _options?: { callbacks?: Record<string, ClientMethod> } })._options?.callbacks;
+      if (!callbacks) return detach;
+      const instrumentation = this;
+      for (const name of ["onBotReady", "onDisconnected", "onTransportStateChanged"] as const) {
+        const original = callbacks[name];
+        if (typeof original !== "function") continue;
+        const wrapped: ClientMethod = function (this: unknown, ...args: unknown[]) {
+          // Exclude only the SDK's synchronous initialize dispatch. User callbacks
+          // can cause genuine nested drops, and must not inherit this exclusion.
+          const initializing = instrumentation.initializingTransports.delete(client);
+          let disconnected: Map<FinishSpan, ConnectionScope> | undefined;
+          try {
+            if (name === "onBotReady") {
+              // Both SDKs resolve this exact function before dispatching bot-ready.
+              // A broadcast must not mark older, replaced handshakes successful.
+              // Finish now so a callback can disconnect and dispose its provider
+              // without racing promise continuations or a cleanup timer.
+              const resolver = PipecatInstrumentation.connectionResolver(client);
+              for (const [finish, scope] of pending.attempts) {
+                if (scope.resolver && scope.resolver === resolver) finish(SpanStatusCode.OK);
+              }
+            } else if (name === "onTransportStateChanged" && args[0] === "disconnected" && !initializing) {
+              // Capture before application callbacks can install a retry, but do
+              // not cancel yet: MoQ also emits this state during recoverable dials,
+              // without onDisconnected. Only the terminal notification cancels.
+              const boundary = disconnected = new Map(pending.attempts);
+              pending.connected = false;
+              pending.disconnections.push(boundary);
+              // Paired close notifications share a synchronous dispatch. Retire
+              // state-only boundaries so they neither retain settled clients nor
+              // mask a later notification-only close. Pending dials stay observed.
+              queueMicrotask(() => {
+                const index = pending.disconnections.indexOf(boundary);
+                if (index === -1) return;
+                pending.disconnections.splice(index, 1);
+                instrumentation.releaseConnections(client, pending);
+              });
+            } else if (name === "onDisconnected") {
+              // Nested synchronous closes notify in stack order. Transports that
+              // notify without a state event still cancel the current attempts.
+              const closed = pending.disconnections.pop();
+              if (!closed) pending.connected = false;
+              PipecatInstrumentation.cancelConnections(closed ?? new Map(pending.attempts));
+              instrumentation.releaseConnections(client, pending);
+            }
+            return original.apply(this, args);
+          } catch (error) {
+            if (disconnected) {
+              // A throwing callback/listener is an actual dispatch failure, not
+              // a recoverable state. Finish only its captured attempts and retire
+              // this aborted boundary, preserving any reentrant retry.
+              PipecatInstrumentation.cancelConnections(disconnected);
+              const index = pending.disconnections.indexOf(disconnected);
+              if (index !== -1) pending.disconnections.splice(index, 1);
+              instrumentation.releaseConnections(client, pending);
+            }
+            throw error;
+          } finally {
+            if (initializing) instrumentation.initializingTransports.add(client);
+          }
+        };
+        callbacks[name] = wrapped;
+        restore.push(() => { if (callbacks[name] === wrapped) callbacks[name] = original; });
+      }
     } catch {
-      return url.split("?")[0]; // Remove query params at minimum
+      detach();
+      diag.warn("Pipecat client lifecycle telemetry failed");
+    }
+    return detach;
+  }
+
+  private static cancelConnections(attempts: Map<FinishSpan, ConnectionScope>): void {
+    for (const finish of attempts.keys()) finish(SpanStatusCode.ERROR);
+  }
+
+  private static connectionResolver(client: object): unknown {
+    // The supported floor/latest SDKs assign their resolver synchronously, then
+    // invoke it immediately before onBotReady. Compare identity only: never call,
+    // replace, serialize or export it. Real-client tests pin this internal contract.
+    try {
+      const target = client as { _connectResolve?: unknown; _startResolve?: unknown };
+      return target._connectResolve ?? target._startResolve;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private invokeConnection(original: ClientMethod, instance: unknown, args: unknown[], scope?: ConnectionScope): unknown {
+    const pending = scope && this.pendingConnections.get(scope.instance);
+    const before = scope && PipecatInstrumentation.connectionResolver(scope.instance);
+    const result = original.apply(instance, args);
+    if (scope?.handshaking && pending) {
+      const resolver = PipecatInstrumentation.connectionResolver(scope.instance);
+      // A rejected overlapping call never installs a resolver of its own. An
+      // initialization callback can also reenter connect before this call returns:
+      // the nested attempt claims its resolver first, so the outer cannot borrow it.
+      if (typeof resolver === "function" && resolver !== before && !pending.claimedResolvers.has(resolver)) {
+        pending.claimedResolvers.add(resolver);
+        scope.resolver = resolver;
+      }
+    }
+    return result;
+  }
+
+  private traceOperation(original: ClientMethod, instance: unknown, args: unknown[], operation: string): unknown {
+    const client = instance !== null && (typeof instance === "object" || typeof instance === "function") ? instance : undefined;
+    const parentContext = context.active();
+    const inherited = parentContext.getValue(CONNECTION_SCOPE) as ConnectionScope | undefined;
+    if (operation === "client.connect" && inherited?.active && inherited.instance === client &&
+        inherited.delegatedParams && inherited.delegatedParams.value === args[0]) {
+      // Exactly one SDK-delegated connect(params), never all same-client calls
+      // in an inherited asynchronous context (which also includes user retries).
+      delete inherited.delegatedParams;
+      inherited.handshaking = true;
+      return context.with(parentContext.deleteValue(CONNECTION_SCOPE), () => this.invokeConnection(original, instance, args, inherited));
+    }
+    // Only successful disconnects (or actual transport notifications) cancel
+    // attempts. A rejected disconnect can leave the handshake running normally.
+    const disconnectOwner = operation === "client.disconnect" && client
+      ? this.pendingConnections.get(client) : undefined;
+    const disconnectSuccesses = disconnectOwner?.successes;
+    const disconnect = operation === "client.disconnect" && client
+      ? new Map(disconnectOwner?.attempts) : undefined;
+    let span: Span;
+    try {
+      span = this.fiTracer.startSpan(`Pipecat ${operation}`, {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          "fi.span.kind": "CHAIN",
+          "pipecat.telemetry_source": "client",
+          "pipecat.operation": operation,
+        },
+      });
+    } catch {
+      diag.warn("Pipecat client operation telemetry failed");
+      return original.apply(instance, args);
+    }
+    const scope: ConnectionScope | undefined = operation === "client.connect" && client
+      ? { instance: client, active: true, invoking: true, startingBot: false, handshaking: true } : undefined;
+    let finished = false;
+    const finish: FinishSpan = (code) => {
+      if (finished) return;
+      finished = true;
+      if (scope) {
+        const pending = this.pendingConnections.get(scope.instance);
+        pending?.attempts.delete(finish);
+        if (pending) {
+          if (code === SpanStatusCode.OK) {
+            pending.connected = true;
+            pending.successes++;
+          }
+          this.releaseConnections(scope.instance, pending);
+        }
+      }
+      try {
+        // Error messages and arguments may contain credentials or transcripts.
+        span.setStatus({ code });
+        span.end();
+      } catch {
+        diag.warn("Pipecat client operation telemetry failed");
+      }
+    };
+    let operationContext = trace.setSpan(parentContext, span);
+    if (scope) {
+      let pending = this.pendingConnections.get(scope.instance);
+      if (!pending) {
+        pending = {
+          attempts: new Map(), claimedResolvers: new WeakSet(),
+          connected: false, successes: 0, disconnections: [], detach: () => {},
+        };
+        this.pendingConnections.set(scope.instance, pending);
+        pending.detach = this.observeConnections(scope.instance, pending);
+      }
+      pending.attempts.set(finish, scope);
+      operationContext = operationContext.setValue(CONNECTION_SCOPE, scope);
+    }
+    const settle = (code: SpanStatusCode) => {
+      if (disconnect) {
+        if (code === SpanStatusCode.OK) {
+          PipecatInstrumentation.cancelConnections(disconnect);
+          if (client && disconnectOwner && this.pendingConnections.get(client) === disconnectOwner) {
+            // Also release observers when a successful disconnect omits callbacks,
+            // but never retire a connection completed by a reentrant retry.
+            if (disconnectOwner.successes === disconnectSuccesses) disconnectOwner.connected = false;
+            if (!disconnectOwner.attempts.size && !disconnectOwner.connected) {
+              disconnectOwner.disconnections.length = 0;
+              this.releaseConnections(client, disconnectOwner);
+            }
+          }
+        }
+        disconnect.clear();
+      }
+      // A cancelled endpoint call may still delegate later. Keep its one-use
+      // delegation slot until SDK settlement, without retaining callback wrappers.
+      if (scope) {
+        scope.active = false;
+        delete scope.delegatedParams;
+      }
+      finish(code);
+    };
+    try {
+      const result = context.with(operationContext, () => {
+        try { return this.invokeConnection(original, instance, args, scope); }
+        finally { if (scope) scope.invoking = false; }
+      });
+      if (result instanceof Promise) {
+        return result.then(
+          (value) => { settle(SpanStatusCode.OK); return value; },
+          (error: unknown) => { settle(SpanStatusCode.ERROR); throw error; },
+        );
+      }
+      settle(SpanStatusCode.OK);
+      return result;
+    } catch (error) {
+      settle(SpanStatusCode.ERROR);
+      throw error;
     }
   }
 }
 
-// Global patched flag
-let _isFIPatched = false;
+/** Whether a client prototype currently has operation tracing installed. */
+export function isPatched(): boolean { return patchedCount > 0; }
 
-/**
- * Check if the module has been patched.
- */
-export function isPatched(): boolean {
-  return _isFIPatched;
-}
-
-/**
- * Reset the patched state (for testing only).
- */
+/** @deprecated Disable instrumentation instances to restore their patches. */
 export function _resetPatchedStateForTesting(): void {
-  _isFIPatched = false;
-}
-
-// Helper functions
-
-function safeJsonStringify(obj: unknown): string {
-  try {
-    return JSON.stringify(obj);
-  } catch {
-    return String(obj);
-  }
-}
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
+  // Retained for compatibility. Clearing ownership without unwrapping would duplicate spans.
 }

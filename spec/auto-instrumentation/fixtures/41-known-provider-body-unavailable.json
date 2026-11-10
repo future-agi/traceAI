@@ -1,0 +1,50 @@
+{
+  "name": "known-provider-body-unavailable",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "unavailable": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "id": "c41",
+      "model": "gpt-4o-mini",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "pong"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "total_tokens": 4
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-mini",
+    "status": "OK",
+    "attributes": {
+      "traceai.wire.body_unavailable": true,
+      "gen_ai.provider.name": "openai",
+      "output.value": "pong"
+    },
+    "absent": [
+      "input.value",
+      "gen_ai.request.model"
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 """Extended tests for Pydantic AI agent wrapper."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import NonCallableMock, MagicMock, AsyncMock, patch
 import asyncio
 import json
 
@@ -183,7 +183,7 @@ class TestExtractUsageEdgeCases:
         """Test usage with only total tokens."""
         from traceai_pydantic_ai._agent_wrapper import extract_usage
 
-        usage = MagicMock()
+        usage = NonCallableMock()
         usage.request_tokens = None
         usage.response_tokens = None
         usage.input_tokens = None
@@ -347,7 +347,7 @@ class TestWrapAgentRunExtended:
             return_value=None
         )
 
-        usage = MagicMock()
+        usage = NonCallableMock()
         usage.request_tokens = 100
         usage.response_tokens = 50
         usage.total_tokens = 150

@@ -1,5 +1,7 @@
 import {
   Attributes,
+  context,
+  createContextKey,
   diag,
   TraceFlags,
   trace,
@@ -13,6 +15,7 @@ import {
   ReadableSpan,
   SpanExporter,
   SpanProcessor,
+  Sampler,
 } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter as _OTLPGRPCTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
 import { OTLPTraceExporter as _OTLPHTTPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
@@ -22,8 +25,69 @@ import {
   SimpleSpanProcessor as OTelSimpleSpanProcessor,
   IdGenerator,
 } from "@opentelemetry/sdk-trace-node";
-import { Resource, resourceFromAttributes, detectResources, defaultResource } from "@opentelemetry/resources";
-import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+import { Resource, ResourceDetector, resourceFromAttributes, detectResources, defaultResource, envDetector, hostDetector, osDetector, processDetector } from "@opentelemetry/resources";
+import { privacyFilter, PrivacyOptions } from "./export-privacy";
+import { credentialSecrets } from "./privacy-runtime";
+import { seedSecrets } from "./secrets";
+import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+
+const privacyDestinations = new WeakSet<SpanExporter>();
+/** @internal True only for constructors in this core copy, never based on user properties. */
+export function hasExportPrivacyBoundary(exporter: SpanExporter): boolean { return privacyDestinations.has(exporter); }
+interface ExportPrivacyOptions {
+  traceConfig?: PrivacyOptions;
+  /** Routing attributes are added only to this destination's detached snapshot. */
+  resourceAttributes?: Attributes;
+}
+function exportPrivacy(options: ExportPrivacyOptions, headers: FIHeaders = {}) {
+  const credentials = credentialSecrets(headers);
+  seedSecrets(process.env, credentials);
+  const filter = privacyFilter(options.traceConfig, credentials);
+  return (spans: ReadableSpan[]) => spans.map(span => filter.span(span, [], options.resourceAttributes));
+}
+/**
+ * Apply the existing FI serialization boundary to an integration-owned transport.
+ * Opt-in only: never wrap a borrowed application destination indiscriminately.
+ * Keeping this outside the batch processor means secrets observed after enqueue
+ * are included, and the transport sees only detached, fail-closed snapshots.
+ */
+export function withExportPrivacy(exporter: SpanExporter, options: ExportPrivacyOptions & { headers?: FIHeaders } = {}): SpanExporter {
+  const sanitize = exportPrivacy(options, options.headers);
+  const guarded: SpanExporter = {
+    export(spans, callback) {
+      let copies: ReadableSpan[];
+      try { copies = sanitize(spans); }
+      catch { callback({ code: ExportResultCode.FAILED }); return; } // Never send raw on failure.
+      exporter.export(copies, callback);
+    },
+    forceFlush: () => exporter.forceFlush?.() ?? Promise.resolve(),
+    shutdown: () => exporter.shutdown(),
+  };
+  privacyDestinations.add(guarded);
+  return guarded;
+}
+// The full process detector exports the command line (which can hold secrets passed as
+// flags), the OS user name and the executable path. By default only the runtime is kept.
+const runtimeDetector: ResourceDetector = {
+  detect(config) {
+    const attributes = processDetector.detect(config).attributes ?? {};
+    return { attributes: Object.fromEntries(Object.entries(attributes).filter(([key]) => key.startsWith("process.runtime."))) };
+  },
+};
+const OPT_IN_DETECTORS: Record<string, ResourceDetector> = { host: hostDetector, os: osDetector, process: processDetector };
+// OTEL_NODE_RESOURCE_DETECTORS (the OpenTelemetry Node variable) opts in to host, os and
+// process detection. OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES are always applied.
+function resourceDetectors(): ResourceDetector[] {
+  const names = (process.env.OTEL_NODE_RESOURCE_DETECTORS ?? "").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+  if (!names.length) return [envDetector, runtimeDetector];
+  const chosen = names.includes("none") ? [] : names.includes("all") ? Object.keys(OPT_IN_DETECTORS) : names;
+  return [envDetector, ...chosen.flatMap((name) => OPT_IN_DETECTORS[name] ?? [])];
+}
+function applicationResource(resource?: Resource): Resource {
+  const application = resource && typeof (resource as any).getRawAttributes === "function" ? resource : resourceFromAttributes(resource?.attributes ?? {});
+  return defaultResource().merge(detectResources({ detectors: resourceDetectors() })).merge(application);
+}
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
 
 // Import grpc for metadata handling
@@ -61,7 +125,7 @@ interface FIHeaders {
   [key: string]: string;
 }
 
-interface HTTPSpanExporterOptions {
+interface HTTPSpanExporterOptions extends ExportPrivacyOptions {
   endpoint: string; // This should be the full URL
   headers?: FIHeaders;
   verbose?: boolean;
@@ -86,12 +150,16 @@ class HTTPSpanExporter implements SpanExporter {
   private readonly headers: FIHeaders;
   private isShutdown = false;
   private verbose: boolean;
+  private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
   constructor(options: HTTPSpanExporterOptions) {
+    const headers = resolveFiHeaders(options.headers);
+    this.sanitize = exportPrivacy(options, headers);
+    privacyDestinations.add(this);
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
     this.headers = {
       "Content-Type": "application/json",
-      ...options.headers,
+      ...headers,
     };
     this.verbose = options.verbose ?? false;
   }
@@ -142,7 +210,7 @@ class HTTPSpanExporter implements SpanExporter {
       return;
     }
 
-    const spansData = spans.map((span) => {
+    const spansData = this.sanitize(spans).map((span) => {
       if (!span) return null;
       const spanContext = span.spanContext();
       if (!spanContext) {
@@ -221,10 +289,12 @@ class HTTPSpanExporter implements SpanExporter {
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
 class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
+  private readonly sanitize: ReturnType<typeof exportPrivacy>;
 
-  constructor(options: { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
-    const { endpoint, headers = {}, verbose = false, ...restOptions } = options;
-    
+  constructor(options: ExportPrivacyOptions & { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
+    const { endpoint, verbose = false, traceConfig, resourceAttributes, ...restOptions } = options;
+    const headers = resolveFiHeaders(options.headers) ?? {};
+    delete restOptions.headers;
     const auth_header = headers;
     const lower_case_auth_header = auth_header 
       ? Object.fromEntries(Object.entries(auth_header).map(([k, v]) => [k.toLowerCase(), v]))
@@ -252,11 +322,17 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
     }
     
     this.verbose = verbose;
-    
+    this.sanitize = exportPrivacy({ traceConfig, resourceAttributes }, headers);
+    privacyDestinations.add(this);
+
     if (this.verbose) {
       diag.info(`GRPCSpanExporter: Configured for endpoint: ${endpoint}`);
       diag.info(`GRPCSpanExporter: Authentication: ${Object.keys(lower_case_auth_header).length > 0 ? 'Enabled' : 'None'}`);
     }
+  }
+
+  export(spans: ReadableSpan[], callback: (result: ExportResult) => void): void {
+    super.export(this.sanitize(spans), callback);
   }
 
   async shutdown(): Promise<void> {
@@ -283,11 +359,27 @@ function getEnvVerbose(): boolean | undefined {
 function getEnvFiAuthHeader(): FIHeaders | undefined {
   const apiKey = getEnv("FI_API_KEY");
   const secretKey = getEnv("FI_SECRET_KEY");
-  if (apiKey && secretKey) {
+  if (apiKey?.trim() && secretKey?.trim()) {
     // Use lowercase headers for gRPC compatibility
     return { "x-api-key": apiKey, "x-secret-key": secretKey };
   }
+  if (apiKey?.trim() || secretKey?.trim()) {
+    diag.warn(`Ignoring incomplete FI credentials from environment: missing ${apiKey?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
+    return {}; // Resolved empty source: nested constructors must not warn again.
+  }
   return undefined;
+}
+function resolveFiHeaders(headers?: FIHeaders): FIHeaders | undefined {
+  // Selection is atomic, but ignored halves remain known FI secrets (ROUND5 B2).
+  seedSecrets(process.env, credentialSecrets(headers ?? {}));
+  if (headers === undefined) return getEnvFiAuthHeader();
+  const items = Object.entries(headers), pair = items.filter(([name]) => /^(?:x-api-key|x-secret-key)$/i.test(name));
+  if (!pair.length) return headers; // Explicit bearer/custom/empty headers remain host-owned.
+  const key = pair.find(([name]) => name.toLowerCase() === "x-api-key")?.[1];
+  const secret = pair.find(([name]) => name.toLowerCase() === "x-secret-key")?.[1];
+  if (key?.trim() && secret?.trim()) return headers;
+  if (key?.trim() || secret?.trim()) diag.warn(`Ignoring incomplete FI credentials from explicit headers: missing ${key?.trim() ? "FI_SECRET_KEY" : "FI_API_KEY"}. Supply both in the same source.`);
+  return { ...Object.fromEntries(items.filter(([name]) => !/^(?:x-api-key|x-secret-key)$/i.test(name))), ...getEnvFiAuthHeader() };
 }
 
 function getEnvGrpcCollectorEndpoint(): string {
@@ -337,18 +429,50 @@ function constructFullEndpoint(customEndpoint?: string): string {
 }
 
 
+/** Standard OTLP HTTP serializer with the same S1 boundary as legacy/gRPC routes. */
+class OTLPHTTPSpanExporter extends _OTLPHTTPTraceExporter {
+  private readonly sanitize: ReturnType<typeof exportPrivacy>;
+  constructor(options: ExportPrivacyOptions & { endpoint?: string; headers?: FIHeaders } = {}) {
+    const headers = resolveFiHeaders(options.headers);
+    super({ url: constructFullEndpoint(options.endpoint), headers });
+    this.sanitize = exportPrivacy(options, headers);
+    privacyDestinations.add(this);
+  }
+  export(spans: ReadableSpan[], callback: (result: ExportResult) => void): void {
+    super.export(this.sanitize(spans), callback);
+  }
+}
+/** Construct a privacy-protected FI exporter without registering a provider or doing I/O. */
+export function createSpanExporter(options: ExportPrivacyOptions & {
+  endpoint?: string;
+  headers?: FIHeaders;
+  transport?: Transport;
+  verbose?: boolean;
+} = {}): SpanExporter {
+  return options.transport === Transport.GRPC
+    ? new GRPCSpanExporter({ ...options, endpoint: options.endpoint ?? getEnvGrpcCollectorEndpoint() })
+    : new OTLPHTTPSpanExporter(options);
+}
+
 // --- TracerProvider ---
-interface FITracerProviderOptions {
+export interface FITracerProviderOptions extends ExportPrivacyOptions {
+  /** Default false selects SimpleSpanProcessor; true selects BatchSpanProcessor. */
+  batch?: boolean;
   resource?: Resource;
   verbose?: boolean;
   idGenerator?: IdGenerator;
   endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
   headers?: FIHeaders;
   transport?: Transport; // Transport type
+  sampler?: Sampler;
+  spanProcessors?: SpanProcessor[];
 }
 
 class FITracerProvider extends BasicTracerProvider {
+  private readonly processorRegistry: SpanProcessorRegistry;
+  private shutdownPromise?: Promise<void>;
   private defaultProcessorAttached: boolean = false;
+  private readonly batch: boolean;
   private verbose: boolean;
   private endpoint: string; // This will store the fully constructed endpoint
   private headers?: FIHeaders;
@@ -368,23 +492,31 @@ class FITracerProvider extends BasicTracerProvider {
       endpoint = constructFullEndpoint(config.endpoint);
     }
     
-    const headers = config.headers ?? getEnvFiAuthHeader();
+    const headers = resolveFiHeaders(config.headers);
 
     if (verbose) {
       diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
     }
 
-    // Create the appropriate exporter
-    let exporter: SpanExporter;
-    if (transport === Transport.GRPC) {
-      exporter = new GRPCSpanExporter({ endpoint, headers, verbose: config.verbose });
-    } else {
-      exporter = new _OTLPHTTPTraceExporter({ url: endpoint, headers });
+    // Explicit lists, including [], never construct a hidden default exporter.
+    let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
+    if (config.spanProcessors === undefined) {
+      const exporter = createSpanExporter({ ...config, transport, endpoint, headers });
+      defaultProcessor = config.batch
+        ? new DefaultBatchSpanProcessor(exporter)
+        : new DefaultSimpleSpanProcessor(exporter);
     }
-    
-    const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
-    super({ resource: config.resource, idGenerator, spanProcessors: [defaultProcessor] });
-    this.defaultProcessorAttached = true;
+    const processorRegistry = new SpanProcessorRegistry(
+      config.spanProcessors ?? [],
+      () => defaultProcessor?.disable(),
+    );
+    // Keep the actual SDK default at the top level for native adapters that borrow
+    // its exporter, and for SDK-owned flush/shutdown of its accepted batch queue.
+    super({ resource: applicationResource(config.resource), idGenerator, sampler: config.sampler,
+      spanProcessors: defaultProcessor ? [defaultProcessor, processorRegistry] : [processorRegistry] });
+    this.processorRegistry = processorRegistry;
+    this.defaultProcessorAttached = config.spanProcessors === undefined;
+    this.batch = config.batch ?? false;
     this.verbose = verbose;
     this.endpoint = endpoint;
     this.headers = headers;
@@ -392,7 +524,7 @@ class FITracerProvider extends BasicTracerProvider {
 
     // Log to confirm processor and exporter details
     if (verbose) {
-      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
+      diag.info(`FITracerProvider: ${defaultProcessor ? `Default ${this.batch ? "Batch" : "Simple"}SpanProcessor` : "Explicit span processors"} with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
     }
 
     if (verbose) {
@@ -401,14 +533,10 @@ class FITracerProvider extends BasicTracerProvider {
   }
 
   addSpanProcessor(spanProcessor: SpanProcessor): void {
-    if (this.defaultProcessorAttached) {
-      diag.warn(
-        "Adding a new SpanProcessor. The default SimpleSpanProcessor will be replaced.",
-      );
-      (this as any)._registeredSpanProcessors = []; 
-      this.defaultProcessorAttached = false; 
-    }
-    (this as any)._registeredSpanProcessors.push(spanProcessor);
+    // First legacy add stops new default deliveries but retains its queued work.
+    // Constructor processors are copied by the registry and are never replaced.
+    this.processorRegistry.add(spanProcessor);
+    this.defaultProcessorAttached = false;
   }
 
   private printTracingDetails(): void {
@@ -424,7 +552,7 @@ class FITracerProvider extends BasicTracerProvider {
     const evalTags = resource.attributes[EVAL_TAGS] || [];
     const sessionName = resource.attributes[SESSION_NAME] || "N/A";
 
-    const processorName = this.defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
+    const processorName = this.defaultProcessorAttached ? `${this.batch ? "Batch" : "Simple"}SpanProcessor (default)` : "Custom/Multiple";
     const transportName = this.transport.toUpperCase(); 
 
     const detailsHeader =
@@ -447,24 +575,51 @@ class FITracerProvider extends BasicTracerProvider {
       detailsMsg += "|  Using a default SpanProcessor. `addSpanProcessor` will overwrite this default.\n";
     }
   }
-  async shutdown(): Promise<void> {
-    if (this.verbose) {
-      diag.info("Shutting down FI TracerProvider...");
+  shutdown(): Promise<void> {
+    if (!this.shutdownPromise) {
+      if (this.verbose) {
+        diag.info("Shutting down FI TracerProvider...");
+      }
+      this.shutdownPromise = super.shutdown();
     }
-    return super.shutdown();
+    return this.shutdownPromise;
   }
 }
 
-class SimpleSpanProcessor extends OTelSimpleSpanProcessor {}
-class BatchSpanProcessor extends OTelBatchSpanProcessor {}
+const CONTEXT_MANAGER_PROBE = createContextKey("traceai.context-manager-probe");
 
-export interface RegisterOptions {
+function ensureContextManager(): void {
+  // OTel has no public getter for the installed manager. Test its behavior using
+  // a private context key, without replacing an application's working manager.
+  const probeContext = context.active().setValue(CONTEXT_MANAGER_PROBE, true);
+  if (context.with(probeContext, () => context.active().getValue(CONTEXT_MANAGER_PROBE))) return;
+  const manager = new AsyncLocalStorageContextManager().enable();
+  if (!context.setGlobalContextManager(manager)) manager.disable();
+  // A global manager may also serve other providers. Provider shutdown must not
+  // disable it; the application owns teardown of global OTel state.
+}
+
+class SimpleSpanProcessor extends OTelSimpleSpanProcessor {}
+class BatchSpanProcessor extends OTelBatchSpanProcessor {
+  constructor(private readonly destination: SpanExporter, config?: ConstructorParameters<typeof OTelBatchSpanProcessor>[1]) { super(destination, config); }
+  async forceFlush(): Promise<void> {
+    await super.forceFlush();
+    // SDK batching drains its own queue but does not flush a destination's
+    // additional buffers. Preserve the public FI flush/lifecycle contract.
+    await this.destination.forceFlush?.();
+  }
+}
+
+export interface RegisterOptions extends ExportPrivacyOptions {
+  /** Preserve application service identity; FI project routing is separate. */
+  resource?: Resource;
   projectName?: string;
   projectType?: ProjectType;
   projectVersionName?: string;
   evalTags?: EvalTag[];
   sessionName?: string;
   metadata?: Record<string, any>;
+  /** Default false preserves manual SimpleSpanProcessor semantics. Auto explicitly opts into batching. */
   batch?: boolean;
   setGlobalTracerProvider?: boolean;
   headers?: FIHeaders;
@@ -472,6 +627,10 @@ export interface RegisterOptions {
   endpoint?: string; // Can be a base URL or a full URL. _constructFullEndpoint will resolve.
   idGenerator?: IdGenerator;
   transport?: Transport; // Transport type: HTTP or GRPC
+  /** Optional advanced SDK configuration; omitted values preserve existing defaults. */
+  sampler?: Sampler;
+  /** When provided, use these processors instead of constructing the default exporter. */
+  spanProcessors?: SpanProcessor[];
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -482,7 +641,6 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     evalTags: optEvalTags = [],
     sessionName,
     metadata = {},
-    batch = false,
     setGlobalTracerProvider = true,
     headers: optHeaders,
     verbose = false,
@@ -549,7 +707,6 @@ if (!projectName) {
   }
 
   const resourceAttributes: Attributes = {
-    [SemanticResourceAttributes.SERVICE_NAME]: projectName,
     [PROJECT_NAME]: projectName,
     [PROJECT_TYPE]: projectType,
     [PROJECT_VERSION_NAME]: projectVersionName,
@@ -562,12 +719,11 @@ if (!projectName) {
     resourceAttributes[SESSION_NAME] = sessionName;
   }
 
-  const detected = detectResources();
-  const resource = detected.merge(resourceFromAttributes(resourceAttributes));
+  const resource = (options.resource ?? resourceFromAttributes({})).merge(resourceFromAttributes(resourceAttributes));
 
   
   // Headers for the exporter
-  const exporterHeaders = optHeaders ?? getEnvFiAuthHeader();
+  const exporterHeaders = resolveFiHeaders(optHeaders);
   // Endpoint for the exporter is now determined by FITracerProvider's constructor
   // using _constructFullEndpoint, which considers optEndpoint and env vars.
 
@@ -578,37 +734,22 @@ if (!projectName) {
     endpoint: optEndpoint,
     headers: exporterHeaders,
     transport,
+    sampler: options.sampler,
+    batch: options.batch ?? false,
+    spanProcessors: options.spanProcessors,
+    traceConfig: options.traceConfig,
+    resourceAttributes: options.resourceAttributes,
   });
 
-  if (batch) {
-    let batchExporter: SpanExporter;
-    if (transport === Transport.GRPC) {
-      batchExporter = new GRPCSpanExporter({
-        endpoint: (tracerProvider as any).endpoint,
-        headers: exporterHeaders,
-        verbose: verbose
-      });
-    } else {
-      batchExporter = new _OTLPHTTPTraceExporter({
-        url: (tracerProvider as any).endpoint,
-        headers: exporterHeaders,
-      });
-    }
-    const batchProcessor = new OTelBatchSpanProcessor(batchExporter);
-
-    (tracerProvider as any)._registeredSpanProcessors = [];
-    (tracerProvider as any)._defaultProcessorAttached = false;
-    tracerProvider.addSpanProcessor(batchProcessor);
-  }
-
   if (setGlobalTracerProvider) {
-    trace.setGlobalTracerProvider(tracerProvider);
-    if (verbose) {
-      diag.info(
-        "|  \n" +
-        "|  `register` has set this TracerProvider as the global OpenTelemetry default.\n" +
-        "|  To disable this behavior, call `register` with " +
-        "`set_global_tracer_provider=false`.\n"
+    if (trace.setGlobalTracerProvider(tracerProvider)) {
+      ensureContextManager();
+      if (verbose) diag.info("register: Installed the global FI tracer provider.");
+    } else {
+      diag.warn(
+        "register: An OpenTelemetry tracer provider is already installed; it was not replaced. " +
+        "Use the returned provider explicitly, or configure exporters on your application's SDK. " +
+        "Use setGlobalTracerProvider: false for an intentionally isolated FI provider.",
       );
     }
   }

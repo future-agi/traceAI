@@ -1,0 +1,60 @@
+{
+  "name": "@traceai/kiro-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maintained Future AGI Kiro CLI and IDE hooks; qualification pending",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./ide": {
+      "types": "./dist/ide/index.d.ts",
+      "default": "./dist/ide/index.js"
+    }
+  },
+  "bin": {
+    "fi-kiro-hook": "./dist/hook.cjs",
+    "fi-kiro-ide-hook": "./dist/ide-hook.cjs"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "qualification.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && esbuild src/hook.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/hook.cjs && esbuild src/ide/hook.ts --bundle --platform=node --target=node22 --format=cjs --legal-comments=linked --outfile=dist/ide-hook.cjs",
+    "test": "node --test test/*.test.cjs",
+    "prepare": "pnpm run build"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "esbuild": "0.25.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_kiro_plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "ide": [
+        "dist/ide/index.d.ts"
+      ]
+    }
+  }
+}

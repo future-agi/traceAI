@@ -1,0 +1,47 @@
+{
+  "name": "openai-missing-output-retains-provider-total",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/responses",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "input": "Hi"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "status": "completed",
+      "output": [],
+      "usage": {
+        "input_tokens": 20,
+        "total_tokens": 23,
+        "input_tokens_details": {
+          "cached_tokens": 7
+        }
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.usage.input_tokens": 20,
+      "gen_ai.usage.total_tokens": 23,
+      "gen_ai.usage.cache_read_tokens": 7
+    },
+    "absent": [
+      "gen_ai.usage.output_tokens",
+      "gen_ai.usage.cache_write_tokens",
+      "gen_ai.usage.output_tokens.reasoning",
+      "gen_ai.usage.provider_total_tokens"
+    ]
+  }
+}

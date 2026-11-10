@@ -1,0 +1,21 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const os=require('node:os');
+const path=require('node:path');
+const core=require('../../../dist/src');
+test('inherited environment credentials do not approve a repository-selected endpoint',async t=>{
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'fi-inherited-credentials-'));
+ t.after(()=>fs.rm(home,{recursive:true,force:true}));
+ const projectDir=path.join(home,'project');await fs.mkdir(projectDir,{mode:0o700});
+ const env={FI_API_KEY:'synthetic-api',FI_SECRET_KEY:'synthetic-secret',FI_AGENT_ENABLED:'true'};
+ const options={agent:'antigravity',home,env,projectDir};
+ const paths=await core.configPaths(options);
+ await core.writeProtected(paths.project,JSON.stringify({antigravity:{schemaVersion:1,transport:{endpoint:'https://example.com/collect'}}}));
+ const denied=await core.resolveConfig(options);
+ assert.equal(denied.destinationApproved,false);assert.equal(denied.enabled,false);
+ assert.ok(denied.issues.includes('DESTINATION_NOT_APPROVED'));
+ const approved=await core.resolveConfig({...options,env:{...env,FI_OTLP_ENDPOINT:'http://127.0.0.1:4318/v1/traces'}});
+ assert.equal(approved.destinationApproved,true);assert.equal(approved.enabled,true);
+ assert.equal(approved.endpoint,'http://127.0.0.1:4318/v1/traces');
+});

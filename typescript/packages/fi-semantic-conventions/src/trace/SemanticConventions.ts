@@ -553,7 +553,130 @@ export const SemanticAttributePrefixes = {
    */
   export const GRAPH_NODE_PARENT_ID = "graph.node.parent_id" as const;
 
+
+  // Coding-agent usage and provenance. fi.agent.* is metadata, not a backend aggregation gate.
+  /** Total cost in USD for this additive usage owner only; omit unknown costs, preserve an explicitly reported zero. */
+  export const GEN_AI_COST_TOTAL = "gen_ai.cost.total" as const;
+
+  /** Input cost in USD for this additive usage owner only; total cost takes precedence over input plus output. */
+  export const GEN_AI_COST_INPUT = "gen_ai.cost.input" as const;
+
+  /** Output cost in USD for this additive usage owner only; total cost takes precedence over input plus output. */
+  export const GEN_AI_COST_OUTPUT = "gen_ai.cost.output" as const;
+
+  /** Measured time to first token in milliseconds for the Future AGI span attribute consumer. Not the OTel histogram unit (seconds). Convert seconds to milliseconds before emission; omit for reconstructed timing. The current gateway seconds writer is inconsistent with the dashboard and requires a separate migration. */
+  export const GEN_AI_SERVER_TIME_TO_FIRST_TOKEN = "gen_ai.server.time_to_first_token" as const;
+
+  /** Scope of canonical usage: request, attempt, turn or unknown. A turn aggregate is not a measured individual request. */
+  export const FI_USAGE_SCOPE = "fi.usage.scope" as const;
+
+  /** Use none for non-additive summaries and additive for the sole owner of canonical usage. Never duplicate canonical tokens or cost on summaries: older aggregate readers sum all span kinds. */
+  export const FI_USAGE_CONTRIBUTION = "fi.usage.contribution" as const;
+
+  /** Cost provenance understood by Future AGI: provider_reported, estimated or unknown. Unknown must not be represented by an invented zero. */
+  export const FI_COST_KIND = "fi.cost.kind" as const;
+
+  /** Evidence fidelity: native-request, reconstructed-message, aggregate-turn or unknown. Only source-observed requests/messages may be LLM spans. */
+  export const FI_AGENT_FIDELITY = "fi.agent.fidelity" as const;
+
+  /** Timing provenance: source, reconstructed or observed-event. Reconstructed message timing is not measured request latency or TTFT. */
+  export const FI_AGENT_TIMING = "fi.agent.timing" as const;
+
+  /** Terminal outcome: success, error, interrupted or incomplete; missing stop events are incomplete, not success. */
+  export const FI_AGENT_OUTCOME = "fi.agent.outcome" as const;
+
+  /** Boolean provenance flag for canonical usage ownership; not itself a backend aggregation gate. Request/attempt plans count each observed model operation once. For turn-only totals, place canonical usage exactly once on the last source-observed generation (marked scope=turn), or the AGENT root if there is no generation. Keep all other spans summary-only; never fabricate a model request. */
+  export const FI_AGENT_USAGE_ADDITIVE = "fi.agent.usage.additive" as const;
+
+  /** One immutable plan per turn: request, attempt, turn or unknown. Never mix per-request counters and overlapping turn totals; unknown plans remain summary-only. */
+  export const FI_AGENT_USAGE_PLAN = "fi.agent.usage.plan" as const;
+
+  /** Boolean: source input count already includes cache reads/writes. Normalize input once; cache detail counters are subsets, not additional total tokens. */
+  export const FI_AGENT_USAGE_CACHE_IN_INPUT = "fi.agent.usage.cache_in_input" as const;
+
+  /** Boolean: source output count already includes reasoning. Normalize output once; reasoning is a subset, not extra total tokens. */
+  export const FI_AGENT_USAGE_REASONING_IN_OUTPUT = "fi.agent.usage.reasoning_in_output" as const;
+
+  /** Source of the cost, for example reported or host-price-table; independent of whether this span contributes to totals. */
+  export const FI_AGENT_COST_SOURCE = "fi.agent.cost.source" as const;
+
+  /** Identifier/version of the estimator or price table for estimated costs; omit for reported costs. Never include credentials. */
+  export const FI_AGENT_COST_ESTIMATOR = "fi.agent.cost.estimator" as const;
+
+  /** Bounded diagnostic code for missing evidence, for example MISSING_PARENT, MISSING_CHILD_STOP or UNRESOLVED_USAGE; not raw error content. */
+  export const FI_AGENT_GAP = "fi.agent.gap" as const;
+
+  /** Versioned transport contract identifier; not an endpoint URL or credential. */
+  export const FI_AGENT_TRANSPORT = "fi.agent.transport" as const;
+
+  /** Opaque integration correlation identifier; not a substitute for a source-provided tool_call.id. */
+  export const FI_AGENT_SOURCE_CALL_ID = "fi.agent.source_call_id" as const;
+
+  /** Non-additive normalized input token summary; never summed into canonical usage. */
+  export const FI_AGENT_SUMMARY_INPUT = "fi.agent.summary.input" as const;
+
+  /** Non-additive normalized output token summary; never summed into canonical usage. */
+  export const FI_AGENT_SUMMARY_OUTPUT = "fi.agent.summary.output" as const;
+
+  /** Non-additive input plus output token summary; never summed into canonical usage. */
+  export const FI_AGENT_SUMMARY_TOTAL = "fi.agent.summary.total" as const;
+
+  /** Non-additive cache-read token summary, a subset of normalized input. */
+  export const FI_AGENT_SUMMARY_CACHE_READ = "fi.agent.summary.cache_read" as const;
+
+  /** Non-additive cache-write token summary, a subset of normalized input. */
+  export const FI_AGENT_SUMMARY_CACHE_WRITE = "fi.agent.summary.cache_write" as const;
+
+  /** Non-additive reasoning token summary, a subset of normalized output. */
+  export const FI_AGENT_SUMMARY_REASONING = "fi.agent.summary.reasoning" as const;
+
+  /** Non-additive cost summary in USD; never place this amount in canonical cost as well unless this span owns the usage. */
+  export const FI_AGENT_SUMMARY_COST_USD = "fi.agent.summary.cost_usd" as const;
+
+  /** JSON-encoded array of configured bounded tags, subject to the integration privacy policy. */
+  export const FI_AGENT_TAGS = "fi.agent.tags" as const;
+
+  /** Agent lifecycle event type, for example compaction; not a model invocation. */
+  export const FI_AGENT_EVENT = "fi.agent.event" as const;
+
+  /** Source input completeness, for example partial; do not present an excerpt as the full model input. */
+  export const FI_AGENT_INPUT_COMPLETENESS = "fi.agent.input.completeness" as const;
+
+  /** Provenance of captured content, for example a source transcript; not evidence of native request capture. */
+  export const FI_AGENT_CONTENT_SOURCE = "fi.agent.content.source" as const;
+
   export const SemanticConventions = {
+    GEN_AI_COST_TOTAL,
+    GEN_AI_COST_INPUT,
+    GEN_AI_COST_OUTPUT,
+    GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
+    FI_USAGE_SCOPE,
+    FI_USAGE_CONTRIBUTION,
+    FI_COST_KIND,
+    FI_AGENT_FIDELITY,
+    FI_AGENT_TIMING,
+    FI_AGENT_OUTCOME,
+    FI_AGENT_USAGE_ADDITIVE,
+    FI_AGENT_USAGE_PLAN,
+    FI_AGENT_USAGE_CACHE_IN_INPUT,
+    FI_AGENT_USAGE_REASONING_IN_OUTPUT,
+    FI_AGENT_COST_SOURCE,
+    FI_AGENT_COST_ESTIMATOR,
+    FI_AGENT_GAP,
+    FI_AGENT_TRANSPORT,
+    FI_AGENT_SOURCE_CALL_ID,
+    FI_AGENT_SUMMARY_INPUT,
+    FI_AGENT_SUMMARY_OUTPUT,
+    FI_AGENT_SUMMARY_TOTAL,
+    FI_AGENT_SUMMARY_CACHE_READ,
+    FI_AGENT_SUMMARY_CACHE_WRITE,
+    FI_AGENT_SUMMARY_REASONING,
+    FI_AGENT_SUMMARY_COST_USD,
+    FI_AGENT_TAGS,
+    FI_AGENT_EVENT,
+    FI_AGENT_INPUT_COMPLETENESS,
+    FI_AGENT_CONTENT_SOURCE,
+
     IMAGE_URL,
     INPUT_VALUE,
     INPUT_MIME_TYPE,

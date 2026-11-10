@@ -17,6 +17,7 @@ from typing import (
     Type,
 )
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     MessageAttributes,
@@ -26,6 +27,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 from traceai_openai._attributes._responses_api import _ResponsesApiAttributes
+from traceai_openai._deepseek import _output_alias, deepseek_attributes
 from traceai_openai._utils import _get_openai_version, _get_texts
 
 if TYPE_CHECKING:
@@ -49,15 +51,20 @@ except ImportError:
 class _ResponseAttributesExtractor:
     __slots__ = (
         "_openai",
+        "_config",
         "_chat_completion_type",
         "_completion_type",
         "_create_embedding_response_type",
         "_images_response_type",
         "_responses_type",
+        "_provider",
     )
 
-    def __init__(self, openai: ModuleType) -> None:
+    def __init__(self, openai: ModuleType, config: Optional[TraceConfig] = None,
+                 provider: Optional[str] = None) -> None:
+        self._provider = provider
         self._openai = openai
+        self._config = config if config is not None else TraceConfig()
         self._chat_completion_type: Type["ChatCompletion"] = (
             openai.types.chat.ChatCompletion
         )
@@ -75,6 +82,8 @@ class _ResponseAttributesExtractor:
         response: Any,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        if self._provider == "deepseek":
+            yield from deepseek_attributes(response, self._config)
         if isinstance(response, self._chat_completion_type):
             yield from self._get_attributes_from_chat_completion(
                 completion=response,
@@ -108,7 +117,17 @@ class _ResponseAttributesExtractor:
         response: Response,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield from _ResponsesApiAttributes._get_attributes_from_response(response)
+        for key, value in _ResponsesApiAttributes._get_attributes_from_response(response):
+            if (
+                self._provider == "deepseek"
+                and key.startswith(f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.")
+                and not key.endswith(f".{MessageAttributes.MESSAGE_ROLE}")
+            ):
+                # Tool arguments and reasoning are output text too; older cores
+                # only recognize the standard message.content privacy key.
+                yield from _output_alias(self._config, key, value)
+            else:
+                yield key, value
 
     def _get_attributes_from_chat_completion(
         self,
@@ -131,7 +150,11 @@ class _ResponseAttributesExtractor:
                     for key, value in self._get_attributes_from_chat_completion_message(
                         message
                     ):
-                        yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
+                        attribute = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}"
+                        if self._provider == "deepseek" and key != MessageAttributes.MESSAGE_ROLE:
+                            yield from _output_alias(self._config, attribute, value)
+                        else:
+                            yield attribute, value
 
     def _get_attributes_from_completion(
         self,
@@ -163,13 +186,22 @@ class _ResponseAttributesExtractor:
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/embedding_create_params.py#L23  # noqa: E501
         if model := getattr(response, "model"):
             yield f"{SpanAttributes.EMBEDDING_MODEL_NAME}", model
+            # Also the span's model, so trace views and cost lookup see it.
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if (data := getattr(response, "data", None)) and isinstance(data, Iterable):
-            for embedding in data:
-                if (index := getattr(embedding, "index", None)) is None:
-                    continue
-                for key, value in self._get_attributes_from_embedding(embedding):
-                    yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{key}", value
+            for position, embedding in enumerate(data):
+                # Some OpenAI-compatible servers (e.g. Gemini's) omit `index`;
+                # fall back to the item's position instead of dropping it.
+                index = getattr(embedding, "index", None)
+                if index is None:
+                    index = position
+                if not (self._config.hide_outputs or self._config.hide_embedding_vectors):
+                    for key, value in self._get_attributes_from_embedding(embedding):
+                        yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{key}", value
 
+        # Embedding text is input too; older fi-core releases only mask input.value.
+        if self._config.hide_inputs:
+            return
         embedding_input = request_parameters.get("input")
         for index, text in enumerate(_get_texts(embedding_input, model)):
             # FIXME: this step should move to request attributes extractor if decoding is not necessary.# noqa: E501

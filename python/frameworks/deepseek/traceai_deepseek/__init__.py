@@ -1,4 +1,5 @@
 import logging
+import warnings
 from importlib import import_module
 from typing import Any, Collection
 
@@ -55,6 +56,14 @@ class DeepSeekInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
+        warnings.warn(
+            "DeepSeekInstrumentor is a legacy Chat Completions integration. "
+            "Use traceAI-openai's OpenAIInstrumentor for shared DeepSeek Chat "
+            "Completions and Responses tracing. When both are enabled, the "
+            "shared instrumentor's tracer provider and privacy config apply.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):

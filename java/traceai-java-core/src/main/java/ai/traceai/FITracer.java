@@ -3,6 +3,7 @@ package ai.traceai;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanKind;
@@ -75,6 +76,23 @@ public class FITracer {
      * @return the started span
      */
     public Span startSpan(String name, FISpanKind kind, Context parent) {
+        return startSpan(name, kind, parent, ContextAttributes.getAttributesFromContext());
+    }
+
+    /**
+     * Starts a span with an explicit parent and a complete FI attribute snapshot.
+     * Unlike the other overloads, this does not inherit the consuming thread's FI attributes.
+     * Capture {@link ContextAttributes#getAttributesFromContext()} when scheduling deferred work;
+     * an empty snapshot intentionally means no caller identity attributes.
+     *
+     * @param name the span name
+     * @param kind the FI span kind
+     * @param parent the parent context
+     * @param contextAttributes the caller's complete FI attribute snapshot, not null
+     * @return the started span
+     */
+    public Span startSpan(String name, FISpanKind kind, Context parent, Map<String, String> contextAttributes) {
+        java.util.Objects.requireNonNull(contextAttributes, "contextAttributes");
         SpanBuilder builder = tracer.spanBuilder(name)
             .setSpanKind(SpanKind.INTERNAL)
             .setParent(parent);
@@ -82,8 +100,7 @@ public class FITracer {
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
         span.setAttribute(SemanticConventions.GEN_AI_SPAN_KIND, kind.getValue().toLowerCase());
-        applyContextAttributes(span);
-
+        contextAttributes.forEach(span::setAttribute);
         return span;
     }
 
@@ -166,7 +183,7 @@ public class FITracer {
      * @param messages the list of message maps
      */
     public void setInputMessages(Span span, List<Map<String, String>> messages) {
-        if (!config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
+        if (!config.isHideInputs() && !config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_INPUT_MESSAGES,
                 truncateIfNeeded(gson.toJson(messages)));
         }
@@ -179,7 +196,7 @@ public class FITracer {
      * @param messages the list of message maps
      */
     public void setOutputMessages(Span span, List<Map<String, String>> messages) {
-        if (!config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
+        if (!config.isHideOutputs() && !config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES,
                 truncateIfNeeded(gson.toJson(messages)));
         }
@@ -207,10 +224,16 @@ public class FITracer {
      * @param error the error
      */
     public void setError(Span span, Throwable error) {
-        span.setStatus(StatusCode.ERROR, error.getMessage());
-        span.recordException(error);
         span.setAttribute(SemanticConventions.ERROR_TYPE, error.getClass().getName());
-        span.setAttribute(SemanticConventions.ERROR_MESSAGE, error.getMessage());
+        if (config.isHideErrorDetails()) {
+            span.setStatus(StatusCode.ERROR);
+            span.addEvent("exception", Attributes.of(
+                AttributeKey.stringKey("exception.type"), error.getClass().getName()));
+        } else {
+            span.setStatus(StatusCode.ERROR, error.getMessage());
+            span.recordException(error);
+            span.setAttribute(SemanticConventions.ERROR_MESSAGE, error.getMessage());
+        }
     }
 
     /**

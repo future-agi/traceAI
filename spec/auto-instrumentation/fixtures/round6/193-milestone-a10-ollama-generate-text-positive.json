@@ -1,0 +1,60 @@
+{
+  "name": "milestone-a10-ollama-generate-text-positive",
+  "description": "Only the nonempty output at 30ms qualifies; later ordinary text at 70ms cannot replace it.",
+  "request": {
+    "method": "POST",
+    "url": "http://localhost:11434/api/generate",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "fixture-model",
+      "prompt": "Hi"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/x-ndjson"
+    },
+    "ndjson": [
+      {
+        "model": "fixture-model",
+        "response": "",
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "response": "",
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "response": "Hi",
+        "done": false
+      },
+      {
+        "model": "fixture-model",
+        "response": "Later",
+        "done": false
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      20,
+      30,
+      70
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "text_completion fixture-model",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.response.time_to_first_text": 0.03,
+      "gen_ai.request.stream": true
+    },
+    "absent": []
+  }
+}

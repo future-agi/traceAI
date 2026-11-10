@@ -3,12 +3,12 @@ import inspect
 import json
 import logging
 import os
-import signal
 import sys
+import threading
 import uuid
 import warnings
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -74,13 +74,14 @@ class Transport(str, Enum):
 
 class SemanticConvention(str, Enum):
     """
-    Semantic convention standard to use for span attributes.
+    Semantic convention selector recorded on the provider's resource.
 
-    This determines how trace attributes are named and structured:
-    - FI: FutureAGI native convention (default) - uses fi.* namespace
-    - OTEL_GENAI: OpenTelemetry GenAI SIG convention - uses gen_ai.* namespace
-    - OPENINFERENCE: Arize Phoenix convention - uses openinference.* namespace
-    - OPENLLMETRY: Traceloop convention - uses traceloop.* namespace
+    This describes the convention emitted by the application or framework; it
+    does not rewrite, rename, or add span attributes.
+    - FI: Future AGI native convention (default)
+    - OTEL_GENAI: OpenTelemetry GenAI SIG convention
+    - OPENINFERENCE: OpenInference convention
+    - OPENLLMETRY: OpenLLMetry convention
     """
     FI = "fi"
     OTEL_GENAI = "otel_genai"
@@ -115,6 +116,9 @@ def register(
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
 
+    Span processors added later with `add_span_processor` run next to the Future AGI
+    exporter, never in place of it. To export somewhere else instead, pass `span_exporter`.
+
     All tuning args below default to `None`, meaning the corresponding OpenTelemetry
     environment variable / upstream default applies (no behavior change when unset).
 
@@ -126,7 +130,8 @@ def register(
         headers (dict): Extra headers sent to the collector.
         verbose (bool): Print configuration details to stdout.
         transport (Transport): HTTP (default) or gRPC.
-        semantic_convention (SemanticConvention): Attribute naming convention.
+        semantic_convention (SemanticConvention): Resource selector describing the
+            emitted convention; does not convert span attributes.
 
         Batch processor tuning (ignored unless `batch=True`):
         max_queue_size (int): Max spans buffered before overflow drops
@@ -239,8 +244,9 @@ def register(
             transport=transport,
             timeout=timeout,
         )
+    # Replaces the default the provider added on construction. This processor is not marked as a
+    # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
-    tracer_provider._default_processor = True
 
     if set_global_tracer_provider:
         trace_api.set_tracer_provider(tracer_provider)
@@ -270,10 +276,11 @@ class TracerProvider(_TracerProvider):
 
     On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
     The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
-    environment variables. Call `add_span_processor` to replace the default. In addition to
-    the arguments below, all upstream `opentelemetry.sdk.trace.TracerProvider` keyword
-    arguments (`sampler`, `resource`, `span_limits`, `id_generator`, ...) are accepted and
-    forwarded.
+    environment variables. The first `add_span_processor` call replaces the default; later calls
+    add processors next to it. The provider `register()` returns has no such default: processors
+    added to it run next to its exporter. In addition to the arguments below, all upstream
+    `opentelemetry.sdk.trace.TracerProvider` keyword arguments (`sampler`, `resource`,
+    `span_limits`, `id_generator`, ...) are accepted and forwarded.
 
     Args:
         transport (Transport): Transport (HTTP or gRPC) used for the default exporter.
@@ -330,7 +337,9 @@ class TracerProvider(_TracerProvider):
         """
         Registers a new `SpanProcessor` for this `TracerProvider`.
 
-        If this `TracerProvider` has a default processor, it will be removed.
+        On a `TracerProvider` constructed directly, the first call replaces the default
+        `SimpleSpanProcessor` added on construction. Any other processor is kept, including the
+        one `register()` adds: the new processor runs next to it, as in upstream OpenTelemetry.
         """
 
         if self._default_processor:
@@ -400,31 +409,13 @@ class TracerProvider(_TracerProvider):
         super().shutdown()
 
     def setup_signal_handlers(self):
-        """Set up signal handlers to ensure proper shutdown on termination"""
-        def handle_signal(signum, frame):
-            print(f"Received signal {signum}, shutting down tracer provider...")
-            try:
-                self.shutdown()
-            except Exception as e:
-                logger.error(f"Error during signal handler shutdown: {e}")
-            finally:
-                sys.exit(0)
+        """Register normal-exit cleanup without changing application signal policy.
 
-        try:
-            signal.signal(signal.SIGINT, handle_signal)
-            signal.signal(signal.SIGTERM, handle_signal)
-        except ValueError as e:
-            logger.warning(
-                f"Failed to register signal handlers: {e}. "
-                "This is expected when running in non-main threads."
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to register signal handlers due to unexpected error: {e}. "
-            )
-
+        Applications that handle termination signals can explicitly flush or
+        shut down their provider in their own handler. Default SIGTERM does not
+        run Python's atexit handlers.
+        """
         atexit.register(self.shutdown)
-
         return self
 
 
@@ -489,6 +480,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         timeout: Optional[float] = None,
     ):
         self._active_spans = {}
+        self._shutdown_lock = threading.Lock()
 
         if span_exporter is None:
             span_exporter = _build_default_exporter(transport, headers, timeout)
@@ -519,27 +511,21 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
     def shutdown(self) -> None:
         """Override shutdown to ensure all active spans get exported"""
         try:
-            # Process any spans that haven't been ended
-            if self._active_spans:
-                print(f"Ending {len(self._active_spans)} active spans during shutdown")
+            with self._shutdown_lock:
+                if self._active_spans:
+                    logger.warning("Ending %d active spans during shutdown", len(self._active_spans))
+                    active_spans = list(self._active_spans.values())
 
-                # Create a copy to avoid modification during iteration
-                active_spans = list(self._active_spans.values())
+                    for span in active_spans:
+                        if hasattr(span, "is_recording") and span.is_recording():
+                            try:
+                                span.set_attribute("gen_ai.span.leaked", True)
+                                span.end()
+                            except Exception:
+                                pass
 
-                # End all active spans and mark them as leaked
-                for span in active_spans:
-                    if hasattr(span, "is_recording") and span.is_recording():
-                        try:
-                            # Mark the span as leaked
-                            span.set_attribute("gen_ai.span.leaked", True)
-                            span.end()
-                        except Exception as e:
-                            pass
-
-                # Clear the tracking dictionary
-                self._active_spans.clear()
+                    self._active_spans.clear()
         finally:
-            # Call the parent shutdown method
             super().shutdown()
 
 
@@ -603,13 +589,50 @@ class BatchSpanProcessor(_BatchSpanProcessor):
         super().on_end(span)
 
 
+_CREDENTIAL_HEADERS = (AUTHORIZATION, "x-api-key", "x-secret-key")
+
+
+def _is_blank(value: Any) -> bool:
+    """None, or a str/bytes value that is empty after stripping whitespace."""
+    if value is None:
+        return True
+    if isinstance(value, (bytes, bytearray)):
+        return not bytes(value).strip()
+    return not str(value).strip()
+
+
+def _with_fi_auth_headers(headers: Any) -> Dict[str, Any]:
+    """Lower-case explicit headers and add the FI_API_KEY/FI_SECRET_KEY pair once.
+
+    Explicit credentials win: the environment pair is added only when no
+    Authorization, X-Api-Key or X-Secret-Key header was passed. A credential
+    header with an empty value is dropped rather than treated as a credential,
+    so an empty Authorization no longer hides valid environment keys. Keys are
+    lower-cased on both sides, so the request never carries case-variant
+    duplicates such as ``x-api-key`` and ``X-Api-Key``.
+    """
+    pairs = () if not headers else (headers.items() if isinstance(headers, Mapping) else headers)
+    merged: Dict[str, Any] = {}
+    for key, value in pairs:
+        name = (key.decode() if isinstance(key, bytes) else str(key)).lower()
+        # Skip a blank credential before collapsing case variants, so an empty
+        # duplicate can never erase an explicit one and pull in the env pair.
+        if name in _CREDENTIAL_HEADERS and _is_blank(value):
+            continue
+        merged[name] = value
+    if not any(name in merged for name in _CREDENTIAL_HEADERS):
+        auth_header = get_env_fi_auth_header()
+        if auth_header:
+            merged.update({k.lower(): v for k, v in auth_header.items()})
+    return merged
+
+
 class GRPCSpanExporter(_GRPCSpanExporter):
     """
     OTLP span exporter using gRPC.
     Args:
-        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If not provided, the
-            `BASE_URL` environment variable will be used to infer which
-            collector endpoint to use, defaults to the gRPC endpoint.
+        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
+            `FI_GRPC_URL` is used, defaulting to the Future AGI gRPC endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
@@ -619,33 +642,12 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        auth_header = get_env_fi_auth_header()
-        lower_case_auth_header = (
-            {k.lower(): v for k, v in auth_header.items()} if auth_header else None
+        bound_args.arguments["headers"] = (
+            _with_fi_auth_headers(bound_args.arguments.get("headers")) or None
         )
 
-        if not bound_args.arguments.get("headers"):
-            headers = {
-                **(lower_case_auth_header or dict()),
-            }
-            bound_args.arguments["headers"] = headers if headers else None
-        else:
-            passed_headers = bound_args.arguments["headers"]
-            if isinstance(passed_headers, dict):
-                headers = {k.lower(): v for k, v in passed_headers.items()}
-            else:
-                headers = {k.lower(): v for k, v in passed_headers}
-
-            if AUTHORIZATION not in headers:
-                bound_args.arguments["headers"] = {
-                    **headers,
-                    **(lower_case_auth_header or dict()),
-                }
-            else:
-                bound_args.arguments["headers"] = headers
-
-        endpoint = get_env_grpc_collector_endpoint()
-        bound_args.arguments["endpoint"] = endpoint
+        if bound_args.arguments.get("endpoint") is None:
+            bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
     def shutdown(self) -> None:
@@ -654,7 +656,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during gRPC exporter shutdown: %s", e)
+        finally:
+            super().shutdown()
 
 
 class HTTPSpanExporter(_HTTPSpanExporter):
@@ -665,29 +669,24 @@ class HTTPSpanExporter(_HTTPSpanExporter):
     - `opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter`
 
     Args:
-        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If not provided, the
-            `BASE_URL` environment variable will be used to infer which
-            collector endpoint to use, defaults to the HTTP endpoint.
+        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If omitted or None,
+            the endpoint is derived from `FI_BASE_URL`, defaulting to the Future AGI HTTP endpoint.
         headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
             and `FI_SECRET_KEY` environment variables will be used.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        endpoint = kwargs.get("endpoint")
-        headers = kwargs.get("headers")
+        bound_args = _get_class_signature(_HTTPSpanExporter).bind_partial(*args, **kwargs)
+        endpoint = bound_args.arguments.get("endpoint")
+        headers = bound_args.arguments.get("headers")
 
         if endpoint is None:
             _, endpoint = _normalized_endpoint(None)
-            kwargs["endpoint"] = endpoint
+            bound_args.arguments["endpoint"] = endpoint
 
-        final_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        if AUTHORIZATION not in final_headers:
-            auth_header = get_env_fi_auth_header()
-            if auth_header:
-                final_headers.update(auth_header)
-        kwargs["headers"] = final_headers or None
+        bound_args.arguments["headers"] = _with_fi_auth_headers(headers) or None
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*bound_args.args, **bound_args.kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -695,7 +694,9 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during HTTP exporter shutdown: %s", e)
+        finally:
+            super().shutdown()
 
 
 def _exporter_transport(exporter: SpanExporter) -> str:

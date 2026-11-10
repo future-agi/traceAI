@@ -1,0 +1,1 @@
+{"id":"msg_01FixtureTool","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"Let me check. OUTMARKER-c41e"},{"type":"tool_use","id":"toolu_01FixtureCall","name":"get_weather","input":{"city":"Paris"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":40,"output_tokens":22}}

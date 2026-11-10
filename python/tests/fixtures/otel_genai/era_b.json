@@ -1,0 +1,62 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "project_name", "value": {"stringValue": "otel-genai-conformance"}},
+          {"key": "project_type", "value": {"stringValue": "observe"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {"name": "traceai.tests.fixtures.otel_genai"},
+          "spans": [
+            {
+              "traceId": "e1b00000000000000000000000000002",
+              "spanId": "e1b0000000000001",
+              "name": "invoke_agent",
+              "kind": 3,
+              "startTimeUnixNano": "1791158400000000000",
+              "endTimeUnixNano": "1791158401000000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}}
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "e1b00000000000000000000000000002",
+              "spanId": "e1b0000000000002",
+              "parentSpanId": "e1b0000000000001",
+              "name": "retrieval",
+              "kind": 3,
+              "startTimeUnixNano": "1791158400100000000",
+              "endTimeUnixNano": "1791158400300000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "retrieval"}}
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "e1b00000000000000000000000000002",
+              "spanId": "e1b0000000000003",
+              "parentSpanId": "e1b0000000000001",
+              "name": "chat gpt-test",
+              "kind": 3,
+              "startTimeUnixNano": "1791158400400000000",
+              "endTimeUnixNano": "1791158400900000000",
+              "attributes": [
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-test"}},
+                {"key": "gen_ai.response.model", "value": {"stringValue": "gpt-test-actual"}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "3"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "4"}},
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}}
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@traceai/opencode-plugin",
+  "version": "0.1.0",
+  "description": "Future AGI turn tracing for OpenCode V2",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": { "prepare": "pnpm run build", "build": "tsc -p tsconfig.json", "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=22.16.0" },
+  "dependencies": { "@opencode/plugin": "2.2.5", "@opencode/client": "2.2.5", "@traceai/agent-core": "workspace:^" },
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" },
+  "repository": { "type": "git", "url": "git+https://github.com/future-agi/traceAI.git", "directory": "typescript/packages/traceai_opencode_plugin" },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": { "access": "public" }
+}

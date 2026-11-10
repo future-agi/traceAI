@@ -16,6 +16,21 @@
   published wheel was `0.1.8`), which mislabelled the instrumentation scope
   version on every span.
 
+## [0.1.11](https://github.com/future-agi/traceAI/compare/traceai-crewai-v0.1.10...traceai-crewai-v0.1.11) (2026-11-05)
+
+
+### Bug Fixes
+
+* **crewai:** complete framework lifecycle and provider composition ([#574](https://github.com/future-agi/traceAI/issues/574)) ([f379e9b](https://github.com/future-agi/traceAI/commit/f379e9b349451224c5c3fce1cd31dc4a3ed65c1a))
+
+## [0.1.10](https://github.com/future-agi/traceAI/compare/traceai-crewai-v0.1.9...traceai-crewai-v0.1.10) (2026-10-31)
+
+
+### Bug Fixes
+
+* **crewai:** project business content without exporting framework credentials ([0ba7ce4](https://github.com/future-agi/traceAI/commit/0ba7ce45c16d01df5404d48b1c114ba68ea42c41))
+* **crewai:** project content without changing native telemetry ([44ceaf3](https://github.com/future-agi/traceAI/commit/44ceaf3821bfdacd5c95c62db9bab3a292f3c880))
+
 ## [0.1.6] - 2025-05-29
 ### Feature
 - Updated dependencies to the latest versions.

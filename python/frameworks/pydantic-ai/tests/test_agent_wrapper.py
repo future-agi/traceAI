@@ -1,7 +1,7 @@
 """Tests for Pydantic AI agent wrapper."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import NonCallableMock, MagicMock, AsyncMock, patch
 import asyncio
 
 
@@ -105,7 +105,7 @@ class TestExtractUsage:
         """Test extracting usage data."""
         from traceai_pydantic_ai._agent_wrapper import extract_usage
 
-        usage = MagicMock()
+        usage = NonCallableMock()
         usage.request_tokens = 100
         usage.response_tokens = 50
         usage.total_tokens = 150
@@ -119,6 +119,16 @@ class TestExtractUsage:
         assert extracted["input_tokens"] == 100
         assert extracted["output_tokens"] == 50
         assert extracted["total_tokens"] == 150
+
+    def test_extract_usage_method(self):
+        from types import SimpleNamespace
+        from traceai_pydantic_ai._agent_wrapper import extract_usage
+
+        usage = SimpleNamespace(input_tokens=100, output_tokens=50, total_tokens=150, requests=1)
+        result = SimpleNamespace(usage=lambda: usage)
+        assert extract_usage(result) == {
+            "input_tokens": 100, "output_tokens": 50, "total_tokens": 150, "requests": 1
+        }
 
     def test_extract_usage_none(self):
         """Test extracting when no usage."""
@@ -134,7 +144,7 @@ class TestExtractUsage:
         """Test extracting with alternate field names."""
         from traceai_pydantic_ai._agent_wrapper import extract_usage
 
-        usage = MagicMock()
+        usage = NonCallableMock()
         usage.request_tokens = None
         usage.input_tokens = 100
         usage.response_tokens = None

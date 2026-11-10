@@ -1,4 +1,8 @@
 import type * as CallbackManagerModuleV02 from "@langchain/core/callbacks/manager";
+import type * as ChatModelModule from "@langchain/core/language_models/chat_models";
+import type * as RunnableModule from "@langchain/core/runnables";
+import { randomUUID } from "crypto";
+import { wrapModelStream } from "./streamLifecycle";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -35,6 +39,15 @@ export function _resetPatchedStateForTesting(): void {
 }
 
 type CallbackManagerModule = typeof CallbackManagerModuleV02;
+// The streaming helper is protected in LangChain's declarations, but is the
+// shared terminal boundary for Lambda/Map/Assign/Pick streaming transforms.
+type RunnableStreamPrototype = Record<string, (...args: unknown[]) => AsyncGenerator<unknown>>;
+function runnableStreamMethods(module: typeof RunnableModule) {
+  return [
+    [module?.Runnable?.prototype, "_transformStreamWithConfig", 2],
+    [module?.RunnableSequence?.prototype, "_streamIterator", 1],
+  ] as const;
+}
 
 /**
  * @param instrumentationConfig The config for the instrumentation @see {@link InstrumentationConfig}
@@ -44,6 +57,9 @@ export class LangChainInstrumentation extends InstrumentationBase {
   private fiTracer: FITracer;
   private tracerProvider?: TracerProvider;
   private traceConfig?: TraceConfigOptions;
+  private manualModule?: CallbackManagerModule;
+  private modelModules?: Set<typeof ChatModelModule>;
+  private runnableModules?: Set<typeof RunnableModule>;
 
   constructor({
     instrumentationConfig,
@@ -82,22 +98,114 @@ export class LangChainInstrumentation extends InstrumentationBase {
     });
   }
 
-  manuallyInstrument(module: CallbackManagerModule) {
+  /** Pass chatModels and runnables to close model and composed-chain streams on early return. */
+  manuallyInstrument(
+    module: CallbackManagerModule,
+    chatModels?: typeof ChatModelModule,
+    runnables?: typeof RunnableModule,
+  ) {
     if (module == null) {
       return;
     }
+    this.manualModule = module;
     diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
+    if (chatModels != null) this.patchChatModels(chatModels);
+    if (runnables != null) this.patchRunnables(runnables);
   }
 
-  protected init(): InstrumentationModuleDefinition {
-    const module =
+  protected init(): InstrumentationModuleDefinition[] {
+    return [
       new InstrumentationNodeModuleDefinition(
         "@langchain/core/dist/callbacks/manager.cjs",
-        ["^0.1.0", "^0.2.0", "^0.3.0"],
+        ["^0.1.0", "^0.2.0", "^0.3.0", "^1.0.0"],
         this.patch.bind(this),
         this.unpatch.bind(this),
-      );
+      ),
+      new InstrumentationNodeModuleDefinition(
+        "@langchain/core/dist/language_models/chat_models.cjs",
+        ["^0.2.0", "^0.3.0", "^1.0.0"],
+        this.patchChatModels.bind(this),
+        this.unpatchChatModels.bind(this),
+      ),
+      new InstrumentationNodeModuleDefinition(
+        "@langchain/core/dist/runnables/base.cjs",
+        ["^0.2.0", "^0.3.0", "^1.0.0"],
+        this.patchRunnables.bind(this),
+        this.unpatchRunnables.bind(this),
+      ),
+    ];
+  }
+
+  enable(): void {
+    super.enable();
+    if (this.manualModule != null) this.patch(this.manualModule);
+    this.modelModules?.forEach((module) => this.patchChatModels(module));
+    this.runnableModules?.forEach((module) => this.patchRunnables(module));
+  }
+
+  disable(): void {
+    super.disable();
+    if (this.manualModule != null) this.unpatch(this.manualModule);
+    this.modelModules?.forEach((module) => this.unpatchChatModels(module));
+    this.runnableModules?.forEach((module) => this.unpatchRunnables(module));
+  }
+
+  private patchChatModels(module: typeof ChatModelModule) {
+    const prototype = module?.BaseChatModel?.prototype;
+    if (prototype == null || isWrapped(prototype._streamIterator)) return module;
+    (this.modelModules ??= new Set()).add(module);
+    this._wrap(prototype, "_streamIterator", (original) => {
+      return function (
+        this: typeof prototype,
+        ...args: Parameters<typeof prototype._streamIterator>
+      ) {
+        // LangChain honors a supplied run id. Clone config because some versions
+        // consume/delete it; do not mutate options owned by the application.
+        const options = args[1];
+        const runId = options?.runId ?? randomUUID();
+        return wrapModelStream((signal) => {
+          args[1] = { ...options, runId, signal };
+          return original.apply(this, args);
+        }, runId, options?.signal, options?.timeout);
+      };
+    });
+    return module;
+  }
+
+  private unpatchChatModels(module?: typeof ChatModelModule) {
+    const prototype = module?.BaseChatModel?.prototype;
+    if (prototype != null && isWrapped(prototype._streamIterator)) {
+      this._unwrap(prototype, "_streamIterator");
+    }
+    return module;
+  }
+
+  private patchRunnables(module: typeof RunnableModule) {
+    (this.runnableModules ??= new Set()).add(module);
+    for (const [prototype, method, optionsIndex] of runnableStreamMethods(module)) {
+      const target = prototype as unknown as RunnableStreamPrototype | undefined;
+      if (typeof target?.[method] !== "function" || isWrapped(target[method])) continue;
+      this._wrap(target, method, (original) => {
+        return function (this: unknown, ...args: unknown[]) {
+          const options = args[optionsIndex] as { runId?: string; signal?: AbortSignal } | undefined;
+          const runId = options?.runId ?? randomUUID();
+          // Do not inject a signal into chain options: an older core's models
+          // interpret a supplied signal as overriding their own request timeout.
+          args[optionsIndex] = { ...options, runId };
+          return wrapModelStream(() => original.apply(this, args), runId, options?.signal);
+        };
+      });
+    }
+    return module;
+  }
+
+  private unpatchRunnables(module?: typeof RunnableModule) {
+    if (module == null) return module;
+    for (const [prototype, method] of runnableStreamMethods(module)) {
+      const target = prototype as unknown as RunnableStreamPrototype | undefined;
+      if (target != null && isWrapped(target[method])) this._unwrap(target, method);
+    }
     return module;
   }
 
@@ -141,12 +249,9 @@ export class LangChainInstrumentation extends InstrumentationBase {
     const instrumentation = this;
 
     /**
-     * _configureSync is only available in v0.2.0 and above
-     * It was added as a replacement to the configure method which is marked as soon to be deprecated
-     * In v0.2.0 and above, the configure method is a wrapper around _configureSync
-     * However, configure is not always called, where as _configureSync is always called
-     * so we want to patch only configure sync if it's available
-     * and only configure if _configureSync is not available so we don't get duplicate traces
+     * Later 0.2.x releases added _configureSync; the 0.2.0 floor only has
+     * configure. Patch exactly one entry point, since newer configure methods
+     * delegate to _configureSync and wrapping both would duplicate tracing.
      */
     if ("_configureSync" in module.CallbackManager) {
       this._wrap(module.CallbackManager, "_configureSync", (original) => {
@@ -163,6 +268,16 @@ export class LangChainInstrumentation extends InstrumentationBase {
           );
           args[0] = newInheritableHandlers;
 
+          return original.apply(this, args);
+        };
+      });
+    } else {
+      this._wrap(module.CallbackManager, "configure", (original) => {
+        return function (
+          this: typeof CallbackManagerModuleV02,
+          ...args: Parameters<typeof CallbackManagerModuleV02.CallbackManager.configure>
+        ) {
+          args[0] = addTracerToHandlers(instrumentation.fiTracer, args[0]);
           return original.apply(this, args);
         };
       });

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-haystack"
-version = "0.1.9"
+version = "0.1.11"
 description = "OpenTelemetry instrumentation for Haystack"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -8,13 +8,40 @@ readme = "README.md"
 packages = [
     { include = "traceai_haystack" },
 ]
+license = "Apache-2.0"
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "haystack"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
 
 [tool.poetry.dependencies]
-python = ">3.9, <3.13"
-haystack-ai = ">=2.10.0"
-fi-instrumentation-otel = ">=0.1.11"
+python = ">=3.10, <3.14"
+haystack-ai = ">=2.10.0,<4"
+fi-instrumentation-otel = ">=1.2.2,<2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.4,<9"
+httpx = ">=0.27,<0.29"
 
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/integrations/traceai/haystack"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/haystack"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/haystack/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

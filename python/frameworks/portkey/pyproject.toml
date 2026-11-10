@@ -1,12 +1,29 @@
 [tool.poetry]
 name = "traceAI-portkey"
-version = "0.1.2"
+version = "0.1.3"
 description = "OpenTelemetry instrumentation for Portkey AI"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 
 packages = [
     { include = "traceai_portkey" },
+]
+license = "Apache-2.0"
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "portkey"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
 ]
 
 [tool.poetry.dependencies]
@@ -15,6 +32,12 @@ portkey-ai = ">0.1.0"
 fi-instrumentation-otel = ">=0.1.11"
 
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/integrations/traceai/portkey"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/portkey"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/portkey/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

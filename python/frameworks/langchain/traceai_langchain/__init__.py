@@ -70,6 +70,7 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             name="BaseCallbackManager.__init__",
             wrapper=_BaseCallbackManagerInit(self._tracer),
         )
+        self._protect_class = Protect
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -83,6 +84,10 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore
         self._original_callback_manager_init = None  # type: ignore
+        if self._protect_class is not None:
+            self._protect_class.protect = self._original_protect
+        self._original_protect = None
+        self._protect_class = None
         self._tracer = None
         self.fi_tracer = None
 

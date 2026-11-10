@@ -1,5 +1,7 @@
 """Tests for Cerebras wrapper functions."""
 
+import json
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
@@ -95,7 +97,7 @@ class TestGetOutputAttributes:
 
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] == "assistant"
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == "Test response"
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == "Test response"
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == mock_completion.model_dump()
 
     def test_usage_metrics(self, mock_completion):
         """Should extract usage metrics."""
@@ -129,7 +131,9 @@ class TestGetStreamOutputAttributes:
         full_content = "Hello there!"
         attrs = _get_stream_output_attributes(mock_stream_chunks, full_content)
 
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == full_content
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == [
+            chunk.model_dump() for chunk in mock_stream_chunks
+        ]
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == full_content
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] == "assistant"
 
@@ -158,7 +162,8 @@ class TestGetStreamOutputAttributes:
         """Should handle empty chunks list."""
         attrs = _get_stream_output_attributes([], "")
 
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == ""
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == []
+        assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == ""
         assert SpanAttributes.GEN_AI_REQUEST_MODEL not in attrs
 
 

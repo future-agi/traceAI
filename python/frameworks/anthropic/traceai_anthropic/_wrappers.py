@@ -15,6 +15,8 @@ from typing import (
 )
 
 import opentelemetry.context as context_api
+from anthropic import AsyncStream, Stream
+from anthropic._response import BaseAPIResponse
 from anthropic.types import Message, MessageTokensCount, TextBlock, ToolUseBlock
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
@@ -32,7 +34,10 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
+from traceai_anthropic._native import _NativeTracing
+from traceai_anthropic._response import _RawResponse
 from traceai_anthropic._stream import _MessagesStream, _Stream
+from traceai_anthropic._utils import _finish_request_error
 from traceai_anthropic._with_span import _WithSpan
 
 if TYPE_CHECKING:
@@ -41,16 +46,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_RAW_RESPONSE_TYPES = (BaseAPIResponse,)
+try:
+    from anthropic._legacy_response import LegacyAPIResponse
+except ImportError:
+    # SDK 2.x removed the legacy raw response in favor of APIResponse.
+    pass
+else:
+    _RAW_RESPONSE_TYPES += (LegacyAPIResponse,)
+
 
 class _WithTracer(ABC):
     """
     Base class for wrappers that need a tracer.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        native_tracing: Optional[_NativeTracing] = None,
+        **kwargs: Any,
+    ) -> None:
 
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._native_tracing = native_tracing
+
+    def _without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """The original method for this call, with the SDK's duplicate native span turned off."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span(wrapped, instance)
+
+    def _without_native_span_async(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
+        """`_without_native_span` for coroutine methods."""
+        if self._native_tracing is None:
+            return wrapped
+        return self._native_tracing.without_native_span_async(wrapped, instance)
 
     @contextmanager
     def _start_as_current_span(
@@ -64,7 +97,7 @@ class _WithTracer(ABC):
                 attributes=attributes,
             )
         except Exception as e:
-            print(f"Error creating span: {e}")
+            logger.warning("Failed to create span")
             span = INVALID_SPAN
         with trace_api.use_span(
             span,
@@ -151,12 +184,8 @@ class _CompletionsWrapper(_BaseWrapper):
                     ),
                 )
 
-            except Exception as exception:
-                print(f"Error in completion: {exception}")
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
 
             streaming = kwargs.get("stream", False)
@@ -219,11 +248,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
             streaming = kwargs.get("stream", False)
@@ -251,6 +277,7 @@ class _MessagesWrapper(_BaseWrapper):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = dict(arguments).pop("messages", None)
@@ -286,49 +313,11 @@ class _MessagesWrapper(_BaseWrapper):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-                streaming = kwargs.get("stream", False)
-                if not streaming:
-                    span.set_attributes(dict(_get_raw_output(response)))
-
-                # Get output content
-                output_content = None
-                if hasattr(response, "content"):
-                    if isinstance(response.content, list):
-                        for block in response.content:
-                            if hasattr(block, "text"):
-                                output_content = block.text
-                                break
-                            elif isinstance(block, dict) and "text" in block:
-                                output_content = block["text"]
-                                break
-
-                # Add I/O to span attributes instead of sending separately
-                self._add_io_to_span_attributes(span=span, output_data=output_content)
-
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
+            return _observe_message_response(response, span)
 
-            streaming = kwargs.get("stream", False)
-            if streaming:
-                return _MessagesStream(response, span)
-            else:
-                span.set_status(trace_api.StatusCode.OK)
-                span.set_attributes(
-                    dict(
-                        chain(
-                            _get_llm_model_name_from_response(response),
-                            _get_output_messages(response),
-                            _get_llm_token_counts(response.usage),
-                            _get_outputs(response),
-                        )
-                    )
-                )
-                span.finish_tracing()
-                return response
 
 
 class _AsyncMessagesWrapper(_WithTracer):
@@ -346,6 +335,7 @@ class _AsyncMessagesWrapper(_WithTracer):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
+        wrapped = self._without_native_span_async(wrapped, instance)
 
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
@@ -381,30 +371,36 @@ class _AsyncMessagesWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-                span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
-            streaming = kwargs.get("stream", False)
-            if streaming:
-                return _MessagesStream(response, span)
-            else:
-                span.set_status(trace_api.StatusCode.OK)
-                span.set_attributes(
-                    dict(
-                        chain(
-                            _get_llm_model_name_from_response(response),
-                            _get_output_messages(response),
-                            _get_llm_token_counts(response.usage),
-                            _get_async_outputs(response),
-                        )
-                    )
-                )
-                span.finish_tracing()
-                return response
+            return _observe_message_response(response, span, is_async=True)
+
+
+def _observe_message_response(response: Any, span: _WithSpan, *, is_async: bool = False) -> Any:
+    if isinstance(response, _RAW_RESPONSE_TYPES):
+        return _RawResponse(response, span, lambda parsed: _observe_message_response(parsed, span, is_async=is_async))
+    if isinstance(response, (Stream, AsyncStream)):
+        return _MessagesStream(response, span)
+    if span.is_finished:
+        return response
+    # A successful provider response must remain successful even if telemetry
+    # extraction fails. Keep usage independent of output serialization/privacy.
+    try:
+        for extract in (
+            lambda: _get_llm_token_counts(getattr(response, "usage", None)),
+            lambda: _get_llm_model_name_from_response(response),
+            lambda: _get_output_messages(response),
+            lambda: _get_async_outputs(response) if is_async else _get_outputs(response),
+        ):
+            try:
+                span.set_attributes(dict(extract()))
+            except Exception:
+                pass
+    finally:
+        span.finish_tracing(status=trace_api.Status(trace_api.StatusCode.OK))
+    return response
+
 
 
 class _MessagesCountTokensWrapper(_BaseWrapper):
@@ -421,6 +417,7 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
     ):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
+        wrapped = self._without_native_span(wrapped, instance)
 
         arguments = kwargs
         llm_input_messages = arguments.get("messages", None)
@@ -454,11 +451,8 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             try:
                 response = wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException as exception:
+                _finish_request_error(span, exception)
                 raise
 
             span.set_status(trace_api.StatusCode.OK)
@@ -569,7 +563,7 @@ def _extract_image_data(messages):
             "query": str(eval_input[0]) if eval_input else None,
         }
     except Exception as e:
-        logger.exception(f"Error in _extract_image_data: {e}")
+        logger.warning("Failed to extract image data")
         return {
             "input_images": None,
             "filtered_messages": messages,
@@ -634,9 +628,18 @@ def _get_llm_system() -> Iterator[Tuple[str, Any]]:
 
 
 def _get_llm_token_counts(usage: "Usage") -> Iterator[Tuple[str, Any]]:
-    yield GEN_AI_USAGE_INPUT_TOKENS, usage.input_tokens
+    if usage is None:
+        return
+    cache_write = getattr(usage, "cache_creation_input_tokens", None)
+    cache_read = getattr(usage, "cache_read_input_tokens", None)
+    input_tokens = usage.input_tokens + (cache_write or 0) + (cache_read or 0)
+    yield GEN_AI_USAGE_INPUT_TOKENS, input_tokens
     yield GEN_AI_USAGE_OUTPUT_TOKENS, usage.output_tokens
-    yield GEN_AI_USAGE_TOTAL_TOKENS, usage.input_tokens + usage.output_tokens
+    yield GEN_AI_USAGE_TOTAL_TOKENS, input_tokens + usage.output_tokens
+    if cache_write is not None:
+        yield SpanAttributes.GEN_AI_USAGE_CACHE_WRITE_TOKENS, cache_write
+    if cache_read is not None:
+        yield SpanAttributes.GEN_AI_USAGE_CACHE_READ_TOKENS, cache_read
 
 
 def _get_llm_model_name_from_input(
@@ -699,17 +702,17 @@ def _get_llm_input_messages(messages: List[Dict[str, str]]) -> Any:
 def _get_tool_use_block(
     block: ToolUseBlock, msg_prefix: str, tool_index: int
 ) -> Iterator[Tuple[str, Any]]:
-    if tool_call_id := block.id:
+    if tool_call_id := (block.get("id") if isinstance(block, Mapping) else block.id):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_ID}",
             tool_call_id,
         )
-    if block_name := block.name:
+    if block_name := (block.get("name") if isinstance(block, Mapping) else block.name):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_NAME}",
             block_name,
         )
-    if block_input := block.input:
+    if block_input := (block.get("input") if isinstance(block, Mapping) else block.input):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
             safe_json_dumps(block_input),

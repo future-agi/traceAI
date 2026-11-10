@@ -4,6 +4,7 @@ import ai.traceai.*;
 import io.github.ollama4j.OllamaAPI;
 import io.github.ollama4j.models.OllamaResult;
 import io.github.ollama4j.models.chat.*;
+import io.github.ollama4j.utils.Options;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -14,8 +15,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for Ollama4j OllamaAPI.
- * Wraps the OllamaAPI to provide automatic tracing of all API calls.
+ * Instrumentation wrapper for the legacy Ollama4j 1.0.79 OllamaAPI.
+ * Applications must explicitly depend on {@code io.github.ollama4j:ollama4j:1.0.79};
+ * the SDK dependency is provided-scope. Ollama4j 1.1.7 uses a different client API
+ * and is not compatible with this wrapper.
+ *
+ * <p>Only calls through this wrapper's blocking methods are traced. Streaming
+ * callbacks, tool calls and calls through {@link #unwrap()} are not instrumented.
+ * Token usage is not captured.</p>
  *
  * <p>Usage:</p>
  * <pre>
@@ -72,8 +79,8 @@ public class TracedOllamaAPI {
             tracer.setInputValue(span, prompt);
             tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", prompt)));
 
-            // Execute request
-            OllamaResult result = api.generate(model, prompt, false, null);
+            // Ollama4j 1.0.79 dereferences Options even when using server defaults.
+            OllamaResult result = api.generate(model, prompt, false, new Options(Collections.emptyMap()));
 
             // Capture output
             if (result.getResponse() != null) {

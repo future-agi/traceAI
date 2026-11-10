@@ -23,6 +23,7 @@ class TestSpanAttributes:
         assert SpanAttributes.GEN_AI_PROVIDER_NAME == "gen_ai.provider.name"
         assert SpanAttributes.GEN_AI_REQUEST_MODEL == "gen_ai.request.model"
         assert SpanAttributes.GEN_AI_RESPONSE_MODEL == "gen_ai.response.model"
+        assert SpanAttributes.LLM_RESPONSE_MODEL == SpanAttributes.GEN_AI_RESPONSE_MODEL
         assert SpanAttributes.GEN_AI_REQUEST_MAX_TOKENS == "gen_ai.request.max_tokens"
         assert SpanAttributes.GEN_AI_REQUEST_TEMPERATURE == "gen_ai.request.temperature"
         assert SpanAttributes.GEN_AI_REQUEST_TOP_P == "gen_ai.request.top_p"
@@ -174,7 +175,8 @@ class TestGetAgentAttributes:
         attrs = get_agent_attributes(mock_agent)
 
         assert attrs[SpanAttributes.GEN_AI_REQUEST_MODEL] == "gpt-4"
-        assert attrs[SpanAttributes.GEN_AI_PROVIDER_NAME] == "openai"
+        assert attrs["gen_ai.provider.name"] == "openai"
+        assert "gen_ai.system" not in attrs
 
     def test_tool_count(self, mock_agent_with_tools):
         """Test tool count extraction."""
@@ -363,7 +365,8 @@ class TestGetModelAttributes:
         attrs = get_model_attributes(mock_model)
 
         assert attrs[SpanAttributes.GEN_AI_REQUEST_MODEL] == "gpt-4"
-        assert attrs[SpanAttributes.GEN_AI_PROVIDER_NAME] == "openai"
+        assert attrs["gen_ai.provider.name"] == "openai"
+        assert "gen_ai.system" not in attrs
         assert attrs[SpanAttributes.GEN_AI_REQUEST_TEMPERATURE] == 0.7
         assert attrs[SpanAttributes.GEN_AI_REQUEST_MAX_TOKENS] == 1000
         assert attrs[SpanAttributes.GEN_AI_REQUEST_TOP_P] == 1.0

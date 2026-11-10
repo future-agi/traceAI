@@ -588,10 +588,12 @@ class TestUtilityFunctions:
         
         assert result["embedding.embeddings.0.embedding.vector"] == [0.1, 0.2, 0.3]
         assert result["embedding.embeddings.1.embedding.vector"] == [0.4, 0.5, 0.6]
-        assert "embedding.embeddings" in result
-        assert "output.mime_type" in result
-        assert "output.value" in result
-        assert "raw.output" in result
+        expected = [embedding.tolist() for embedding in embeddings]
+        assert json.loads(result["embedding.embeddings"]) == expected
+        assert result["output.mime_type"] == "application/json"
+        assert json.loads(result["output.value"]) == {"embeddings": expected}
+        # Raw aliases bypass the canonical input/output privacy controls.
+        assert "raw.output" not in result
 
     def test_suppressed_instrumentation(self):
         """Test that wrappers respect suppressed instrumentation."""
