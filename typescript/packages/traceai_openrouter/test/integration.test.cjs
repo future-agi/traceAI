@@ -50,6 +50,8 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
       const stream = await client.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
       for await (const _event of stream) { /* consume */ }
       assert.equal(exporter.getFinishedSpans().at(-1).attributes['gen_ai.usage.output_tokens'], 6);
+      assert.equal(exporter.getFinishedSpans().at(-1).status.code, 1);
+      assert.equal(chunkedSpan.status.code, 1);
       const malformedStreamClient = new OpenRouter({ apiKey: 'synthetic-only', retryConfig: { strategy: 'none' },
         httpClient: createOpenRouterTracingClient({ fetcher: async () => new Response('data: {bad json}\n\n', { headers: { 'content-type': 'text/event-stream' } }), tracer: provider.getTracer('test') }) });
       const malformed = await malformedStreamClient.chat.send({ chatRequest: { model: 'requested/model', messages: [{ role: 'user', content: 'synthetic' }], stream: true } });
@@ -92,6 +94,7 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
       await reader.read();
       await reader.cancel();
       assert.equal(exporter.getFinishedSpans().at(-1).attributes['gen_ai.operation.name'], 'responses');
+      assert.equal(exporter.getFinishedSpans().at(-1).status.code, 0);
       assert.equal(paths.at(-1), '/api/v1/responses');
       assert.equal(exporter.getFinishedSpans().at(-1).attributes['gen_ai.response.model'], 'early');
     } finally { await provider.shutdown(); }
@@ -136,7 +139,7 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
       ]) {
         reply = new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
         await invoke();
-        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 0);
+        assert.equal(exporter.getFinishedSpans().at(-1).status.code, 1);
         assert.equal(exporter.getFinishedSpans().at(-1).attributes['fi.span.kind'], kind);
       }
       for (const [data, type] of [
@@ -169,3 +172,46 @@ for (const moduleName of ['@openrouter/sdk-floor', '@openrouter/sdk']) {
     } finally { await provider.shutdown(); }
   });
 }
+
+test('span status is OK only on evidence of a completed success', async () => {
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const tracer = provider.getTracer('test');
+  const chat = () => new Request('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', body: '{"model":"synthetic"}' });
+  const last = () => exporter.getFinishedSpans().at(-1).status.code;
+  const pending = () => new Response(new ReadableStream({ start() { /* never enqueues */ } }), { headers: { 'content-type': 'text/event-stream' } });
+  try {
+    // A cancel that lands while a read is pending is not a completed stream.
+    for (const [reason, code] of [[undefined, 0], [new Error('synthetic'), 2]]) {
+      const response = await createOpenRouterTracingClient({ fetcher: async () => pending(), tracer }).request(chat());
+      const reader = response.body.getReader();
+      const read = reader.read();
+      await reader.cancel(reason);
+      await read;
+      assert.equal(last(), code);
+    }
+    // An event-stream response with no body never completes.
+    await createOpenRouterTracingClient({ fetcher: async () => new Response(null, { headers: { 'content-type': 'text/event-stream' } }), tracer }).request(chat());
+    assert.equal(last(), 0);
+    // A JSON body too large for the bounded validation is not evidence of success.
+    const large = JSON.stringify({ unexpected: 'x'.repeat(66000) });
+    await createOpenRouterTracingClient({ fetcher: async () => new Response(large, { headers: { 'content-type': 'application/json' } }), tracer }).request(chat());
+    assert.equal(last(), 0);
+    // A stream frame too large to observe cannot mark the stream completed.
+    const huge = `data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm', choices: [{ index: 0, delta: { content: 'x'.repeat(66000) } }] })}\n\ndata: [DONE]\n\n`;
+    const streamed = await createOpenRouterTracingClient({ fetcher: async () => new Response(huge, { headers: { 'content-type': 'text/event-stream' } }), tracer }).request(chat());
+    const hugeReader = streamed.body.getReader();
+    while (!(await hugeReader.read()).done) { /* consume */ }
+    assert.notEqual(last(), 1);
+    // The same oversized frame followed by [DONE] in a later chunk is still not evidence of success.
+    const [frame, finish] = [huge.slice(0, huge.indexOf('data: [DONE]')), 'data: [DONE]\n\n'];
+    const split = await createOpenRouterTracingClient({ fetcher: async () => new Response(new ReadableStream({ start(controller) {
+      const encoder = new TextEncoder(); controller.enqueue(encoder.encode(frame)); controller.enqueue(encoder.encode(finish)); controller.close();
+    } }), { headers: { 'content-type': 'text/event-stream' } }), tracer }).request(chat());
+    const splitReader = split.body.getReader();
+    while (!(await splitReader.read()).done) { /* consume */ }
+    assert.notEqual(last(), 1);
+  } finally {
+    await provider.shutdown();
+  }
+});
