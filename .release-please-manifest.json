@@ -73,7 +73,7 @@
   "typescript/packages/fi-core": "1.2.3",
   "typescript/packages/fi-semantic-conventions": "1.2.0",
   "typescript/packages/traceai_anthropic": "0.1.5",
-  "typescript/packages/traceai_auto": "0.1.3",
+  "typescript/packages/traceai_auto": "0.1.4",
   "typescript/packages/traceai_bedrock": "0.1.3",
   "typescript/packages/traceai_beeai": "0.1.2",
   "typescript/packages/traceai_cerebras": "0.1.2",
