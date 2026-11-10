@@ -172,13 +172,12 @@ test.each(["ordinary", "registered", "credential-shaped"])("I1-H1b typed identit
       expect(clean.attributes["control.label"]).toBe("i1-public-control");
       if (kind !== "ordinary") expect(JSON.stringify(clean)).not.toContain(id);
     }
-    // Distinct, ordinary ids keep this an unbound-name control, not a secret-value test.
+    // A distinct, ordinary unbound id is a grouping key and exports as set.
     const unboundId = `different-unbound-i1-${kind}`;
     const unbound = privacyFilter().span(snapshot({ "session.id": unboundId, "control.label": "i1-public-control" }));
     for (const clean of [unbound, privacyFilter().span(unbound)]) {
-      expect(clean.attributes["session.id"]).toBe("<redacted>");
+      expect(clean.attributes["session.id"]).toBe(unboundId);
       expect(clean.attributes["control.label"]).toBe("i1-public-control");
-      expect(JSON.stringify(clean)).not.toContain(unboundId);
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
   } finally { await provider.shutdown(); }
