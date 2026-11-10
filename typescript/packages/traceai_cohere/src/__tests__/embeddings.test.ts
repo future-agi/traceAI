@@ -17,7 +17,7 @@ beforeEach(() => exporter.reset());
 afterEach(() => instrumentation?.disable());
 afterAll(async () => provider.shutdown());
 
-describe("T8-TS-CLOUD-006 integer embedding attributes", () => {
+describe("integer embedding attributes", () => {
   describe.each([
     { type: "int8", values: [[-128, 0, 127], [1, -2, 3]] },
     { type: "uint8", values: [[0, 128, 255], [1, 2, 3]] },
