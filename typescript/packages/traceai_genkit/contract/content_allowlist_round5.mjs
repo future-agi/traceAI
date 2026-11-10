@@ -62,6 +62,8 @@ for (const [name, key] of Object.entries(semconv.SemanticConventions)) if (name.
 function under(key, roots) { return roots.some(root => key === root || key.startsWith(root + '.') || key.startsWith(root + '[')); }
 function side(key) {
   if (metadata.has(key)) return 'metadata';
+  // Array notation is a path separator, not part of the leaf's spelling.
+  key = key.replace(/\[(\d+)\]/g, '.$1');
   if (under(key, ['gen_ai.tool.call.arguments', 'tool.input', 'tool.arguments', 'agent.input', 'gen_ai.agent.input', 'agent.instructions', 'gen_ai.agent.instructions', 'reranker.input_documents', 'reranker.query'])) return 'input';
   if (under(key, ['gen_ai.tool.call.result', 'tool.output', 'tool.result', 'agent.output', 'gen_ai.agent.output', 'gen_ai.tool.call', 'tool_call', 'llm.function_call', 'reranker.output_documents', 'retrieval', 'gen_ai.retrieval'])) return 'output';
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|$)/.test(key)) {
@@ -74,7 +76,7 @@ function side(key) {
   return 'both';
 }
 const rows = [...inventory].sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, sources]) =>
-  [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), marker: 'SYNTHETIC_' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
+  [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
 const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText'];
 const cases = ['span', 'context', 'event', 'link', 'resource'].flatMap(surface => flags.map(flag => ({ name: `${surface}-${flag}`, surface, flag })));
 if (!process.argv[2]) {
@@ -113,26 +115,37 @@ if (!process.argv[2]) {
     const ai = genkit({ plugins: [] });
     const model = ai.defineModel({ name: 'offline/content' }, async request => {
       const attributes = { [active.key]: value(active) };
-      const span = trace.getActiveSpan();
-      if (test.surface === 'span') span.setAttributes(attributes);
-      if (test.surface === 'event') span.addEvent('synthetic-content', attributes);
-      if (test.surface === 'link') span.addLink({ context: { traceId: '11111111111111111111111111111111', spanId: '2222222222222222', traceFlags: 1 }, attributes });
+      // Probe children of the real native model span have no model request or
+      // response envelope that could overwrite a seeded MIME/model attribute.
+      // Test BOTH a model and a generic span: non-model usage is namespaced by
+      // the mapper and must not bypass privacy through that additional copy.
+      const ctx = test.surface === 'context' ? setAttributes(context.active(), attributes) : context.active();
+      context.with(ctx, () => {
+        for (const typed of [true, false]) {
+          const span = trace.getTracer('genkit-privacy-probe').startSpan('content-probe', {
+            attributes: typed ? { 'genkit:type': 'action', 'genkit:metadata:subtype': 'model' } : {},
+          });
+          if (test.surface === 'span') span.setAttributes(attributes);
+          if (test.surface === 'event') span.addEvent('synthetic-content', attributes);
+          if (test.surface === 'link') span.addLink({ context: { traceId: '11111111111111111111111111111111', spanId: '2222222222222222', traceFlags: 1 }, attributes });
+          span.end();
+        }
+      });
       return (await fetch(origin + '/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })).json();
     });
     // One key per native model span avoids attribute-budget drops masquerading as
     // privacy. Resource attributes share one complete resource (not span limits).
     for (const row of test.surface === 'resource' ? rows.slice(0, 1) : rows) {
       active = row;
-      const ctx = test.surface === 'context' ? setAttributes(context.active(), { [row.key]: value(row) }) : context.active();
-      assert.equal((await context.with(ctx, () => ai.generate({ model, prompt: 'public prompt' }))).text, 'public reply');
+      assert.equal((await ai.generate({ model, prompt: 'public prompt' })).text, 'public reply');
     }
     await flushTracing(); await processor.forceFlush();
     const spans = payloads.flatMap(p => p.resourceSpans ?? []).flatMap(r => r.scopeSpans ?? []).flatMap(s => s.spans ?? []);
     assert.equal(requests.length, test.surface === 'resource' ? 1 : rows.length);
     assert.equal(new Set(spans.map(s => s.spanId)).size, spans.length);
-    assert.equal(spans.length, requests.length * 2);
+    assert.equal(spans.length, requests.length * 4);
     const selected = test.surface === 'resource' ? payloads.flatMap(p => p.resourceSpans ?? []).flatMap(r => r.resource.attributes ?? [])
-      : ['span', 'context'].includes(test.surface) ? spans.flatMap(s => s.attributes ?? [])
+      : ['span', 'context'].includes(test.surface) ? spans.filter(s => s.name === 'content-probe').flatMap(s => s.attributes ?? [])
       : spans.flatMap(s => s[test.surface === 'event' ? 'events' : 'links'] ?? []).flatMap(s => s.attributes ?? []);
     const wire = JSON.stringify(payloads);
     const outcomes = rows.map(row => {

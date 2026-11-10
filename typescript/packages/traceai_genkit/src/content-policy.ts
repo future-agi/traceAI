@@ -70,7 +70,7 @@ export function semanticContentSide(key: string): ContentSide | undefined {
     "gen_ai.tool.call", "tool_call", "llm.function_call", "reranker.output_documents", "retrieval", "gen_ai.retrieval",
   ].some(root => family(key, root))) return "output";
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|\[|$)/.test(key)) {
-    if (/(?:^|\.)(?:vector|embedding)(?:\.|\[|$)/.test(key.replace(/^embedding\./, ""))) return "output";
+    if (/(?:^|\.)(?:vector|embedding)(?:\.|\[|$)/.test(key.replace(/^embedding(?:\.|(?=\[)|$)/, ""))) return "output";
     if (/(?:^|\.)text(?:\.|\[|$)/.test(key)) return "input";
     return "both";
   }

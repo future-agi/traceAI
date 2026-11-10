@@ -247,7 +247,10 @@ function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy): 
     // fi-core. All other content, including future and flattened fields, follows
     // the closed metadata allowlist and explicit side policy.
     if (key === "gen_ai.input.messages" || key === "gen_ai.output.messages") continue;
-    if (hideSemanticContent(key, policy)) {
+    // Non-model spans namespace aggregate usage instead of promoting it. That
+    // rename must not turn an unrecognised usage/cost descendant into metadata.
+    const semanticKey = key.startsWith(GENKIT_USAGE_PREFIX) ? key.slice(GENKIT_USAGE_PREFIX.length) : key;
+    if (hideSemanticContent(semanticKey, policy)) {
       if (key.endsWith("mime_type")) delete out[key];
       else out[key] = REDACTED_VALUE;
     }
