@@ -122,7 +122,16 @@ for (const [nestedKey, depth] of ['gen_ai.prompts', 'gen_ai.agent.input', 'gen_a
     sources: ['fi-core/src/attribute-projection.ts legacy capsule', `nested ${nestedKey}`], side: side(nestedKey), defaultMediaOmission: false,
     marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) });
 }
-const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText'];
+// These three NEW inventory keys have an exact numeric-counter contract. A
+// prose marker is an invalid count and must still obey the always-on media
+// policy. Keep that negative control as well as a valid typed positive control.
+for (const [index, key] of ['gen_ai.usage.cache_read_tokens.audio', 'llm.token_count.prompt_details.audio', 'llm.token_count.completion_details.audio'].entries()) {
+  const row = rows.find(row => row.key === key);
+  rows.push({ ...row, key: `traceai.attribute_projection.metadata::invalid-string::${key}`, attributeKey: 'traceai.attribute_projection.metadata', nestedKey: key, depth: 1, defaultMediaOmission: true });
+  row.marker = 730000001 + index;
+  row.valueType = 'nonnegative-safe-integer';
+}
+const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText', 'hideInputImages'];
 const cases = ['manual', 'automatic'].flatMap(route => ['span', 'context', 'event', 'link', 'resource'].flatMap(surface =>
   flags.map(flag => ({ name: `${route}-${surface}-${flag}`, route, surface, flag }))));
 if (!process.argv[2]) {
@@ -248,7 +257,7 @@ if (!process.argv[2]) {
         : attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__')));
       return { ...row, route: test.route, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
         passed: hidden ? !present && placeholder : row.defaultMediaOmission
-          ? !present && attrs.length > 0 && attrs.every(a => a.value.stringValue === '<omitted: media>')
+          ? !present && attrs.length > 0 && (row.nestedKey ? nestedValues.length > 0 && nestedValues.every(v => v === '<omitted: media>') : attrs.every(a => a.value.stringValue === '<omitted: media>'))
           : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker)) };
     });
     const evidence = { case: test.name, inventory: rows, requests, payloads, outcomes };

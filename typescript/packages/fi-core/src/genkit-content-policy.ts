@@ -109,7 +109,9 @@ export function hideSemanticContent(key: string, policy: ContentPolicy): boolean
 // usage and operation classification with a whole-value marker. No exported
 // attribute can grant this exception, and changed values lose the receipt.
 type AliasReceipt = { policy: ContentPolicy; values: Map<string, unknown> };
-const aliases = new WeakMap<object, AliasReceipt>();
+const ALIASES = Symbol.for("traceai.genkit.mapped-aliases.v1");
+const host = globalThis as typeof globalThis & { [ALIASES]?: WeakMap<object, AliasReceipt> };
+const aliases = host[ALIASES] ??= new WeakMap<object, AliasReceipt>();
 export function rememberGenkitAliases(attributes: Attributes, policy: ContentPolicy, keys: readonly string[]): void {
   aliases.set(attributes, { policy: { ...policy }, values: new Map(keys.map(key => [key, attributes[key]])) });
 }
