@@ -15,11 +15,10 @@ under the active node span.
   not covered by the automatic loader hook.
 
 Install it in the same installation that resolves `n8n-core`, together with the
-OpenTelemetry packages the setup below uses, at the versions this package uses so
-npm installs a single copy of each:
+OpenTelemetry packages the setup below uses:
 
 ```sh
-npm install @traceai/n8n @traceai/fi-core @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1 @opentelemetry/instrumentation@^0.202.0
+npm install @traceai/n8n @traceai/fi-core @opentelemetry/api @opentelemetry/context-async-hooks @opentelemetry/instrumentation
 ```
 
 ## Self-hosted setup
