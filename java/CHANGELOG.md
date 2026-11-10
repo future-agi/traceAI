@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0](https://github.com/future-agi/traceAI/compare/java-v1.0.3...java-v1.1.0) (2026-11-10)
+
+### Features
+
+* **java-core:** add Python-aligned `GEN_AI_*` names for every GenAI attribute in `SemanticConventions`. The 16 legacy `LLM_*` names stay as deprecated compile-time aliases with identical values, so existing source and binaries keep working; `LLM_SYSTEM` maps to `GEN_AI_PROVIDER_NAME` (`gen_ai.provider.name`) ([#654](https://github.com/future-agi/traceAI/pull/654), TH-3776).
+
 ## [1.0.3](https://github.com/future-agi/traceAI/compare/java-v1.0.2...java-v1.0.3) (2026-11-10)
 
 ### Features
