@@ -12,7 +12,7 @@ npm install -D @traceai/vitest-evals vitest-evals@0.17 vitest@4
 
 The reporter only loads the OpenTelemetry packages at runtime; `vitest` and `vitest-evals` are optional peer dependencies that declare the supported versions. npm 10 can crash while installing `vitest-evals` 0.17 together with Vitest 4 (`Cannot read properties of null (reading 'edgesOut')`), with or without this package; use npm 11 or pnpm.
 
-Set `FI_API_KEY` and `FI_SECRET_KEY` in the test process. In `vitest.config.ts`:
+Set `FI_API_KEY` and `FI_SECRET_KEY` in the test process, and `FI_PROJECT_NAME` for the Observe project the eval traces go to (default `vitest-evals`; or pass `new VitestEvalsReporter({ projectName: '...' })`). In `vitest.config.ts`:
 
 ```ts
 import { defineConfig } from 'vitest/config';
