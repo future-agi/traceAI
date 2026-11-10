@@ -51,14 +51,14 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         wrap_function_wrapper(
             module="groq.resources.chat.completions",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
+            wrapper=_CompletionsWrapper(tracer=self._tracer, config=config),
         )
 
         self._original_async_completions_create = AsyncCompletions.create
         wrap_function_wrapper(
             module="groq.resources.chat.completions",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
+            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, config=config),
         )
 
         if Protect is not None:
