@@ -242,8 +242,8 @@ function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy): 
     attributes,
   });
   for (const key of Object.keys(out)) {
-    const input = /^(?:input\.|raw\.input$|gen_ai\.input\.)/.test(key);
-    const output = /^(?:output\.|raw\.output$|gen_ai\.output\.)/.test(key);
+    const input = /^(?:input\.|raw\.input$|gen_ai\.input\.|gen_ai\.(?:prompt|system_instructions)(?:\.|$))/.test(key);
+    const output = /^(?:output\.|raw\.output$|gen_ai\.output\.|gen_ai\.completion(?:\.|$))/.test(key);
     // Exact message blobs retain fi-core's field-level masking. Flattened/opaque
     // copies have no independently verifiable envelope, so mask the whole value.
     if (key === "gen_ai.input.messages" || key === "gen_ai.output.messages") continue;
