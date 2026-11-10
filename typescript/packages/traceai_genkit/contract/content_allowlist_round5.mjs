@@ -153,7 +153,7 @@ if (!process.argv[2]) {
     require('ts-node/register/transpile-only');
     const auto = require('../../traceai_auto/src/index.ts');
     auto.init({ provider: nativeProvider, apiKey: 'synthetic', secretKey: 'synthetic', projectName: 'genkit-content-contract',
-      baseUrl: origin + '/v1/traces', instrumentations: [], wireCapture: false, traceConfig });
+      baseUrl: origin + '/v1/traces', instrumentations: ['genkit'], wireCapture: false, traceConfig });
     assert.equal(auto.report().active, true);
     assert.equal(enable().status, 'instrumented');
     processor = { forceFlush: auto.forceFlush, shutdown: auto.shutdown };
@@ -193,6 +193,10 @@ if (!process.argv[2]) {
     }
     await flushTracing(); await processor.forceFlush();
     const spans = payloads.flatMap(p => p.resourceSpans ?? []).flatMap(r => r.scopeSpans ?? []).flatMap(s => s.spans ?? []);
+    // Retain the complete receiver body even if a cardinality/identity assertion
+    // fails before the per-attribute checks below can run.
+    if (process.env.PRIVACY_EVIDENCE_DIR) writeFileSync(`${process.env.PRIVACY_EVIDENCE_DIR}/${test.name}.json`,
+      JSON.stringify({ case: test.name, inventory: rows, requests, payloads, nativeSpanCount: native.length }));
     assert.equal(requests.length, test.surface === 'resource' ? 1 : rows.length);
     assert.equal(new Set(spans.map(s => s.spanId)).size, spans.length);
     assert.equal(spans.length, requests.length * 4);
