@@ -1,6 +1,6 @@
 {
   "name": "@traceai/openai",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "OpenTelemetry instrumentation for OpenAI",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
