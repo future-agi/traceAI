@@ -84,8 +84,20 @@ GEN_AI_INPUT_MESSAGES;
 SemanticConventions.GEN_AI_INPUT_MESSAGES;
 ```
 
-The old `LLM_*` constants remain available as deprecated aliases with the same
-literal types and wire values. Existing instrumentation does not need to change.
+### Migrate existing imports
+
+The 17 `LLM_*` constants listed below remain available as deprecated aliases with
+the same literal types and wire values. Existing instrumentation does not need to
+change. To adopt the canonical API, replace an import or property name using the
+table below; do not rewrite the emitted attribute keys or stored traces.
+
+```typescript
+import { GEN_AI_INPUT_MESSAGES } from '@traceai/fi-semantic-conventions';
+
+// Replaces LLM_INPUT_MESSAGES without changing the attribute key or its type.
+const inputKey: 'gen_ai.input.messages' = GEN_AI_INPUT_MESSAGES;
+```
+
 In particular, both `LLM_PROVIDER` and `LLM_SYSTEM` alias `GEN_AI_PROVIDER_NAME`;
 `LLM_SYSTEM` is not an alias for Python's distinct `GEN_AI_SYSTEM` (`gen_ai.system`).
 

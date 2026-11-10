@@ -6,6 +6,7 @@ on:
     paths:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
+      - 'python/fi_instrumentation/fi_types.py'
       - 'typescript/pnpm-lock.yaml'
       - 'typescript/tsconfig*'
       - '.github/workflows/fi-core-typescript-tests.yml'
@@ -14,6 +15,7 @@ on:
     paths:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
+      - 'python/fi_instrumentation/fi_types.py'
       - 'typescript/pnpm-lock.yaml'
       - 'typescript/tsconfig*'
       - '.github/workflows/fi-core-typescript-tests.yml'
@@ -62,5 +64,6 @@ jobs:
             ip link set lo up
             export FI_CORE_PACKAGE_JSON="$1/node_modules/@traceai/fi-core/package.json"
             "$2" --test "$3/typescript/packages/fi-core/test/provider-lifecycle.test.cjs" &&
+            "$2" "$3/typescript/node_modules/jest/bin/jest.js" --config "$3/typescript/packages/fi-semantic-conventions/jest.config.js" --runInBand --no-cache &&
             "$2" "$3/typescript/node_modules/jest/bin/jest.js" --config "$3/typescript/packages/fi-core/jest.config.js" --runInBand
           ' sh "$RUNNER_TEMP/sdk-fixture" "$NODE" "$GITHUB_WORKSPACE"

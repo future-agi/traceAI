@@ -698,21 +698,37 @@ export const SemanticAttributePrefixes = {
     GEN_AI_USAGE_TOTAL_TOKENS,
     GEN_AI_TOOL_CALL,
     GEN_AI_TOOL_DEFINITIONS,
+    /** @deprecated Use GEN_AI_INPUT_MESSAGES instead. */
     LLM_INPUT_MESSAGES,
+    /** @deprecated Use GEN_AI_OUTPUT_MESSAGES instead. */
     LLM_OUTPUT_MESSAGES,
+    /** @deprecated Use GEN_AI_REQUEST_MODEL instead. */
     LLM_MODEL_NAME,
+    /** @deprecated Use GEN_AI_PROMPTS instead. */
     LLM_PROMPTS,
+    /** @deprecated Use GEN_AI_REQUEST_PARAMETERS instead. */
     LLM_INVOCATION_PARAMETERS,
+    /** @deprecated Use GEN_AI_USAGE_OUTPUT_TOKENS instead. */
     LLM_TOKEN_COUNT_COMPLETION,
+    /** @deprecated Use GEN_AI_USAGE_OUTPUT_TOKENS_REASONING instead. */
     LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+    /** @deprecated Use GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO instead. */
     LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+    /** @deprecated Use GEN_AI_USAGE_INPUT_TOKENS instead. */
     LLM_TOKEN_COUNT_PROMPT,
+    /** @deprecated Use GEN_AI_USAGE_CACHE_WRITE_TOKENS instead. */
     LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE,
+    /** @deprecated Use GEN_AI_USAGE_CACHE_READ_TOKENS instead. */
     LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+    /** @deprecated Use GEN_AI_USAGE_INPUT_TOKENS_AUDIO instead. */
     LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+    /** @deprecated Use GEN_AI_USAGE_TOTAL_TOKENS instead. */
     LLM_TOKEN_COUNT_TOTAL,
+    /** @deprecated Use GEN_AI_PROVIDER_NAME instead. */
     LLM_SYSTEM,
+    /** @deprecated Use GEN_AI_PROVIDER_NAME instead. */
     LLM_PROVIDER,
+    /** @deprecated Use GEN_AI_TOOL_DEFINITIONS instead. */
     LLM_TOOLS,
     MESSAGE_ROLE,
     MESSAGE_NAME,
@@ -748,6 +764,7 @@ export const SemanticAttributePrefixes = {
     RERANKER_QUERY,
     RERANKER_MODEL_NAME,
     RERANKER_TOP_K,
+    /** @deprecated Use GEN_AI_TOOL_CALL instead. */
     LLM_FUNCTION_CALL,
     RETRIEVAL_DOCUMENTS,
     SESSION_ID,
