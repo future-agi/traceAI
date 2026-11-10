@@ -10,7 +10,7 @@ const { spawnSync } = require("node:child_process");
 const marker = "synthetic-query-filter-value";
 const filter = { category: { $eq: marker } };
 
-async function child(mode) {
+async function child(mode, options = {}) {
   const { register, ProjectType } = require("@traceai/fi-core");
   const { PineconeInstrumentation } = require("../dist/src");
   const requests = [];
@@ -44,11 +44,18 @@ async function child(mode) {
     endpoint: `http://127.0.0.1:${receiver.address().port}`,
     headers: {},
   });
-  const instrumentation = new PineconeInstrumentation();
+  const load = process.env.PINECONE_SDK_DIR
+    ? createRequire(resolve(process.env.PINECONE_SDK_DIR, "package.json")) : require;
+  // Both default-enabled registration paths must honor constructor policy on
+  // the first operation, without disable/enable compensating for initialization.
+  const preloaded = options.registration === "manual" ? load("@pinecone-database/pinecone") : undefined;
+  if (options.traceConfig) {
+    assert.equal(Object.keys(process.env).some(key => key.startsWith("FI_")), false);
+  }
+  const instrumentation = new PineconeInstrumentation({ traceConfig: options.traceConfig });
   try {
-    const load = process.env.PINECONE_SDK_DIR
-      ? createRequire(resolve(process.env.PINECONE_SDK_DIR, "package.json")) : require;
-    const sdk = load("@pinecone-database/pinecone");
+    const sdk = preloaded || load("@pinecone-database/pinecone");
+    if (options.registration === "manual") instrumentation.manuallyInstrument(sdk);
     const version = load("@pinecone-database/pinecone/package.json").version;
     const major = Number(version.split(".")[0]);
     const config = {
@@ -72,7 +79,7 @@ async function child(mode) {
     if (mode === "privacy") {
       const result = await index.query({ vector: [0.1, 0.2], topK: 1, filter });
       await provider.forceFlush();
-      console.log(JSON.stringify({ version, requests, exports }));
+      console.log(JSON.stringify({ version, options, requests, exports }));
       assert.equal(result.matches[0].id, "synthetic-record");
       assert.equal(requests.length, 1);
       assert.deepEqual(requests[0].body.filter, filter, "hiding must not alter the provider request");
@@ -81,7 +88,9 @@ async function child(mode) {
       assert.equal(attrs["db.vector.index.name"], "synthetic-index");
       assert.equal(attrs["db.vector.namespace"], "scoped-namespace");
       assert.equal(attrs["db.vector.results.count"], 1);
-      const hidden = process.env.FI_HIDE_INPUTS === "true" || process.env.FI_HIDE_INPUT_TEXT === "true";
+      const hidden = options.traceConfig
+        ? options.traceConfig.hideInputs === true || options.traceConfig.hideInputText === true
+        : process.env.FI_HIDE_INPUTS === "true" || process.env.FI_HIDE_INPUT_TEXT === "true";
       assert.equal(attrs["db.vector.query.filter"], hidden ? "__REDACTED__" : JSON.stringify(filter));
       // Scan every received field, including events, links and resources, not
       // just the query-filter attribute inspected above.
@@ -127,16 +136,16 @@ async function child(mode) {
 }
 
 if (process.argv[2] === "--child") {
-  child(process.argv[3]).catch(error => { console.error(error); process.exitCode = 1; });
+  child(process.argv[3], JSON.parse(process.argv[4] || "{}")).catch(error => { console.error(error); process.exitCode = 1; });
 } else {
   const { test } = require("node:test");
-  const run = (mode, flags) => {
+  const run = (mode, flags, options = {}) => {
     const env = { ...process.env };
     for (const key of Object.keys(env)) {
       if (key.startsWith("FI_") || key.startsWith("OTEL_") || key === "NODE_TEST_CONTEXT") delete env[key];
     }
     Object.assign(env, flags);
-    const result = spawnSync(process.execPath, [__filename, "--child", mode], { env, encoding: "utf8", timeout: 30000 });
+    const result = spawnSync(process.execPath, [__filename, "--child", mode, JSON.stringify(options)], { env, encoding: "utf8", timeout: 30000 });
     process.stdout.write(result.stdout || "");
     process.stderr.write(result.stderr || "");
     assert.equal(result.error, undefined);
@@ -148,4 +157,12 @@ if (process.argv[2] === "--child") {
     }
   }
   test("scoped, default and explicit namespace attribution", () => run("namespace", {}));
+  for (const registration of ["automatic", "manual"]) {
+    for (const flag of ["hideInputs", "hideInputText"]) {
+      for (const value of [false, true]) {
+        test(`constructor ${flag}=${value}, ${registration}: first query and complete OTLP payload`, () =>
+          run("privacy", {}, { registration, traceConfig: { [flag]: value } }));
+      }
+    }
+  }
 }

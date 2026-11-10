@@ -83,6 +83,12 @@ export class PineconeInstrumentation extends InstrumentationBase {
     );
     this._traceConfig = traceConfig;
     this._pineconeConfig = instrumentationConfig || {};
+    // InstrumentationBase may call enable() before these options are assigned.
+    // Replace that initial tracer so the first operation uses constructor policy.
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this._traceConfig,
+    });
   }
 
   public override enable(): void {

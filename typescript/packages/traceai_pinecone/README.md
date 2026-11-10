@@ -86,6 +86,15 @@ metadata and result counts remain available. This rule requires the matching
 `@traceai/fi-core` release containing vector-query-filter masking; updating the
 Pinecone package alone does not update a separately pinned core installation.
 
+The equivalent constructor options apply from the first operation, with either
+automatic SDK instrumentation or `manuallyInstrument()`; no extra `enable()`
+call is needed:
+
+```typescript
+new PineconeInstrumentation({ traceConfig: { hideInputs: true } });
+// Alternatively, use traceConfig: { hideInputText: true }.
+```
+
 For SDKs with per-call namespace overrides, `namespace: ""` selects the default
 namespace rather than the index's scoped namespace. Empty/default namespaces
 omit `db.vector.namespace` and `db.namespace`; nonempty namespaces retain both.
@@ -617,6 +626,10 @@ pnpm build
 
 # Run tests
 pnpm test
+
+# Run real-SDK local HTTP/OTLP contracts after building
+node contract/lifecycle.cjs
+node --test contract/privacy-namespace.cjs
 
 # Type check
 pnpm tsc --noEmit
