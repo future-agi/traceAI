@@ -67,7 +67,7 @@ function side(key) {
   if (under(key, ['gen_ai.tool.call.arguments', 'tool.input', 'tool.arguments', 'agent.input', 'gen_ai.agent.input', 'agent.instructions', 'gen_ai.agent.instructions', 'reranker.input_documents', 'reranker.query'])) return 'input';
   if (under(key, ['gen_ai.tool.call.result', 'tool.output', 'tool.result', 'agent.output', 'gen_ai.agent.output', 'gen_ai.tool.call', 'tool_call', 'llm.function_call', 'reranker.output_documents', 'retrieval', 'gen_ai.retrieval'])) return 'output';
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|$)/.test(key)) {
-    if (/(?:^|\.)(?:vector|embedding)(?:\.|$)/.test(key.replace(/^embedding\./, ''))) return 'output';
+    if (/(?:^|\.)(?:vector|embedding)(?:\.|$)/.test(key.replace(/^embedding(?:\.|$)/, ''))) return 'output';
     if (/(?:^|\.)text(?:\.|$)/.test(key)) return 'input';
     return 'both';
   }
@@ -75,8 +75,15 @@ function side(key) {
   if (under(key, ['output', 'raw.output', 'gen_ai.output', 'gen_ai.completion', 'gen_ai.completions', 'gen_ai.response', 'llm.output_messages'])) return 'output';
   return 'both';
 }
+// The independent, always-on S6 media contract omits raw audio payload fields
+// even with every hide flag off. Transcript text and exact usage counters are
+// metadata boundaries in that catalog, not raw media. These rows still receive
+// the marker and MUST omit it by default; they are not positive-export controls.
+function defaultMediaOmission(key) {
+  return /(?:^|\.)audio(?:\.|\[|$)/.test(key) && !metadata.has(key) && !/(?:^|\.)transcript(?:\.|\[|$)/.test(key);
+}
 const rows = [...inventory].sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, sources]) =>
-  [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
+  [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), defaultMediaOmission: defaultMediaOmission(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
 const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText'];
 const cases = ['span', 'context', 'event', 'link', 'resource'].flatMap(surface => flags.map(flag => ({ name: `${surface}-${flag}`, surface, flag })));
 if (!process.argv[2]) {
@@ -154,7 +161,9 @@ if (!process.argv[2]) {
       const present = wire.includes(row.marker);
       const placeholder = attrs.length === 0 || attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__'));
       return { ...row, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
-        passed: hidden ? !present && placeholder : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker)) };
+        passed: hidden ? !present && placeholder : row.defaultMediaOmission
+          ? !present && attrs.length > 0 && attrs.every(a => a.value.stringValue === '<omitted: media>')
+          : present && attrs.some(a => JSON.stringify(a.value).includes(row.marker)) };
     });
     const evidence = { case: test.name, inventory: rows, requests, payloads, outcomes };
     if (process.env.PRIVACY_EVIDENCE_DIR) writeFileSync(`${process.env.PRIVACY_EVIDENCE_DIR}/${test.name}.json`, JSON.stringify(evidence));
