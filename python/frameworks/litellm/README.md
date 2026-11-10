@@ -8,7 +8,7 @@ This integration provides support for using OpenTelemetry with the Litellm frame
 1. **Install traceAI Litellm**
 
 ```bash
-pip install pip install traceAI-litellm
+pip install traceAI-litellm tenacity
 ```
 
 
