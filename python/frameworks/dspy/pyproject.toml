@@ -28,7 +28,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.10, <3.13"
 dspy = ">=2.5.0"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.2.2"
 
 
 [tool.poetry.urls]
