@@ -13,8 +13,13 @@ logger.addHandler(logging.NullHandler())
 
 
 class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
-    """
-    An instrumentor for openai-agents
+    """Bridge the official OpenAI Agents tracing processor to OpenTelemetry.
+
+    ``instrument(tracer_provider=..., config=TraceConfig(...))`` uses the
+    supplied provider for span creation and flushing. By default it replaces
+    all SDK trace processors, including OpenAI's exporter. Set
+    ``exclusive_processor=False`` to keep existing export destinations.
+    The application retains ownership of the provider's shutdown lifecycle.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -36,15 +41,15 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
 
         from traceai_openai_agents._processor import FiTracingProcessor
 
-
+        processor = FiTracingProcessor(cast(Tracer, tracer), tracer_provider=tracer_provider)
         if exclusive_processor:
             from agents import set_trace_processors
 
-            set_trace_processors([FiTracingProcessor(cast(Tracer, tracer))])
+            set_trace_processors([processor])
         else:
             from agents import add_trace_processor
 
-            add_trace_processor(FiTracingProcessor(cast(Tracer, tracer)))
+            add_trace_processor(processor)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # TODO : OpenAI Agents does not support uninstrumentation currently
