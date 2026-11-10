@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.3](https://github.com/future-agi/traceAI/compare/java-v1.0.2...java-v1.0.3) (2026-11-10)
+
+### Bug Fixes
+
+* **ollama-java:** restore legacy Ollama4j 1.0.79 generation with empty default options ([#425](https://github.com/future-agi/traceAI/pull/425)).
+
 ## [1.0.2](https://github.com/future-agi/traceAI/compare/java-v1.0.1...java-v1.0.2) (2026-11-05)
 
 

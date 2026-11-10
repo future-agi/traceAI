@@ -17,7 +17,7 @@ After building and installing this checkout locally, add these dependencies. For
 <dependency>
     <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-weaviate</artifactId>
-    <version>1.0.2</version> <!-- x-release-please-version -->
+    <version>1.0.3</version> <!-- x-release-please-version -->
 </dependency>
 <dependency>
     <groupId>io.weaviate</groupId>

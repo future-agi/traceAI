@@ -9,6 +9,11 @@
   close/context exit remains OK unless an exception occurs. Known limitation:
   streams with no `finish_reason` at all are not judged and remain OK.
 
+## [0.1.14] - 2026-11-10
+### Fixed
+- Attribute OpenAI-compatible requests to `api.cometapi.com` to `cometapi` (#348), including streamed and failed requests.
+- Attribute OpenAI-compatible requests to `api.novita.ai` to `novita` (#397), including streamed and failed requests.
+
 ## [0.1.11] - 2026-10-29
 ### Fixed
 - Attribute OpenAI-compatible calls to `api.together.ai` to `together`, including streamed and failed requests; unknown proxies and look-alike hosts still use `openai`.
