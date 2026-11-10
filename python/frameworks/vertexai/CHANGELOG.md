@@ -1,5 +1,10 @@
 
 
+## [Unreleased]
+
+### Changed
+- traceai-vertexai now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
 ## [0.1.11] - 2026-10-31
 ### Fixed
 - Bound legacy `google-cloud-aiplatform` support to `>=1.61.0,<=1.101.0`, retaining the generative AI modules and allowing the protobuf version required by the tracing dependencies.
