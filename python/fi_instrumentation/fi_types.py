@@ -1794,12 +1794,13 @@ class EvalTag:
     def to_dict(self) -> Dict[str, Any]:
         """Convert EvalTag to dictionary format for API responses"""
 
-        if isinstance(self.model, str):
+        # Custom evaluations may use their template's model without an override.
+        if self.model is None or isinstance(self.model, str):
             model_name = self.model
         elif isinstance(self.model, ModelChoices):
             model_name = self.model.value
         else:
-            raise ValueError(f"Model must be a string or ModelChoices, got {type(self.model)}")
+            raise ValueError(f"Model must be None, a string or ModelChoices, got {type(self.model)}")
 
         return {
             "type": self.type.value,
