@@ -215,6 +215,10 @@ def _record_output(span: Span, result: Any) -> None:
     output = getattr(result, "output", None)
     if output is None:
         output = getattr(result, "data", None)
+    _record_output_value(span, output)
+
+
+def _record_output_value(span: Span, output: Any) -> None:
     if output is not None:
         serialized = safe_serialize(output)
         span.set_attribute(PydanticAIAttributes.RUN_RESULT, serialized)
