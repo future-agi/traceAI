@@ -1,5 +1,5 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
-import { generateTraceConfig, maskAttributes, REDACTED_VALUE } from "@traceai/fi-core";
+import { generateTraceConfig, maskAttributes, REDACTED_VALUE, rememberGenkitAliases } from "@traceai/fi-core";
 import { FISpanKind, MimeType, SemanticConventions } from "@traceai/fi-semantic-conventions";
 import { hideSemanticContent } from "./content-policy";
 import {
@@ -236,13 +236,24 @@ function sideValue(
 }
 
 /** Semantic content copies share one policy on spans, context, events and links. */
-function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy): Attributes {
+function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy, depth = 0): Attributes {
   const out = maskAttributes({
     config: generateTraceConfig({ ...policy, hideInputImages: policy.hideInputImages ?? false,
       hideErrorDetails: hidesFreeText(policy) }),
     attributes,
   });
   for (const key of Object.keys(out)) {
+    if (key === "traceai.attribute_projection.metadata") {
+      // This deprecated JSON capsule contains an attribute map, not free-form
+      // user JSON. Re-enter the SAME policy for every nested semantic key.
+      try {
+        if (depth >= 16 || typeof out[key] !== "string") throw new Error("Capsule limit");
+        const packed: unknown = JSON.parse(out[key] as string);
+        if (!isRecord(packed)) throw new Error("Capsule shape");
+        out[key] = JSON.stringify(maskSemanticAttributes(packed as Attributes, policy, depth + 1));
+      } catch { out[key] = REDACTED_VALUE; }
+      continue;
+    }
     // Only canonical message blobs have a verified field-level redactor in
     // fi-core. All other content, including future and flattened fields, follows
     // the closed metadata allowlist and explicit side policy.
@@ -408,8 +419,10 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
 
   // input.value / output.value, the keys Future AGI shows as a span's input and output. A hidden
   // side gets fi-core's "__REDACTED__" and no mime type, as fi-core's own masking does.
+  const mappedAliases: string[] = [];
   const input = source[GenkitAttributes.INPUT];
   if (typeof input === "string" && out[SemanticConventions.INPUT_VALUE] === undefined) {
+    mappedAliases.push(SemanticConventions.INPUT_VALUE, SemanticConventions.INPUT_MIME_TYPE);
     if (modes.input === "hide") {
       out[SemanticConventions.INPUT_VALUE] = REDACTED_VALUE;
     } else {
@@ -419,6 +432,7 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   }
   const output = source[GenkitAttributes.OUTPUT];
   if (typeof output === "string" && out[SemanticConventions.OUTPUT_VALUE] === undefined) {
+    mappedAliases.push(SemanticConventions.OUTPUT_VALUE, SemanticConventions.OUTPUT_MIME_TYPE);
     if (modes.output === "hide") {
       out[SemanticConventions.OUTPUT_VALUE] = REDACTED_VALUE;
     } else {
@@ -433,5 +447,6 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
       if (isErrorDetailAttribute(key)) delete out[key];
     }
   }
+  rememberGenkitAliases(out, policy, mappedAliases);
   return out;
 }

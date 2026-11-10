@@ -1,5 +1,6 @@
 /** Offline regression: real Genkit spans -> fi-core's HTTP exporter -> localhost OTLP JSON. */
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -113,6 +114,7 @@ if (!process.argv[2]) {
     await processor.forceFlush();
 
     const wire = payloads.flatMap((p) => p.resourceSpans ?? []).flatMap((r) => r.scopeSpans).flatMap((s) => s.spans);
+    if (process.env.PRIVACY_EVIDENCE_DIR) writeFileSync(`${process.env.PRIVACY_EVIDENCE_DIR}/${test.name}.json`, JSON.stringify({ case: test.name, payloads, native: native.map(({ span }) => ({ name: span.name, attributes: span.attributes })) }));
     assert.equal(wire.length, 11, 'one export per native flow/tool/generate/model span');
     assert.equal(new Set(wire.map((s) => s.spanId)).size, wire.length, 'no duplicate spans');
     const errorSpans = wire.filter((s) => s.status?.code === 2);

@@ -1,0 +1,1876 @@
+{
+  "reference_head": "2adad313181635a2a1dd14c8c33d8a06fee52b10",
+  "description": "Independent source-resolved minimum inventory; live source scanning adds any newly observed keys. Used unchanged on both paired heads.",
+  "attributes": [
+    {
+      "key": "agent",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:86",
+        "traceai_genkit/src/content-policy.ts:59"
+      ]
+    },
+    {
+      "key": "agent.future_payload",
+      "sources": [
+        "forward-compatible namespace probe"
+      ]
+    },
+    {
+      "key": "agent.id",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "agent.input",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:66"
+      ]
+    },
+    {
+      "key": "agent.instructions",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:67"
+      ]
+    },
+    {
+      "key": "agent.iteration_count",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "agent.name",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "agent.output",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:69"
+      ]
+    },
+    {
+      "key": "agent.status",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "agent.step_count",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "agent.version",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:30"
+      ]
+    },
+    {
+      "key": "audio",
+      "sources": [
+        "fi-core/src/trace/trace-config/messageRedaction.ts:44",
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "audio.mime_type",
+      "sources": [
+        "semconv.AUDIO_MIME_TYPE"
+      ]
+    },
+    {
+      "key": "audio.transcript",
+      "sources": [
+        "forward-compatible namespace probe",
+        "semconv.AUDIO_TRANSCRIPT"
+      ]
+    },
+    {
+      "key": "audio.url",
+      "sources": [
+        "semconv.AUDIO_URL"
+      ]
+    },
+    {
+      "key": "db.vector.query.filter",
+      "sources": [
+        "fi-semantic-conventions/src/trace/SemanticConventions.ts DB_VECTOR_QUERY_FILTER"
+      ]
+    },
+    {
+      "key": "document",
+      "sources": [
+        "fi-core/src/trace/trace-config/messageRedaction.ts:44",
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "document.content",
+      "sources": [
+        "SemanticConventions.DOCUMENT_CONTENT",
+        "semconv.DOCUMENT_CONTENT"
+      ]
+    },
+    {
+      "key": "document.id",
+      "sources": [
+        "SemanticConventions.DOCUMENT_ID",
+        "semconv.DOCUMENT_ID",
+        "traceai_genkit/src/content-policy.ts:32"
+      ]
+    },
+    {
+      "key": "document.metadata",
+      "sources": [
+        "SemanticConventions.DOCUMENT_METADATA",
+        "semconv.DOCUMENT_METADATA"
+      ]
+    },
+    {
+      "key": "document.score",
+      "sources": [
+        "SemanticConventions.DOCUMENT_SCORE",
+        "semconv.DOCUMENT_SCORE",
+        "traceai_genkit/src/content-policy.ts:32"
+      ]
+    },
+    {
+      "key": "embedding",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "traceai_genkit/src/content-policy.ts:60",
+        "traceai_genkit/src/privacy.ts:195"
+      ]
+    },
+    {
+      "key": "embedding.embeddings",
+      "sources": [
+        "SemanticConventions.EMBEDDING_EMBEDDINGS",
+        "semconv.EMBEDDING_EMBEDDINGS"
+      ]
+    },
+    {
+      "key": "embedding.embeddings.0.embedding.embeddings",
+      "sources": [
+        "composed embedding.embeddings / EMBEDDING_EMBEDDINGS"
+      ]
+    },
+    {
+      "key": "embedding.embeddings.0.embedding.model_name",
+      "sources": [
+        "composed embedding.embeddings / EMBEDDING_MODEL_NAME"
+      ]
+    },
+    {
+      "key": "embedding.embeddings.0.embedding.text",
+      "sources": [
+        "composed embedding.embeddings / EMBEDDING_TEXT"
+      ]
+    },
+    {
+      "key": "embedding.embeddings.0.embedding.vector",
+      "sources": [
+        "composed embedding.embeddings / EMBEDDING_VECTOR"
+      ]
+    },
+    {
+      "key": "embedding.model_name",
+      "sources": [
+        "SemanticConventions.EMBEDDING_MODEL_NAME",
+        "fi-core/src/attribute-projection.ts:25",
+        "semconv.EMBEDDING_MODEL_NAME",
+        "traceai_genkit/src/content-policy.ts:32"
+      ]
+    },
+    {
+      "key": "embedding.text",
+      "sources": [
+        "SemanticConventions.EMBEDDING_TEXT",
+        "semconv.EMBEDDING_TEXT"
+      ]
+    },
+    {
+      "key": "embedding.vector",
+      "sources": [
+        "SemanticConventions.EMBEDDING_VECTOR",
+        "semconv.EMBEDDING_VECTOR"
+      ]
+    },
+    {
+      "key": "fi.agent",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:59"
+      ]
+    },
+    {
+      "key": "fi.agent.content.source",
+      "sources": [
+        "SemanticConventions.FI_AGENT_CONTENT_SOURCE",
+        "semconv.FI_AGENT_CONTENT_SOURCE",
+        "traceai_genkit/src/content-policy.ts:39"
+      ]
+    },
+    {
+      "key": "fi.agent.cost.estimator",
+      "sources": [
+        "SemanticConventions.FI_AGENT_COST_ESTIMATOR",
+        "semconv.FI_AGENT_COST_ESTIMATOR",
+        "traceai_genkit/src/content-policy.ts:36"
+      ]
+    },
+    {
+      "key": "fi.agent.cost.source",
+      "sources": [
+        "SemanticConventions.FI_AGENT_COST_SOURCE",
+        "semconv.FI_AGENT_COST_SOURCE",
+        "traceai_genkit/src/content-policy.ts:35"
+      ]
+    },
+    {
+      "key": "fi.agent.event",
+      "sources": [
+        "SemanticConventions.FI_AGENT_EVENT",
+        "semconv.FI_AGENT_EVENT",
+        "traceai_genkit/src/content-policy.ts:38"
+      ]
+    },
+    {
+      "key": "fi.agent.fidelity",
+      "sources": [
+        "SemanticConventions.FI_AGENT_FIDELITY",
+        "semconv.FI_AGENT_FIDELITY",
+        "traceai_genkit/src/content-policy.ts:34"
+      ]
+    },
+    {
+      "key": "fi.agent.gap",
+      "sources": [
+        "SemanticConventions.FI_AGENT_GAP",
+        "semconv.FI_AGENT_GAP",
+        "traceai_genkit/src/content-policy.ts:36"
+      ]
+    },
+    {
+      "key": "fi.agent.input.completeness",
+      "sources": [
+        "SemanticConventions.FI_AGENT_INPUT_COMPLETENESS",
+        "semconv.FI_AGENT_INPUT_COMPLETENESS",
+        "traceai_genkit/src/content-policy.ts:39"
+      ]
+    },
+    {
+      "key": "fi.agent.outcome",
+      "sources": [
+        "SemanticConventions.FI_AGENT_OUTCOME",
+        "semconv.FI_AGENT_OUTCOME",
+        "traceai_genkit/src/content-policy.ts:34"
+      ]
+    },
+    {
+      "key": "fi.agent.source_call_id",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SOURCE_CALL_ID",
+        "semconv.FI_AGENT_SOURCE_CALL_ID",
+        "traceai_genkit/src/content-policy.ts:36"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.cache_read",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_CACHE_READ",
+        "semconv.FI_AGENT_SUMMARY_CACHE_READ",
+        "traceai_genkit/src/content-policy.ts:37"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.cache_write",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_CACHE_WRITE",
+        "semconv.FI_AGENT_SUMMARY_CACHE_WRITE",
+        "traceai_genkit/src/content-policy.ts:38"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.cost_usd",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_COST_USD",
+        "semconv.FI_AGENT_SUMMARY_COST_USD",
+        "traceai_genkit/src/content-policy.ts:38"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.input",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_INPUT",
+        "semconv.FI_AGENT_SUMMARY_INPUT",
+        "traceai_genkit/src/content-policy.ts:37"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.output",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_OUTPUT",
+        "semconv.FI_AGENT_SUMMARY_OUTPUT",
+        "traceai_genkit/src/content-policy.ts:37"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.reasoning",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_REASONING",
+        "semconv.FI_AGENT_SUMMARY_REASONING",
+        "traceai_genkit/src/content-policy.ts:38"
+      ]
+    },
+    {
+      "key": "fi.agent.summary.total",
+      "sources": [
+        "SemanticConventions.FI_AGENT_SUMMARY_TOTAL",
+        "semconv.FI_AGENT_SUMMARY_TOTAL",
+        "traceai_genkit/src/content-policy.ts:37"
+      ]
+    },
+    {
+      "key": "fi.agent.tags",
+      "sources": [
+        "SemanticConventions.FI_AGENT_TAGS",
+        "semconv.FI_AGENT_TAGS"
+      ]
+    },
+    {
+      "key": "fi.agent.timing",
+      "sources": [
+        "SemanticConventions.FI_AGENT_TIMING",
+        "semconv.FI_AGENT_TIMING",
+        "traceai_genkit/src/content-policy.ts:34"
+      ]
+    },
+    {
+      "key": "fi.agent.transport",
+      "sources": [
+        "SemanticConventions.FI_AGENT_TRANSPORT",
+        "semconv.FI_AGENT_TRANSPORT",
+        "traceai_genkit/src/content-policy.ts:36"
+      ]
+    },
+    {
+      "key": "fi.agent.usage.additive",
+      "sources": [
+        "SemanticConventions.FI_AGENT_USAGE_ADDITIVE",
+        "semconv.FI_AGENT_USAGE_ADDITIVE",
+        "traceai_genkit/src/content-policy.ts:34"
+      ]
+    },
+    {
+      "key": "fi.agent.usage.cache_in_input",
+      "sources": [
+        "SemanticConventions.FI_AGENT_USAGE_CACHE_IN_INPUT",
+        "semconv.FI_AGENT_USAGE_CACHE_IN_INPUT",
+        "traceai_genkit/src/content-policy.ts:35"
+      ]
+    },
+    {
+      "key": "fi.agent.usage.plan",
+      "sources": [
+        "SemanticConventions.FI_AGENT_USAGE_PLAN",
+        "semconv.FI_AGENT_USAGE_PLAN",
+        "traceai_genkit/src/content-policy.ts:34"
+      ]
+    },
+    {
+      "key": "fi.agent.usage.reasoning_in_output",
+      "sources": [
+        "SemanticConventions.FI_AGENT_USAGE_REASONING_IN_OUTPUT",
+        "semconv.FI_AGENT_USAGE_REASONING_IN_OUTPUT",
+        "traceai_genkit/src/content-policy.ts:35"
+      ]
+    },
+    {
+      "key": "gen_ai",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:59"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.description",
+      "sources": [
+        "forward-compatible namespace probe"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.id",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:22"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.input",
+      "sources": [
+        "forward-compatible namespace probe",
+        "traceai_genkit/src/content-policy.ts:66"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.instructions",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:67"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.iteration_count",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:23"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.name",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:22"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.output",
+      "sources": [
+        "forward-compatible namespace probe",
+        "traceai_genkit/src/content-policy.ts:69"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.status",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:22"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.step_count",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:23"
+      ]
+    },
+    {
+      "key": "gen_ai.agent.version",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:22"
+      ]
+    },
+    {
+      "key": "gen_ai.audio.transcript",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:57",
+        "fi-core/src/export-privacy.ts:616"
+      ]
+    },
+    {
+      "key": "gen_ai.completion",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:85"
+      ]
+    },
+    {
+      "key": "gen_ai.completions",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:85"
+      ]
+    },
+    {
+      "key": "gen_ai.conversation.id",
+      "sources": [
+        "SemanticConventions.GEN_AI_CONVERSATION_ID",
+        "semconv.GEN_AI_CONVERSATION_ID",
+        "traceai_genkit/src/content-policy.ts:12"
+      ]
+    },
+    {
+      "key": "gen_ai.cost",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:236"
+      ]
+    },
+    {
+      "key": "gen_ai.cost.input",
+      "sources": [
+        "SemanticConventions.GEN_AI_COST_INPUT",
+        "semconv.GEN_AI_COST_INPUT",
+        "traceai_genkit/src/content-policy.ts:17"
+      ]
+    },
+    {
+      "key": "gen_ai.cost.output",
+      "sources": [
+        "SemanticConventions.GEN_AI_COST_OUTPUT",
+        "semconv.GEN_AI_COST_OUTPUT",
+        "traceai_genkit/src/content-policy.ts:17"
+      ]
+    },
+    {
+      "key": "gen_ai.cost.total",
+      "sources": [
+        "SemanticConventions.GEN_AI_COST_TOTAL",
+        "semconv.GEN_AI_COST_TOTAL",
+        "traceai_genkit/src/content-policy.ts:17"
+      ]
+    },
+    {
+      "key": "gen_ai.embeddings",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42"
+      ]
+    },
+    {
+      "key": "gen_ai.future_payload",
+      "sources": [
+        "forward-compatible namespace probe"
+      ]
+    },
+    {
+      "key": "gen_ai.input",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "traceai_genkit/src/content-policy.ts:80"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages",
+      "sources": [
+        "SemanticConventions.GEN_AI_INPUT_MESSAGES",
+        "SemanticConventions.LLM_INPUT_MESSAGES",
+        "fi-core/src/export-privacy.ts:581",
+        "fi-core/src/trace/trace-config/types.ts:130",
+        "semconv.GEN_AI_INPUT_MESSAGES",
+        "semconv.LLM_INPUT_MESSAGES",
+        "traceai_genkit/src/mapping.ts:249"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.content",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_CONTENT"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.contents",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_CONTENTS"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.contents.0.message_content.image",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_IMAGE"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.contents.0.message_content.text",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_TEXT"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.contents.0.message_content.type",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_TYPE"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.function_call_arguments_json",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.function_call_name",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_FUNCTION_CALL_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.name",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.role",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_ROLE"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.tool_call_id",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_TOOL_CALL_ID"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.tool_calls",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_TOOL_CALLS"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.tool_calls.0.tool_call.function.arguments",
+      "sources": [
+        "composed tool calls / TOOL_CALL_FUNCTION_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.tool_calls.0.tool_call.function.name",
+      "sources": [
+        "composed tool calls / TOOL_CALL_FUNCTION_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message.tool_calls.0.tool_call.id",
+      "sources": [
+        "composed tool calls / TOOL_CALL_ID"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message_content.image",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_CONTENT_IMAGE"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message_content.text",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_CONTENT_TEXT"
+      ]
+    },
+    {
+      "key": "gen_ai.input.messages.0.message_content.type",
+      "sources": [
+        "composed gen_ai.input.messages / MESSAGE_CONTENT_TYPE"
+      ]
+    },
+    {
+      "key": "gen_ai.operation.name",
+      "sources": [
+        "SemanticConventions.GEN_AI_OPERATION_NAME",
+        "fi-core/src/attribute-projection.ts:128",
+        "fi-core/src/attribute-projection.ts:25",
+        "fi-core/src/export-privacy.ts:30",
+        "fi-core/src/export-privacy.ts:831",
+        "fi-core/src/export-privacy.ts:954",
+        "semconv.GEN_AI_OPERATION_NAME",
+        "traceai_genkit/src/content-policy.ts:10"
+      ]
+    },
+    {
+      "key": "gen_ai.output",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:43",
+        "traceai_genkit/src/content-policy.ts:85"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages",
+      "sources": [
+        "SemanticConventions.GEN_AI_OUTPUT_MESSAGES",
+        "SemanticConventions.LLM_OUTPUT_MESSAGES",
+        "fi-core/src/export-privacy.ts:581",
+        "semconv.GEN_AI_OUTPUT_MESSAGES",
+        "semconv.LLM_OUTPUT_MESSAGES",
+        "traceai_genkit/src/mapping.ts:249"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.content",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_CONTENT"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.contents",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_CONTENTS"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.contents.0.message_content.image",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_IMAGE"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.contents.0.message_content.text",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_TEXT"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.contents.0.message_content.type",
+      "sources": [
+        "composed message contents / MESSAGE_CONTENT_TYPE"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.function_call_arguments_json",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.function_call_name",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_FUNCTION_CALL_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.name",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.role",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_ROLE"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.tool_call_id",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_TOOL_CALL_ID"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.tool_calls",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_TOOL_CALLS"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.arguments",
+      "sources": [
+        "composed tool calls / TOOL_CALL_FUNCTION_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name",
+      "sources": [
+        "composed tool calls / TOOL_CALL_FUNCTION_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id",
+      "sources": [
+        "composed tool calls / TOOL_CALL_ID"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message_content.image",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_CONTENT_IMAGE"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message_content.text",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_CONTENT_TEXT"
+      ]
+    },
+    {
+      "key": "gen_ai.output.messages.0.message_content.type",
+      "sources": [
+        "composed gen_ai.output.messages / MESSAGE_CONTENT_TYPE"
+      ]
+    },
+    {
+      "key": "gen_ai.prompt",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "traceai_genkit/src/content-policy.ts:80"
+      ]
+    },
+    {
+      "key": "gen_ai.prompts",
+      "sources": [
+        "SemanticConventions.GEN_AI_PROMPTS",
+        "SemanticConventions.LLM_PROMPTS",
+        "semconv.GEN_AI_PROMPTS",
+        "semconv.LLM_PROMPTS",
+        "traceai_genkit/src/content-policy.ts:80"
+      ]
+    },
+    {
+      "key": "gen_ai.provider.name",
+      "sources": [
+        "SemanticConventions.GEN_AI_PROVIDER_NAME",
+        "SemanticConventions.LLM_PROVIDER",
+        "SemanticConventions.LLM_SYSTEM",
+        "fi-core/src/attribute-projection.ts:25",
+        "semconv.GEN_AI_PROVIDER_NAME",
+        "semconv.LLM_PROVIDER",
+        "semconv.LLM_SYSTEM",
+        "traceai_genkit/src/content-policy.ts:10"
+      ]
+    },
+    {
+      "key": "gen_ai.request",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:81",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "gen_ai.request.model",
+      "sources": [
+        "SemanticConventions.GEN_AI_REQUEST_MODEL",
+        "SemanticConventions.LLM_MODEL_NAME",
+        "fi-core/src/attribute-projection.ts:25",
+        "semconv.GEN_AI_REQUEST_MODEL",
+        "semconv.LLM_MODEL_NAME",
+        "traceai_genkit/src/content-policy.ts:11"
+      ]
+    },
+    {
+      "key": "gen_ai.request.parameters",
+      "sources": [
+        "SemanticConventions.GEN_AI_REQUEST_PARAMETERS",
+        "SemanticConventions.LLM_INVOCATION_PARAMETERS",
+        "fi-core/src/attribute-projection.ts:61",
+        "fi-core/src/export-privacy.ts:582",
+        "fi-core/src/export-privacy.ts:612",
+        "semconv.GEN_AI_REQUEST_PARAMETERS",
+        "semconv.LLM_INVOCATION_PARAMETERS",
+        "traceai_genkit/src/mapping.ts:313"
+      ]
+    },
+    {
+      "key": "gen_ai.response",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:85"
+      ]
+    },
+    {
+      "key": "gen_ai.response.finish_reasons",
+      "sources": [
+        "SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS",
+        "fi-core/src/attribute-projection.ts:22",
+        "semconv.GEN_AI_RESPONSE_FINISH_REASONS",
+        "traceai_genkit/src/content-policy.ts:12"
+      ]
+    },
+    {
+      "key": "gen_ai.response.id",
+      "sources": [
+        "SemanticConventions.GEN_AI_RESPONSE_ID",
+        "fi-core/src/attribute-projection.ts:21",
+        "semconv.GEN_AI_RESPONSE_ID",
+        "traceai_genkit/src/content-policy.ts:11"
+      ]
+    },
+    {
+      "key": "gen_ai.response.latency",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:18"
+      ]
+    },
+    {
+      "key": "gen_ai.response.model",
+      "sources": [
+        "SemanticConventions.GEN_AI_RESPONSE_MODEL",
+        "fi-core/src/attribute-projection.ts:25",
+        "semconv.GEN_AI_RESPONSE_MODEL",
+        "traceai_genkit/src/content-policy.ts:11"
+      ]
+    },
+    {
+      "key": "gen_ai.response.time_to_first_chunk",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:18"
+      ]
+    },
+    {
+      "key": "gen_ai.response.time_to_first_text",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:18"
+      ]
+    },
+    {
+      "key": "gen_ai.response.time_to_first_token",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:19"
+      ]
+    },
+    {
+      "key": "gen_ai.retrieval",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:43",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "gen_ai.server.request.duration",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:20"
+      ]
+    },
+    {
+      "key": "gen_ai.server.time_per_output_token",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:28",
+        "traceai_genkit/src/content-policy.ts:20"
+      ]
+    },
+    {
+      "key": "gen_ai.server.time_to_first_token",
+      "sources": [
+        "SemanticConventions.GEN_AI_SERVER_TIME_TO_FIRST_TOKEN",
+        "fi-core/src/attribute-projection.ts:28",
+        "semconv.GEN_AI_SERVER_TIME_TO_FIRST_TOKEN",
+        "traceai_genkit/src/content-policy.ts:19"
+      ]
+    },
+    {
+      "key": "gen_ai.span.kind",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:21",
+        "fi-core/src/auto-span-delivery.ts:243",
+        "fi-core/src/export-privacy.ts:29",
+        "traceai_genkit/src/attributes.ts:213",
+        "traceai_genkit/src/auto.ts:46",
+        "traceai_genkit/src/content-policy.ts:10"
+      ]
+    },
+    {
+      "key": "gen_ai.system",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:25",
+        "traceai_genkit/src/content-policy.ts:10"
+      ]
+    },
+    {
+      "key": "gen_ai.system_instructions",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "traceai_genkit/src/content-policy.ts:80"
+      ]
+    },
+    {
+      "key": "gen_ai.tool",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "fi-core/src/export-privacy.ts:609"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.call",
+      "sources": [
+        "SemanticConventions.GEN_AI_TOOL_CALL",
+        "SemanticConventions.LLM_FUNCTION_CALL",
+        "semconv.GEN_AI_TOOL_CALL",
+        "semconv.LLM_FUNCTION_CALL",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.call.arguments",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:66"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.call.id",
+      "sources": [
+        "fi-core/src/export-privacy.ts:610",
+        "traceai_genkit/src/content-policy.ts:21"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.call.result",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:69"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions",
+      "sources": [
+        "SemanticConventions.GEN_AI_TOOL_DEFINITIONS",
+        "SemanticConventions.LLM_TOOLS",
+        "fi-core/src/export-privacy.ts:582",
+        "fi-core/src/trace/trace-config/structuredRedaction.ts:63",
+        "semconv.GEN_AI_TOOL_DEFINITIONS",
+        "semconv.LLM_TOOLS",
+        "traceai_genkit/src/content-policy.ts:81",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool.description",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_DESCRIPTION"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool.json_schema",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_JSON_SCHEMA"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool.name",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool.parameters",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_PARAMETERS"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool_call.function.arguments",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_CALL_FUNCTION_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool_call.function.name",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_CALL_FUNCTION_NAME"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.definitions.0.tool_call.id",
+      "sources": [
+        "composed gen_ai.tool.definitions / TOOL_CALL_ID"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.description",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:81"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.name",
+      "sources": [
+        "fi-core/src/export-privacy.ts:610",
+        "traceai_genkit/src/attributes.ts:214",
+        "traceai_genkit/src/content-policy.ts:21"
+      ]
+    },
+    {
+      "key": "gen_ai.tool.type",
+      "sources": [
+        "fi-core/src/export-privacy.ts:610",
+        "traceai_genkit/src/content-policy.ts:21"
+      ]
+    },
+    {
+      "key": "gen_ai.usage",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:37",
+        "traceai_genkit/src/attributes.ts:233"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.cache_creation_tokens",
+      "sources": [
+        "fi-core/src/export-privacy.ts:36",
+        "traceai_genkit/src/content-policy.ts:16"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.cache_read_tokens",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_CACHE_READ_TOKENS",
+        "SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ",
+        "fi-core/src/export-privacy.ts:35",
+        "semconv.GEN_AI_USAGE_CACHE_READ_TOKENS",
+        "semconv.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ",
+        "traceai_genkit/src/content-policy.ts:15"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.cache_read_tokens.audio",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:16"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.cache_write_tokens",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_CACHE_WRITE_TOKENS",
+        "SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE",
+        "semconv.GEN_AI_USAGE_CACHE_WRITE_TOKENS",
+        "semconv.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE",
+        "traceai_genkit/src/content-policy.ts:15"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.input_tokens",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_INPUT_TOKENS",
+        "SemanticConventions.LLM_TOKEN_COUNT_PROMPT",
+        "fi-core/src/export-privacy.ts:32",
+        "semconv.GEN_AI_USAGE_INPUT_TOKENS",
+        "semconv.LLM_TOKEN_COUNT_PROMPT",
+        "traceai_genkit/src/content-policy.ts:13"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.input_tokens.audio",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_INPUT_TOKENS_AUDIO",
+        "SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO",
+        "fi-core/src/export-privacy.ts:37",
+        "semconv.GEN_AI_USAGE_INPUT_TOKENS_AUDIO",
+        "semconv.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO",
+        "traceai_genkit/src/content-policy.ts:14"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.output_tokens",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS",
+        "SemanticConventions.LLM_TOKEN_COUNT_COMPLETION",
+        "fi-core/src/export-privacy.ts:33",
+        "semconv.GEN_AI_USAGE_OUTPUT_TOKENS",
+        "semconv.LLM_TOKEN_COUNT_COMPLETION",
+        "traceai_genkit/src/content-policy.ts:13"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.output_tokens.audio",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO",
+        "SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO",
+        "fi-core/src/export-privacy.ts:38",
+        "semconv.GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO",
+        "semconv.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO",
+        "traceai_genkit/src/content-policy.ts:14"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.output_tokens.reasoning",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING",
+        "SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING",
+        "fi-core/src/export-privacy.ts:39",
+        "semconv.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING",
+        "semconv.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING",
+        "traceai_genkit/src/content-policy.ts:15"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.provider_total_tokens",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:16"
+      ]
+    },
+    {
+      "key": "gen_ai.usage.total_tokens",
+      "sources": [
+        "SemanticConventions.GEN_AI_USAGE_TOTAL_TOKENS",
+        "SemanticConventions.LLM_TOKEN_COUNT_TOTAL",
+        "fi-core/src/export-privacy.ts:34",
+        "semconv.GEN_AI_USAGE_TOTAL_TOKENS",
+        "semconv.LLM_TOKEN_COUNT_TOTAL",
+        "traceai_genkit/src/content-policy.ts:13"
+      ]
+    },
+    {
+      "key": "image",
+      "sources": [
+        "fi-core/src/trace/trace-config/imageCap.ts:162",
+        "fi-core/src/trace/trace-config/imageCap.ts:20",
+        "fi-core/src/trace/trace-config/imageCap.ts:22",
+        "fi-core/src/trace/trace-config/imageCap.ts:23",
+        "fi-core/src/trace/trace-config/messageRedaction.ts:27",
+        "fi-core/src/trace/trace-config/messageRedaction.ts:6",
+        "traceai_genkit/src/content-policy.ts:60",
+        "traceai_genkit/src/content-policy.ts:83"
+      ]
+    },
+    {
+      "key": "image.url",
+      "sources": [
+        "SemanticConventions.IMAGE_URL",
+        "semconv.IMAGE_URL"
+      ]
+    },
+    {
+      "key": "input",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "traceai_genkit/src/content-policy.ts:100",
+        "traceai_genkit/src/content-policy.ts:42",
+        "traceai_genkit/src/content-policy.ts:59",
+        "traceai_genkit/src/content-policy.ts:68",
+        "traceai_genkit/src/content-policy.ts:75",
+        "traceai_genkit/src/content-policy.ts:80",
+        "traceai_genkit/src/content-policy.ts:84",
+        "traceai_genkit/src/content-policy.ts:99"
+      ]
+    },
+    {
+      "key": "input.mime_type",
+      "sources": [
+        "SemanticConventions.INPUT_MIME_TYPE",
+        "fi-core/src/attribute-projection.ts:56",
+        "semconv.INPUT_MIME_TYPE"
+      ]
+    },
+    {
+      "key": "input.value",
+      "sources": [
+        "SemanticConventions.INPUT_VALUE",
+        "fi-core/src/attribute-projection.ts:56",
+        "fi-core/src/export-privacy.ts:604",
+        "semconv.INPUT_VALUE"
+      ]
+    },
+    {
+      "key": "llm",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:59"
+      ]
+    },
+    {
+      "key": "llm.cost",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:237"
+      ]
+    },
+    {
+      "key": "llm.function_call",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "llm.future_payload",
+      "sources": [
+        "forward-compatible namespace probe"
+      ]
+    },
+    {
+      "key": "llm.input_messages",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42",
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:81"
+      ]
+    },
+    {
+      "key": "llm.invocation_parameters",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:61",
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:82",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "llm.model_name",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:24"
+      ]
+    },
+    {
+      "key": "llm.output_messages",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:43",
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:86"
+      ]
+    },
+    {
+      "key": "llm.prompt",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:42"
+      ]
+    },
+    {
+      "key": "llm.prompt_template",
+      "sources": [
+        "legacy LLM postfix",
+        "semconv.PROMPT_TEMPLATE_PREFIX",
+        "traceai_genkit/src/content-policy.ts:82"
+      ]
+    },
+    {
+      "key": "llm.prompt_template.template",
+      "sources": [
+        "SemanticConventions.PROMPT_TEMPLATE_TEMPLATE",
+        "semconv.PROMPT_TEMPLATE_TEMPLATE"
+      ]
+    },
+    {
+      "key": "llm.prompt_template.variables",
+      "sources": [
+        "SemanticConventions.PROMPT_TEMPLATE_VARIABLES",
+        "semconv.PROMPT_TEMPLATE_VARIABLES"
+      ]
+    },
+    {
+      "key": "llm.prompt_template.version",
+      "sources": [
+        "SemanticConventions.PROMPT_TEMPLATE_VERSION",
+        "semconv.PROMPT_TEMPLATE_VERSION",
+        "traceai_genkit/src/content-policy.ts:24"
+      ]
+    },
+    {
+      "key": "llm.prompts",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:81"
+      ]
+    },
+    {
+      "key": "llm.provider",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:24"
+      ]
+    },
+    {
+      "key": "llm.system",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:24"
+      ]
+    },
+    {
+      "key": "llm.token_count",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:37",
+        "legacy LLM postfix",
+        "traceai_genkit/src/attributes.ts:234"
+      ]
+    },
+    {
+      "key": "llm.token_count.completion",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:25"
+      ]
+    },
+    {
+      "key": "llm.token_count.completion_details.audio",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:27"
+      ]
+    },
+    {
+      "key": "llm.token_count.completion_details.reasoning",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:28"
+      ]
+    },
+    {
+      "key": "llm.token_count.prompt",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:25"
+      ]
+    },
+    {
+      "key": "llm.token_count.prompt_details.audio",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:27"
+      ]
+    },
+    {
+      "key": "llm.token_count.prompt_details.cache_read",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:26"
+      ]
+    },
+    {
+      "key": "llm.token_count.prompt_details.cache_write",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:26"
+      ]
+    },
+    {
+      "key": "llm.token_count.total",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:25"
+      ]
+    },
+    {
+      "key": "llm.tools",
+      "sources": [
+        "legacy LLM postfix",
+        "traceai_genkit/src/content-policy.ts:82",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "llm.usage",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:235"
+      ]
+    },
+    {
+      "key": "message",
+      "sources": [
+        "fi-core/src/export-privacy.ts:327",
+        "fi-core/src/export-privacy.ts:935",
+        "fi-core/src/export-privacy.ts:965",
+        "fi-core/src/trace/trace-config/errorDetails.ts:183",
+        "fi-core/src/trace/trace-config/errorDetails.ts:496",
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "message.content",
+      "sources": [
+        "SemanticConventions.MESSAGE_CONTENT",
+        "semconv.MESSAGE_CONTENT"
+      ]
+    },
+    {
+      "key": "message.contents",
+      "sources": [
+        "SemanticConventions.MESSAGE_CONTENTS",
+        "semconv.MESSAGE_CONTENTS"
+      ]
+    },
+    {
+      "key": "message.function_call_arguments_json",
+      "sources": [
+        "SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON",
+        "semconv.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "message.function_call_name",
+      "sources": [
+        "SemanticConventions.MESSAGE_FUNCTION_CALL_NAME",
+        "semconv.MESSAGE_FUNCTION_CALL_NAME",
+        "traceai_genkit/src/content-policy.ts:31"
+      ]
+    },
+    {
+      "key": "message.name",
+      "sources": [
+        "SemanticConventions.MESSAGE_NAME",
+        "semconv.MESSAGE_NAME",
+        "traceai_genkit/src/content-policy.ts:31"
+      ]
+    },
+    {
+      "key": "message.role",
+      "sources": [
+        "SemanticConventions.MESSAGE_ROLE",
+        "semconv.MESSAGE_ROLE",
+        "traceai_genkit/src/content-policy.ts:31"
+      ]
+    },
+    {
+      "key": "message.tool_call_id",
+      "sources": [
+        "SemanticConventions.MESSAGE_TOOL_CALL_ID",
+        "semconv.MESSAGE_TOOL_CALL_ID",
+        "traceai_genkit/src/content-policy.ts:31"
+      ]
+    },
+    {
+      "key": "message.tool_calls",
+      "sources": [
+        "SemanticConventions.MESSAGE_TOOL_CALLS",
+        "semconv.MESSAGE_TOOL_CALLS"
+      ]
+    },
+    {
+      "key": "message_content",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "message_content.image",
+      "sources": [
+        "SemanticConventions.MESSAGE_CONTENT_IMAGE",
+        "semconv.MESSAGE_CONTENT_IMAGE"
+      ]
+    },
+    {
+      "key": "message_content.text",
+      "sources": [
+        "SemanticConventions.MESSAGE_CONTENT_TEXT",
+        "semconv.MESSAGE_CONTENT_TEXT"
+      ]
+    },
+    {
+      "key": "message_content.type",
+      "sources": [
+        "SemanticConventions.MESSAGE_CONTENT_TYPE",
+        "semconv.MESSAGE_CONTENT_TYPE",
+        "traceai_genkit/src/content-policy.ts:31"
+      ]
+    },
+    {
+      "key": "messages",
+      "sources": [
+        "forward-compatible namespace probe",
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "output",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:43",
+        "fi-core/src/attribute-projection.ts:53",
+        "traceai_genkit/src/content-policy.ts:100",
+        "traceai_genkit/src/content-policy.ts:42",
+        "traceai_genkit/src/content-policy.ts:59",
+        "traceai_genkit/src/content-policy.ts:71",
+        "traceai_genkit/src/content-policy.ts:77",
+        "traceai_genkit/src/content-policy.ts:85",
+        "traceai_genkit/src/content-policy.ts:87"
+      ]
+    },
+    {
+      "key": "output.mime_type",
+      "sources": [
+        "SemanticConventions.OUTPUT_MIME_TYPE",
+        "fi-core/src/attribute-projection.ts:55",
+        "semconv.OUTPUT_MIME_TYPE",
+        "traceai_genkit/src/auto.ts:117"
+      ]
+    },
+    {
+      "key": "output.value",
+      "sources": [
+        "SemanticConventions.OUTPUT_VALUE",
+        "fi-core/src/attribute-projection.ts:146",
+        "fi-core/src/attribute-projection.ts:167",
+        "fi-core/src/attribute-projection.ts:175",
+        "fi-core/src/attribute-projection.ts:55",
+        "fi-core/src/export-privacy.ts:604",
+        "fi-core/src/export-privacy.ts:635",
+        "fi-core/src/privacy-runtime.ts:1157",
+        "semconv.OUTPUT_VALUE",
+        "traceai_genkit/src/auto.ts:105",
+        "traceai_genkit/src/auto.ts:113",
+        "traceai_genkit/src/auto.ts:116"
+      ]
+    },
+    {
+      "key": "prompt",
+      "sources": [
+        "fi-core/src/trace/trace-config/structuredRedaction.ts:68",
+        "traceai_genkit/src/attributes.ts:79",
+        "traceai_genkit/src/content-policy.ts:60",
+        "traceai_genkit/src/content-policy.ts:83"
+      ]
+    },
+    {
+      "key": "prompt.id",
+      "sources": [
+        "SemanticConventions.PROMPT_ID",
+        "semconv.PROMPT_ID",
+        "traceai_genkit/src/content-policy.ts:33"
+      ]
+    },
+    {
+      "key": "prompt.url",
+      "sources": [
+        "SemanticConventions.PROMPT_URL",
+        "semconv.PROMPT_URL"
+      ]
+    },
+    {
+      "key": "prompt.vendor",
+      "sources": [
+        "SemanticConventions.PROMPT_VENDOR",
+        "semconv.PROMPT_VENDOR",
+        "traceai_genkit/src/content-policy.ts:33"
+      ]
+    },
+    {
+      "key": "raw.input",
+      "sources": [
+        "SemanticConventions.RAW_INPUT",
+        "fi-core/src/attribute-projection.ts:61",
+        "fi-core/src/export-privacy.ts:604",
+        "traceai_genkit/src/content-policy.ts:59",
+        "traceai_genkit/src/content-policy.ts:80"
+      ]
+    },
+    {
+      "key": "raw.output",
+      "sources": [
+        "SemanticConventions.RAW_OUTPUT",
+        "fi-core/src/attribute-projection.ts:58",
+        "fi-core/src/export-privacy.ts:604",
+        "fi-core/src/privacy-runtime.ts:1157",
+        "traceai_genkit/src/content-policy.ts:59",
+        "traceai_genkit/src/content-policy.ts:85"
+      ]
+    },
+    {
+      "key": "reranker",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:80",
+        "traceai_genkit/src/content-policy.ts:60"
+      ]
+    },
+    {
+      "key": "reranker.input_documents",
+      "sources": [
+        "SemanticConventions.RERANKER_INPUT_DOCUMENTS",
+        "semconv.RERANKER_INPUT_DOCUMENTS",
+        "traceai_genkit/src/content-policy.ts:67"
+      ]
+    },
+    {
+      "key": "reranker.input_documents.0.document.content",
+      "sources": [
+        "composed reranker.input_documents / DOCUMENT_CONTENT"
+      ]
+    },
+    {
+      "key": "reranker.input_documents.0.document.id",
+      "sources": [
+        "composed reranker.input_documents / DOCUMENT_ID"
+      ]
+    },
+    {
+      "key": "reranker.input_documents.0.document.metadata",
+      "sources": [
+        "composed reranker.input_documents / DOCUMENT_METADATA"
+      ]
+    },
+    {
+      "key": "reranker.input_documents.0.document.score",
+      "sources": [
+        "composed reranker.input_documents / DOCUMENT_SCORE"
+      ]
+    },
+    {
+      "key": "reranker.model_name",
+      "sources": [
+        "SemanticConventions.RERANKER_MODEL_NAME",
+        "semconv.RERANKER_MODEL_NAME",
+        "traceai_genkit/src/content-policy.ts:32"
+      ]
+    },
+    {
+      "key": "reranker.output_documents",
+      "sources": [
+        "SemanticConventions.RERANKER_OUTPUT_DOCUMENTS",
+        "semconv.RERANKER_OUTPUT_DOCUMENTS",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "reranker.output_documents.0.document.content",
+      "sources": [
+        "composed reranker.output_documents / DOCUMENT_CONTENT"
+      ]
+    },
+    {
+      "key": "reranker.output_documents.0.document.id",
+      "sources": [
+        "composed reranker.output_documents / DOCUMENT_ID"
+      ]
+    },
+    {
+      "key": "reranker.output_documents.0.document.metadata",
+      "sources": [
+        "composed reranker.output_documents / DOCUMENT_METADATA"
+      ]
+    },
+    {
+      "key": "reranker.output_documents.0.document.score",
+      "sources": [
+        "composed reranker.output_documents / DOCUMENT_SCORE"
+      ]
+    },
+    {
+      "key": "reranker.query",
+      "sources": [
+        "SemanticConventions.RERANKER_QUERY",
+        "semconv.RERANKER_QUERY",
+        "traceai_genkit/src/content-policy.ts:67"
+      ]
+    },
+    {
+      "key": "reranker.top_k",
+      "sources": [
+        "SemanticConventions.RERANKER_TOP_K",
+        "semconv.RERANKER_TOP_K",
+        "traceai_genkit/src/content-policy.ts:32"
+      ]
+    },
+    {
+      "key": "retrieval",
+      "sources": [
+        "fi-core/src/attribute-projection.ts:43",
+        "fi-core/src/export-privacy.ts:30",
+        "traceai_genkit/src/content-policy.ts:60",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "retrieval.documents",
+      "sources": [
+        "SemanticConventions.RETRIEVAL_DOCUMENTS",
+        "fi-core/src/attribute-projection.ts:60",
+        "semconv.RETRIEVAL_DOCUMENTS"
+      ]
+    },
+    {
+      "key": "retrieval.documents.0.document.content",
+      "sources": [
+        "composed retrieval.documents / DOCUMENT_CONTENT"
+      ]
+    },
+    {
+      "key": "retrieval.documents.0.document.id",
+      "sources": [
+        "composed retrieval.documents / DOCUMENT_ID"
+      ]
+    },
+    {
+      "key": "retrieval.documents.0.document.metadata",
+      "sources": [
+        "composed retrieval.documents / DOCUMENT_METADATA"
+      ]
+    },
+    {
+      "key": "retrieval.documents.0.document.score",
+      "sources": [
+        "composed retrieval.documents / DOCUMENT_SCORE"
+      ]
+    },
+    {
+      "key": "tool",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:82",
+        "traceai_genkit/src/content-policy.ts:59"
+      ]
+    },
+    {
+      "key": "tool.arguments",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:66"
+      ]
+    },
+    {
+      "key": "tool.description",
+      "sources": [
+        "SemanticConventions.TOOL_DESCRIPTION",
+        "semconv.TOOL_DESCRIPTION",
+        "traceai_genkit/src/content-policy.ts:82"
+      ]
+    },
+    {
+      "key": "tool.future_payload",
+      "sources": [
+        "forward-compatible namespace probe"
+      ]
+    },
+    {
+      "key": "tool.id",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:29"
+      ]
+    },
+    {
+      "key": "tool.input",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:66"
+      ]
+    },
+    {
+      "key": "tool.json_schema",
+      "sources": [
+        "SemanticConventions.TOOL_JSON_SCHEMA",
+        "semconv.TOOL_JSON_SCHEMA",
+        "traceai_genkit/src/content-policy.ts:83",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "tool.name",
+      "sources": [
+        "SemanticConventions.TOOL_NAME",
+        "semconv.TOOL_NAME",
+        "traceai_genkit/src/content-policy.ts:29"
+      ]
+    },
+    {
+      "key": "tool.output",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:69"
+      ]
+    },
+    {
+      "key": "tool.parameters",
+      "sources": [
+        "SemanticConventions.TOOL_PARAMETERS",
+        "semconv.TOOL_PARAMETERS",
+        "traceai_genkit/src/content-policy.ts:82",
+        "traceai_genkit/src/content-policy.ts:97"
+      ]
+    },
+    {
+      "key": "tool.result",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:69"
+      ]
+    },
+    {
+      "key": "tool.type",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:29"
+      ]
+    },
+    {
+      "key": "tool.v2",
+      "sources": [
+        "traceai_genkit/src/attributes.ts:83",
+        "traceai_genkit/src/attributes.ts:97"
+      ]
+    },
+    {
+      "key": "tool_call",
+      "sources": [
+        "traceai_genkit/src/content-policy.ts:59",
+        "traceai_genkit/src/content-policy.ts:70"
+      ]
+    },
+    {
+      "key": "tool_call.function.arguments",
+      "sources": [
+        "SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON",
+        "semconv.TOOL_CALL_FUNCTION_ARGUMENTS_JSON"
+      ]
+    },
+    {
+      "key": "tool_call.function.name",
+      "sources": [
+        "SemanticConventions.TOOL_CALL_FUNCTION_NAME",
+        "semconv.TOOL_CALL_FUNCTION_NAME",
+        "traceai_genkit/src/content-policy.ts:29"
+      ]
+    },
+    {
+      "key": "tool_call.id",
+      "sources": [
+        "SemanticConventions.TOOL_CALL_ID",
+        "semconv.TOOL_CALL_ID",
+        "traceai_genkit/src/content-policy.ts:29"
+      ]
+    }
+  ]
+}

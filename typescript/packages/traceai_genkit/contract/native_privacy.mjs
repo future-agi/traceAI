@@ -1,5 +1,6 @@
 /** Native registered generation, media, and background operations -> loopback OTLP. */
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -115,6 +116,7 @@ if (!process.argv[2]) {
     await processor.forceFlush();
     const wire = payloads.flatMap((p) => p.resourceSpans ?? []).flatMap((r) => r.scopeSpans).flatMap((s) => s.spans);
     assert.ok(wire.length > 0);
+    if (process.env.PRIVACY_EVIDENCE_DIR) writeFileSync(`${process.env.PRIVACY_EVIDENCE_DIR}/${test.name}.json`, JSON.stringify({ case: test.name, payloads, native: native.map(({ span }) => ({ name: span.name, attributes: span.attributes })) }));
     assert.equal(wire.length, native.length);
     assert.equal(new Set(wire.map((s) => s.spanId)).size, wire.length);
     const leaks = wire.flatMap((s) => (s.attributes ?? []).filter((a) => JSON.stringify(a.value).includes(marker)).map((a) => `${s.name}:${a.key}`));

@@ -18,7 +18,7 @@ import { createRequire } from 'node:module';
 
 const pkg = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packages = path.resolve(pkg, '..');
-const namespace = /^(?:gen_ai|llm|input|output|tool|tool_call|agent|fi\.agent|message|messages|message_content|audio|image|prompt|embedding|retrieval|reranker|document|raw\.input|raw\.output)(?:\.|$)/;
+const namespace = /^(?:gen_ai|llm|input|output|tool|tool_call|agent|fi\.agent|message|messages|message_content|audio|image|prompt|embedding|retrieval|reranker|document|raw\.input|raw\.output|db\.vector\.query\.filter)(?:\.|$)/;
 const inventory = new Map();
 function add(key, source) {
   if (typeof key !== 'string' || !namespace.test(key) || !/^[a-z][a-z0-9_.]+$/.test(key)) return;
@@ -49,7 +49,7 @@ for (const root of [sc.RETRIEVAL_DOCUMENTS, sc.RERANKER_INPUT_DOCUMENTS, sc.RERA
 for (const postfix of Object.values(semconv.LLMAttributePostfixes)) add(`${semconv.SemanticAttributePrefixes.llm}.${postfix}`, 'LLMAttributePostfixes');
 function scan(dir) {
   for (const item of readdirSync(dir, { withFileTypes: true })) {
-    if (item.name === '__tests__' || item.name === 'content-policy.ts') continue;
+    if (item.name === '__tests__') continue;
     const file = path.join(dir, item.name);
     if (item.isDirectory()) scan(file);
     else if (item.name.endsWith('.ts')) {
@@ -59,6 +59,9 @@ function scan(dir) {
 }
 scan(path.join(packages, 'fi-core/src'));
 scan(path.join(pkg, 'src'));
+for (const row of JSON.parse(readFileSync(new URL('./semantic-inventory-round7.json', import.meta.url), 'utf8')).attributes) {
+  for (const source of row.sources) add(row.key, `independent source inventory: ${source}`);
+}
 // Future namespace members deliberately absent from today's constants, plus
 // operation-dependent transcripts. Their fallback must not depend on a catalog.
 for (const key of ['gen_ai.agent.input', 'gen_ai.agent.output', 'gen_ai.agent.description', 'gen_ai.future_payload',
@@ -75,9 +78,14 @@ const metadata = new Set([
   'gen_ai.response.time_to_first_text', 'gen_ai.response.time_to_first_token', 'gen_ai.server.time_to_first_token',
   'gen_ai.server.time_per_output_token', 'gen_ai.server.request.duration', 'gen_ai.tool.name', 'gen_ai.tool.type', 'gen_ai.tool.call.id',
   'llm.model_name', 'llm.provider', 'llm.system', 'llm.prompt_template.version', 'llm.token_count.prompt', 'llm.token_count.completion', 'llm.token_count.total',
-  'tool.name', 'tool_call.id', 'tool_call.function.name', 'message.role', 'message.name', 'message.tool_call_id', 'message.function_call_name',
+  'tool.name', 'tool.type', 'tool.id', 'tool_call.id', 'tool_call.function.name', 'message.role', 'message.name', 'message.tool_call_id', 'message.function_call_name',
   'message_content.type', 'embedding.model_name', 'reranker.model_name', 'reranker.top_k', 'document.id', 'document.score', 'prompt.vendor', 'prompt.id',
 ]);
+// Exact additional metadata keys resolved by the independent source inventory.
+for (const key of ['agent.id', 'agent.name', 'agent.version', 'agent.status', 'agent.step_count', 'agent.iteration_count',
+  'gen_ai.agent.id', 'gen_ai.agent.name', 'gen_ai.agent.version', 'gen_ai.agent.status', 'gen_ai.agent.step_count', 'gen_ai.agent.iteration_count',
+  'llm.token_count.prompt_details.cache_read', 'llm.token_count.prompt_details.cache_write', 'llm.token_count.prompt_details.audio',
+  'llm.token_count.completion_details.audio', 'llm.token_count.completion_details.reasoning']) metadata.add(key);
 // fi.agent's documented provenance constants are metadata, except user tags.
 for (const [name, key] of Object.entries(semconv.SemanticConventions)) if (name.startsWith('FI_AGENT_') && name !== 'FI_AGENT_TAGS') metadata.add(key);
 function under(key, roots) { return roots.some(root => key === root || key.startsWith(root + '.') || key.startsWith(root + '[')); }
@@ -85,7 +93,7 @@ function side(key) {
   if (metadata.has(key)) return 'metadata';
   // Array notation is a path separator, not part of the leaf's spelling.
   key = key.replace(/\[(\d+)\]/g, '.$1');
-  if (under(key, ['gen_ai.tool.call.arguments', 'tool.input', 'tool.arguments', 'agent.input', 'gen_ai.agent.input', 'agent.instructions', 'gen_ai.agent.instructions', 'reranker.input_documents', 'reranker.query'])) return 'input';
+  if (under(key, ['db.vector.query.filter', 'gen_ai.tool.call.arguments', 'tool.input', 'tool.arguments', 'agent.input', 'gen_ai.agent.input', 'agent.instructions', 'gen_ai.agent.instructions', 'reranker.input_documents', 'reranker.query'])) return 'input';
   if (under(key, ['gen_ai.tool.call.result', 'tool.output', 'tool.result', 'agent.output', 'gen_ai.agent.output', 'gen_ai.tool.call', 'tool_call', 'llm.function_call', 'reranker.output_documents', 'retrieval', 'gen_ai.retrieval'])) return 'output';
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|$)/.test(key)) {
     if (/(?:^|\.)text(?:\.|$)/.test(key)) return 'input';
@@ -106,6 +114,14 @@ function defaultMediaOmission(key) {
 }
 const rows = [...inventory].sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, sources]) =>
   [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), defaultMediaOmission: defaultMediaOmission(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
+// The legacy capsule is still a supported serialized attribute map. Give each
+// nested key its own marker and off/on/opposite-side controls on every surface.
+for (const [nestedKey, depth] of ['gen_ai.prompts', 'gen_ai.agent.input', 'gen_ai.future_payload', 'db.vector.query.filter', 'gen_ai.request.model'].flatMap(key => [[key, 1], [key, 2]])) {
+  const key = `traceai.attribute_projection.metadata::${depth}::${nestedKey}`;
+  rows.push({ key, attributeKey: 'traceai.attribute_projection.metadata', nestedKey, depth,
+    sources: ['fi-core/src/attribute-projection.ts legacy capsule', `nested ${nestedKey}`], side: side(nestedKey), defaultMediaOmission: false,
+    marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) });
+}
 const flags = ['off', 'hideInputs', 'hideOutputs', 'hideInputMessages', 'hideOutputMessages', 'hideInputText', 'hideOutputText'];
 const cases = ['manual', 'automatic'].flatMap(route => ['span', 'context', 'event', 'link', 'resource'].flatMap(surface =>
   flags.map(flag => ({ name: `${route}-${surface}-${flag}`, route, surface, flag }))));
@@ -130,9 +146,21 @@ if (!process.argv[2]) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const value = row => ['gen_ai.input.messages', 'gen_ai.output.messages'].includes(row.key)
-    ? JSON.stringify([{ role: 'user', content: [{ type: 'text', text: row.marker }] }]) : row.marker;
-  const resource = resourceFromAttributes({ 'service.name': 'public-service', ...(test.surface === 'resource' ? Object.fromEntries(rows.map(row => [row.key, value(row)])) : {}) });
+  const value = row => {
+    if (row.nestedKey) {
+      let packed = JSON.stringify({ [row.nestedKey]: row.marker });
+      for (let n = 1; n < row.depth; n++) packed = JSON.stringify({ 'traceai.attribute_projection.metadata': packed });
+      return packed;
+    }
+    return ['gen_ai.input.messages', 'gen_ai.output.messages'].includes(row.key)
+      ? JSON.stringify([{ role: 'user', content: [{ type: 'text', text: row.marker }] }]) : row.marker;
+  };
+  const resourceAttributes = Object.fromEntries(rows.filter(row => !row.nestedKey).map(row => [row.key, value(row)]));
+  const capsule = {}, innerCapsule = {};
+  for (const row of rows.filter(row => row.nestedKey)) (row.depth === 1 ? capsule : innerCapsule)[row.nestedKey] = row.marker;
+  capsule['traceai.attribute_projection.metadata'] = JSON.stringify(innerCapsule);
+  resourceAttributes['traceai.attribute_projection.metadata'] = JSON.stringify(capsule);
+  const resource = resourceFromAttributes({ 'service.name': 'public-service', ...(test.surface === 'resource' ? resourceAttributes : {}) });
   const resourceBefore = JSON.stringify(resource.attributes);
   const traceConfig = test.flag === 'off' ? {} : { [test.flag]: true };
   const snapshot = span => JSON.stringify({ attributes: span.attributes, events: span.events, links: span.links, status: span.status });
@@ -162,7 +190,7 @@ if (!process.argv[2]) {
   try {
     const ai = genkit({ plugins: [] });
     const model = ai.defineModel({ name: 'offline/content' }, async request => {
-      const attributes = { [active.key]: value(active) };
+      const attributes = { [active.attributeKey ?? active.key]: value(active) };
       // Probe children of the real native model span have no model request or
       // response envelope that could overwrite a seeded MIME/model attribute.
       // Test BOTH a model and a generic span: non-model usage is namespaced by
@@ -206,9 +234,18 @@ if (!process.argv[2]) {
     const wire = JSON.stringify(payloads);
     const outcomes = rows.map(row => {
       const hidden = test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side));
-      const attrs = selected.filter(a => a.key === row.key);
+      const attrs = selected.filter(a => a.key === (row.attributeKey ?? row.key));
       const present = wire.includes(row.marker);
-      const placeholder = attrs.length === 0 || attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__'));
+      const nestedValues = row.nestedKey ? attrs.map(a => {
+        try {
+          let packed = JSON.parse(a.value.stringValue);
+          for (let n = 1; n < row.depth; n++) packed = JSON.parse(packed['traceai.attribute_projection.metadata']);
+          return packed[row.nestedKey];
+        } catch { return a.value.stringValue === '__REDACTED__' ? '__REDACTED__' : undefined; }
+      }).filter(v => v !== undefined) : [];
+      const placeholder = attrs.length === 0 || (row.nestedKey
+        ? nestedValues.every(v => v === '__REDACTED__')
+        : attrs.every(a => JSON.stringify(a.value).includes('__REDACTED__')));
       return { ...row, route: test.route, flag: test.flag, surface: test.surface, hidden, markerPresent: present, selectedCount: attrs.length,
         passed: hidden ? !present && placeholder : row.defaultMediaOmission
           ? !present && attrs.length > 0 && attrs.every(a => a.value.stringValue === '<omitted: media>')
