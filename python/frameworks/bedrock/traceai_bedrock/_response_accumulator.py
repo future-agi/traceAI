@@ -58,6 +58,7 @@ class _Attributes:
         self.output_attributes: Dict[str, Any] = {}
         self.metadata: Dict[str, Any] = {}
         self.span_kind: FiSpanKindValues = span_kind
+        self.status_code: StatusCode = StatusCode.OK
         self.requires_agent_span: bool = False
 
 
@@ -83,9 +84,9 @@ class _ResponseAccumulator:
             idx: Index for the accumulator, useful when handling multiple responses
         """
         self._span = span
-        self._request_parameters = request
         self.tracer = tracer
         self._is_finished: bool = False
+        self._output_chunks: list[bytes] = []
         self.trace_collector = TraceCollector()
 
         # Track model invocation inputs for matching with outputs
@@ -108,30 +109,23 @@ class _ResponseAccumulator:
         Returns:
             The same object, allowing for pass-through processing
 
-        Raises:
-            Exception: Re-raises any exception after recording it in the span
+        Telemetry conversion errors do not change the caller's response or status.
         """
+        if self._is_finished:
+            return obj
         try:
             if isinstance(obj, dict):
                 if "chunk" in obj:
                     if "bytes" in obj["chunk"]:
-                        output_text = obj["chunk"]["bytes"].decode("utf-8")
-                        self._span.set_attributes(get_output_attributes(output_text))
+                        self._output_chunks.append(obj["chunk"]["bytes"])
                 elif "trace" in obj:
                     self.trace_collector.collect(obj)
             elif isinstance(obj, (StopIteration, StopAsyncIteration)):
-                self._process_traces()
                 self._finish_tracing()
-
             elif isinstance(obj, BaseException):
-                self._process_traces()
-                self._handle_exception(obj)
-        except Exception as e:
-            logger.exception(e)
-            self._span.record_exception(e)
-            self._span.set_status(Status(StatusCode.ERROR))
-            self._span.end()
-            raise e
+                self._finish_tracing(obj)
+        except Exception:
+            logger.warning("Failed to process Bedrock agent telemetry", exc_info=True)
         return obj
 
     def _process_traces(self) -> None:
@@ -412,7 +406,7 @@ class _ResponseAccumulator:
             # Create span with appropriate timing
             start_time = self._fetch_span_start_time(attributes, trace_span)
             span = self._create_chain_span(parent_span, attributes, start_time)
-            span.set_status(Status(StatusCode.OK))
+            span.set_status(Status(attributes.status_code))
 
             # Process child spans recursively
             if isinstance(trace_span, TraceNode):
@@ -421,18 +415,6 @@ class _ResponseAccumulator:
             # End span with appropriate timing
             end_time = self._fetch_span_end_time(attributes, trace_span)
             span.end(end_time=int(end_time) if end_time else None)
-
-    def _handle_exception(self, obj: BaseException) -> None:
-        """
-        Handle an exception object.
-
-        Args:
-            obj (BaseException): The exception to handle.
-        """
-        self._span.record_exception(obj)
-        self._span.set_status(Status(StatusCode.ERROR, str(obj)))
-        self._span.end()
-        self._finish_tracing()
 
     @classmethod
     def _prepare_span_attributes(cls, trace_span_data: Union[TraceSpan, TraceNode]) -> _Attributes:
@@ -481,6 +463,8 @@ class _ResponseAccumulator:
                 cls._process_rationale(event_data, _attributes)
             if trace_event == "failureTrace":
                 cls._process_failure_trace(event_data, _attributes)
+            if trace_event == "guardrailTrace":
+                cls._process_guardrail_trace(event_data, _attributes)
         return _attributes
 
     @classmethod
@@ -577,6 +561,18 @@ class _ResponseAccumulator:
         attributes.metadata.update(AttributeExtractor.get_metadata_from_observation(observation))
 
     @classmethod
+    def _process_guardrail_trace(cls, event_data: Dict[str, Any], attributes: _Attributes) -> None:
+        attributes.name = "Guardrails"
+        attributes.span_kind = FiSpanKindValues.GUARDRAIL
+        attributes.output_attributes.update(
+            AttributeExtractor.get_guardrail_trace_attributes(event_data)
+        )
+        if event_data.get("action") == "INTERVENED":
+            # Flag the intervention without treating it as an invoke_agent exception
+            # or putting potentially sensitive assessment text in the status message.
+            attributes.status_code = StatusCode.ERROR
+
+    @classmethod
     def _process_failure_trace(cls, event_data: Dict[str, Any], attributes: _Attributes) -> None:
         """
         Process failure trace data.
@@ -610,19 +606,23 @@ class _ResponseAccumulator:
         if rationale_text := event_data.get("rationale", {}).get("text", ""):
             attributes.output_attributes.update(get_output_attributes(rationale_text))
 
-    def _finish_tracing(self) -> None:
-        """
-        Finish tracing by ending all spans.
-
-        This method is called when all trace data has been collected and processed.
-        It ensures that all spans are properly ended and prevents duplicate ending
-        of spans by checking the _is_finished flag.
-        """
+    def _finish_tracing(self, error: Optional[BaseException] = None) -> None:
+        """Export consumed output and trace events once, including on early close."""
         if self._is_finished:
             return
-        # Use span manager to finish tracing
-        _finish(self._span, None, self._request_parameters)
         self._is_finished = True
+        try:
+            if self._output_chunks:
+                # Event boundaries need not align with UTF-8 code points. Decode only
+                # once; an early close may leave an incomplete trailing character.
+                output = b"".join(self._output_chunks).decode("utf-8", errors="replace")
+                self._span.set_attributes(get_output_attributes(output))
+            self._process_traces()
+        finally:
+            self._output_chunks.clear()
+            # Input is already set using canonical attributes by the wrapper. Raw
+            # request kwargs (notably inputText) bypass TraceConfig's privacy filters.
+            _finish(self._span, error, {})
 
 
 # Constants for document and retrieval attributes

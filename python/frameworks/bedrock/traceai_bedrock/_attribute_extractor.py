@@ -541,6 +541,7 @@ class AttributeExtractor:
             "orchestrationTrace",
             "postProcessingTrace",
             "failureTrace",
+            "guardrailTrace",
         ]
         for trace_event in trace_events:
             if trace_event in trace_data:
@@ -863,6 +864,34 @@ class AttributeExtractor:
 
         # Generate a unique ID if none found
         return str(uuid.uuid4())
+
+    @classmethod
+    def get_guardrail_trace_attributes(cls, trace_data: dict[str, Any]) -> dict[str, Any]:
+        """Keep the native decision visible, but treat assessments as private content."""
+        attributes = {
+            SpanAttributes.GEN_AI_PROVIDER_NAME: FiLLMProviderValues.AWS.value,
+        }
+        if action := trace_data.get("action"):
+            # Preserve AWS's outcome: INTERVENED can mean blocking or anonymizing.
+            attributes["aws.bedrock.guardrail.action"] = action
+        # Assessments can quote prompts/responses, PII matches and custom regexes.
+        # Canonical directional fields apply TraceConfig hiding and PII redaction;
+        # do not duplicate this content into unfiltered metadata/custom attributes.
+        if "inputAssessments" in trace_data:
+            attributes.update(
+                get_input_attributes(
+                    {"inputAssessments": trace_data["inputAssessments"]},
+                    mime_type=FiMimeTypeValues.JSON,
+                )
+            )
+        if "outputAssessments" in trace_data:
+            attributes.update(
+                get_output_attributes(
+                    {"outputAssessments": trace_data["outputAssessments"]},
+                    mime_type=FiMimeTypeValues.JSON,
+                )
+            )
+        return attributes
 
     @classmethod
     def get_failure_trace_attributes(cls, trace_data: dict[str, Any]) -> dict[str, Any]:
