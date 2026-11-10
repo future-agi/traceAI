@@ -11,6 +11,7 @@ import {
   import {
     AISemanticConventions,
     AISemanticConventionsList,
+    EMBEDDING_TOKEN_COUNT,
   } from "./AISemanticConventions";
   import {
     FIIOConventionKey,
@@ -393,6 +394,27 @@ import {
     onError: onErrorCallback("metadata"),
   });
   
+  /** SDK 5/6 report embedding usage on both operation and doEmbed spans. */
+  const getEmbeddingTokenAttributes = (attributes: Attributes): Attributes => {
+    const operationName = attributes["operation.name"];
+    const tokens = attributes[EMBEDDING_TOKEN_COUNT];
+    if (
+      typeof operationName !== "string" ||
+      !["ai.embed", "ai.embedMany", "ai.embed.doEmbed", "ai.embedMany.doEmbed"].includes(
+        getVercelFunctionNameFromOperationName(operationName) ?? "",
+      ) ||
+      typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0
+    ) {
+      return {};
+    }
+    return {
+      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]:
+        attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] ?? tokens,
+      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]:
+        attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] ?? tokens,
+    };
+  };
+
   /**
    * Gets the FI attributes associated with the span from the initial attributes
    * @param attributesWithSpanKind the initial attributes of the span and the FI span kind
@@ -404,6 +426,7 @@ import {
     const spanKind = safelyGetFISpanKindFromAttributes(attributes);
     const fiAttributes = {
       [SemanticConventions.FI_SPAN_KIND]: spanKind ?? undefined,
+      ...getEmbeddingTokenAttributes(attributes),
     };
     return AISemanticConventionsList.reduce(
       (fiAttributes: Attributes, convention) => {
