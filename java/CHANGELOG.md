@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.3](https://github.com/future-agi/traceAI/compare/java-v1.0.2...java-v1.0.3) (2026-11-10)
+
+### Features
+
+* **semconv:** add cost, time-to-first-token and coding-agent attribute constants to `SemanticConventions` ([#605](https://github.com/future-agi/traceAI/pull/605)).
+
+### Bug Fixes
+
+* **java-core:** respect the `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES` and `FI_HIDE_OUTPUT_MESSAGES` environment flags in `TraceConfig` defaults; explicit builder settings still take precedence ([#543](https://github.com/future-agi/traceAI/pull/543)).
+* **ollama-java:** restore legacy Ollama4j 1.0.79 generation with empty default options ([#425](https://github.com/future-agi/traceAI/pull/425)).
+
 ## [1.0.2](https://github.com/future-agi/traceAI/compare/java-v1.0.1...java-v1.0.2) (2026-11-05)
 
 
