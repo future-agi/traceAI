@@ -14,22 +14,13 @@ under the active node span.
   ESM package entry points are available, but native ESM loading of n8n itself is
   not covered by the automatic loader hook.
 
-This package is a source contribution and has not been released to npm yet. The
-commands below build it from this repository:
+Install it in the same installation that resolves `n8n-core`, together with the
+OpenTelemetry packages the setup below uses, at the versions this package uses so
+npm installs a single copy of each:
 
 ```sh
-cd typescript
-pnpm --filter '@traceai/n8n...' install --frozen-lockfile --ignore-scripts
-pnpm run build:deps
-pnpm --filter @traceai/n8n build
-pnpm --filter @traceai/n8n pack --pack-destination /path/to/artifacts
+npm install @traceai/n8n @traceai/fi-core @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1 @opentelemetry/instrumentation@^0.202.0
 ```
-
-Install the resulting tarball in the same application installation that resolves
-`n8n-core`. The workspace dependencies must also be available there; when building
-them from source, pack and install `@traceai/fi-semantic-conventions` and
-`@traceai/fi-core` first. On Windows, use Git Bash for the existing dependency
-build scripts.
 
 ## Self-hosted setup
 
