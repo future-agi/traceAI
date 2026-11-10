@@ -29,9 +29,15 @@ export function observeAPIPromise<T>(
     return promise.then(onResult).catch(reject);
   }
 
-  // Observe transport failures even if the caller never parses the response.
-  // This does not read, clone, tee or buffer the response body.
-  void promise.asResponse().then(undefined, onError);
+  const observed = promise._thenUnwrap(onResult);
+  // SDK 4–7 keep the transport promise separate from lazy body parsing. Replace
+  // it only on our derived APIPromise: a dropped request must still reject
+  // unhandled, while every native consumer/helper handles this same rejection.
+  // A detached asResponse().catch(...) would silently consume dropped errors.
+  const transport = observed as SDKPromise<T> & { responsePromise?: Promise<unknown> };
+  if (transport.responsePromise) {
+    transport.responsePromise = transport.responsePromise.catch(reject);
+  }
 
   function wrap<U>(target: SDKPromise<U>): SDKPromise<U> {
     return new Proxy(target, {
@@ -64,5 +70,5 @@ export function observeAPIPromise<T>(
       },
     });
   }
-  return wrap(promise._thenUnwrap(onResult));
+  return wrap(observed);
 }
