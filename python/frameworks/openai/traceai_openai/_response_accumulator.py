@@ -257,6 +257,14 @@ class _ChatCompletionAccumulator:
                     yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
                 if completion_tokens is not None:
                     yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, Mapping):
+                    if (cached_tokens := prompt_details.get("cached_tokens")) is not None:
+                        yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, cached_tokens
+                completion_details = usage.get("completion_tokens_details")
+                if isinstance(completion_details, Mapping):
+                    if (reasoning_tokens := completion_details.get("reasoning_tokens")) is not None:
+                        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, reasoning_tokens
 
         # A tool-only completion has no text, but still has useful output.
         if not output_value and (result := self._result()):

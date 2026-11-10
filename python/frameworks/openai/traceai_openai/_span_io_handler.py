@@ -22,6 +22,7 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
         input_content = []
         input_images = []
         eval_input = []
+        has_non_text_content = False
         for msg in input_data:
             if isinstance(msg, dict):
                 msg_content = msg.get("content", "")
@@ -32,7 +33,9 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
                             if item.get("type") == "text":
                                 filtered_content.append(item)
                                 eval_input.append(item.get("text", ""))
-                            elif item.get("type") == "image_url":
+                            else:
+                                has_non_text_content = True
+                            if item.get("type") == "image_url":
                                 url_data = item.get("image_url", {})
                                 url = url_data.get("url")
                                 if url:
@@ -58,8 +61,10 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
         if input_images:
             images_value = json.dumps(input_images, ensure_ascii=False)
             span.set_attribute(SpanAttributes.INPUT_IMAGES, images_value)
-        if eval_input:
-            eval_input_str = " \n ".join(map(str, eval_input))
+        eval_input_str = " \n ".join(map(str, eval_input))
+        if not eval_input_str.strip() and has_non_text_content:
+            eval_input_str = "[non-text content]"
+        if eval_input or has_non_text_content:
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
             # Describe the value actually exported (all messages joined), not the first message.
             _set_mime_type(span, SpanAttributes.INPUT_MIME_TYPE, eval_input_str)
