@@ -1,5 +1,5 @@
-## [Unreleased]
-### Fixed
+## [1.2.0] - 2026-11-10
+### Added
 - Align GenAI constant names with Python's `SpanAttributes`: expose `GEN_AI_*` names as named exports and on `SemanticConventions`.
 - Preserve existing `LLM_*` exports as deprecated aliases without changing attribute keys or literal types.
 - Document canonical names and replace legacy `llm.*` keys in the usage example.
