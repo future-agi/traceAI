@@ -287,7 +287,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
 
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
-            if (isChatCompletionResponse(result)) {
+            if (isChatCompletionResponse(result) && !hasResponseError(result)) {
               const responseAttributes = {
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -304,11 +304,13 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setAttributes(responseAttributes);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
-            } else {
+            } else if (isStream<ChatCompletionChunk>(result)) {
               result = observeStream(result, span, requestStartedAt, (chunks) =>
                 consumeChatCompletionStreamChunks(chunks, span),
                 args[1]?.signal,
               );
+            } else {
+              endNonStreamResponseSpan(span, result);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -376,7 +378,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
           const wrappedPromise = observeAPIPromise(execPromise, (result) => {
             if (!span.isRecording()) return result;
-            if (isCompletionResponse(result)) {
+            if (isCompletionResponse(result) && !hasResponseError(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -391,7 +393,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
-            } else {
+            } else if (isStream<Completion>(result)) {
               result = observeStream(result, span, requestStartedAt, (chunks) => {
                 span.setAttributes({
                   ...getStreamMetadataAttributes(chunks),
@@ -403,6 +405,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
               }, args[1]?.signal);
+            } else {
+              endNonStreamResponseSpan(span, result);
             }
             return result;
           }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
@@ -473,6 +477,10 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               // Record the results
               span.setAttributes({
                 [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                ...(result.usage && {
+                  [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: result.usage.prompt_tokens,
+                  [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: result.usage.total_tokens,
+                }),
                 // Do not record the output data as it can be large
                 ...getEmbeddingEmbeddingsAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -593,7 +601,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               };
               if (isResponseCreateResponse(result)) {
                 recordSpan(result);
-              } else {
+              } else if (isStream<ResponseStreamEvent>(result)) {
                 result = observeStream(
                   result,
                   span,
@@ -604,6 +612,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   args[1]?.signal,
                   (event) => event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete",
                 );
+              } else {
+                endNonStreamResponseSpan(span, result);
               }
 
               return result;
@@ -797,28 +807,57 @@ function endRawResponseSpan(span: Span, response: { status: number }): void {
   span.end();
 }
 
+function isObject(response: unknown): response is Record<PropertyKey, unknown> {
+  return response !== null && typeof response === "object";
+}
+
+/** Missing completion fields do not imply a stream, even on an HTTP 200. */
+function isStream<T>(response: unknown): response is Stream<T> {
+  return isObject(response) && (
+    typeof response[Symbol.asyncIterator] === "function" ||
+    typeof response.iterator === "function"
+  );
+}
+
+function hasResponseError(response: unknown): response is { error: Record<string, unknown> } {
+  return isObject(response) && isObject(response.error);
+}
+
+/** Preserve unexpected parsed bodies without inventing output or consuming them. */
+function endNonStreamResponseSpan(span: Span, response: unknown): void {
+  if (hasResponseError(response)) {
+    const error = new Error(typeof response.error.message === "string"
+      ? response.error.message : "Provider returned an error");
+    // Use the same exception.type event attribute as SDK exceptions.
+    if (typeof response.error.type === "string") error.name = response.error.type;
+    endSpanWithError(span, error);
+  } else {
+    span.end();
+  }
+}
+
 function isResponseCreateResponse(
-  response: Stream<ResponseStreamEvent> | ResponseType,
+  response: unknown,
 ): response is ResponseType {
-  return "object" in response && response.object === "response";
+  return isObject(response) && response.object === "response";
 }
 
 /**
  * type-guard that checks if the response is a chat completion response
  */
 function isChatCompletionResponse(
-  response: Stream<ChatCompletionChunk> | ChatCompletion,
+  response: unknown,
 ): response is ChatCompletion {
-  return "choices" in response;
+  return isObject(response) && Array.isArray(response.choices);
 }
 
 /**
  * type-guard that checks if the response is a completion response
  */
 function isCompletionResponse(
-  response: Stream<Completion> | Completion,
+  response: unknown,
 ): response is Completion {
-  return "choices" in response;
+  return isObject(response) && Array.isArray(response.choices);
 }
 
 /**
