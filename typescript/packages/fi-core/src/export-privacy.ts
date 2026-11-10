@@ -553,6 +553,9 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
     for (const [key, original] of entries(attrs)) {
       // Preserve optional usage/detail absence before value() can stringify it.
       if (original === undefined) continue;
+      // Mandatory Genkit context exclusion also applies to borrowed resources
+      // when every optional content flag is off, including legacy capsules.
+      if (genkit && key === "genkit:metadata:context") continue;
       // Do this before parsing capsules, parser-bound responses, PII, hide
       // transforms or MIME inference: a fragment can hide the rest of a secret.
       if (!admission && (unknownHints || !NON_CONTENT_KEYS.has(key) && (withholdContent || scanBudget.exhausted || !exportedMarker(attrs, key, original) && truncatedValue(original, valueLimit, scanBudget, 0, true)))) {

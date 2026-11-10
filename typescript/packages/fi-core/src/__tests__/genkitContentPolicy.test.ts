@@ -44,3 +44,23 @@ describe("value-bound native aliases", () => {
     expect(isGenkitMappedAlias(copy, "output.value", copy["output.value"], { hideOutputText: true })).toBe(true);
   });
 });
+
+
+test("the final Genkit boundary excludes native context from off-policy resource capsules", () => {
+  const capsule = "traceai.attribute_projection.metadata";
+  const marker = "SYNTHETIC CAPSULE CONTENT !";
+  const attributes = { [capsule]: JSON.stringify({ "genkit:metadata:context": marker,
+    [capsule]: JSON.stringify({ "genkit:metadata:context": marker, "gen_ai.request.model": "public-model" }),
+  }), "genkit:metadata:context": marker };
+  const ctx = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 };
+  const span: any = { _spanContext: ctx, spanContext: () => ctx, attributes: {}, name: "probe", kind: 0,
+    startTime: [1, 0], endTime: [2, 0], duration: [1, 0], ended: true, status: { code: 0 },
+    resource: { attributes }, instrumentationScope: { name: "genkit-tracer" }, events: [], links: [] };
+  const before = JSON.stringify(attributes);
+  const clean = privacyFilter().span(span);
+  expect(JSON.stringify(clean.resource.attributes)).not.toContain(marker);
+  const outer = JSON.parse(String(clean.resource.attributes[capsule]));
+  expect(outer["genkit:metadata:context"]).toBeUndefined();
+  expect(JSON.parse(outer[capsule])).toEqual({ "gen_ai.request.model": "public-model" });
+  expect(JSON.stringify(attributes)).toBe(before);
+});
