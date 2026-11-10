@@ -226,14 +226,14 @@ test = ["pytest (>=6)"]
 
 [[package]]
 name = "fi-instrumentation-otel"
-version = "1.1.0"
-description = "OpenTelemetry instrumentation"
+version = "1.2.2"
+description = "OpenTelemetry tracing for AI applications: tracer setup, span helpers, exporters, and semantic conventions for Future AGI."
 optional = false
 python-versions = "<3.14,>3.9"
 groups = ["main"]
 files = [
-    {file = "fi_instrumentation_otel-1.1.0-py3-none-any.whl", hash = "sha256:4fa2bf663e0ce09447aca92ae798cd7b0dee35c5c92c2e033f1d89d158a9e62c"},
-    {file = "fi_instrumentation_otel-1.1.0.tar.gz", hash = "sha256:7ec324c3c9242aa87a88cf23a21c11919b8736c6451c5fb50917f592a853b059"},
+    {file = "fi_instrumentation_otel-1.2.2-py3-none-any.whl", hash = "sha256:25cf88f93e33aa928d4fae0f631afe8a32565639490862b715869e0633becbaf"},
+    {file = "fi_instrumentation_otel-1.2.2.tar.gz", hash = "sha256:b675df47d7a03c506fbd2e4b0420fe4f74d12a6353a88b219bfd97797b276d4c"},
 ]
 
 [package.dependencies]
@@ -1435,4 +1435,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">3.9, <3.14"
-content-hash = "7ccd10f7b1fb5981e2e73c5733126c52526f066456643e4879c840f7a405d071"
+content-hash = "f136cfede75deaf27bf3361935d90bcf0e52089ed8e611a283b126dc7b905e8c"
