@@ -26,20 +26,20 @@ class _ChatResponseAttributesExtractor:
             return
 
         # Token counts from meta
-        meta = response.get("meta", {})
+        meta = response.get("meta") or {}
         if "billed_units" in meta:
-            billed = meta["billed_units"]
+            billed = meta["billed_units"] or {}
             if "input_tokens" in billed:
                 yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, billed["input_tokens"]
             if "output_tokens" in billed:
                 yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, billed["output_tokens"]
 
-            total = billed.get("input_tokens", 0) + billed.get("output_tokens", 0)
+            total = (billed.get("input_tokens") or 0) + (billed.get("output_tokens") or 0)
             if total:
                 yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total
 
         if "tokens" in meta:
-            tokens = meta["tokens"]
+            tokens = meta["tokens"] or {}
             if "input_tokens" in tokens:
                 yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, tokens["input_tokens"]
             if "output_tokens" in tokens:
@@ -113,6 +113,15 @@ class _EmbedResponseAttributesExtractor:
 
         # Embeddings
         embeddings = response.get("embeddings", [])
+        if isinstance(embeddings, Mapping):
+            # Typed responses use float/float_ depending on SDK version.
+            # Prefer floats when multiple representations are present; count
+            # vectors, not the number of representation keys in the mapping.
+            embeddings = next(
+                (embeddings[key] for key in ("float", "float_", "int8", "uint8", "binary", "ubinary")
+                 if embeddings.get(key) is not None),
+                [],
+            )
         if embeddings:
             yield "cohere.embeddings_count", len(embeddings)
             # First embedding info

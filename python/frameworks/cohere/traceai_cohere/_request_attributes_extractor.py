@@ -11,6 +11,8 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from traceai_cohere._utils import _to_dict
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -44,26 +46,29 @@ class _ChatRequestAttributesExtractor:
         # Keep system/history/current messages in order without overwriting
         # indices. Canonical input-message keys also honor FI_HIDE_INPUTS.
         messages = []
-        if "preamble" in request_parameters:
+        if request_parameters.get("preamble") is not None:
             messages.append({"role": "system", "message": request_parameters["preamble"]})
-        messages.extend(request_parameters.get("chat_history", []))
+        messages.extend(request_parameters.get("chat_history") or [])
         if "message" in request_parameters:
             message = request_parameters.get("message", "")
             messages.append({"role": "user", "message": message})
             yield SpanAttributes.INPUT_VALUE, message
 
         for i, msg in enumerate(messages):
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role", "")
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", msg.get("message", "")
+            # SDK histories accept model instances as well as dictionaries.
+            # Convert only for telemetry; leave the actual SDK arguments intact.
+            message = _to_dict(msg)
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", message.get("role") or ""
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", message.get("message") or ""
 
         # Documents for RAG
         if "documents" in request_parameters:
-            docs = request_parameters.get("documents", [])
+            docs = request_parameters.get("documents") or []
             yield "cohere.documents_count", len(docs)
 
         # Tools
         if "tools" in request_parameters:
-            tools = request_parameters.get("tools", [])
+            tools = request_parameters.get("tools") or []
             yield "cohere.tools_count", len(tools)
 
     def _extract_invocation_parameters(
