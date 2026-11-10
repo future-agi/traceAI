@@ -29,7 +29,12 @@ from typing import (
 from uuid import UUID
 
 import wrapt  # type: ignore
-from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import (
+    REDACTED_VALUE,
+    TraceConfig,
+    get_attributes_from_context,
+    safe_json_dumps,
+)
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -528,6 +533,12 @@ def _update_span(
     filtered_data, images, eval_input, query = _filter_images(
         run.inputs.get("messages", [])
     )
+    # Older supported cores do not mask the aggregate image attribute.
+    config = getattr(span, "_self_config", None)
+    if isinstance(config, TraceConfig) and (
+        config.hide_inputs or config.hide_input_images
+    ):
+        images = []
 
     if not filtered_data:
         if isinstance(run.inputs, dict):
@@ -560,8 +571,8 @@ def _update_span(
                     _retrieval_documents(run),
                     _metadata(run),
                     _session_id_from_thread_id(run, captured_context),
+                    # Keep the full run input canonical, not the first message's query.
                     _as_raw_input_output(run, outputs),
-                    _as_query(query),
                 )
             )
         )
@@ -641,9 +652,9 @@ def _as_raw_input_output(
 ) -> Iterator[Tuple[str, Any]]:
     if raw_input := run.inputs:
         if isinstance(raw_input, dict):
-            yield INPUT_VALUE, safe_json_dumps(raw_input)
+            yield INPUT_VALUE, safe_json_dumps(_replace_image_blocks(raw_input))
         elif hasattr(raw_input, "__dict__"):
-            yield INPUT_VALUE, safe_json_dumps(raw_input.__dict__)
+            yield INPUT_VALUE, safe_json_dumps(_replace_image_blocks(raw_input.__dict__))
     if raw_output := outputs:
         if isinstance(raw_output, dict):
             yield OUTPUT_VALUE, safe_json_dumps(raw_output)
@@ -798,10 +809,23 @@ def _parse_message_data(
                     assert hasattr(obj, "get"), f"expected Mapping, found {type(obj)}"
                     for k, v in _get_attributes_from_message_content(obj):
                         yield f"{MESSAGE_CONTENTS}.{i}.{k}", v
-        if additional_kwargs := kwargs.get("additional_kwargs"):
-            assert hasattr(
-                additional_kwargs, "get"
-            ), f"expected Mapping, found {type(additional_kwargs)}"
+        additional_kwargs = kwargs.get("additional_kwargs") or {}
+        assert hasattr(
+            additional_kwargs, "get"
+        ), f"expected Mapping, found {type(additional_kwargs)}"
+        # LangChain's normalized calls are authoritative; providers may also
+        # include a redundant legacy representation in additional_kwargs.
+        if tool_calls := kwargs.get("tool_calls") or additional_kwargs.get("tool_calls"):
+            assert isinstance(
+                tool_calls, Iterable
+            ), f"expected Iterable, found {type(tool_calls)}"
+            message_tool_calls = []
+            for tool_call in tool_calls:
+                if message_tool_call := dict(_get_tool_call(tool_call)):
+                    message_tool_calls.append(message_tool_call)
+            if message_tool_calls:
+                yield MESSAGE_TOOL_CALLS, message_tool_calls
+        if additional_kwargs:
             if function_call := additional_kwargs.get("function_call"):
                 assert hasattr(
                     function_call, "get"
@@ -814,17 +838,6 @@ def _parse_message_data(
                         arguments, str
                     ), f"expected str, found {type(arguments)}"
                     yield MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON, arguments
-            if tool_calls := additional_kwargs.get("tool_calls"):
-                assert isinstance(
-                    tool_calls, Iterable
-                ), f"expected Iterable, found {type(tool_calls)}"
-                message_tool_calls = []
-                for tool_call in tool_calls:
-                    if message_tool_call := dict(_get_tool_call(tool_call)):
-                        message_tool_calls.append(message_tool_call)
-                if message_tool_calls:
-                    yield MESSAGE_TOOL_CALLS, message_tool_calls
-
             # Add handling for tool_outputs
             if tool_outputs := additional_kwargs.get("tool_outputs"):
                 assert isinstance(
@@ -845,7 +858,16 @@ def _get_tool_call(tool_call: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str
     if not tool_call:
         return
     assert hasattr(tool_call, "get"), f"expected Mapping, found {type(tool_call)}"
-    if function := tool_call.get("function"):
+    if "args" in tool_call:
+        arguments = tool_call["args"]
+        assert isinstance(arguments, Mapping), f"expected Mapping, found {type(arguments)}"
+        function = {
+            "name": tool_call.get("name"),
+            "arguments": safe_json_dumps(arguments),
+        }
+    else:
+        function = tool_call.get("function")
+    if function:
         assert hasattr(function, "get"), f"expected Mapping, found {type(function)}"
         if name := function.get("name"):
             assert isinstance(name, str), f"expected str, found {type(name)}"
@@ -853,6 +875,9 @@ def _get_tool_call(tool_call: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str
         if arguments := function.get("arguments"):
             assert isinstance(arguments, str), f"expected str, found {type(arguments)}"
             yield TOOL_CALL_FUNCTION_ARGUMENTS_JSON, arguments
+    if id_ := tool_call.get("id"):
+        assert isinstance(id_, str), f"expected str, found {type(id_)}"
+        yield TOOL_CALL_ID, id_
 
 
 @stop_on_exception
@@ -1222,12 +1247,30 @@ def _get_attributes_from_message_content(
             yield f"{MESSAGE_CONTENT_AUDIO}", audio.get("data", "")
 
 
+def _get_image_url(image: Any) -> Optional[str]:
+    url = image.get("url") if isinstance(image, Mapping) else image
+    if not isinstance(url, str) or not url:
+        return None
+    return REDACTED_VALUE if url.lower().startswith("data:") else url
+
+
 def _get_attributes_from_image(
-    image: Mapping[str, Any],
+    image: Any,
 ) -> Iterator[Tuple[str, AttributeValue]]:
-    image = dict(image)
-    if url := image.pop("url"):
+    if url := _get_image_url(image):
         yield f"{IMAGE_URL}", url
+
+
+def _replace_image_blocks(value: Any) -> Any:
+    """Keep the conversation intact while replacing images with safe placeholders."""
+    if isinstance(value, dict):
+        if value.get("type") == "image_url":
+            if url := _get_image_url(value.get("image_url")):
+                return {"type": "text", "text": f"[Image: {url}]"}
+        return {key: _replace_image_blocks(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_image_blocks(item) for item in value]
+    return value
 
 
 def _filter_images(messages: Any) -> Tuple[Any, List[str], str, str]:
@@ -1264,7 +1307,7 @@ def _filter_images(messages: Any) -> Tuple[Any, List[str], str, str]:
                             if text:
                                 eval_input.append(str(text))
                         elif obj.get("type") == "image_url":
-                            image_url = obj.get("image_url", {}).get("url")
+                            image_url = _get_image_url(obj.get("image_url"))
                             if image_url:
                                 images.append(image_url)
                                 filtered_data.append(
@@ -1333,6 +1376,7 @@ GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 SESSION_ID = SpanAttributes.SESSION_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
+TOOL_CALL_ID = ToolCallAttributes.TOOL_CALL_ID
 GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
 GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
