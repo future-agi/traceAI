@@ -70,8 +70,11 @@ export function semanticContentSide(key: string): ContentSide | undefined {
     "gen_ai.tool.call", "tool_call", "llm.function_call", "reranker.output_documents", "retrieval", "gen_ai.retrieval",
   ].some(root => family(key, root))) return "output";
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|\[|$)/.test(key)) {
-    if (/(?:^|\.)(?:vector|embedding)(?:\.|\[|$)/.test(key.replace(/^embedding(?:\.|(?=\[)|$)/, ""))) return "output";
+    // Flattened semconv entries use embedding.embeddings.N.embedding.text:
+    // the inner embedding namespace does not turn its input text into a vector.
     if (/(?:^|\.)text(?:\.|\[|$)/.test(key)) return "input";
+    const field = key.replace(/^embedding(?:\.|(?=\[)|$)/, "");
+    if (/(?:^|\.)vector(?:\.|\[|$)/.test(field) || /(?:^|\.)embedding(?:\.\d+|\[\d+\])*$/.test(field)) return "output";
     return "both";
   }
   if (["input", "raw.input", "gen_ai.input", "gen_ai.prompt", "gen_ai.prompts", "gen_ai.system_instructions",

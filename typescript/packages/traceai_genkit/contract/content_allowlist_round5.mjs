@@ -24,6 +24,22 @@ function add(key, source) {
   inventory.set(key, [...(inventory.get(key) ?? []), source]);
 }
 for (const [name, key] of Object.entries(semconv.SemanticConventions)) add(key, `SemanticConventions.${name}`);
+// Actual flattened collection shapes compose a collection root with the
+// exported element constants. Testing only invented .content leaves misses
+// mixed namespaces such as embedding.embeddings.0.embedding.text.
+const sc = semconv.SemanticConventions;
+const fields = prefix => Object.entries(sc).filter(([name]) => name.startsWith(prefix));
+function collection(root, elements) {
+  for (const [name, key] of elements) add(`${root}.0.${key}`, `flattened ${root} + SemanticConventions.${name}`);
+}
+for (const root of [sc.LLM_INPUT_MESSAGES, sc.LLM_OUTPUT_MESSAGES]) {
+  collection(root, fields('MESSAGE_'));
+  collection(`${root}.0.${sc.MESSAGE_CONTENTS}`, fields('MESSAGE_CONTENT_'));
+  collection(`${root}.0.${sc.MESSAGE_TOOL_CALLS}`, fields('TOOL_CALL_'));
+}
+collection(sc.LLM_TOOLS, fields('TOOL_'));
+collection(sc.EMBEDDING_EMBEDDINGS, fields('EMBEDDING_'));
+for (const root of [sc.RETRIEVAL_DOCUMENTS, sc.RERANKER_INPUT_DOCUMENTS, sc.RERANKER_OUTPUT_DOCUMENTS]) collection(root, fields('DOCUMENT_'));
 // Legacy attribute spellings are composed from the repository's exported constants.
 for (const postfix of Object.values(semconv.LLMAttributePostfixes)) add(`${semconv.SemanticAttributePrefixes.llm}.${postfix}`, 'LLMAttributePostfixes');
 function scan(dir) {
@@ -67,8 +83,9 @@ function side(key) {
   if (under(key, ['gen_ai.tool.call.arguments', 'tool.input', 'tool.arguments', 'agent.input', 'gen_ai.agent.input', 'agent.instructions', 'gen_ai.agent.instructions', 'reranker.input_documents', 'reranker.query'])) return 'input';
   if (under(key, ['gen_ai.tool.call.result', 'tool.output', 'tool.result', 'agent.output', 'gen_ai.agent.output', 'gen_ai.tool.call', 'tool_call', 'llm.function_call', 'reranker.output_documents', 'retrieval', 'gen_ai.retrieval'])) return 'output';
   if (/^(?:gen_ai\.)?embedding(?:s)?(?:\.|$)/.test(key)) {
-    if (/(?:^|\.)(?:vector|embedding)(?:\.|$)/.test(key.replace(/^embedding(?:\.|$)/, ''))) return 'output';
     if (/(?:^|\.)text(?:\.|$)/.test(key)) return 'input';
+    const field = key.replace(/^embedding(?:\.|$)/, '');
+    if (/(?:^|\.)vector(?:\.|$)/.test(field) || /(?:^|\.)embedding(?:\.\d+)*$/.test(field)) return 'output';
     return 'both';
   }
   if (under(key, ['input', 'raw.input', 'gen_ai.input', 'gen_ai.prompt', 'gen_ai.prompts', 'gen_ai.system_instructions', 'gen_ai.request', 'gen_ai.tool.definitions', 'gen_ai.tool.description', 'llm.input_messages', 'llm.prompts', 'llm.prompt_template', 'llm.invocation_parameters', 'llm.tools', 'tool.description', 'tool.parameters', 'tool.json_schema', 'prompt', 'image'])) return 'input';
@@ -142,9 +159,13 @@ if (!process.argv[2]) {
     });
     // One key per native model span avoids attribute-budget drops masquerading as
     // privacy. Resource attributes share one complete resource (not span limits).
+    let generated = 0;
     for (const row of test.surface === 'resource' ? rows.slice(0, 1) : rows) {
       active = row;
       assert.equal((await ai.generate({ model, prompt: 'public prompt' })).text, 'public reply');
+      // A growing source-derived inventory must not exceed a provider's queue.
+      // Flush bounded batches; still require every request and every span below.
+      if (++generated % 128 === 0) { await flushTracing(); await processor.forceFlush(); }
     }
     await flushTracing(); await processor.forceFlush();
     const spans = payloads.flatMap(p => p.resourceSpans ?? []).flatMap(r => r.scopeSpans ?? []).flatMap(s => s.spans ?? []);
