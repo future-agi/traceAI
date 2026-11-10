@@ -90,12 +90,17 @@ function json(data?: Uint8Array | string): any {
 export function parseSSE(data: Uint8Array): [string | undefined, any][] {
   return streamFrames(data, true).map(frame => [frame.event, frame.payload]);
 }
-interface Body { kind: string; data?: any; text?: string; payloads: any[] }
+interface Body { kind: string; data?: any; text?: string; payloads: any[]; eventNames?: (string | undefined)[] }
 function decode(resp: ResponseData): Body {
   const type = header(resp.headers, "content-type");
   if (isBinary(type)) return { kind: "binary", payloads: [] };
   if (!resp.body || resp.truncated) return { kind: "empty", payloads: [] };
-  if (type === "text/event-stream") return { kind: "sse", payloads: parseSSE(resp.body).filter(([, payload]) => object(payload)).map(([event, payload]) => event && payload.type === undefined ? { ...payload, type: event } : payload) };
+  if (type === "text/event-stream") {
+    const frames = parseSSE(resp.body).filter(([, payload]) => object(payload));
+    // Keep event names independently: an error payload can use type for its error code.
+    return { kind: "sse", eventNames: frames.map(([event]) => event),
+      payloads: frames.map(([event, payload]) => event && payload.type === undefined ? { ...payload, type: event } : payload) };
+  }
   const text = decodeBytes(resp.body);
   if (["application/x-ndjson", "application/jsonl", "application/ndjson"].includes(type)) {
     return { kind: "ndjson", payloads: streamFrames(resp.body, false, Infinity, !resp.error && !resp.incomplete && !resp.truncated).map(frame => frame.payload).filter(object) };
@@ -175,6 +180,7 @@ interface Parsed {
   usage: Record<string, number | null>; usageFamily?: "anthropic" | "gemini" | "converse";
   inputValue?: string; inputMime?: string; outputValue?: string;
   outputMime?: string; extra: Attributes; skip?: boolean;
+  providerError?: { type: string; message?: string };
 }
 function parsed(): Parsed { return { finish: [], inputs: [], outputs: [], tools: [], params: {}, usage: {}, extra: {} }; }
 function usage(p: Parsed, values: Record<string, any>): void {
@@ -363,7 +369,16 @@ function openaiUsage(p: Parsed, u: any): void {
 function transcript(p: Parsed, text: any): void {
   if (typeof text === "string") { p.extra["gen_ai.audio.transcript"] = text; p.outputValue = text; p.outputMime = "text/plain"; }
 }
+function recordProviderError(p: Parsed, error: any, failed = false): void {
+  if (!failed && !object(error) && !(typeof error === "string" && error)) return;
+  const code = typeof error?.code === "string" && error.code ? error.code : num(error?.code);
+  const type = typeof error?.type === "string" && error.type !== "error" ? error.type : undefined;
+  // Failure is sticky: subsequent output/usage or completion records cannot undo it.
+  p.providerError ??= { type: String(code ?? (type || "provider_error")),
+    message: typeof error === "string" ? error : typeof error?.message === "string" ? error.message : undefined };
+}
 function responseOutput(p: Parsed, r: any): void {
+  recordProviderError(p, r.error, r.status === "failed");
   p.responseId = r.id || p.responseId; p.responseModel = r.model || p.responseModel;
   const out = message("assistant"), texts: string[] = [];
   for (const item of list(r.output).filter(object)) {
@@ -380,6 +395,7 @@ function responseParser(m: Match, body: Body, p: Parsed): void {
   switch (f) {
     case "openai.chat": case "openai.completions":
       if (body.kind === "json") {
+        recordProviderError(p, d.error);
         p.responseId = d.id; p.responseModel = d.model;
         for (const c of list(d.choices)) {
           if (c.message && Object.keys(c.message).length) p.outputs.push(openaiMessage(c.message));
@@ -389,7 +405,9 @@ function responseParser(m: Match, body: Body, p: Parsed): void {
         openaiUsage(p, d.usage);
       } else if (body.kind === "sse") {
         const slots = new Map<number, { out: Message; calls: Map<number, ToolCall> }>(), finish = new Map<number, string>();
-        for (const chunk of events) {
+        for (const [index, chunk] of events.entries()) {
+          const errorEvent = body.eventNames?.[index] === "error" || chunk.type === "error";
+          recordProviderError(p, chunk.error ?? (errorEvent ? chunk : undefined), errorEvent);
           p.responseId ||= chunk.id; p.responseModel ||= chunk.model; openaiUsage(p, chunk.usage);
           for (const c of list(chunk.choices)) {
             const i = c.index ?? 0, delta = c.delta || {};
@@ -416,7 +434,10 @@ function responseParser(m: Match, body: Body, p: Parsed): void {
       if (body.kind === "json") responseOutput(p, d);
       else if (body.kind === "sse") {
         let final: any; const deltas: string[] = [], calls = new Map<number, ToolCall>();
-        for (const e of events) {
+        for (const [index, e] of events.entries()) {
+          const event = body.eventNames?.[index], errorEvent = event === "error" || e.type === "error";
+          recordProviderError(p, e.response?.error ?? e.error ?? (errorEvent ? e : undefined),
+            event === "response.failed" || e.type === "response.failed" || errorEvent || e.response?.status === "failed");
           if (object(e.response)) openaiUsage(p, e.response.usage);
           if (["response.completed", "response.incomplete", "response.failed"].includes(e.type) && object(e.response)) final = e.response;
           else if (e.type === "response.created" && object(e.response)) { p.responseId = e.response.id; p.responseModel = e.response.model; }
@@ -495,18 +516,27 @@ function responseParser(m: Match, body: Body, p: Parsed): void {
     }
     case "gemini.generate_content": {
       p.usageFamily = "gemini";
-      const items = body.kind === "sse" ? events : Array.isArray(body.data) ? body.data : [d], out = message("assistant"), texts: string[] = [];
+      const items = body.kind === "sse" ? events : Array.isArray(body.data) ? body.data : [d];
+      const slots = new Map<number, { out: Message; texts: string[]; finish?: string }>();
       for (const item of items.filter(object)) {
         p.responseModel = item.modelVersion || p.responseModel; p.responseId = item.responseId || p.responseId;
-        const candidates = list(item.candidates);
-        if (object(candidates[0])) {
-          const msg = geminiMessage(candidates[0].content || {}); if (msg.content) texts.push(msg.content); out.calls.push(...msg.calls);
-          const reasons = candidates.filter(x => x?.finishReason).map(x => String(x.finishReason)); if (reasons.length) p.finish = reasons;
+        // Positions can change between chunks; candidate indices own content and finish reasons.
+        for (const [position, candidate] of list(item.candidates).entries()) {
+          if (!object(candidate)) continue;
+          const index = int(candidate.index) ?? position;
+          let slot = slots.get(index);
+          if (!slot) { slot = { out: message("assistant"), texts: [] }; slots.set(index, slot); }
+          const msg = geminiMessage(candidate.content || {});
+          if (msg.content) slot.texts.push(msg.content);
+          slot.out.calls.push(...msg.calls);
+          if (candidate.finishReason) slot.finish = String(candidate.finishReason);
         }
         const u = item.usageMetadata;
         usage(p, { input: u?.promptTokenCount, tool_input: u?.toolUsePromptTokenCount, output: u?.candidatesTokenCount, total: u?.totalTokenCount, cache_read: u?.cachedContentTokenCount, reasoning: u?.thoughtsTokenCount });
       }
-      out.content = texts.join("") || undefined; if (out.content !== undefined || out.calls.length) p.outputs = [out]; return;
+      const ordered = [...slots].sort(([a], [b]) => a - b).map(([, slot]) => slot);
+      p.outputs = ordered.map(slot => ({ ...slot.out, content: slot.texts.join("") || undefined }));
+      p.finish = ordered.flatMap(slot => slot.finish ? [slot.finish] : []); return;
     }
     case "gemini.embed_content": {
       const first = d.embedding || d.embeddings?.[0];
@@ -611,9 +641,10 @@ function errorMessage(body: Body): string | undefined {
 export function build(m: Match, req: RequestData, resp: ResponseData, initial?: Parsed): SpanResult | undefined {
   try {
     const p = initial ?? checkRequest(m, req); if (!p) return undefined;
-    const e = m.endpoint, body = decode(resp), ok = !resp.error && (resp.status ?? 0) < 400;
+    const e = m.endpoint, body = decode(resp), transportOk = !resp.error && (resp.status ?? 0) < 400;
     if (e.only_when === "completed" && !resp.error && !["completed", "error"].includes(body.data?.status)) return undefined;
-    if (ok || resp.error) { try { responseParser(m, body, p); } catch { /* Malformed provider data is nonfatal. */ } if (p.skip) return undefined; }
+    if (transportOk || resp.error) { try { responseParser(m, body, p); } catch { /* Malformed provider data is nonfatal. */ } if (p.skip) return undefined; }
+    const ok = transportOk && !p.providerError;
     const a: Attributes = { "gen_ai.span.kind": e.span_kind, "gen_ai.operation.name": e.operation,
       "gen_ai.provider.name": m.provider, "traceai.capture.layer": "wire", "traceai.wire.endpoint": e.id,
       "server.address": m.host, "server.port": m.port, "http.request.method": req.method.toUpperCase() };
@@ -664,7 +695,13 @@ export function build(m: Match, req: RequestData, resp: ResponseData, initial?: 
     if (resp.undecodedEncoding) a["traceai.wire.undecoded_encoding"] = resp.undecodedEncoding;
     const model = p.requestModel || p.responseModel;
     let description: string | undefined;
-    if (!ok) { a["error.type"] = resp.error ? resp.error.name : String(resp.status); description = resp.error ? resp.error.message || resp.error.name : errorMessage(body) || `HTTP ${resp.status}`; }
+    if (resp.error) {
+      a["error.type"] = resp.error.name; description = resp.error.message || resp.error.name;
+    } else if (!transportOk) {
+      a["error.type"] = String(resp.status); description = errorMessage(body) || `HTTP ${resp.status}`;
+    } else if (p.providerError) {
+      a["error.type"] = p.providerError.type; description = p.providerError.message || "Provider error";
+    }
     let secrets = credentialSecrets(req.headers, req.secrets), privacyFailed = false;
     try {
       // Preserve raw request credentials privately before best-effort scrubbing erases
