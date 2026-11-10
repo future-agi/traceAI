@@ -221,27 +221,35 @@ class _LMCallWrapper(_WithTracer):
     ) -> Any:
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
-        arguments = _bind_arguments(wrapped, *args, **kwargs)
-        messages = arguments.get("messages")
-        prompts = arguments.get("prompt")
         span_name = instance.__class__.__name__ + ".__call__"
+        attributes: Dict[str, AttributeValue] = {GEN_AI_SPAN_KIND: LLM.value}
+        try:
+            arguments = _bind_arguments(wrapped, *args, **kwargs)
+            messages = arguments.get("messages")
+            prompts = arguments.get("prompt")
+            attributes.update(
+                dict(
+                    _flatten(
+                        {
+                            **dict(_input_value_and_mime_type(messages)),
+                            **dict(_eval_input(messages)),
+                            **dict(_llm_prompt(prompts)),
+                            **dict(_raw_input(arguments)),
+                            **dict(_llm_model_name(instance)),
+                            **dict(_llm_invocation_parameters(instance, arguments)),
+                            **dict(_llm_input_messages(arguments)),
+                            **dict(get_attributes_from_context()),
+                        }
+                    )
+                )
+            )
+        except Exception:
+            # Attribute extraction must not prevent the application model call.
+            # Do not include payloads or exception details in this diagnostic.
+            logger.warning("Failed to extract model input attributes")
         with self._tracer.start_as_current_span(
             span_name,
-            attributes=dict(
-                _flatten(
-                    {
-                        GEN_AI_SPAN_KIND: LLM,
-                        **dict(_input_value_and_mime_type(messages)),
-                        **dict(_eval_input(messages)),
-                        **dict(_llm_prompt(prompts)),
-                        **dict(_raw_input(arguments)),
-                        **dict(_llm_model_name(instance)),
-                        **dict(_llm_invocation_parameters(instance, arguments)),
-                        **dict(_llm_input_messages(arguments)),
-                        **dict(get_attributes_from_context()),
-                    }
-                )
-            ),
+            attributes=attributes,
         ) as span:
             response = wrapped(*args, **kwargs)
             span.set_status(StatusCode.OK)
@@ -748,13 +756,12 @@ def _eval_input(messages: list) -> Iterator[Tuple[str, Any]]:
     eval_input = []
     for message in messages:
         if isinstance(message, dict) and "content" in message:
-            eval_input.append(message["content"])
+            content = message["content"]
+            eval_input.append(
+                content if isinstance(content, str) else safe_json_dumps(content)
+            )
 
-    if eval_input and len(eval_input) > 0:
-        yield INPUT_VALUE, safe_json_dumps(eval_input[0])
-
-    eval_input = "\n".join(eval_input)
-    yield INPUT_VALUE, safe_json_dumps(eval_input)
+    yield INPUT_VALUE, safe_json_dumps("\n".join(eval_input))
 
 
 def _convert_to_dict(obj: Any) -> Any:
