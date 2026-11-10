@@ -14,6 +14,7 @@ from fi_instrumentation.fi_types import (
     SpanAttributes,
 )
 from groq import NOT_GIVEN
+from wrapt import ObjectProxy
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
@@ -99,7 +100,167 @@ def _parse_args(
         key: value
         for key, value in bound_signature.arguments.items()
         if value is not None and value is not NOT_GIVEN
+        # This is a telemetry-only view. Never drain caller-owned messages.
+        and not (key == "messages" and isinstance(value, Iterator))
     }
+
+
+class _Stream(ObjectProxy):
+    """Keep SDK lifecycle APIs while owning one invocation's tracing state."""
+
+    def __init__(self, response, span, extractor, request_parameters):
+        super().__init__(response)
+        self._self_span = span
+        self._self_extractor = extractor
+        self._self_request_parameters = request_parameters
+        self._self_chunks = []
+        self._self_iterator = None
+        self._self_finished = False
+
+    def __del__(self):
+        # Finalize abandoned tracing without reading or driving the transport.
+        # The SDK still owns its explicit (possibly asynchronous) close API.
+        try:
+            self._finish()
+        except Exception:
+            pass
+
+    def _finish(self, error=None, complete=False):
+        if self._self_finished:
+            return
+        self._self_finished = True
+        span = self._self_span
+        try:
+            if error is not None:
+                span.record_exception(error)
+                span.finish_tracing(status=trace_api.Status(
+                    status_code=trace_api.StatusCode.ERROR,
+                    description=f"{type(error).__name__}: {error}",
+                ))
+            elif complete:
+                _finish_tracing(
+                    status=trace_api.Status(status_code=trace_api.StatusCode.OK),
+                    with_span=span,
+                    attributes=self._self_extractor.get_attributes(
+                        response=self._self_chunks, is_streaming=True,
+                    ),
+                    extra_attributes=self._self_extractor.get_extra_attributes(
+                        response=self._self_chunks,
+                        request_parameters=self._self_request_parameters,
+                        is_streaming=True,
+                    ),
+                )
+            else:
+                # Early close is not a completed response. Do not invent output
+                # or an OK status for a stream the application did not exhaust.
+                span.finish_tracing()
+        except Exception:
+            logger.exception("Failed to finalize streaming response")
+            span.finish_tracing()
+        finally:
+            self._self_chunks.clear()
+
+
+class _SyncStream(_Stream):
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            if self._self_iterator is None:
+                self._self_iterator = iter(self.__wrapped__)
+            item = next(self._self_iterator)
+        except StopIteration:
+            self._finish(complete=True)
+            raise
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        if not self._self_finished:
+            self._self_chunks.append(item)
+        return item
+
+    def close(self):
+        try:
+            if close := getattr(self.__wrapped__, "close", None):
+                return close()
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        finally:
+            self._finish()
+
+    def __enter__(self):
+        try:
+            self.__wrapped__.__enter__()
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            return self.__wrapped__.__exit__(exc_type, exc, traceback)
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        finally:
+            # An exception in the consumer's context body is not an SDK error.
+            self._finish()
+
+
+class _AsyncStream(_Stream):
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            if self._self_iterator is None:
+                self._self_iterator = self.__wrapped__.__aiter__()
+            item = await self._self_iterator.__anext__()
+        except StopAsyncIteration:
+            self._finish(complete=True)
+            raise
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        if not self._self_finished:
+            self._self_chunks.append(item)
+        return item
+
+    async def close(self):
+        try:
+            close = getattr(self.__wrapped__, "close", None)
+            if close is None:
+                close = getattr(self.__wrapped__, "aclose", None)
+            if close is not None:
+                return await close()
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        finally:
+            self._finish()
+
+    async def aclose(self):
+        return await self.close()
+
+    async def __aenter__(self):
+        try:
+            await self.__wrapped__.__aenter__()
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        try:
+            return await self.__wrapped__.__aexit__(exc_type, exc, traceback)
+        except BaseException as error:
+            self._finish(error=error)
+            raise
+        finally:
+            # An exception in the consumer's context body is not an SDK error.
+            self._finish()
 
 
 class _CompletionsWrapper(_WithTracer):
@@ -149,48 +310,9 @@ class _CompletionsWrapper(_WithTracer):
                 raise
 
             if streaming and isinstance(response, Iterable):
-                # If streaming, wrap the iterator without consuming it
-                def streaming_response_wrapper():
-                    chunks = []  # State belongs to this invocation, not the installed hook.
-                    try:
-                        for item in response:
-                            chunks.append(item)
-                            yield item
-
-                    except Exception as exception:
-                        span.record_exception(exception)
-                        status = trace_api.Status(
-                            status_code=trace_api.StatusCode.ERROR,
-                            description=f"{type(exception).__name__}: {exception}",
-                        )
-                        span.finish_tracing(status=status)
-                        raise
-                    else:
-                        try:
-                            _finish_tracing(
-                                status=trace_api.Status(
-                                    status_code=trace_api.StatusCode.OK
-                                ),
-                                with_span=span,
-                                attributes=self._response_extractor.get_attributes(
-                                    response=chunks, is_streaming=streaming
-                                ),
-                                extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=chunks,
-                                    request_parameters=request_parameters,
-                                    is_streaming=streaming,
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                f"Failed to finalize streaming response of type {type(response)}"
-                            )
-                            span.finish_tracing()
-                    finally:
-                        if span._span.is_recording():
-                            span.finish_tracing()
-
-                return streaming_response_wrapper()
+                return _SyncStream(
+                    response, span, self._response_extractor, request_parameters,
+                )
             else:
                 # Non-streaming response
                 try:
@@ -261,48 +383,9 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 raise
 
             if streaming and hasattr(response, "__aiter__"):
-                # If streaming, wrap the async iterator without consuming it
-                async def streaming_response_wrapper():
-                    chunks = []  # Concurrent streams must never share response data.
-                    try:
-                        async for item in response:
-                            chunks.append(item)
-                            yield item
-
-                    except Exception as exception:
-                        span.record_exception(exception)
-                        status = trace_api.Status(
-                            status_code=trace_api.StatusCode.ERROR,
-                            description=f"{type(exception).__name__}: {exception}",
-                        )
-                        span.finish_tracing(status=status)
-                        raise
-                    else:
-                        try:
-                            _finish_tracing(
-                                status=trace_api.Status(
-                                    status_code=trace_api.StatusCode.OK
-                                ),
-                                with_span=span,
-                                attributes=self._response_extractor.get_attributes(
-                                    response=chunks, is_streaming=streaming
-                                ),
-                                extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=chunks,
-                                    request_parameters=request_parameters,
-                                    is_streaming=streaming,
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                f"Failed to finalize streaming response of type {type(response)}"
-                            )
-                            span.finish_tracing()
-                    finally:
-                        if span._span.is_recording():
-                            span.finish_tracing()
-
-                return streaming_response_wrapper()
+                return _AsyncStream(
+                    response, span, self._response_extractor, request_parameters,
+                )
             else:
                 # Non-streaming response
                 try:
