@@ -210,6 +210,19 @@ def _record_usage(span, usage):
             span.set_attribute(f"gen_ai.usage.{key}", usage[key])
 
 
+def _record_output(span: Span, result: Any) -> None:
+    """Record the same bounded text for canonical and compatibility consumers."""
+    output = getattr(result, "output", None)
+    if output is None:
+        output = getattr(result, "data", None)
+    if output is not None:
+        serialized = safe_serialize(output)
+        span.set_attribute(PydanticAIAttributes.RUN_RESULT, serialized)
+        span.set_attribute(PydanticAIAttributes.OUTPUT_VALUE, serialized)
+        # Even structured values are text: truncation may make them invalid JSON.
+        span.set_attribute(PydanticAIAttributes.OUTPUT_MIME_TYPE, "text/plain")
+
+
 def _run_attributes(
     agent: Any, args: tuple, kwargs: dict, method_name: str
 ) -> Dict[str, Any]:
@@ -230,9 +243,12 @@ def _run_attributes(
     # Build attributes
     attributes = {
         PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
+        PydanticAIAttributes.GEN_AI_SPAN_KIND: "AGENT",
         PydanticAIAttributes.RUN_ID: run_id,
         PydanticAIAttributes.RUN_METHOD: method_name,
         PydanticAIAttributes.RUN_PROMPT: prompt,
+        PydanticAIAttributes.INPUT_VALUE: prompt,
+        PydanticAIAttributes.INPUT_MIME_TYPE: "text/plain",
     }
 
     # Add agent info
@@ -332,12 +348,7 @@ def wrap_agent_run(
                 _record_usage(span, operation_usage.extract(result))
 
                 # Record output
-                output = getattr(result, "output", None) or getattr(result, "data", None)
-                if output is not None:
-                    span.set_attribute(
-                        PydanticAIAttributes.RUN_RESULT,
-                        safe_serialize(output),
-                    )
+                _record_output(span, result)
 
                 span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
                 span.set_status(Status(StatusCode.OK))
@@ -384,13 +395,7 @@ def wrap_agent_run(
                 # Extract and record usage
                 _record_usage(span, operation_usage.extract(result))
 
-                output = getattr(result, "output", None)
-                if output is None:
-                    output = getattr(result, "data", None)
-                if output is not None:
-                    span.set_attribute(
-                        PydanticAIAttributes.RUN_RESULT, safe_serialize(output)
-                    )
+                _record_output(span, result)
 
                 span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
                 span.set_status(Status(StatusCode.OK))

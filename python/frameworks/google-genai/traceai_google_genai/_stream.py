@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from copy import deepcopy
 from typing import (
@@ -37,6 +38,9 @@ from fi_instrumentation.fi_types import (
 if TYPE_CHECKING:
     from google.genai.types import GenerateContentResponse
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
 
 class _Stream(ObjectProxy):  # type: ignore
     __slots__ = (
@@ -53,8 +57,10 @@ class _Stream(ObjectProxy):  # type: ignore
         super().__init__(stream)
         self._response_accumulator = _ResponseAccumulator()
         self._with_span = with_span
+        self._is_finished = False
 
     def __iter__(self) -> Iterator["GenerateContentResponse"]:
+        status = None
         try:
             for item in self.__wrapped__:
                 self._response_accumulator.process_chunk(item)
@@ -65,15 +71,20 @@ class _Stream(ObjectProxy):  # type: ignore
                 description=f"{type(exception).__name__}: {exception}",
             )
             self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
             raise
-        # completed without exception
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
+        else:
+            status = trace_api.Status(status_code=trace_api.StatusCode.OK)
+        finally:
+            self._finish_tracing(status=status)
+            if status is None:
+                # Forward early iterator closure without replacing GeneratorExit.
+                try:
+                    self.close()
+                except Exception:
+                    logger.exception("Failed to close interrupted stream")
 
     async def __aiter__(self) -> AsyncIterator["GenerateContentResponse"]:
+        status = None
         try:
             async for item in self.__wrapped__:
                 self._response_accumulator.process_chunk(item)
@@ -84,18 +95,39 @@ class _Stream(ObjectProxy):  # type: ignore
                 description=f"{type(exception).__name__}: {exception}",
             )
             self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
             raise
-        # completed without exception
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
+        else:
+            status = trace_api.Status(status_code=trace_api.StatusCode.OK)
+        finally:
+            self._finish_tracing(status=status)
+            if status is None:
+                # Cancellation/GeneratorExit must propagate, even if cleanup fails.
+                try:
+                    await self.aclose()
+                except Exception:
+                    logger.exception("Failed to close interrupted async stream")
+
+    def close(self) -> Any:
+        try:
+            if close := getattr(self.__wrapped__, "close", None):
+                return close()
+        finally:
+            self._finish_tracing()
+
+    async def aclose(self) -> Any:
+        try:
+            if aclose := getattr(self.__wrapped__, "aclose", None):
+                return await aclose()
+        finally:
+            self._finish_tracing()
 
     def _finish_tracing(
         self,
         status: Optional[trace_api.Status] = None,
     ) -> None:
+        if self._is_finished:
+            return
+        self._is_finished = True
         response_extractor = _ResponseExtractor(response_accumulator=self._response_accumulator)
         _finish_tracing(
             with_span=self._with_span,
@@ -117,9 +149,7 @@ class _ResponseAccumulator:
             candidates=_IndexedAccumulator(
                 lambda: _ValuesAccumulator(
                     content=_ValuesAccumulator(
-                        # Parts have no index: retain each streamed part rather
-                        # than merging unrelated text, tool calls, or media.
-                        parts=[],
+                        parts=_PartsAccumulator(),
                         role=_SimpleStringReplace(),
                     ),
                     finish_reason=_SimpleStringReplace(),
@@ -222,7 +252,7 @@ class _ValuesAccumulator:
             elif isinstance(value, _StringAccumulator):
                 if str_value := str(value):
                     yield key, str_value
-            elif isinstance(value, _IndexedAccumulator):
+            elif isinstance(value, (_IndexedAccumulator, _PartsAccumulator)):
                 yield key, list(value)
             elif isinstance(value, _DictReplace):
                 if dict_value := dict(value):
@@ -246,7 +276,7 @@ class _ValuesAccumulator:
             elif isinstance(self_value, _SimpleStringReplace):
                 if isinstance(value, str):
                     self_value += value
-            elif isinstance(self_value, _IndexedAccumulator):
+            elif isinstance(self_value, (_IndexedAccumulator, _PartsAccumulator)):
                 self_value += value
             elif isinstance(self_value, _DictReplace):
                 if isinstance(value, Mapping):
@@ -309,6 +339,67 @@ class _IndexedAccumulator:
         for v in values:
             if v and hasattr(v, "get"):
                 self._indexed[v.get("index") or 0] += v
+        return self
+
+
+class _PartsAccumulator:
+    """Coalesce adjacent text; keep calls distinct unless their IDs match."""
+
+    __slots__ = ("_parts", "_function_calls", "_text_part")
+
+    def __init__(self) -> None:
+        self._parts: List[_ValuesAccumulator] = []
+        self._function_calls: Dict[str, _ValuesAccumulator] = {}
+        self._text_part: Optional[_ValuesAccumulator] = None
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        for part in self._parts:
+            yield dict(part)
+
+    def __iadd__(
+        self, values: Optional[Union[Mapping[str, Any], List[Any]]]
+    ) -> "_PartsAccumulator":
+        if not values:
+            return self
+        if isinstance(values, Mapping):
+            values = [values]
+        for value in values:
+            if not isinstance(value, Mapping) or not value:
+                continue
+            part = deepcopy(dict(value))
+            # Only plain text fragments can share a part. Media, calls and
+            # text carrying metadata retain their own boundaries and ordering.
+            text_only = isinstance(part.get("text"), str) and all(
+                key == "text" or val is None for key, val in part.items()
+            )
+            if text_only and self._text_part is not None:
+                self._text_part += part
+                continue
+            self._text_part = None
+            function_call = part.get("function_call")
+            call_id = function_call.get("id") if isinstance(function_call, Mapping) else None
+            has_id = isinstance(call_id, str) and bool(call_id)
+            accumulator = self._function_calls.get(call_id) if has_id else None
+            if accumulator is None:
+                # Positions restart in each chunk, and names (or even arguments)
+                # can be identical for distinct calls. Do not guess their identity.
+                accumulator = _ValuesAccumulator(
+                    text=_StringAccumulator(),
+                    function_call=_DictReplace(),
+                )
+                self._parts.append(accumulator)
+                if has_id:
+                    self._function_calls[call_id] = accumulator
+            else:
+                # Merge argument fields only after establishing call identity.
+                previous_args = dict(accumulator).get("function_call", {}).get("args")
+                updates = {key: val for key, val in function_call.items() if val is not None}
+                if isinstance(previous_args, Mapping) and isinstance(updates.get("args"), Mapping):
+                    updates["args"] = {**previous_args, **updates["args"]}
+                part["function_call"] = updates
+            accumulator += part
+            if text_only:
+                self._text_part = accumulator
         return self
 
 

@@ -96,24 +96,30 @@ class FiTracingProcessor(TracingProcessor):
         Args:
             trace: The trace that started.
         """
+        initial_input = self._trace_inputs.pop(trace.trace_id, None)
+        final_output = self._trace_outputs.pop(trace.trace_id, None)
         if root_span := self._root_spans.pop(trace.trace_id, None):
-            if initial_input := self._trace_inputs.pop(trace.trace_id, None):
-                if isinstance(initial_input, str):
-                    root_span.set_attribute(INPUT_VALUE, initial_input)
-                elif isinstance(initial_input, list):
-                    root_span.set_attribute(INPUT_MIME_TYPE, JSON)
-                    root_span.set_attribute(INPUT_VALUE, safe_json_dumps(initial_input))
-                    for k, v in _get_attributes_from_input(initial_input):
+            try:
+                if initial_input:
+                    if isinstance(initial_input, str):
+                        root_span.set_attribute(INPUT_VALUE, initial_input)
+                    elif isinstance(initial_input, list):
+                        root_span.set_attribute(INPUT_MIME_TYPE, JSON)
+                        root_span.set_attribute(INPUT_VALUE, safe_json_dumps(initial_input))
+                        for k, v in _get_attributes_from_input(initial_input):
+                            root_span.set_attribute(k, v)
+                if final_output:
+                    root_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(final_output))
+                    for k, v in _get_attributes_from_response(final_output, include_usage=False):
                         root_span.set_attribute(k, v)
-            if final_output := self._trace_outputs.pop(trace.trace_id, None):
-                root_span.set_attribute(OUTPUT_VALUE, final_output.model_dump_json())
-                if text_output := _get_text_from_response(final_output):
-                    root_span.set_attribute(OUTPUT_VALUE, text_output)
-                for k, v in _get_attributes_from_response(final_output):
-                    root_span.set_attribute(k, v)
-
-            root_span.set_status(Status(StatusCode.OK))
-            root_span.end()
+            except Exception:
+                # Exception text can contain input or output data.
+                logger.warning("Failed to convert trace attributes")
+            finally:
+                try:
+                    root_span.set_status(Status(StatusCode.OK))
+                finally:
+                    root_span.end()
 
     def on_span_start(self, span: Span[Any]) -> None:
         """Called when a span is started.
@@ -154,6 +160,24 @@ class FiTracingProcessor(TracingProcessor):
             detach(token)  # type: ignore[arg-type]
         if not (otel_span := self._otel_spans.pop(span.span_id, None)):
             return
+        try:
+            self._set_span_attributes(span, otel_span)
+        except Exception:
+            # Attribute conversion must not leak data or leave a recording span.
+            logger.warning("Failed to convert span attributes")
+        finally:
+            end_time: Optional[int] = None
+            try:
+                if span.ended_at:
+                    try:
+                        end_time = _as_utc_nano(datetime.fromisoformat(span.ended_at))
+                    except ValueError:
+                        pass
+                otel_span.set_status(status=_get_span_status(span))
+            finally:
+                otel_span.end(end_time)
+
+    def _set_span_attributes(self, span: Span[Any], otel_span: OtelSpan) -> None:
         otel_span.update_name(_get_span_name(span))
         # flatten_attributes: dict[str, AttributeValue] = dict(_flatten(span.export()))
         # otel_span.set_attributes(flatten_attributes)
@@ -165,9 +189,7 @@ class FiTracingProcessor(TracingProcessor):
             if hasattr(data, "response") and isinstance(response := data.response, Response):
                 self._trace_outputs[span.trace_id] = response
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-                otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                if text_output := _get_text_from_response(response):
-                    otel_span.set_attribute(OUTPUT_VALUE, text_output)
+                otel_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(response))
                 for k, v in _get_attributes_from_response(response):
                     otel_span.set_attribute(k, v)
             if hasattr(data, "input") and (input := data.input):
@@ -196,10 +218,8 @@ class FiTracingProcessor(TracingProcessor):
                 if hasattr(data, "response") and isinstance(
                     response := data.response, Response
                 ):
-                    parent_otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                    if text_output := _get_text_from_response(response):
-                        parent_otel_span.set_attribute(OUTPUT_VALUE, text_output)
-                    for k, v in _get_attributes_from_response(response):
+                    parent_otel_span.set_attribute(OUTPUT_VALUE, _get_output_from_response(response))
+                    for k, v in _get_attributes_from_response(response, include_usage=False):
                         parent_otel_span.set_attribute(k, v)
         elif isinstance(data, GenerationSpanData):
             otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(data.input))
@@ -226,15 +246,6 @@ class FiTracingProcessor(TracingProcessor):
             key = f"{data.name}:{span.trace_id}"
             if parent_node := self._reverse_handoffs_dict.pop(key, None):
                 otel_span.set_attribute(GRAPH_NODE_PARENT_ID, parent_node)
-
-        end_time: Optional[int] = None
-        if span.ended_at:
-            try:
-                end_time = _as_utc_nano(datetime.fromisoformat(span.ended_at))
-            except ValueError:
-                pass
-        otel_span.set_status(status=_get_span_status(span))
-        otel_span.end(end_time)
 
     def force_flush(self) -> None:
         """Forces an immediate flush of all queued spans/traces."""
@@ -591,6 +602,21 @@ def _get_attributes_from_message_content_list(
             assert_never(item["type"])
 
 
+def _get_output_from_response(response: Response) -> str:
+    """Keep echoed request fields out of output without mutating the SDK response."""
+    if text_output := _get_text_from_response(response):
+        return text_output
+    # Match the OpenAI instrumentor's response-owned allowlist. A denylist would
+    # let new SDK request-echo fields bypass directional input privacy settings.
+    return response.model_dump_json(
+        include={
+            "id", "object", "created_at", "model", "status", "output", "usage",
+            "incomplete_details",
+        },
+        exclude_none=True,
+    )
+
+
 def _get_text_from_response(response: Response) -> Optional[str]:
     """Extracts the concatenated text from a Response object."""
     texts = []
@@ -604,9 +630,13 @@ def _get_text_from_response(response: Response) -> Optional[str]:
     return " ".join(texts) if texts else None
 
 
-def _get_attributes_from_response(obj: Response) -> Iterator[tuple[str, AttributeValue]]:
+def _get_attributes_from_response(
+    obj: Response, *, include_usage: bool = True
+) -> Iterator[tuple[str, AttributeValue]]:
     yield from _get_attributes_from_tools(obj.tools)
-    yield from _get_attributes_from_usage(obj.usage)
+    # Wrapper spans copy response metadata, but only LLM requests contribute usage.
+    if include_usage:
+        yield from _get_attributes_from_usage(obj.usage)
     yield from _get_attributes_from_response_output(obj.output)
     if isinstance(obj.instructions, str):
         yield from _get_attributes_from_response_instruction(obj.instructions)
@@ -661,11 +691,13 @@ def _get_attributes_from_response_output(
             yield from _get_attributes_from_function_tool_call(item, prefix)
             tool_call_idx += 1
         elif item.type == "custom_tool_call":
-            yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", "assistant"
+            prefix = f"{GEN_AI_OUTPUT_MESSAGES}.{msg_idx}."
+            yield f"{prefix}{MESSAGE_ROLE}", "assistant"
             yield from _get_attributes_from_response_custom_tool_call(
                 item,
-                f"{prefix}{MessageAttributes.MESSAGE_TOOL_CALLS}.0.",
+                f"{prefix}{MESSAGE_TOOL_CALLS}.{tool_call_idx}.",
             )
+            tool_call_idx += 1
         elif item.type == "file_search_call":
             ...  # TODO
         elif item.type == "web_search_call":

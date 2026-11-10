@@ -17,6 +17,7 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
 from traceai_cohere._wrappers import (
+    _AsyncChatStreamWrapper,
     _AsyncChatWrapper,
     _AsyncEmbedWrapper,
     _AsyncRerankWrapper,
@@ -114,6 +115,14 @@ class CohereInstrumentor(BaseInstrumentor):
                     wrapper=_AsyncChatWrapper(tracer=self._tracer),
                 )
 
+            if hasattr(cohere_module.AsyncClient, "chat_stream"):
+                self._original_async_chat_stream = cohere_module.AsyncClient.chat_stream
+                wrap_function_wrapper(
+                    module="cohere",
+                    name="AsyncClient.chat_stream",
+                    wrapper=_AsyncChatStreamWrapper(tracer=self._tracer),
+                )
+
             if hasattr(cohere_module.AsyncClient, "embed"):
                 self._original_async_embed = cohere_module.AsyncClient.embed
                 wrap_function_wrapper(
@@ -156,6 +165,8 @@ class CohereInstrumentor(BaseInstrumentor):
         if hasattr(cohere_module, "AsyncClient"):
             if hasattr(self, "_original_async_chat"):
                 cohere_module.AsyncClient.chat = self._original_async_chat
+            if hasattr(self, "_original_async_chat_stream"):
+                cohere_module.AsyncClient.chat_stream = self._original_async_chat_stream
             if hasattr(self, "_original_async_embed"):
                 cohere_module.AsyncClient.embed = self._original_async_embed
             if hasattr(self, "_original_async_rerank"):

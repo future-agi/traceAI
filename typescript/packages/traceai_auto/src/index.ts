@@ -13,7 +13,7 @@ import { captureSecrets, SpanResult } from "./wire/core";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
 
-const VERSION = "0.1.3"; // x-release-please-version
+const VERSION = "0.1.4"; // x-release-please-version
 import { chainSigterm } from "./signals";
 import { observeTransports } from "./wire/observe-node";
 import { borrowConvertedSpanDestination, ConvertedSpanDestination } from "./converted-spans";

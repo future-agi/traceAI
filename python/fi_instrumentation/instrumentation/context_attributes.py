@@ -1,9 +1,12 @@
 from contextlib import ContextDecorator
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from contextvars import Token
+from functools import wraps
+from inspect import isasyncgenfunction, iscoroutinefunction
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from fi_instrumentation.fi_types import SimulatorAttributes, SpanAttributes
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
-from opentelemetry.context import attach, detach, get_current, get_value, set_value
+from opentelemetry.context import Context, attach, detach, get_current, get_value, set_value
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import Self
 
@@ -25,6 +28,8 @@ CONTEXT_ATTRIBUTES = (
 
 
 class _UsingAttributesContextManager(ContextDecorator):
+    """Use a fresh instance per with/async with block; helpers also decorate sync and async functions."""
+
     def __init__(
         self,
         *,
@@ -48,7 +53,72 @@ class _UsingAttributesContextManager(ContextDecorator):
         self._prompt_template_variables = prompt_template_variables
         self._simulator_attributes = simulator_attributes
 
+    def __call__(self, func: Callable[..., Any]) -> Callable[..., Any]:
+        if iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                token = self._attach_context()
+                try:
+                    return await func(*args, **kwargs)
+                finally:
+                    detach(token)
+
+            return async_wrapper
+
+        if isasyncgenfunction(func):
+            @wraps(func)
+            async def async_generator_wrapper(*args: Any, **kwargs: Any):
+                token = self._attach_context()
+                try:
+                    generator_context = get_current()
+                finally:
+                    detach(token)
+                generator = func(*args, **kwargs)
+                operation = generator.__anext__()
+                try:
+                    while True:
+                        token = attach(generator_context)
+                        try:
+                            try:
+                                value = await operation
+                            except StopAsyncIteration:
+                                return
+                        finally:
+                            # Keep context changes made inside the body, but never
+                            # leave its context attached while the consumer runs.
+                            generator_context = get_current()
+                            detach(token)
+                        try:
+                            sent = yield value
+                        except GeneratorExit:
+                            raise
+                        except BaseException as exc:
+                            operation = generator.athrow(exc)
+                        else:
+                            operation = generator.asend(sent)
+                finally:
+                    token = attach(generator_context)
+                    try:
+                        await generator.aclose()
+                    finally:
+                        detach(token)
+
+            return async_generator_wrapper
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            token = self._attach_context()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                detach(token)
+
+        return wrapper
+
     def attach_context(self) -> None:
+        self._token = self._attach_context()
+
+    def _attach_context(self) -> Token[Context]:
         ctx = get_current()
         if self._session_id:
             ctx = set_value(SpanAttributes.SESSION_ID, self._session_id, ctx)
@@ -95,7 +165,7 @@ class _UsingAttributesContextManager(ContextDecorator):
             # Explicitly check for None, not truthiness, since False is a valid boolean value
             if is_simulator_trace is not None:
                 ctx = set_value(SimulatorAttributes.IS_SIMULATOR_TRACE, is_simulator_trace, ctx)
-        self._token = attach(ctx)
+        return attach(ctx)
 
     def __enter__(self) -> Self:
         self.attach_context()

@@ -55,10 +55,17 @@ def counts(value):
         "total_tokens"))
 
 
+def run_spans(exporter):
+    # Model requests now carry their own usage. These assertions guard the
+    # aggregate logical run counters, not a sum across parent and child spans.
+    return [span for span in exporter.get_finished_spans()
+            if span.name == "pydantic_ai.agent.run"]
+
+
 def span_counts(exporter):
     return [tuple(span.attributes.get(f"gen_ai.usage.{key}") for key in (
         "input_tokens", "output_tokens", "total_tokens"))
-        for span in exporter.get_finished_spans()]
+        for span in run_spans(exporter)]
 
 
 @pytest.mark.parametrize("method", ["run_sync", "run"])
@@ -71,8 +78,8 @@ def test_empty_shared_usage_returns_original_success(traces, method):
     assert get_usage(result) is shared
     expected = counts(shared)
     assert span_counts(traces) == [expected]
-    assert len(traces.get_finished_spans()) == 1
-    assert traces.get_finished_spans()[0].status.status_code.name == "OK"
+    assert len(run_spans(traces)) == 1
+    assert run_spans(traces)[0].status.status_code.name == "OK"
 
 
 def test_reconstructing_singleton_does_not_lose_owned_hooks(traces):
@@ -163,7 +170,7 @@ def test_continuation_exports_only_this_turn(traces, method):
                         if hasattr(first, "conversation") else {"message_history": first.all_messages()})
         second = agent.run_sync("second", **continuation)
     assert second.all_messages()[:len(first.all_messages())] == first.all_messages()
-    assert len(traces.get_finished_spans()) == 2
+    assert len(run_spans(traces)) == 2
     actual = span_counts(traces)
     if hasattr(first, "conversation"):
         assert second.conversation.conversation_id == first.conversation.conversation_id
