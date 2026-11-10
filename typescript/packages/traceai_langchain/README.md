@@ -40,8 +40,8 @@ import * as ChatModelModule from "@langchain/core/language_models/chat_models";
 import * as RunnableModule from "@langchain/core/runnables";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
-// Enable OpenTelemetry internal diagnostics (optional, for debugging)
-diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+// For troubleshooting only: uncomment to print OpenTelemetry's internal debug logs.
+// diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
 
 // 1. Register FI Core TracerProvider
 const tracerProvider = register({
