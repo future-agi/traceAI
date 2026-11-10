@@ -94,12 +94,66 @@ describe("T8-TS-CLOUD-006 integer embedding attributes", () => {
     expect(attrs["cohere.embedding_type"]).toBe(type);
     expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual({ embeddings });
   });
+});
 
-  it.each(["binary", "ubinary"])("does not reinterpret packed %s as coordinates", type => {
-    const response = { embeddings: { [type]: [[1, 2, 3]] } };
-    const attrs = outputAttributes("embed", response, captureConfig);
-    expect(attrs[vectorKey(0)]).toBeUndefined();
-    expect(attrs["cohere.embedding_type"]).toBeUndefined();
-    expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual(response);
+describe("packed binary embedding attributes", () => {
+  describe.each([
+    { type: "binary", values: [[-1, 5, 7], [-128, 0, 127]] },
+    { type: "ubinary", values: [[255, 5, 7], [0, 128, 1]] },
+  ])("$type", ({ type, values }) => {
+    const vectors = Object.freeze(values.map(vector => Object.freeze(vector)));
+
+    it.each([false, true])("exports every packed vector as returned through the wrapped SDK (v2=%s)", async v2 => {
+      const response = Object.freeze({ embeddings: Object.freeze({ [type]: vectors }) });
+      const request = Object.freeze({
+        model: "embed-english-v3.0", texts: ["Paris", "London"],
+        inputType: "search_document", embeddingTypes: [type],
+      });
+      const embed = jest.fn(async (_request: unknown) => response);
+      // Fake the generated SDK's v1 method and v2 getter; neither performs I/O.
+      class V2Client { embed(request: unknown) { return embed(request); } }
+      class Client {
+        embed(request: unknown) { return embed(request); }
+        get v2() { return new V2Client(); }
+      }
+      instrumentation = new CohereInstrumentation({ traceConfig: captureConfig });
+      instrumentation.setTracerProvider(provider);
+      instrumentation.manuallyInstrument({ CohereClient: Client });
+      const client = new Client();
+      const result = await (v2 ? client.v2 : client).embed(request);
+
+      expect(result).toBe(response);
+      expect(result.embeddings[type]).toBe(vectors);
+      expect(embed).toHaveBeenCalledTimes(1);
+      const spans = exporter.getFinishedSpans();
+      expect(spans).toHaveLength(1);
+      const attrs = spans[0].attributes;
+      vectors.forEach((vector, index) => expect(attrs[vectorKey(index)]).toEqual(vector));
+      expect(attrs[vectorKey(2)]).toBeUndefined();
+      expect(attrs["cohere.embedding_type"]).toBe(type);
+      expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual(response);
+    });
+
+    it.each(["hideEmbeddingVectors", "hideOutputs", "hideOutputMessages", "hideOutputText"] as const)(
+      "honors %s for standard and raw vectors",
+      flag => {
+        const attrs = outputAttributes("embed", { embeddings: { [type]: vectors } }, { ...captureConfig, [flag]: true });
+        expect(attrs[vectorKey(0)]).toBeUndefined();
+        expect(attrs[vectorKey(1)]).toBeUndefined();
+        expect(attrs[S.RAW_OUTPUT]).toBeUndefined();
+        expect(attrs["cohere.embedding_type"]).toBeUndefined();
+      },
+    );
+  });
+
+  it.each([
+    { order: "binary first", embeddings: { binary: [[-1, 5]], ubinary: [[255, 5]] } },
+    { order: "ubinary first", embeddings: { ubinary: [[255, 5]], binary: [[-1, 5]] } },
+  ])("selects binary over ubinary deterministically ($order)", ({ embeddings }) => {
+    const attrs = outputAttributes("embed", { embeddings }, captureConfig);
+    expect(attrs[vectorKey(0)]).toEqual([-1, 5]);
+    expect(attrs[vectorKey(1)]).toBeUndefined();
+    expect(attrs["cohere.embedding_type"]).toBe("binary");
+    expect(JSON.parse(attrs[S.RAW_OUTPUT] as string)).toEqual({ embeddings });
   });
 });

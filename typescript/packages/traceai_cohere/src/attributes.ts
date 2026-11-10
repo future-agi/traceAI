@@ -150,9 +150,10 @@ export function outputAttributes(operation: Operation, response: Data, config: T
     // raw.output would otherwise bypass hideEmbeddingVectors.
     if (!hideOutput(config) && !config.hideEmbeddingVectors) {
       const embeddings = object(response.embeddings);
-      // Prefer float coordinates, then integer coordinates. Packed binary and
-      // ubinary values are not coordinates and must not use the vector attribute.
-      const embeddingType = ["float", "int8", "uint8"].find(type => Array.isArray(embeddings[type]));
+      // Prefer float coordinates, then integer coordinates, then packed binary
+      // and ubinary values as returned (one value per eight dimensions);
+      // cohere.embedding_type tells readers which representation was recorded.
+      const embeddingType = ["float", "int8", "uint8", "binary", "ubinary"].find(type => Array.isArray(embeddings[type]));
       const vectors = Array.isArray(response.embeddings) ? response.embeddings : embeddingType ? embeddings[embeddingType] : undefined;
       list(vectors).forEach((vector, index) => {
         if (Array.isArray(vector) && vector.every((n) => typeof n === "number")) {
