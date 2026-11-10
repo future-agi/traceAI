@@ -311,6 +311,12 @@ class _ResponseAttributesExtractor:
             yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
         if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
             yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if (cached_tokens := getattr(prompt_details, "cached_tokens", None)) is not None:
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, cached_tokens
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        if (reasoning_tokens := getattr(completion_details, "reasoning_tokens", None)) is not None:
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, reasoning_tokens
 
     def _get_attributes_from_embedding_usage(
         self,
