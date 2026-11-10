@@ -222,6 +222,7 @@ def _mask_content(config, value, output=False):
 def _agent_attributes(agent, messages, config):
     info = extract_agent_info(agent)
     attributes = {
+        SpanAttributes.GEN_AI_SPAN_KIND: "AGENT",
         "autogen.span_kind": "agent_run",
         "autogen.run.id": str(uuid.uuid4()),
         "autogen.agent.name": info["agent_name"],
@@ -234,7 +235,9 @@ def _agent_attributes(agent, messages, config):
     if messages:
         attributes["autogen.input.message_count"] = len(messages)
         last = extract_message_info(messages[-1])
-        attributes["autogen.input.last_message"] = _mask_content(config, last.get("content", ""))
+        content = _mask_content(config, last.get("content", ""))
+        attributes[SpanAttributes.INPUT_VALUE] = content
+        attributes["autogen.input.last_message"] = content
         attributes["autogen.input.last_source"] = last.get("source", "")
     return attributes
 
@@ -243,7 +246,9 @@ def _record_agent_result(span, result, config):
     if result is not None and hasattr(result, "chat_message"):
         info = extract_message_info(result.chat_message)
         span.set_attribute("autogen.output.message_type", info.get("message_type", ""))
-        span.set_attribute("autogen.output.content", _mask_content(config, info.get("content", ""), output=True))
+        content = _mask_content(config, info.get("content", ""), output=True)
+        span.set_attribute(SpanAttributes.OUTPUT_VALUE, content)
+        span.set_attribute("autogen.output.content", content)
         if getattr(result, "inner_messages", None):
             span.set_attribute("autogen.output.inner_message_count", len(result.inner_messages))
 
@@ -251,6 +256,7 @@ def _record_agent_result(span, result, config):
 def _team_attributes(team, task, method, config):
     info = extract_team_info(team)
     attributes = {
+        SpanAttributes.GEN_AI_SPAN_KIND: "CHAIN",
         "autogen.span_kind": "team_run",
         "autogen.run.id": str(uuid.uuid4()),
         "autogen.team.type": info["team_type"],
@@ -263,14 +269,39 @@ def _team_attributes(team, task, method, config):
         attributes["autogen.team.participants"] = json.dumps(info["participants"])
     if task:
         attributes["autogen.task.content"] = _mask_content(config, safe_serialize(task, 1000))
+        # AgentChat accepts a string, a message, or a sequence of messages.
+        # Keep the historical alias format, but show content rather than a
+        # message object's repr in the collector's normal input column.
+        content = ([getattr(message, "content", message) for message in task]
+                   if isinstance(task, (list, tuple)) else getattr(task, "content", task))
+        attributes[SpanAttributes.INPUT_VALUE] = _mask_content(config, safe_serialize(content, 1000))
     return attributes
 
 
-def _record_team_result(span, result, config):
+def _team_result_recorder(args, kwargs, config):
+    task = kwargs.get("task", args[0] if args else None)
+    # AgentChat puts task messages before generated messages in TaskResult.
+    # Snapshot the boundary per call, never infer roles from caller-set sources.
+    input_message_count = 0
+    if task is not None and kwargs.get("output_task_messages", True):
+        input_message_count = len(task) if isinstance(task, (list, tuple)) else 1
+    return functools.partial(
+        _record_team_result, config=config, input_message_count=input_message_count,
+    )
+
+
+def _record_team_result(span, result, config, input_message_count=0):
     if result is None:
         return
     if hasattr(result, "messages"):
         span.set_attribute("autogen.task.message_count", len(result.messages))
+        if len(result.messages) > input_message_count:
+            last = result.messages[-1]
+            # An input-only partial TaskResult has no answer under any source.
+            if hasattr(last, "content"):
+                content = _mask_content(config, extract_message_info(last)["content"], output=True)
+                span.set_attribute(SpanAttributes.OUTPUT_VALUE, content)
+                span.set_attribute("autogen.task.result", content)
     if hasattr(result, "stop_reason"):
         # TextMentionTermination quotes model text in the stop reason too.
         span.set_attribute("autogen.task.stop_reason", _mask_content(config, str(result.stop_reason), output=True))
@@ -301,9 +332,10 @@ def _record_error(span, error, config):
         span.record_exception(error)
 
 
-def _wrap_stream(original_method, tracer, name, attributes, record_result, kind, config):
+def _wrap_stream(original_method, tracer, name, attributes, result_recorder, kind, config):
     @functools.wraps(original_method)
     async def stream_wrapper(self, *args, **kwargs):
+        record_result = result_recorder(args, kwargs)
         # Remain a true async generator, forwarding each consumer operation once.
         # No prefetch: Response may precede slow/failing SDK post-yield cleanup.
         span = tracer.start_span(name(self), kind=kind, attributes=attributes(self, args, kwargs))
@@ -435,7 +467,7 @@ def wrap_agent_on_messages_stream(original_method: Callable, tracer: trace_api.T
         original_method, tracer,
         lambda agent: f"autogen.agent.on_messages_stream.{getattr(agent, 'name', 'agent')}",
         lambda agent, args, kwargs: _agent_attributes(agent, kwargs.get("messages", args[0] if args else None), config),
-        lambda span, result: _record_agent_result(span, result, config), SpanKind.INTERNAL, config,
+        lambda args, kwargs: functools.partial(_record_agent_result, config=config), SpanKind.INTERNAL, config,
     )
 
 
@@ -446,12 +478,13 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
             original_method, tracer,
             lambda team: f"{TEAM_RUN_STREAM_SPAN_NAME}.{type(team).__name__}",
             lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name, config),
-            lambda span, result: _record_team_result(span, result, config), SpanKind.CLIENT, config,
+            lambda args, kwargs: _team_result_recorder(args, kwargs, config), SpanKind.CLIENT, config,
         )
 
     @functools.wraps(original_method)
     async def async_wrapper(self, *args, **kwargs):
         task = kwargs.get("task", args[0] if args else None)
+        record_result = _team_result_recorder(args, kwargs, config)
         start_time = time.time()
         with tracer.start_as_current_span(
             f"{TEAM_RUN_SPAN_NAME}.{type(self).__name__}", kind=SpanKind.CLIENT,
@@ -462,7 +495,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
                 # AgentChat's task is keyword-only and optional. Preserve the
                 # entire call shape, including task-less continuation.
                 result = await original_method(self, *args, **kwargs)
-                _record_team_result(span, result, config)
+                record_result(span, result)
                 span.set_attribute("autogen.is_error", False)
                 span.set_status(Status(StatusCode.OK))
                 return result
@@ -496,6 +529,7 @@ def wrap_tool_execution(
     @functools.wraps(tool_func)
     async def async_wrapper(*args, **kwargs):
         attributes = {
+            SpanAttributes.GEN_AI_SPAN_KIND: "TOOL",
             "autogen.span_kind": "tool_call",
             "autogen.tool.name": tool_name,
         }
@@ -539,6 +573,7 @@ def wrap_tool_execution(
     @functools.wraps(tool_func)
     def sync_wrapper(*args, **kwargs):
         attributes = {
+            SpanAttributes.GEN_AI_SPAN_KIND: "TOOL",
             "autogen.span_kind": "tool_call",
             "autogen.tool.name": tool_name,
         }
