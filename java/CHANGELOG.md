@@ -46,6 +46,7 @@
 
 ## Unreleased
 
+- Add Python-aligned `GEN_AI_*` names for all existing GenAI attributes and deprecate the 16 legacy `LLM_*` names as compile-time constant aliases. Existing attribute values and source/binary compatibility are preserved; `LLM_SYSTEM` maps to `GEN_AI_PROVIDER_NAME`, not `GEN_AI_SYSTEM`.
 - Prepare Maven Central coordinates under `com.futureagi`; Java packages remain `ai.traceai.*`.
 - Add a BOM covering all instrumentation modules and an opt-in release profile for sources, Javadocs, signing, and Central publishing.
 - Read the runtime SDK version from the parent Maven version instead of a separate hard-coded value.
