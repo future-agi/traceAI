@@ -1,450 +1,125 @@
-# TraceAI Pydantic AI Instrumentation
+# Pydantic AI tracing
 
-OpenTelemetry instrumentation for [Pydantic AI](https://ai.pydantic.dev), providing comprehensive tracing for AI agent executions, tool calls, and model interactions.
+Trace Pydantic AI agent runs, model requests, and tools in Future AGI using Pydantic AI's native OpenTelemetry instrumentation.
 
-## Installation
+## Install
+
+Use Python 3.10–3.13 and Pydantic AI 1.0 or later. Install the extra for your model provider; this example uses OpenAI.
 
 ```bash
-pip install traceai-pydantic-ai
+pip install -U traceai-pydantic-ai 'pydantic-ai-slim[openai]>=1.0.0'
 ```
 
-## Quick Start
+Pydantic AI 1.0 uses an older OpenTelemetry events API. If you must stay on 1.0, use OpenTelemetry SDK/exporter 1.37.0 and instrumentation 0.58b0. Otherwise, upgrade Pydantic AI and OpenTelemetry together.
 
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
+## Configure and run
 
-# Initialize instrumentation (do this once at startup)
-PydanticAIInstrumentor().instrument()
+Set your Future AGI credentials and your own model-provider key in the environment:
 
-# Use Pydantic AI as normal - tracing is automatic
-from pydantic_ai import Agent
-
-agent = Agent('openai:gpt-4o', instructions='Be concise and helpful.')
-result = agent.run_sync('What is the capital of France?')
-print(result.output)
+```bash
+export FI_API_KEY='<your-future-agi-api-key>'
+export FI_SECRET_KEY='<your-future-agi-secret-key>'
+export OPENAI_API_KEY='<your-openai-api-key>'
 ```
-
-## Features
-
-- **Agent Run Tracing**: Automatic tracing for `run()`, `run_sync()`, and `run_stream()` methods
-- **Tool Call Tracking**: Traces tool function executions with inputs and outputs
-- **Model Attribution**: Automatic detection of model provider (OpenAI, Anthropic, Google, etc.)
-- **Usage Metrics**: Token usage tracking (input, output, total)
-- **Streaming Support**: Full tracing for streaming responses with chunk counting
-- **Error Handling**: Comprehensive error recording and exception tracking
-- **Structured Outputs**: Support for Pydantic model result types
-- **Conversation Memory**: Message history length tracking
-- **Multi-model Support**: Traces across different model providers
-
-## Configuration
-
-### Basic Setup
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
-
-# Use default tracer provider
-PydanticAIInstrumentor().instrument()
-```
-
-### With Custom Tracer Provider
-
-```python
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from traceai_pydantic_ai import PydanticAIInstrumentor
-
-# Setup tracer provider
-provider = TracerProvider()
-processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="http://localhost:4317"))
-provider.add_span_processor(processor)
-trace.set_tracer_provider(provider)
-
-# Instrument with provider
-PydanticAIInstrumentor().instrument(tracer_provider=provider)
-```
-
-### Convenience Function
-
-```python
-from traceai_pydantic_ai import instrument_pydantic_ai
-
-# One-liner instrumentation
-instrumentor = instrument_pydantic_ai()
-```
-
-### Using Built-in Instrumentation
-
-Pydantic AI has its own OpenTelemetry support. You can optionally use that instead:
-
-```python
-from traceai_pydantic_ai import instrument_pydantic_ai
-
-# Use Pydantic AI's built-in OTEL (via Agent.instrument_all())
-instrument_pydantic_ai(use_builtin=True)
-```
-
-## Examples
-
-### Basic Agent
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent
-
-# Initialize instrumentation
-PydanticAIInstrumentor().instrument()
-
-# Create agent
-agent = Agent(
-    'openai:gpt-4o',
-    instructions='You are a helpful assistant.'
-)
-
-# Synchronous execution
-result = agent.run_sync('Hello, how are you?')
-print(result.output)
-```
-
-### Async Agent
-
-```python
-import asyncio
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent
-
-PydanticAIInstrumentor().instrument()
-
-agent = Agent('anthropic:claude-3-sonnet')
-
-async def main():
-    result = await agent.run('Tell me a joke')
-    print(result.output)
-
-asyncio.run(main())
-```
-
-### Agent with Tools
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent, RunContext
-
-PydanticAIInstrumentor().instrument()
-
-agent = Agent('openai:gpt-4o')
-
-@agent.tool
-def get_weather(ctx: RunContext, city: str) -> str:
-    """Get the weather for a city."""
-    return f"The weather in {city} is sunny and 72°F"
-
-@agent.tool
-def calculate(ctx: RunContext, expression: str) -> str:
-    """Evaluate a mathematical expression."""
-    return str(eval(expression))
-
-result = agent.run_sync('What is the weather in San Francisco?')
-print(result.output)
-```
-
-### Structured Outputs
-
-```python
-from pydantic import BaseModel
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent
-
-PydanticAIInstrumentor().instrument()
-
-class CityInfo(BaseModel):
-    name: str
-    country: str
-    population: int
-
-agent = Agent('openai:gpt-4o', result_type=CityInfo)
-result = agent.run_sync('Tell me about Paris')
-
-city = result.output
-print(f"{city.name}, {city.country} - Population: {city.population:,}")
-```
-
-### Streaming
-
-```python
-import asyncio
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent
-
-PydanticAIInstrumentor().instrument()
-
-agent = Agent('openai:gpt-4o')
-
-async def main():
-    async with agent.run_stream('Write a haiku about Python') as stream:
-        async for chunk in stream.stream_text():
-            print(chunk, end='', flush=True)
-
-asyncio.run(main())
-```
-
-### RAG Pipeline
-
-```python
-from typing import List
-from pydantic import BaseModel, Field
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent, RunContext
-
-PydanticAIInstrumentor().instrument()
-
-class RAGResponse(BaseModel):
-    answer: str = Field(description="The answer to the question")
-    sources: List[str] = Field(description="Source documents used")
-    confidence: float = Field(description="Confidence score 0-1")
-
-agent = Agent('openai:gpt-4o', result_type=RAGResponse)
-
-@agent.tool
-def search_documents(ctx: RunContext, query: str) -> str:
-    """Search the knowledge base."""
-    # In production: call vector database
-    return "Found relevant documents..."
-
-result = agent.run_sync("What are Python best practices?")
-print(f"Answer: {result.output.answer}")
-print(f"Sources: {result.output.sources}")
-```
-
-### Conversation with Memory
-
-```python
-import asyncio
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent
-
-PydanticAIInstrumentor().instrument()
-
-agent = Agent('openai:gpt-4o', instructions='Remember details from our conversation.')
-
-async def main():
-    history = []
-
-    # First turn
-    result = await agent.run("My name is Alice.")
-    history.append({"role": "user", "content": "My name is Alice."})
-    history.append({"role": "assistant", "content": str(result.output)})
-
-    # Second turn with history
-    result = await agent.run(
-        "What's my name?",
-        message_history=history
-    )
-    print(result.output)  # Should remember "Alice"
-
-asyncio.run(main())
-```
-
-### Multi-Model Routing
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor, get_model_provider
-from pydantic_ai import Agent
-
-PydanticAIInstrumentor().instrument()
-
-# Route to different models based on task
-def get_agent_for_task(task_type: str) -> Agent:
-    if task_type == "coding":
-        return Agent("anthropic:claude-3-sonnet")
-    elif task_type == "analysis":
-        return Agent("openai:gpt-4o")
-    else:
-        return Agent("openai:gpt-4o-mini")  # Cost-effective default
-
-agent = get_agent_for_task("coding")
-result = agent.run_sync("Write a Python function to calculate fibonacci")
-print(f"Provider: {get_model_provider('anthropic:claude-3-sonnet')}")
-print(result.output)
-```
-
-### Error Handling
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
-from pydantic_ai import Agent, RunContext
-
-PydanticAIInstrumentor().instrument()
-
-agent = Agent('openai:gpt-4o')
-
-@agent.tool
-def risky_operation(ctx: RunContext, value: int) -> int:
-    """Perform a risky operation."""
-    if value == 0:
-        raise ValueError("Cannot process zero!")
-    return value * 2
-
-# Errors are captured in spans with full context
-try:
-    result = agent.run_sync("Process the value 0")
-except Exception as e:
-    print(f"Error captured in trace: {e}")
-```
-
-## Traced Attributes
-
-### Agent Run Spans
-
-| Attribute | Description |
-|-----------|-------------|
-| `pydantic_ai.span_kind` | Type of span (agent_run, tool_call, stream) |
-| `pydantic_ai.run.id` | Unique identifier for the run |
-| `pydantic_ai.run.method` | Method used (run, run_sync, run_stream) |
-| `pydantic_ai.run.prompt` | Input prompt |
-| `pydantic_ai.run.result` | Output result |
-| `pydantic_ai.run.is_structured` | Whether output is structured |
-| `pydantic_ai.run.message_history_length` | Number of messages in history |
-| `pydantic_ai.agent.name` | Agent name (if set) |
-| `pydantic_ai.agent.instructions` | Agent instructions |
-| `pydantic_ai.agent.result_type` | Expected result type |
-| `gen_ai.request.model` | Model name |
-| `gen_ai.system` | Model provider |
-
-### Usage Metrics
-
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.usage.input_tokens` | Input/prompt tokens |
-| `gen_ai.usage.output_tokens` | Output/completion tokens |
-| `gen_ai.usage.total_tokens` | Total tokens used |
-
-### Tool Call Spans
-
-| Attribute | Description |
-|-----------|-------------|
-| `pydantic_ai.tool.name` | Tool function name |
-| `pydantic_ai.tool.description` | Tool description |
-| `pydantic_ai.tool.args` | Tool arguments (JSON) |
-| `pydantic_ai.tool.result` | Tool return value |
-| `pydantic_ai.tool.is_error` | Whether tool raised error |
-| `pydantic_ai.tool.error_message` | Error message if failed |
-| `pydantic_ai.tool.duration_ms` | Tool execution time |
-
-### Streaming Spans
-
-| Attribute | Description |
-|-----------|-------------|
-| `pydantic_ai.stream.chunk_count` | Number of chunks received |
-| `pydantic_ai.stream.is_structured` | Whether streaming structured data |
-
-### Error Attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `pydantic_ai.is_error` | Whether an error occurred |
-| `pydantic_ai.error.type` | Exception type |
-| `pydantic_ai.error.message` | Error message |
-
-### Performance Attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `pydantic_ai.duration_ms` | Total execution time |
-| `pydantic_ai.time_to_first_token_ms` | Time to first token (streaming) |
-
-## Model Provider Detection
-
-The instrumentor automatically detects model providers from model names:
-
-| Pattern | Provider |
-|---------|----------|
-| `gpt-*`, `o1-*`, `o3-*` | openai |
-| `claude-*` | anthropic |
-| `gemini*` | google |
-| `mistral*` | mistral |
-| `deepseek*` | deepseek |
-| `groq*` | groq |
-| `cohere*` | cohere |
-| `ollama*` | ollama |
-| `together*` | together |
-| `openai:*` | openai |
-| `anthropic:*` | anthropic |
-| `bedrock:*` | aws |
-| `vertex:*` | google |
-
-## Uninstrumenting
-
-```python
-from traceai_pydantic_ai import PydanticAIInstrumentor
-
-instrumentor = PydanticAIInstrumentor()
-instrumentor.instrument()
-
-# ... use Pydantic AI ...
-
-# Remove instrumentation
-instrumentor.uninstrument()
-```
-
-## Integration with FutureAGI
-
-For the best experience, use with FutureAGI's observability platform:
 
 ```python
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
+from pydantic_ai import Agent
 from traceai_pydantic_ai import PydanticAIInstrumentor
 
-# Register with FutureAGI
-trace_provider = register(
-    api_key="your-api-key",
+provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="my-pydantic-ai-app",
+    project_name="pydantic-ai-app",
 )
+PydanticAIInstrumentor().instrument(tracer_provider=provider)
 
-# Instrument Pydantic AI
-PydanticAIInstrumentor().instrument(tracer_provider=trace_provider)
+agent = Agent("openai:gpt-4o-mini", instructions="Use the calculator tool.")
+
+@agent.tool_plain
+def multiply(left: int, right: int) -> int:
+    """Multiply two integers."""
+    return left * right
+
+try:
+    result = agent.run_sync("What is 17 multiplied by 23?")
+    print(result.output)
+finally:
+    provider.force_flush()
 ```
 
-## Running Tests
+Open the `pydantic-ai-app` Observe project in Future AGI. The trace contains an agent span with model-request and tool spans beneath it. Prompts, responses, tool arguments, tool results, and exception details are **not captured by default**.
+
+Configure the instrumentor once at startup. It passes your provider directly to native instrumentation through a semantic/privacy adapter; it does not change the global provider or patch `Agent` methods. Do not also call `Agent.instrument_all()` or instrument the same model calls with a separate provider integration. That can replace these settings or create duplicate model spans. Explicit per-agent instrumentation settings take precedence over this process-wide default.
+
+## Capture content deliberately
+
+To capture message content, tool inputs/results, and structured output, replace the startup call with:
+
+```python
+from fi_instrumentation.instrumentation import TraceConfig
+
+PydanticAIInstrumentor().instrument(
+    tracer_provider=provider,
+    include_content=True,
+    config=TraceConfig(hide_error_details=True, pii_redaction=True),
+)
+```
+
+`TraceConfig` also reads the standard `FI_HIDE_*` and `FI_PII_REDACTION` environment variables. Any input/output/message/text/image hide flag disables **all** native content capture, even with `include_content=True`, because native serialized messages can mix directions and modalities. Error details are always hidden when content is disabled. With content enabled, `TraceConfig.hide_error_details` controls exception messages and stack traces.
+
+Binary content is disabled in native settings. Arbitrary native metadata, tool schemas, formatted log messages, and combined conversation-history attributes are omitted. Model, agent, tool and conversation identifiers remain visible: do not put secrets in names or IDs. These settings affect spans created through this adapter, not other integrations or resource attributes you configure yourself. Regex PII redaction is not a guarantee that arbitrary secrets will be removed from opted-in content.
+
+## Stream an answer
+
+Keep the same provider and startup configuration. Use Pydantic AI's normal asynchronous context manager; do not `await agent.run_stream()` itself.
+
+```python
+import asyncio
+
+async def stream_answer():
+    async with agent.run_stream("What is 8 multiplied by 9?") as result:
+        async for text in result.stream_text(delta=True):
+            print(text, end="", flush=True)
+
+try:
+    asyncio.run(stream_answer())
+finally:
+    provider.force_flush()
+```
+
+`run`, `run_sync`, `run_stream`, and `iter` retain their native return values and lifetimes. Errors still reach your application. Use `output_type=YourPydanticModel` for structured output, and pass `previous_result.all_messages()` as `message_history` for a continuation.
+
+## Span attributes and usage
+
+| Span | Attributes |
+| --- | --- |
+| Agent | `gen_ai.span.kind=AGENT`, agent/model identifiers, `gen_ai.aggregated_usage.*` |
+| Model request | `gen_ai.span.kind=LLM`, native provider/model identifiers, `gen_ai.usage.input_tokens`, `output_tokens`, and their sum in `total_tokens` |
+| Tool | `gen_ai.span.kind=TOOL`, `gen_ai.tool.name`, tool-call ID when supplied |
+| Content, when enabled | Native input/output messages plus `input.value` / `output.value` and MIME types; tool arguments/results; final agent output |
+
+Count request tokens from **model spans only**. Agent aggregates sum that run's model requests, not a shared `RunUsage` object's cumulative balance; nested agents have their own totals. Cache/reasoning token fields are retained when the native model reports them and are not added again to total tokens. Unknown measurements are not estimated by this adapter. It exports traces, not metrics or logs.
+
+## Compatibility and teardown
+
+`PydanticAIInstrumentor().instrument(tracer_provider=...)` and `instrument_pydantic_ai(provider, use_builtin=...)` remain available. Both values of the legacy `use_builtin` argument now use native instrumentation. The earlier `pydantic_ai.run.*` attributes and synthetic chunk counters are replaced by native GenAI semantics. Update attribute-based queries accordingly.
+
+The exported legacy `wrap_agent_run`, `wrap_tool_function`, attribute constants, and model-name helper remain importable for existing callers. They are not used by this native route; do not apply the legacy wrappers on top of it.
+
+```python
+PydanticAIInstrumentor().uninstrument()
+```
+
+Teardown restores the previous process-wide native setting only if this instrumentor still owns it. It does not overwrite settings installed later by your application, shut down your provider, or interrupt spans already in progress.
+
+If no traces appear, confirm you passed the provider returned by `register()`, configured tracing before executing the agent, and did not set `agent.instrument = False`. Flush the provider before a short-lived process exits.
+
+## Development
+
+The package tests use Pydantic AI's test/function models and a localhost OTLP receiver. They require no model keys or remote collector.
 
 ```bash
-# Run unit tests
-pytest tests/
-
-# Run with verbose output
-pytest tests/ -v
-
-# Run integration tests (requires pydantic-ai and API key)
-OPENAI_API_KEY=your-key pytest tests/ -m integration
+pip install -e '.[dev]'
+pytest tests -q
 ```
-
-## Example Scripts
-
-The `examples/` directory contains ready-to-run scripts:
-
-| Script | Description |
-|--------|-------------|
-| `basic_agent.py` | Simple agent usage |
-| `agent_with_tools.py` | Tool/function calling |
-| `structured_output.py` | Pydantic model outputs |
-| `async_streaming.py` | Streaming responses |
-| `multi_model.py` | Multiple model providers |
-| `rag_pipeline.py` | RAG with retrieval tools |
-| `conversation_memory.py` | Multi-turn conversations |
-| `error_handling.py` | Error capture patterns |
-| `futureagi_integration.py` | FutureAGI platform setup |
-
-## Requirements
-
-- Python >= 3.9
-- pydantic-ai >= 0.0.1
-- opentelemetry-api >= 1.0.0
-- opentelemetry-sdk >= 1.0.0
-
-## License
-
-MIT License - see LICENSE file for details.
