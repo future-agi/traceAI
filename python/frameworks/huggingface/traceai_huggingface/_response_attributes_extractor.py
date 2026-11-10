@@ -21,15 +21,23 @@ def _without_prefill(response: Any) -> Mapping[str, Any]:
     data = dict(_to_dict(response))
     if data.get("details") is None:
         return data
-    details = dict(_to_dict(data["details"]))
-    details.pop("prefill", None)
+    def copy_sequence(sequence: Any) -> Mapping[str, Any]:
+        item = dict(_to_dict(sequence))
+        item.pop("prefill", None)
+        # Older SDKs use dataclasses for generated tokens and enums for reasons.
+        # Keep their JSON fields, rather than the objects' repr strings.
+        if item.get("tokens") is not None:
+            item["tokens"] = [dict(_to_dict(token)) for token in item["tokens"]]
+        if item.get("finish_reason") is not None:
+            reason = item["finish_reason"]
+            item["finish_reason"] = getattr(reason, "value", reason)
+        return item
+
+    details = dict(copy_sequence(data["details"]))
     if details.get("best_of_sequences") is not None:
-        sequences = []
-        for sequence in details["best_of_sequences"]:
-            item = dict(_to_dict(sequence))
-            item.pop("prefill", None)
-            sequences.append(item)
-        details["best_of_sequences"] = sequences
+        details["best_of_sequences"] = [
+            copy_sequence(sequence) for sequence in details["best_of_sequences"]
+        ]
     data["details"] = details
     return data
 
