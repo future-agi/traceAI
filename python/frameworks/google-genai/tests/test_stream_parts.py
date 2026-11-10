@@ -204,6 +204,9 @@ def test_stream_preserves_parts(tracing, asynchronous, groups):
             [part.model_dump(exclude_unset=True) for part in expected_parts]
         )
     )
+    if all(set(part) == {"text"} for part in expected):
+        # Adjacent text deltas form a single part; non-text boundaries remain.
+        expected = [{"text": "".join(part["text"] for part in expected)}]
     actual = _messages(result)[0]
     assert actual["content"]["parts"] == expected
     assert actual["finish_reason"] == "STOP"
