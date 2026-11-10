@@ -276,9 +276,6 @@ export function maskAuxiliaryAttributes(attributes: Attributes, policy: ContentP
  * exporters (dev UI telemetry server, Firebase plugin) read the same span.
  */
 export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}): Attributes {
-  // Merge before masking: a hidden native key must not be repopulated from the
-  // context after its native copy was removed. Native values retain precedence.
-  source = { ...options.contextAttributes, ...source };
   const policy = options.policy ?? SHOW_ALL;
   const scrub = options.scrub ?? {};
   const kind = genkitSpanKind(source);
@@ -319,22 +316,26 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     }
   }
 
+  const nativeContent = (key: string, value: AttributeValue): AttributeValue | undefined => {
+    const isInput = GENKIT_INPUT_KEYS.includes(key);
+    const mode = isInput ? modes.input : modes.output;
+    let content = value;
+    if (mode !== "hide") {
+      if (isOperation || (isGeneration && !isInput)) {
+        content = generationOutput(content, policy, isOperation || isBackgroundModel, isBackgroundModel);
+      } else if (isGeneration && isInput && policy.hideInputImages) {
+        content = redactMessageImages(content) ?? REDACTED_VALUE;
+      }
+    }
+    return sideValue(content, mode, scrub, hideVectors && !isInput);
+  };
+
   for (const [key, original] of Object.entries(source)) {
     const value = key === GenkitAttributes.INPUT ? generationInput : original;
     if (value === undefined) continue;
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
     if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {
-      const isInput = GENKIT_INPUT_KEYS.includes(key);
-      const mode = isInput ? modes.input : modes.output;
-      let content = value;
-      if (mode !== "hide") {
-        if (isOperation || (isGeneration && !isInput)) {
-          content = generationOutput(content, policy, isOperation || isBackgroundModel, isBackgroundModel);
-        } else if (isGeneration && isInput && policy.hideInputImages) {
-          content = redactMessageImages(content) ?? REDACTED_VALUE;
-        }
-      }
-      const exported = sideValue(content, mode, scrub, hideVectors && !isInput);
+      const exported = nativeContent(key, value);
       if (exported !== undefined) out[key] = exported;
       continue;
     }
@@ -381,6 +382,20 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   const agentSession = source[GenkitAttributes.METADATA_AGENT_SESSION_ID];
   if (typeof agentSession === "string" && agentSession.length > 0 && out[SemanticConventions.SESSION_ID] === undefined) {
     out[SemanticConventions.SESSION_ID] = agentSession;
+  }
+
+  // Derive kinds, usage and model identity only from the native span. Context is
+  // lower-priority metadata, and cannot restore native keys removed by policy.
+  for (const [key, value] of Object.entries(options.contextAttributes ?? {})) {
+    if (value === undefined || source[key] !== undefined || out[key] !== undefined || GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
+    if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {
+      const exported = nativeContent(key, value);
+      if (exported !== undefined) out[key] = exported;
+    } else if (isPromotedUsageKey(key) && !isModelCall) {
+      out[GENKIT_USAGE_PREFIX + key] = value;
+    } else {
+      out[key] = value;
+    }
   }
 
   // Native spans do not pass through FISpan. Apply the same semantic content rules
