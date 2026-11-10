@@ -7,8 +7,11 @@ const counts = ["llm.token_count.prompt_details.audio", "llm.token_count.complet
 describe("exact typed audio usage metadata", () => {
   test.each(counts)("keeps valid %s counts but not invalid payloads or hinted media", key => {
     for (const value of [0, 1, 730000001]) expect(mediaReplacement(value, key)).toBeUndefined();
-    for (const value of ["SYNTHETIC CONTENT !", "730000001", -1, 0.5, true, [1, 2]]) {
-      expect(mediaReplacement(value, key)).toBe("<omitted: media>");
+    for (const [value, expected] of [
+      ["SYNTHETIC CONTENT !", "<omitted: media>"], ["730000001", "<omitted: 9 base64 chars>"],
+      [-1, "<omitted: media>"], [0.5, "<omitted: media>"], [true, "<omitted: media>"], [[1, 2], "<omitted: media>"],
+    ] as const) {
+      expect(mediaReplacement(value, key)).toBe(expected);
     }
     const parent = key.slice(0, key.lastIndexOf("."));
     const hints = indexPrivacyHints([[parent + ".mime_type", "audio/wav"]]);

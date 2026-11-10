@@ -1,7 +1,7 @@
 {
   "version": 3,
   "scalar_metrics": {
-    "version": 6,
+    "version": 7,
     "canonical_decimal": {
       "ruling": "LANE-CALL-NIKM4-5A-I1-DIGIT-STRING-COUNTS-r2 with I1-R10B A-DIGIT-CONFINED",
       "regex": "^(0|[1-9][0-9]{0,15})$",
