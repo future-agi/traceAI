@@ -127,27 +127,25 @@ class TestLiteLLMInstrumentor:
         assert len(dependencies) >= 1
 
     def test_instrument_basic(self, tracer_provider, config, mock_litellm):
-        """Test basic instrumentation setup."""
+        """Store exactly the supported endpoints present in this SDK version."""
+        import litellm
+
         instrumentor = LiteLLMInstrumentor()
-        
-        # Mock the original functions before instrumentation
-        instrumentor.original_litellm_funcs["completion"] = mock_litellm["completion"]
-        instrumentor.original_litellm_funcs["acompletion"] = mock_litellm["acompletion"]
-        instrumentor.original_litellm_funcs["completion_with_retries"] = mock_litellm["completion_with_retries"]
-        instrumentor.original_litellm_funcs["acompletion_with_retries"] = mock_litellm["acompletion_with_retries"]
-        instrumentor.original_litellm_funcs["embedding"] = mock_litellm["embedding"]
-        instrumentor.original_litellm_funcs["aembedding"] = mock_litellm["aembedding"]
-        instrumentor.original_litellm_funcs["image_generation"] = mock_litellm["image_generation"]
-        instrumentor.original_litellm_funcs["aimage_generation"] = mock_litellm["aimage_generation"]
-        
-        instrumentor._instrument(tracer_provider=tracer_provider, config=config)
-        
-        # Verify tracer was created
-        assert hasattr(instrumentor, '_tracer')
-        assert isinstance(instrumentor._tracer, FITracer)
-        
-        # Verify original functions were stored
-        assert len(instrumentor.original_litellm_funcs) == 8
+        instrumentor.original_litellm_funcs.clear()
+        expected = set(mock_litellm) - {"acompletion_with_retries"}
+        expected.update(
+            name for name in ("responses", "aresponses", "text_completion", "atext_completion")
+            if hasattr(litellm, name)
+        )
+        originals = {name: getattr(litellm, name) for name in expected}
+        try:
+            instrumentor._instrument(tracer_provider=tracer_provider, config=config)
+            assert isinstance(instrumentor._tracer, FITracer)
+            assert instrumentor.original_litellm_funcs == originals
+        finally:
+            instrumentor._uninstrument()
+        for name, original in originals.items():
+            assert getattr(litellm, name) is original
 
     def test_instrument_without_tracer_provider(self, config, mock_litellm):
         """Test instrumentation without explicit tracer provider."""
@@ -696,7 +694,7 @@ class TestInstrumentationFunctions:
         assert result is not None
         assert "filtered_messages" in result
         assert "eval_input" in result
-        assert "query" in result
+        assert "query" not in result
         assert result["filtered_messages"] == messages
         assert "Hello world" in result["eval_input"]
 
@@ -896,5 +894,81 @@ class TestIntegrationScenarios:
             mock_context.assert_called()
 
 
+class TestInputValueMultiMessage:
+    """Regression: INPUT_VALUE must keep every message, not just the first.
+
+    Same defect as traceAI#151 (openai handler): a final write overwrote the
+    joined eval_input with query = eval_input[0].
+    """
+
+    def _final_input_value(self, mock_span):
+        values = [
+            c.args[1]
+            for c in mock_span.set_attribute.call_args_list
+            if c.args[0] == SpanAttributes.INPUT_VALUE
+        ]
+        assert values, "INPUT_VALUE was never set"
+        final = values[-1]
+        # The span receives a typed ChatInput; resolve it the way core's mask does.
+        try:
+            from fi_instrumentation.instrumentation.config import ChatInput, mask_chat_input
+        except ImportError:
+            ChatInput = None
+        if ChatInput is not None and type(final) is ChatInput:
+            final = mask_chat_input(final, TraceConfig())
+        return final
+
+    def test_completion_keeps_all_message_texts(self):
+        mock_span = MagicMock()
+        _instrument_func_type_completion(
+            mock_span,
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "What is 2+2?"},
+                    {"role": "assistant", "content": "4"},
+                    {"role": "user", "content": "And 3+3?"},
+                ],
+            },
+        )
+        final = self._final_input_value(mock_span)
+        for text in ("You are helpful.", "What is 2+2?", "4", "And 3+3?"):
+            assert text in final
+
+    def test_completion_multimodal_text_and_image_placeholder(self):
+        mock_span = MagicMock()
+        _instrument_func_type_completion(
+            mock_span,
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe this"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/a.png"},
+                            },
+                            {"type": "text", "text": "in detail"},
+                        ],
+                    }
+                ],
+            },
+        )
+        attrs = {c.args[0]: c.args[1] for c in mock_span.set_attribute.call_args_list}
+        final = self._final_input_value(mock_span)
+        assert "describe this" in final
+        assert "in detail" in final
+        assert f"{{{SpanAttributes.INPUT_IMAGES}.0}}" in final
+        assert "https://example.com/a.png" in attrs[SpanAttributes.INPUT_IMAGES]
+
+    def test_process_messages_returns_no_query_key(self):
+        result = _process_messages([{"role": "user", "content": "hi"}])
+        assert "query" not in result
+        assert result["eval_input"] == "hi"
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"]) 
+    pytest.main([__file__, "-v"])
