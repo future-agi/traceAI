@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- traceai-deepseek now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
 ## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-deepseek-v0.1.1...traceai-deepseek-v0.1.2) (2026-11-05)
 
 

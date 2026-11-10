@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- traceai-fireworks now requires fi-instrumentation-otel 1.3.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
 ## [0.1.2](https://github.com/future-agi/traceAI/compare/traceai-fireworks-v0.1.1...traceai-fireworks-v0.1.2) (2026-11-05)
 
 
