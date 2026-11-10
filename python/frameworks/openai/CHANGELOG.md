@@ -1,6 +1,15 @@
-## [Unreleased]
-### Fixed
+## [0.1.14] - 2026-11-10
+### Added
 - Add Azure client deployment, API version and endpoint host/explicit port span metadata through the existing OpenAI instrumentor, without recording full URLs or credentials (#154).
+
+### Fixed
+- Attribute OpenAI-compatible requests to `api.cometapi.com` to `cometapi` (#348), including streamed and failed requests.
+- Attribute OpenAI-compatible requests to `api.novita.ai` to `novita` (#397), including streamed and failed requests.
+- Attribute dedicated and regional Baseten endpoints (`model-*.api.baseten.co`) to `baseten` (#541).
+- Attribute Azure Government resources (`*.openai.azure.us`) to `azure` (#502).
+- Attribute the OpenAI-compatible `openrouter.ai` host to `openrouter` (#547).
+- `input.value` keeps every message of a conversational input instead of only the first (#245), and
+  `input.mime_type` is derived from that full value.
 - Normally exhausted Chat Completions streams now export ERROR when at least one
   choice reports a non-null `finish_reason` but a requested choice index never does.
   This honors the effective on-wire `n`, including `extra_body` overrides, for sync

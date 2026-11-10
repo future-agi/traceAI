@@ -1,16 +1,23 @@
-## [Unreleased]
+## [1.3.1] - 2026-11-10
 ### Fixed
 - PII redaction (`pii_redaction` / `FI_PII_REDACTION`) no longer corrupts correlation identifiers (#195):
   `session.id`, `user.id` and conversation ids are exported unchanged, numbers inside a longer
   identifier are no longer read as phone numbers, and card numbers must be card-shaped and pass the
   Luhn check. Free text and metadata are still redacted when the flag is on; hide flags and the image
   cap apply to every field.
+- With `FI_PII_REDACTION` on, a phone number that follows a JSON escape (`\n`, `\t`, `\r`) in serialized
+  text is now redacted; digits inside longer identifiers stay intact.
 - Exporter credentials (#155): an empty `Authorization` header no longer hides valid
   `FI_API_KEY`/`FI_SECRET_KEY` environment keys, and explicit `X-Api-Key`/`X-Secret-Key`
   headers are sent once instead of alongside case-variant copies from the environment.
   Explicit credential headers still take precedence; header names are sent lower-case.
+  Blank credential headers are skipped before case variants are merged.
+  Known limitation: with `opentelemetry-exporter-otlp-proto-http` 1.45 or later, a blank
+  `Authorization=` entry in `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is
+  still sent as an empty header next to the FI keys, because the exporter re-reads those variables.
+  Remove blank entries from the environment; headers passed in code are unaffected.
 
-## [1.3.0] - pending release
+## [1.3.0] - 2026-11-07
 ### Added
 - Semantic conventions for agent cost, time to first token and coding-agent spans in
   `fi_instrumentation.fi_types` (#605): `tool_call.id`, `tool.name`, `fi.usage.*`, `fi.cost.kind`

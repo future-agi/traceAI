@@ -1,3 +1,7 @@
+## [0.2.2] - 2026-11-10
+### Fixed
+- Restore the optional Protect hook when `LangChainInstrumentor.uninstrument()` runs, so subsequent calls and re-instrumentation do not retain a stale wrapper (#393).
+
 ## [0.2.1] - 2026-10-26
 ### Fixed
 - LangGraph's `configurable.thread_id` is copied to `session.id` on every span, including Deep Agents subagents. Metadata `session_id` and `using_session(...)` retain precedence; blank thread ids set nothing.

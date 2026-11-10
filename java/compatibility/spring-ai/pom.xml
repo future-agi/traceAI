@@ -4,7 +4,7 @@
   <!-- Deliberately outside the reactor: tests the installed JAR, never module classes. -->
   <properties>
     <maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <traceai.version>1.0.2</traceai.version><!-- x-release-please-version -->
+    <traceai.version>1.0.3</traceai.version><!-- x-release-please-version -->
     <spring-ai.version>1.1.8</spring-ai.version><spring-boot.version>3.5.15</spring-boot.version>
     <factory.source>src/spring1/java</factory.source>
   </properties>
