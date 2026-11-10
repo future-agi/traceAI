@@ -12,7 +12,7 @@ Until the first `go/langchaingo/v0.1.0` tag is released, use `@dev` instead of `
 
 ## Configure tracing
 
-Set `FI_API_KEY`, `FI_SECRET_KEY`, `FI_PROJECT_NAME` and the credential for your chosen model provider. The [example](example/main.go) configures an OpenTelemetry OTLP/HTTP exporter with the full endpoint `https://api.futureagi.com/tracer/v1/traces`, headers `X-Api-Key` and `X-Secret-Key`, no compression, and the `project_name` and `project_type=observe` resource attributes.
+Set `FI_API_KEY`, `FI_SECRET_KEY`, `FI_PROJECT_NAME` and the credential for your chosen model provider. The [example](example/main.go) configures an OpenTelemetry OTLP/HTTP exporter that sends to `{FI_BASE_URL}/tracer/v1/traces` (`FI_BASE_URL` is optional, defaults to `https://api.futureagi.com`, and may end with a slash), with headers `X-Api-Key` and `X-Secret-Key`, no compression, and the `project_name` and `project_type=observe` resource attributes. Set `FI_BASE_URL` to send to a self-hosted or local Future AGI instead.
 
 ```go
 handler := traceailangchaingo.NewHandler(
