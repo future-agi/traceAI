@@ -201,6 +201,32 @@ function isGlobalTracerProvider(provider: unknown): boolean {
   }
 }
 
+interface ResourceLike {
+  readonly attributes: Attributes;
+  readonly asyncAttributesPending?: boolean;
+  readonly schemaUrl?: string;
+  waitForAsyncAttributes?(): Promise<void>;
+}
+
+/** Detached export view; never change the application/provider resource. */
+function exportResource(resource: unknown, policy: ContentPolicy): ResourceLike {
+  const source = resource as ResourceLike;
+  const pending = source.asyncAttributesPending === true;
+  // Keep attributes as an own data property: fi-core intentionally does not invoke
+  // arbitrary accessors when it snapshots a resource at the export boundary.
+  const result = {
+    attributes: pending ? {} : maskAuxiliaryAttributes(source.attributes, policy),
+    asyncAttributesPending: pending,
+    schemaUrl: source.schemaUrl,
+    async waitForAsyncAttributes(): Promise<void> {
+      await source.waitForAsyncAttributes?.();
+      result.attributes = maskAuxiliaryAttributes(source.attributes, policy);
+      result.asyncAttributesPending = source.asyncAttributesPending === true;
+    },
+  };
+  return result;
+}
+
 /** Build the sdk-trace-base 2.x view of a span with new attributes and the Future AGI resource. */
 export function toExportableSpan(
   span: GenkitReadableSpan,
@@ -232,7 +258,7 @@ export function toExportableSpan(
     events: exportEvents(span.events, privacy),
     duration: span.duration,
     ended: span.ended,
-    resource,
+    resource: exportResource(resource, privacy.policy ?? SHOW_ALL),
     instrumentationScope: scope,
     instrumentationLibrary: scope,
     droppedAttributesCount: span.droppedAttributesCount ?? 0,
