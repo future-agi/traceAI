@@ -19,7 +19,6 @@ def setup_mocks():
     # Create a proper SpanAttributes class that returns string values
     class MockSpanAttributes:
         GEN_AI_PROVIDER_NAME = "llm.provider"
-        GEN_AI_PROVIDER_NAME_PROMPT = "llm.system_prompt"
         GEN_AI_REQUEST_MODEL = "llm.model"
         LLM_RESPONSE_MODEL = "llm.response_model"
         GEN_AI_REQUEST_PARAMETERS = "llm.invocation_parameters"
