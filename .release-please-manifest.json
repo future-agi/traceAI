@@ -102,7 +102,7 @@
   "typescript/packages/traceai_mistral": "0.1.1",
   "typescript/packages/traceai_mongodb": "0.1.2",
   "typescript/packages/traceai_ollama": "0.1.2",
-  "typescript/packages/traceai_openai": "0.1.17",
+  "typescript/packages/traceai_openai": "0.1.18",
   "typescript/packages/traceai_openai_agents": "0.2.1",
   "typescript/packages/traceai_pgvector": "0.1.1",
   "typescript/packages/traceai_pi_coding_agent": "0.2.0",
