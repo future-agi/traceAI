@@ -229,28 +229,34 @@ function getFunctionCallDataFromAdditionalKwargs(
 }
 
 /**
- * Gets the tool calls from the langchain message additional kwargs and formats them into FI attributes.
- * @param additionalKwargs - The langchain message additional kwargs to extract the tool calls from
- * @returns the FI attributes for the tool calls
+ * Formats provider-neutral tool calls or the legacy OpenAI additional kwargs shape.
+ * Normalized calls contain object `args`; legacy calls contain string `function.arguments`.
  */
-function getToolCallDataFromAdditionalKwargs(
-  additionalKwargs: Record<string, unknown>,
+function getToolCallData(
+  toolCalls: unknown,
+  normalized: boolean,
 ): LLMMessageToolCalls {
-  const toolCalls = additionalKwargs.tool_calls;
   if (!Array.isArray(toolCalls)) {
     return {};
   }
   const formattedToolCalls = toolCalls.map((toolCall) => {
-    if (!isObject(toolCall) && !isObject(toolCall.function)) {
+    if (!isObject(toolCall)) {
       return {};
     }
-    const toolCallName = isString(toolCall.function.name)
-      ? toolCall.function.name
+    const functionCall = normalized ? toolCall : toolCall.function;
+    if (!isObject(functionCall)) {
+      return {};
+    }
+    const toolCallName = isString(functionCall.name)
+      ? functionCall.name
       : undefined;
-    const toolCallArgs = isString(toolCall.function.arguments)
-      ? toolCall.function.arguments
-      : undefined;
+    const toolCallArgs = normalized
+      ? safelyJSONStringify(functionCall.args) ?? undefined
+      : isString(functionCall.arguments)
+        ? functionCall.arguments
+        : undefined;
     return {
+      [SemanticConventions.TOOL_CALL_ID]: isString(toolCall.id) ? toolCall.id : undefined,
       [SemanticConventions.TOOL_CALL_FUNCTION_NAME]: toolCallName,
       [SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON]: toolCallArgs,
     };
@@ -273,23 +279,36 @@ function parseMessage(messageData: Record<string, unknown>): LLMMessage {
     message[SemanticConventions.MESSAGE_ROLE] = maybeRole;
   }
 
-  const messageKwargs = messageData.lc_kwargs;
-  if (!isObject(messageKwargs)) {
-    return message;
-  }
+  const messageKwargs = isObject(messageData.lc_kwargs)
+    ? messageData.lc_kwargs
+    : messageData;
   const maybeContent = getContentFromMessageData(messageKwargs);
   if (maybeContent != null) {
     message[SemanticConventions.MESSAGE_CONTENT] = maybeContent;
   }
-
-  const additionalKwargs = messageKwargs.additional_kwargs;
-  if (!isObject(additionalKwargs)) {
-    return message;
+  const toolCallId = isString(messageData.tool_call_id)
+    ? messageData.tool_call_id
+    : messageKwargs.tool_call_id;
+  if (isString(toolCallId)) {
+    message[SemanticConventions.MESSAGE_TOOL_CALL_ID] = toolCallId;
   }
+
+  const additionalKwargs: Record<string, unknown> = isObject(messageKwargs.additional_kwargs)
+    ? messageKwargs.additional_kwargs
+    : {};
+  // Runtime fields are authoritative; serialized messages retain these in lc_kwargs.
+  // Empty normalized arrays are common defaults on legacy adapters. Fall back in
+  // that case, but never append a duplicate legacy copy to normalized calls.
+  const normalizedToolCalls = isNonEmptyArray(messageData.tool_calls)
+    ? messageData.tool_calls
+    : messageKwargs.tool_calls;
+  const toolCalls = isNonEmptyArray(normalizedToolCalls)
+    ? getToolCallData(normalizedToolCalls, true)
+    : getToolCallData(additionalKwargs.tool_calls, false);
   return {
     ...message,
     ...getFunctionCallDataFromAdditionalKwargs(additionalKwargs),
-    ...getToolCallDataFromAdditionalKwargs(additionalKwargs),
+    ...toolCalls,
   };
 }
 
@@ -326,6 +345,7 @@ function formatInputMessages(
       const obj: Record<string, unknown> = {};
       if (msg[SemanticConventions.MESSAGE_ROLE]) obj.role = msg[SemanticConventions.MESSAGE_ROLE];
       if (msg[SemanticConventions.MESSAGE_CONTENT]) obj.content = msg[SemanticConventions.MESSAGE_CONTENT];
+      if (msg[SemanticConventions.MESSAGE_TOOL_CALL_ID] != null) obj.tool_call_id = msg[SemanticConventions.MESSAGE_TOOL_CALL_ID];
       if (msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]) {
         obj.function_call = {
           name: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME],
@@ -334,6 +354,7 @@ function formatInputMessages(
       }
       if (msg[SemanticConventions.MESSAGE_TOOL_CALLS]) {
         obj.tool_calls = msg[SemanticConventions.MESSAGE_TOOL_CALLS]?.map((tc) => ({
+          id: tc[SemanticConventions.TOOL_CALL_ID],
           function: {
             name: tc[SemanticConventions.TOOL_CALL_FUNCTION_NAME],
             arguments: tc[SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON],
@@ -395,6 +416,7 @@ function formatOutputMessages(
       const obj: Record<string, unknown> = {};
       if (msg[SemanticConventions.MESSAGE_ROLE]) obj.role = msg[SemanticConventions.MESSAGE_ROLE];
       if (msg[SemanticConventions.MESSAGE_CONTENT]) obj.content = msg[SemanticConventions.MESSAGE_CONTENT];
+      if (msg[SemanticConventions.MESSAGE_TOOL_CALL_ID] != null) obj.tool_call_id = msg[SemanticConventions.MESSAGE_TOOL_CALL_ID];
       if (msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]) {
         obj.function_call = {
           name: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME],
@@ -403,6 +425,7 @@ function formatOutputMessages(
       }
       if (msg[SemanticConventions.MESSAGE_TOOL_CALLS]) {
         obj.tool_calls = msg[SemanticConventions.MESSAGE_TOOL_CALLS]?.map((tc) => ({
+          id: tc[SemanticConventions.TOOL_CALL_ID],
           function: {
             name: tc[SemanticConventions.TOOL_CALL_FUNCTION_NAME],
             arguments: tc[SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON],
