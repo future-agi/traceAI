@@ -208,17 +208,30 @@ span.setAttribute('fi.span_kind', 'LLM');
 
 ## Resource Attributes
 
+Use the public constants when constructing a resource for a custom OpenTelemetry provider:
+
 ```typescript
-import { ResourceAttributes } from '@traceai/fi-semantic-conventions';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import {
+    ATTR_PROJECT_NAME,
+    ATTR_SERVICE_NAME,
+} from '@traceai/fi-semantic-conventions';
+
+const resource = resourceFromAttributes({
+    [ATTR_PROJECT_NAME]: 'demo-project',
+    [ATTR_SERVICE_NAME]: 'demo-service',
+    project_type: 'observe',
+});
 ```
 
-Standard OpenTelemetry resource attributes for service identification:
+| Export | Resource attribute | Description |
+|--------|--------------------|-------------|
+| `ATTR_PROJECT_NAME` | `project_name` | Collector project name; required when no supported project header is supplied |
+| `ATTR_SERVICE_NAME` | `service.name` | Standard OpenTelemetry service name |
 
-| Attribute | Description |
-|-----------|-------------|
-| `service.name` | Service name |
-| `service.version` | Service version |
-| `deployment.environment` | Deployment environment |
+Other resource attributes, such as `service.version` and `deployment.environment`, can be supplied as literal keys.
+
+**Compatibility:** These constants previously emitted `fi.project.name` and `SERVICE_NAME`, respectively. They now emit the canonical collector and OpenTelemetry keys. Update resource lookups, processors, and queries that depended on the old spellings. Existing resources and historical traces using the old keys are not automatically rewritten. The project resource attribute set by `@traceai/fi-core`'s `register()` already uses `project_name` and is unchanged.
 
 ## TypeScript Configuration
 
