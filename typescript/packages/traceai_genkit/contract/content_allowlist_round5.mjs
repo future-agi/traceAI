@@ -242,7 +242,10 @@ if (!process.argv[2]) {
       : spans.flatMap(s => s[test.surface === 'event' ? 'events' : 'links'] ?? []).flatMap(s => s.attributes ?? []);
     const wire = JSON.stringify(payloads);
     const outcomes = rows.map(row => {
-      const hidden = test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side));
+      // This canonical control is explicitly TEXT, not opaque input or an
+      // image. Image-only hiding must retain it (the structured-message API).
+      const canonicalTextUnderImageOnly = test.flag === 'hideInputImages' && row.key === 'gen_ai.input.messages';
+      const hidden = !canonicalTextUnderImageOnly && test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side));
       const attrs = selected.filter(a => a.key === (row.attributeKey ?? row.key));
       const present = wire.includes(row.marker);
       const nestedValues = row.nestedKey ? attrs.map(a => {
