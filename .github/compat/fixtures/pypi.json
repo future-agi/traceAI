@@ -1,0 +1,436 @@
+{
+  "anthropic": {
+    "info": {
+      "name": "anthropic"
+    },
+    "releases": {
+      "0.41.0": [
+        {
+          "digests": {
+            "blake2b_256": "92d518284e6a21fec47bbcf74cb46e59fb22706723071bc52da0fce39fb7f104",
+            "md5": "077226b7b882543c192d2e78fae10901",
+            "sha256": "ab64e1e94568bd4db92183e7e839858c3c38d5dacb3976719078312ff5e4e1f8"
+          },
+          "filename": "anthropic-0.41.0-py3-none-any.whl",
+          "requires_python": ">=3.8",
+          "upload_time_iso_8601": "2024-12-17T15:53:14.274991Z",
+          "url": "https://files.pythonhosted.org/packages/92/d5/18284e6a21fec47bbcf74cb46e59fb22706723071bc52da0fce39fb7f104/anthropic-0.41.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "4a0d6d02a4f42ef4a11eb54f839d1a8c0ca08e95fc7cf82b39d05b841b5de272",
+            "md5": "c481c0253f39e9111e9e0f13385313bf",
+            "sha256": "41ba533ac1969f7b60ee59bcdf37bc012eee2397725fb14a64b9f2acb9ab2f2a"
+          },
+          "filename": "anthropic-0.41.0.tar.gz",
+          "requires_python": ">=3.8",
+          "upload_time_iso_8601": "2024-12-17T15:53:17.096959Z",
+          "url": "https://files.pythonhosted.org/packages/4a/0d/6d02a4f42ef4a11eb54f839d1a8c0ca08e95fc7cf82b39d05b841b5de272/anthropic-0.41.0.tar.gz",
+          "yanked": false
+        }
+      ],
+      "0.75.0": [
+        {
+          "digests": {
+            "blake2b_256": "601c1cd02b7ae64302a6e06724bf80a96401d5313708651d277b1458504a1730",
+            "md5": "e7633c0683eb49bc7c936d55f701534f",
+            "sha256": "ea8317271b6c15d80225a9f3c670152746e88805a7a61e14d4a374577164965b"
+          },
+          "filename": "anthropic-0.75.0-py3-none-any.whl",
+          "requires_python": ">=3.9",
+          "upload_time_iso_8601": "2025-11-24T20:41:43.587237Z",
+          "url": "https://files.pythonhosted.org/packages/60/1c/1cd02b7ae64302a6e06724bf80a96401d5313708651d277b1458504a1730/anthropic-0.75.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "041f08e95f4b7e2d35205ae5dcbb4ae97e7d477fc521c275c02609e2931ece2d",
+            "md5": "a222ad580855fc2a56cb5261371b1f58",
+            "sha256": "e8607422f4ab616db2ea5baacc215dd5f028da99ce2f022e33c7c535b29f3dfb"
+          },
+          "filename": "anthropic-0.75.0.tar.gz",
+          "requires_python": ">=3.9",
+          "upload_time_iso_8601": "2025-11-24T20:41:45.280553Z",
+          "url": "https://files.pythonhosted.org/packages/04/1f/08e95f4b7e2d35205ae5dcbb4ae97e7d477fc521c275c02609e2931ece2d/anthropic-0.75.0.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "fi-instrumentation-otel": {
+    "info": {
+      "name": "fi-instrumentation-otel"
+    },
+    "releases": {
+      "1.1.0": [
+        {
+          "digests": {
+            "blake2b_256": "2aecbb3534e0245c6ba1e454ab676356d7387c658094fd9e51556a70e98562c5",
+            "md5": "b8984ff39b7090a7ae09ab6976a2a1cf",
+            "sha256": "4fa2bf663e0ce09447aca92ae798cd7b0dee35c5c92c2e033f1d89d158a9e62c"
+          },
+          "filename": "fi_instrumentation_otel-1.1.0-py3-none-any.whl",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-08-27T12:00:20.841678Z",
+          "url": "https://files.pythonhosted.org/packages/2a/ec/bb3534e0245c6ba1e454ab676356d7387c658094fd9e51556a70e98562c5/fi_instrumentation_otel-1.1.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "c4fdf88c73228722ceff16efb7552cbebeadb75e666c2f447686fb2025cda22a",
+            "md5": "eec2090e0b92b93f06d3b58acef45024",
+            "sha256": "7ec324c3c9242aa87a88cf23a21c11919b8736c6451c5fb50917f592a853b059"
+          },
+          "filename": "fi_instrumentation_otel-1.1.0.tar.gz",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-08-27T12:00:22.626426Z",
+          "url": "https://files.pythonhosted.org/packages/c4/fd/f88c73228722ceff16efb7552cbebeadb75e666c2f447686fb2025cda22a/fi_instrumentation_otel-1.1.0.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "langchain-core": {
+    "info": {
+      "name": "langchain-core"
+    },
+    "releases": {
+      "0.2.43": [
+        {
+          "digests": {
+            "blake2b_256": "709bb26405992d807a592ab3e7792f0eb2c2f71fe69111c972caf7786ba99199",
+            "md5": "101d1633554dc5faa929ad25cd4cb705",
+            "sha256": "619601235113298ebf8252a349754b7c28d3cf7166c7c922da24944b78a9363a"
+          },
+          "filename": "langchain_core-0.2.43-py3-none-any.whl",
+          "requires_python": "<4.0,>=3.8.1",
+          "upload_time_iso_8601": "2024-10-31T20:30:35.112369Z",
+          "url": "https://files.pythonhosted.org/packages/70/9b/b26405992d807a592ab3e7792f0eb2c2f71fe69111c972caf7786ba99199/langchain_core-0.2.43-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "cc25a14a1287e5d7e00eaf8cb3ee3c31d029127f14b945de6fc8e2f0e28e2b12",
+            "md5": "a9efa8a08c11b19aebdbc99298509101",
+            "sha256": "42c2ef6adedb911f4254068b6adc9eb4c4075f6c8cb3d83590d3539a815695f5"
+          },
+          "filename": "langchain_core-0.2.43.tar.gz",
+          "requires_python": "<4.0,>=3.8.1",
+          "upload_time_iso_8601": "2024-10-31T20:30:36.780497Z",
+          "url": "https://files.pythonhosted.org/packages/cc/25/a14a1287e5d7e00eaf8cb3ee3c31d029127f14b945de6fc8e2f0e28e2b12/langchain_core-0.2.43.tar.gz",
+          "yanked": false
+        }
+      ],
+      "1.2.7": [
+        {
+          "digests": {
+            "blake2b_256": "6e6f34a9fba14d191a67f7e2ee3dbce3e9b86d2fa7310e2c7f2c713583481bd2",
+            "md5": "594bb21c76f596d54048cee2abd6aab4",
+            "sha256": "452f4fef7a3d883357b22600788d37e3d8854ef29da345b7ac7099f33c31828b"
+          },
+          "filename": "langchain_core-1.2.7-py3-none-any.whl",
+          "requires_python": "<4.0.0,>=3.10.0",
+          "upload_time_iso_8601": "2026-01-09T17:44:24.236426Z",
+          "url": "https://files.pythonhosted.org/packages/6e/6f/34a9fba14d191a67f7e2ee3dbce3e9b86d2fa7310e2c7f2c713583481bd2/langchain_core-1.2.7-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "a20e664d8d81b3493e09cbab72448d2f9d693d1fa5aa2bcc488602203a9b6da0",
+            "md5": "1dc19962c078b3ccfa29b892dd432afd",
+            "sha256": "e1460639f96c352b4a41c375f25aeb8d16ffc1769499fb1c20503aad59305ced"
+          },
+          "filename": "langchain_core-1.2.7.tar.gz",
+          "requires_python": "<4.0.0,>=3.10.0",
+          "upload_time_iso_8601": "2026-01-09T17:44:25.505103Z",
+          "url": "https://files.pythonhosted.org/packages/a2/0e/664d8d81b3493e09cbab72448d2f9d693d1fa5aa2bcc488602203a9b6da0/langchain_core-1.2.7.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "langgraph": {
+    "info": {
+      "name": "langgraph"
+    },
+    "releases": {
+      "0.2.0": [
+        {
+          "digests": {
+            "blake2b_256": "b373d2a399c79692723cac76883a0939e60fddb2d1dadea2991df3279ab3de2f",
+            "md5": "035ee25f567b9adc4ac04405f482bdaa",
+            "sha256": "e6722350d07d5ea87014204cc78f05e34505072f89a83bffac6aa8b3c6c572e7"
+          },
+          "filename": "langgraph-0.2.0-py3-none-any.whl",
+          "requires_python": "<4.0,>=3.9.0",
+          "upload_time_iso_8601": "2024-08-07T03:33:55.923964Z",
+          "url": "https://files.pythonhosted.org/packages/b3/73/d2a399c79692723cac76883a0939e60fddb2d1dadea2991df3279ab3de2f/langgraph-0.2.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "439c37c3998be27e0709cf0076fc29c8792816d11ffc9ca13af59b8107b8f35f",
+            "md5": "40be2fc3ce38ff7c332814530999612d",
+            "sha256": "18721ecbb857a85e69ac9322e292c85c5ad5557bd80d0638a5c45b80f0574585"
+          },
+          "filename": "langgraph-0.2.0.tar.gz",
+          "requires_python": "<4.0,>=3.9.0",
+          "upload_time_iso_8601": "2024-08-07T03:33:57.724370Z",
+          "url": "https://files.pythonhosted.org/packages/43/9c/37c3998be27e0709cf0076fc29c8792816d11ffc9ca13af59b8107b8f35f/langgraph-0.2.0.tar.gz",
+          "yanked": false
+        }
+      ],
+      "1.0.5": [
+        {
+          "digests": {
+            "blake2b_256": "231be318ee76e42d28f515d87356ac5bd7a7acc8bad3b8f54ee377bef62e1cbf",
+            "md5": "8ddd7d95db36a4023d96148f47abc308",
+            "sha256": "b4cfd173dca3c389735b47228ad8b295e6f7b3df779aba3a1e0c23871f81281e"
+          },
+          "filename": "langgraph-1.0.5-py3-none-any.whl",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-12-12T23:05:46.499684Z",
+          "url": "https://files.pythonhosted.org/packages/23/1b/e318ee76e42d28f515d87356ac5bd7a7acc8bad3b8f54ee377bef62e1cbf/langgraph-1.0.5-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "7d4728f4d4d33d88f69de26f7a54065961ac0c662cec2479b36a2db081ef5cb6",
+            "md5": "cb6287bd899a0a334e307075f76aee5d",
+            "sha256": "7f6ae59622386b60fe9fa0ad4c53f42016b668455ed604329e7dc7904adbf3f8"
+          },
+          "filename": "langgraph-1.0.5.tar.gz",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-12-12T23:05:48.224155Z",
+          "url": "https://files.pythonhosted.org/packages/7d/47/28f4d4d33d88f69de26f7a54065961ac0c662cec2479b36a2db081ef5cb6/langgraph-1.0.5.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "langgraph-checkpoint": {
+    "info": {
+      "name": "langgraph-checkpoint"
+    },
+    "releases": {
+      "3.0.1": [
+        {
+          "digests": {
+            "blake2b_256": "48e3616e3a7ff737d98c1bbb5700dd62278914e2a9ded09a79a1fa93cf24ce12",
+            "md5": "2b6b0e1fa9f4a535827d6ba1a50402c3",
+            "sha256": "9b04a8d0edc0474ce4eaf30c5d731cee38f11ddff50a6177eead95b5c4e4220b"
+          },
+          "filename": "langgraph_checkpoint-3.0.1-py3-none-any.whl",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-11-04T21:55:46.472080Z",
+          "url": "https://files.pythonhosted.org/packages/48/e3/616e3a7ff737d98c1bbb5700dd62278914e2a9ded09a79a1fa93cf24ce12/langgraph_checkpoint-3.0.1-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "0f072b1c042fa87d40cf2db5ca27dc4e8dd86f9a0436a10aa4361a8982718ae7",
+            "md5": "f81b6a41b1fbb83614785c41435886c9",
+            "sha256": "59222f875f85186a22c494aedc65c4e985a3df27e696e5016ba0b98a5ed2cee0"
+          },
+          "filename": "langgraph_checkpoint-3.0.1.tar.gz",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-11-04T21:55:47.774043Z",
+          "url": "https://files.pythonhosted.org/packages/0f/07/2b1c042fa87d40cf2db5ca27dc4e8dd86f9a0436a10aa4361a8982718ae7/langgraph_checkpoint-3.0.1.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "langgraph-prebuilt": {
+    "info": {
+      "name": "langgraph-prebuilt"
+    },
+    "releases": {
+      "1.0.5": [
+        {
+          "digests": {
+            "blake2b_256": "875eaeba4a5b39fe6e874e0dd003a82da71c7153e671312671a8dacc5cb7c1af",
+            "md5": "d472676398e16eb81c90091346bf1377",
+            "sha256": "22369563e1848862ace53fbc11b027c28dd04a9ac39314633bb95f2a7e258496"
+          },
+          "filename": "langgraph_prebuilt-1.0.5-py3-none-any.whl",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-11-20T16:47:38.187281Z",
+          "url": "https://files.pythonhosted.org/packages/87/5e/aeba4a5b39fe6e874e0dd003a82da71c7153e671312671a8dacc5cb7c1af/langgraph_prebuilt-1.0.5-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "46f954f8891b32159e4542236817aea2ee83de0de18bce28e9bdba08c7f93001",
+            "md5": "1aff9b92e1fc2aee765b386563f97691",
+            "sha256": "85802675ad778cc7240fd02d47db1e0b59c0c86d8369447d77ce47623845db2d"
+          },
+          "filename": "langgraph_prebuilt-1.0.5.tar.gz",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2025-11-20T16:47:39.230688Z",
+          "url": "https://files.pythonhosted.org/packages/46/f9/54f8891b32159e4542236817aea2ee83de0de18bce28e9bdba08c7f93001/langgraph_prebuilt-1.0.5.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "openai": {
+    "info": {
+      "name": "openai"
+    },
+    "releases": {
+      "1.69.0": [
+        {
+          "digests": {
+            "blake2b_256": "b8a428113be8b7bc937656aaf7b06feff7e9a5eb742ee4e405c6c48c30d879c4",
+            "md5": "52ea27916eefa2e301b3ec21d799a40c",
+            "sha256": "73c4b2ddfd050060f8d93c70367189bd891e70a5adb6d69c04c3571f4fea5627"
+          },
+          "filename": "openai-1.69.0-py3-none-any.whl",
+          "requires_python": ">=3.8",
+          "upload_time_iso_8601": "2025-03-27T18:04:46.569917Z",
+          "url": "https://files.pythonhosted.org/packages/b8/a4/28113be8b7bc937656aaf7b06feff7e9a5eb742ee4e405c6c48c30d879c4/openai-1.69.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "ab99d164612528dfb7a9b19330623daded608e75d25823b01f81e0376eb388a4",
+            "md5": "a76d3ad75b0ee338c01dcf055b1db13c",
+            "sha256": "7b8a10a8ff77e1ae827e5e4c8480410af2070fb68bc973d6c994cf8218f1f98d"
+          },
+          "filename": "openai-1.69.0.tar.gz",
+          "requires_python": ">=3.8",
+          "upload_time_iso_8601": "2025-03-27T18:04:48.762613Z",
+          "url": "https://files.pythonhosted.org/packages/ab/99/d164612528dfb7a9b19330623daded608e75d25823b01f81e0376eb388a4/openai-1.69.0.tar.gz",
+          "yanked": false
+        }
+      ],
+      "3.24.0": [
+        {
+          "digests": {
+            "blake2b_256": "f20132baec3bdb83d36da27281d7eeac2647241345cf8ff538bc21d1013ddeec",
+            "md5": "5a0557fd3feb09bd2444ac7c91cb0521",
+            "sha256": "b59703a3e3b5df78b269e90049d383a1dda58c90104cc4be59db21078db4b7a4"
+          },
+          "filename": "openai-3.24.0-py3-none-any.whl",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2026-10-02T15:55:16.228279Z",
+          "url": "https://files.pythonhosted.org/packages/f2/01/32baec3bdb83d36da27281d7eeac2647241345cf8ff538bc21d1013ddeec/openai-3.24.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "734fe57670227cb7b61362d8f9bfba54d4e9f7bde799798c342782788bc12d6c",
+            "md5": "5b14c0e65d59d7e06c81c42cbfc997c1",
+            "sha256": "1e7463f7d78773ab2ce4fe85710481aa5bd5ffefd54c8de4b067506cd2d42895"
+          },
+          "filename": "openai-3.24.0.tar.gz",
+          "requires_python": ">=3.10",
+          "upload_time_iso_8601": "2026-10-02T15:55:18.851829Z",
+          "url": "https://files.pythonhosted.org/packages/73/4f/e57670227cb7b61362d8f9bfba54d4e9f7bde799798c342782788bc12d6c/openai-3.24.0.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "traceAI-anthropic": {
+    "info": {
+      "name": "traceAI-anthropic"
+    },
+    "releases": {
+      "0.1.10": [
+        {
+          "digests": {
+            "blake2b_256": "9fdf22904ac16feed1f08911748a856b08117533172080c5a726f6dd3d656694",
+            "md5": "2cfdd993d291589d9f9fbcbe7bf5ae2c",
+            "sha256": "06aa561e72f68a1f11db9d03ebda0cc1a8b6b0ba9d027fc40bace32f12f8ef6a"
+          },
+          "filename": "traceai_anthropic-0.1.10-py3-none-any.whl",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-03-10T13:53:51.782416Z",
+          "url": "https://files.pythonhosted.org/packages/9f/df/22904ac16feed1f08911748a856b08117533172080c5a726f6dd3d656694/traceai_anthropic-0.1.10-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "9f92a2409802f85d7fe3952131509adc1c69733e6ff0d0024f36853499bcbdb8",
+            "md5": "c7cf5dc7a3953bdf364210e96b99ae1c",
+            "sha256": "bad24b8cde775bdd5af9f9fe9e22c3f5f1a0791effbf2da17aefda8c8f141840"
+          },
+          "filename": "traceai_anthropic-0.1.10.tar.gz",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-03-10T13:53:52.839714Z",
+          "url": "https://files.pythonhosted.org/packages/9f/92/a2409802f85d7fe3952131509adc1c69733e6ff0d0024f36853499bcbdb8/traceai_anthropic-0.1.10.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "traceAI-langchain": {
+    "info": {
+      "name": "traceAI-langchain"
+    },
+    "releases": {
+      "0.2.0": [
+        {
+          "digests": {
+            "blake2b_256": "7ce142b870ebb962ab099edc68830de97e32bb95953bacc4af017b5c662a924e",
+            "md5": "45e8ac7b606cd785aca3d038d35c06ef",
+            "sha256": "83066fdd52a1ec8ad397bff0c79c3efa964d3687d39abdaa73ebf3ebf2a7ad17"
+          },
+          "filename": "traceai_langchain-0.2.0-py3-none-any.whl",
+          "requires_python": "<3.14,>=3.10",
+          "upload_time_iso_8601": "2026-07-30T13:50:59.058863Z",
+          "url": "https://files.pythonhosted.org/packages/7c/e1/42b870ebb962ab099edc68830de97e32bb95953bacc4af017b5c662a924e/traceai_langchain-0.2.0-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "f89b4870d7cf29507cdb138d1bbcd363340ad2e82f1e822b738cf6118890e46b",
+            "md5": "89cfef5c0135d196d508071e23e15860",
+            "sha256": "15045681dc9a14f446a5bcf908904e7834b48f6f9765181f5055877b8552f9d8"
+          },
+          "filename": "traceai_langchain-0.2.0.tar.gz",
+          "requires_python": "<3.14,>=3.10",
+          "upload_time_iso_8601": "2026-07-30T13:51:00.044134Z",
+          "url": "https://files.pythonhosted.org/packages/f8/9b/4870d7cf29507cdb138d1bbcd363340ad2e82f1e822b738cf6118890e46b/traceai_langchain-0.2.0.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  },
+  "traceAI-openai": {
+    "info": {
+      "name": "traceAI-openai"
+    },
+    "releases": {
+      "0.1.10": [
+        {
+          "digests": {
+            "blake2b_256": "28eb38390617fccb5042ef9ab93d9e689958ff3230ab327184a4f4f2ab27f092",
+            "md5": "ae0fbfad5284d3a7710215a9617748a9",
+            "sha256": "0c28ad64071844c56aba0c0a64723be7d3e4e69b247eeaf022ade1baee45dfa2"
+          },
+          "filename": "traceai_openai-0.1.10-py3-none-any.whl",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-03-10T13:54:40.087111Z",
+          "url": "https://files.pythonhosted.org/packages/28/eb/38390617fccb5042ef9ab93d9e689958ff3230ab327184a4f4f2ab27f092/traceai_openai-0.1.10-py3-none-any.whl",
+          "yanked": false
+        },
+        {
+          "digests": {
+            "blake2b_256": "e644ce0df6bcae01fdd602f5e8fea367cda7dabfec586051ee774e266afe8fdb",
+            "md5": "778c03dadb18a17a01d39d2cd5b9fc19",
+            "sha256": "d670f8d28ded6809bd180d0a8d0ae2d63780f32c45c83921e66dc3da0290fca6"
+          },
+          "filename": "traceai_openai-0.1.10.tar.gz",
+          "requires_python": "<3.14,>3.9",
+          "upload_time_iso_8601": "2026-03-10T13:54:41.234960Z",
+          "url": "https://files.pythonhosted.org/packages/e6/44/ce0df6bcae01fdd602f5e8fea367cda7dabfec586051ee774e266afe8fdb/traceai_openai-0.1.10.tar.gz",
+          "yanked": false
+        }
+      ]
+    }
+  }
+}
