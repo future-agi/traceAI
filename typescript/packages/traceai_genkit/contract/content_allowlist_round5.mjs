@@ -23,6 +23,9 @@ function add(key, source) {
   key = key.replace(/\.$/, '');
   inventory.set(key, [...(inventory.get(key) ?? []), source]);
 }
+// Some legacy constants (notably AUDIO_*) are exported directly but are not
+// members of SemanticConventions. Include both public export surfaces.
+for (const [name, key] of Object.entries(semconv)) add(key, `export.${name}`);
 for (const [name, key] of Object.entries(semconv.SemanticConventions)) add(key, `SemanticConventions.${name}`);
 // Actual flattened collection shapes compose a collection root with the
 // exported element constants. Testing only invented .content leaves misses
@@ -97,7 +100,7 @@ function side(key) {
 // metadata boundaries in that catalog, not raw media. These rows still receive
 // the marker and MUST omit it by default; they are not positive-export controls.
 function defaultMediaOmission(key) {
-  return /(?:^|\.)audio(?:\.|\[|$)/.test(key) && !metadata.has(key) && !/(?:^|\.)transcript(?:\.|\[|$)/.test(key);
+  return /(?:^|\.)audio(?:\.|\[|$)/.test(key) && !metadata.has(key) && !/(?:^|\.)(?:transcript|url|mime_type)(?:\.|\[|$)/.test(key);
 }
 const rows = [...inventory].sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, sources]) =>
   [key, `${key}.0.content`, `${key}[0].content`].map(key => ({ key, sources, side: side(key), defaultMediaOmission: defaultMediaOmission(key), marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) })));
