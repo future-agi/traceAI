@@ -91,6 +91,8 @@ def _get_attributes_from_message_param(
 
     if name := message.get("name"):
         yield MessageAttributes.MESSAGE_NAME, name
+    if tool_call_id := message.get("tool_call_id"):
+        yield MessageAttributes.MESSAGE_TOOL_CALL_ID, tool_call_id
     if (function_call := message.get("function_call")) and hasattr(
         function_call, "get"
     ):
@@ -104,6 +106,12 @@ def _get_attributes_from_message_param(
     if (tool_calls := message.get("tool_calls")) and isinstance(tool_calls, Iterable):
         for index, tool_call in enumerate(tool_calls):
             tool_call = _message_dict(tool_call)
+            if tool_call_id := tool_call.get("id"):
+                yield (
+                    f"{MessageAttributes.MESSAGE_TOOL_CALLS}.{index}."
+                    f"{ToolCallAttributes.TOOL_CALL_ID}",
+                    tool_call_id,
+                )
             function = _message_dict(tool_call.get("function")) if tool_call else None
             if function:
                 if name := function.get("name"):
