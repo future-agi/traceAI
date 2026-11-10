@@ -250,7 +250,7 @@ function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy, d
         if (depth >= 16 || typeof out[key] !== "string") throw new Error("Capsule limit");
         const packed: unknown = JSON.parse(out[key] as string);
         if (!isRecord(packed)) throw new Error("Capsule shape");
-        out[key] = JSON.stringify(maskSemanticAttributes(packed as Attributes, policy, depth + 1));
+        out[key] = JSON.stringify(maskAuxiliaryAttributes(packed as Attributes, policy, depth + 1));
       } catch { out[key] = REDACTED_VALUE; }
       continue;
     }
@@ -270,8 +270,8 @@ function maskSemanticAttributes(attributes: Attributes, policy: ContentPolicy, d
 }
 
 /** Events/links carry attribute maps, not native generation envelopes. */
-export function maskAuxiliaryAttributes(attributes: Attributes, policy: ContentPolicy): Attributes {
-  const out = maskSemanticAttributes(attributes, policy);
+export function maskAuxiliaryAttributes(attributes: Attributes, policy: ContentPolicy, depth = 0): Attributes {
+  const out = maskSemanticAttributes(attributes, policy, depth);
   for (const key of Object.keys(out)) {
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key) ||
         (GENKIT_INPUT_KEYS.includes(key) && (policy.hideInputs || policy.hideInputMessages || policy.hideInputText || policy.hideInputImages)) ||

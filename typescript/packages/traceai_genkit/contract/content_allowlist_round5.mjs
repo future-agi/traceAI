@@ -122,6 +122,13 @@ for (const [nestedKey, depth] of ['gen_ai.prompts', 'gen_ai.agent.input', 'gen_a
     sources: ['fi-core/src/attribute-projection.ts legacy capsule', `nested ${nestedKey}`], side: side(nestedKey), defaultMediaOmission: false,
     marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) });
 }
+for (const depth of [1, 2]) {
+  const nestedKey = 'genkit:metadata:context';
+  const key = `traceai.attribute_projection.metadata::${depth}::${nestedKey}`;
+  rows.push({ key, attributeKey: 'traceai.attribute_projection.metadata', nestedKey, depth,
+    sources: ['traceai_genkit/src/attributes.ts GENKIT_NEVER_EXPORTED_KEYS'], side: 'never-exported', neverExported: true,
+    defaultMediaOmission: false, marker: 'SYNTHETIC CONTENT ! ' + createHash('sha256').update(key).digest('hex').slice(0, 20) });
+}
 // These three NEW inventory keys have an exact numeric-counter contract. A
 // prose marker is an invalid count and must still obey the always-on media
 // policy. Keep that negative control as well as a valid typed positive control.
@@ -245,7 +252,7 @@ if (!process.argv[2]) {
       // This canonical control is explicitly TEXT, not opaque input or an
       // image. Image-only hiding must retain it (the structured-message API).
       const canonicalTextUnderImageOnly = test.flag === 'hideInputImages' && row.key === 'gen_ai.input.messages';
-      const hidden = !canonicalTextUnderImageOnly && test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side));
+      const hidden = !!row.neverExported || (!canonicalTextUnderImageOnly && test.flag !== 'off' && row.side !== 'metadata' && (row.side === 'both' || test.flag.toLowerCase().includes(row.side)));
       const attrs = selected.filter(a => a.key === (row.attributeKey ?? row.key));
       const present = wire.includes(row.marker);
       // A model positive cannot stand in for its generic-span aggregate copy.

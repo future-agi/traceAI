@@ -36,6 +36,20 @@ describe("composed semantic policy", () => {
     expect(JSON.stringify(attributes)).toBe(original);
   });
 
+  it("does not use a legacy capsule to restore native context attributes", () => {
+    const attributes = { [capsule]: JSON.stringify({
+      "genkit:metadata:context": marker,
+      [capsule]: JSON.stringify({ "genkit:metadata:context": marker }),
+    }) };
+    for (const policy of [SHOW_ALL, { ...SHOW_ALL, hideInputs: true }]) {
+      const out = maskAuxiliaryAttributes(attributes, policy);
+      expect(JSON.stringify(out)).not.toContain(marker);
+      const outer = JSON.parse(String(out[capsule]));
+      expect(outer["genkit:metadata:context"]).toBeUndefined();
+      expect(JSON.parse(outer[capsule])["genkit:metadata:context"]).toBeUndefined();
+    }
+  });
+
   it("fails closed on malformed or excessively nested capsules", () => {
     expect(maskAuxiliaryAttributes({ [capsule]: "not JSON" }, { ...SHOW_ALL, hideInputs: true })[capsule]).toBe("__REDACTED__");
     let value = JSON.stringify({ "gen_ai.prompts": marker });
