@@ -81,7 +81,7 @@ jobs:
           # traceai.init enabling all six by name (registry, report rows, capture through auto).
           - {package: auto, tier: latest, python: '3.12', expect: '1', suite: test_auto_registry.py,
              path: 'mcp mcp-use openai-agents claude-agent-sdk smolagents firecrawl',
-             sdks: 'mcp==2.3.0 mcp-use==1.7.1 openai-agents==0.24.0 claude-agent-sdk==0.2.180 smolagents==1.26.0 openai pillow firecrawl-py==4.55.0'}
+             sdks: 'mcp>=1.30.0,<2 mcp-use==1.7.1 openai-agents==0.24.0 claude-agent-sdk==0.2.180 smolagents==1.26.0 openai pillow firecrawl-py==4.55.0'}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
