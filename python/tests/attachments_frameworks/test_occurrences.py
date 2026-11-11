@@ -1,6 +1,9 @@
-"""Shared helper: cross-span claims, raw bytes, URL policy and part limits (no framework installed)."""
+"""Shared helper: per-span occurrences, raw bytes, URL policy and part limits (no framework installed).
 
-import hashlib
+F01 resolves an occurrence only under its own parent span, so every observing span owns
+its own occurrence: nothing here reuses an occurrence across spans or traces.
+"""
+
 import http.server
 import threading
 
@@ -9,20 +12,25 @@ from conftest import b64, flush, jpeg, png, refs, wav
 from fi_instrumentation import TraceConfig
 from fi_instrumentation.attachments import CapturePolicy
 from fi_instrumentation.attachments import media_capture as mc
-from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+from opentelemetry import context as otel_context
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
 IMAGE = png(seed=11)
 URI = "data:image/png;base64," + b64(IMAGE)
 
 
-def _inline(manager, span, value=URI, policy=None, raw=False):
+def _inline(manager, span, value=URI, policy=None, raw=False, part_index=0):
     return mc.attach_inline(manager, span, lambda: value, mc.IMAGE_MIMES, raw=raw, direction="input",
                             purpose="model_input", capture=policy or mc.local_capture_policy(None, direction="input"),
-                            message_index=0, part_index=0, role="user")
+                            message_index=0, part_index=part_index, role="user")
 
 
-def test_framework_then_provider_span_uploads_identical_bytes_once(f01, spans):
+def _parents(f01):
+    return [body["association"]["parent"]["span_id"] for body in f01.uploads]
+
+
+def test_framework_and_provider_spans_each_own_their_occurrence(f01, spans):
     tracer_provider, exporter = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
@@ -31,27 +39,32 @@ def test_framework_then_provider_span_uploads_identical_bytes_once(f01, spans):
         with tracer.start_as_current_span("provider") as child:
             second = _inline(manager, child)
     flush(manager)
-    assert first is not None and second == first
-    assert f01.payloads == [IMAGE]
+    assert first is not None and second is not None and first != second
+    assert f01.payloads == [IMAGE, IMAGE]  # byte deduplication is the server's job
     names = {span.name: refs(span) for span in exporter.get_finished_spans()}
     assert [r["occurrence_id"] for r in names["framework"]] == [first.occurrence_id]
-    assert names["provider"] == []  # the occurrence stays bound to the first span
+    assert [r["occurrence_id"] for r in names["provider"]] == [second.occurrence_id]
+    assert _parents(f01) == ["%016x" % parent.get_span_context().span_id,
+                             "%016x" % child.get_span_context().span_id]
 
 
-def test_raw_bytes_and_inline_base64_of_the_same_image_share_one_claim(f01, spans):
-    tracer_provider, _ = spans
+def test_raw_bytes_and_inline_base64_at_two_positions_are_two_occurrences(f01, spans):
+    tracer_provider, exporter = spans
     manager = f01.manager()
     with tracer_provider.get_tracer("t").start_as_current_span("s") as span:
         a = mc.attach_bytes(manager, span, IMAGE, mc.IMAGE_MIMES, direction="input", purpose="model_input",
                             capture=CapturePolicy(model_input=True), message_index=0, part_index=0)
-        b = _inline(manager, span)
+        b = _inline(manager, span, part_index=1)
     flush(manager)
-    assert a == b and f01.payloads == [IMAGE]
+    assert a is not None and b is not None and a != b
+    assert f01.payloads == [IMAGE, IMAGE]
+    (span,) = exporter.get_finished_spans()
+    assert sorted(r["occurrence_id"] for r in refs(span)) == sorted([a.occurrence_id, b.occurrence_id])
 
 
-def test_separate_traces_on_one_manager_share_the_claim(f01, spans):
+def test_separate_traces_on_one_manager_never_share_an_occurrence(f01, spans):
     # LangChain and LlamaIndex do not make their span current, so the provider span is a separate root.
-    tracer_provider, _ = spans
+    tracer_provider, exporter = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
     with tracer.start_as_current_span("framework") as one:
@@ -59,69 +72,123 @@ def test_separate_traces_on_one_manager_share_the_claim(f01, spans):
     with tracer.start_as_current_span("provider") as two:
         b = _inline(manager, two)
     flush(manager)
-    assert a == b and f01.payloads == [IMAGE]
+    assert one.get_span_context().trace_id != two.get_span_context().trace_id
+    assert a is not None and b is not None and a != b and f01.payloads == [IMAGE, IMAGE]
+    for span, occurrence in zip(exporter.get_finished_spans(), (a, b)):
+        assert [r["occurrence_id"] for r in refs(span)] == [occurrence.occurrence_id]
 
 
-def test_another_manager_or_an_expired_claim_uploads_again(f01, spans, monkeypatch):
-    tracer_provider, _ = spans
-    first, second = f01.manager(), f01.manager()
+def test_same_span_and_position_observed_twice_is_one_occurrence(f01, spans):
+    # The (span, position) registry still dedups ONE span observing ONE position twice.
+    tracer_provider, exporter = spans
+    manager = f01.manager()
+    part = mc.MediaPart("inline", lambda: URI, mc.IMAGE_MIMES, "model_input", 0, 0, raw=False)
+    with tracer_provider.get_tracer("t").start_as_current_span("s") as span:
+        first = mc.capture_parts(manager, span, "test", [part], direction="input")
+        again = mc.capture_parts(manager, span, "test", [part], direction="input")
+    flush(manager)
+    assert dict(first) == dict(again) and f01.payloads == [IMAGE]
+    (span,) = exporter.get_finished_spans()
+    assert len(refs(span)) == 1
+
+
+class _FailingStore(list):
+    """The loopback server fails every content PUT while this is its payload store."""
+
+    def append(self, item):
+        raise RuntimeError("synthetic content PUT failure")
+
+
+def test_a_failed_upload_is_not_reused_by_a_later_span(f01, spans):
+    # The first content PUT fails; the same bytes on a later span upload again under that span.
+    tracer_provider, exporter = spans
+    manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
-    with tracer.start_as_current_span("s") as span:
-        a = _inline(first, span)
-        b = _inline(second, span)
-    now = mc._clock()
-    monkeypatch.setattr(mc, "_clock", lambda: now + mc.CLAIM_TTL + 1)
-    with tracer.start_as_current_span("later") as span:
-        c = _inline(first, span)
-    flush(first)
-    flush(second)
-    assert len({a, b, c}) == 3 and f01.payloads == [IMAGE, IMAGE, IMAGE]
+    good = f01.state["payloads"]
+    f01.state["payloads"] = _FailingStore()
+    with tracer.start_as_current_span("first") as one:
+        _inline(manager, one)
+    manager.flush(15)
+    f01.state["payloads"] = good
+    with tracer.start_as_current_span("second") as two:
+        b = _inline(manager, two)
+    flush(manager)
+    assert b is not None and f01.payloads == [IMAGE]
+    second = [s for s in exporter.get_finished_spans() if s.name == "second"][0]
+    assert [r["occurrence_id"] for r in refs(second)] == [b.occurrence_id]
+    assert _parents(f01)[-1] == "%016x" % two.get_span_context().span_id
 
 
 def test_a_later_observer_denied_by_its_own_policy_gets_nothing(f01, spans):
-    tracer_provider, _ = spans
+    tracer_provider, exporter = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
     hidden = mc.local_capture_policy(TraceConfig(hide_input_images=True), direction="input", image=True)
     with tracer.start_as_current_span("framework") as parent:
         assert _inline(manager, parent) is not None
         with tracer.start_as_current_span("provider") as child:
-            assert _inline(manager, child, policy=hidden) is None  # reuse never widens permission
+            assert _inline(manager, child, policy=hidden) is None
     flush(manager)
     assert f01.payloads == [IMAGE]
+    assert refs([s for s in exporter.get_finished_spans() if s.name == "provider"][0]) == []
 
 
-def test_denied_bytes_are_never_hashed(f01, spans, monkeypatch):
+def test_denied_sources_are_never_read(f01, spans):
     tracer_provider, _ = spans
     manager = f01.manager()
-    calls = []
-    real = hashlib.sha256
-    monkeypatch.setattr(mc.hashlib, "sha256", lambda data=b"": calls.append(1) or real(data))
+    reads = []
     hidden = mc.local_capture_policy(TraceConfig(hide_inputs=True), direction="input")
     with tracer_provider.get_tracer("t").start_as_current_span("s") as span:
-        assert _inline(manager, span, policy=hidden) is None
-        assert mc.attach_bytes(manager, span, IMAGE, mc.IMAGE_MIMES, direction="input", purpose="model_input",
-                               capture=hidden) is None
-    assert calls == [] and f01.after_bootstrap() == []
+        assert mc.attach_inline(manager, span, lambda: reads.append(1) or URI, mc.IMAGE_MIMES, raw=False,
+                                direction="input", purpose="model_input", capture=hidden) is None
+        part = mc.MediaPart("bytes", lambda: reads.append(1) or IMAGE, mc.IMAGE_MIMES, "model_input", 0, 1)
+        assert mc.capture_parts(manager, span, "test", [part], direction="input",
+                                trace_configs=(TraceConfig(hide_inputs=True),)) == {}
+    assert reads == [] and f01.after_bootstrap() == []
 
 
-def test_concurrent_observers_of_identical_bytes_upload_once(f01, spans):
-    tracer_provider, _ = spans
+def test_concurrent_observers_of_identical_bytes_each_own_one(f01, spans):
+    tracer_provider, exporter = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
     results = []
-    with tracer.start_as_current_span("root") as root:
-        def observe():
-            with tracer.start_as_current_span("child", context=None) as child:
-                results.append(_inline(manager, child))
-        from opentelemetry import context as otel_context
+    with tracer.start_as_current_span("root"):
         ctx = otel_context.get_current()
-        threads = [threading.Thread(target=lambda: (otel_context.attach(ctx), observe())) for _ in range(8)]
+
+        def observe():
+            otel_context.attach(ctx)
+            with tracer.start_as_current_span("child") as child:
+                results.append(_inline(manager, child))
+
+        threads = [threading.Thread(target=observe) for _ in range(8)]
         [t.start() for t in threads]
         [t.join() for t in threads]
     flush(manager)
-    assert len(set(results)) == 1 and None not in results
-    assert f01.payloads == [IMAGE]
+    assert None not in results and len(set(results)) == 8
+    assert f01.payloads == [IMAGE] * 8
+    children = [s for s in exporter.get_finished_spans() if s.name == "child"]
+    assert sorted(r["occurrence_id"] for s in children for r in refs(s)) == \
+        sorted(o.occurrence_id for o in results)
+
+
+def test_tool_policy_folds_input_and_output_hide_flags(f01, spans):
+    tracer_provider, _ = spans
+    manager = f01.manager()
+    part = mc.MediaPart("bytes", lambda: IMAGE, mc.IMAGE_MIMES, "tool_result", 0, 0, role="tool")
+    tracer = tracer_provider.get_tracer("t")
+    for config in (TraceConfig(hide_outputs=True), TraceConfig(hide_output_text=True),
+                   TraceConfig(hide_output_messages=True), TraceConfig(hide_inputs=True),
+                   TraceConfig(hide_input_images=True), TraceConfig(pii_redaction=True)):
+        with tracer.start_as_current_span("tool") as span:
+            assert mc.capture_parts(manager, span, "test", [part], direction="input", trace_configs=(config,),
+                                    policy_directions=("input", "output")) == {}, config
+    with tracer.start_as_current_span("tool") as span:
+        captured = mc.capture_parts(manager, span, "test", [part], direction="input",
+                                    trace_configs=(TraceConfig(),), policy_directions=("input", "output"))
+    flush(manager)
+    assert len(captured) == 1 and f01.payloads == [IMAGE]
+    (body,) = f01.uploads
+    assert body["direction"] == "input" and body["purpose"] == "tool_result"
 
 
 def test_magic_bytes_must_match_and_select_the_exact_type(f01, spans):

@@ -9,8 +9,9 @@ non-streaming chat response are observed:
 - the magic bytes must match the admitted type.
 
 An ``IOBase`` source is never read, a ``path`` is never opened, and a ``url`` goes
-to the core's ``RemoteUrl`` policy without being fetched. Bytes identical to ones
-a provider instrumentor already uploaded in the same trace are not uploaded again.
+to the core's ``RemoteUrl`` policy without being fetched. The LlamaIndex span and a
+provider instrumentor's span each get their own occurrence (byte deduplication is
+server-side).
 
 This module imports ``fi_instrumentation.attachments``; the handler imports it only
 when an enabled attachment manager is passed.

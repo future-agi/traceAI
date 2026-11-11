@@ -8,13 +8,16 @@ Observed at SDK execution boundaries only:
   core's ``RemoteUrl`` policy and are never fetched or resolved here;
 - model request span, output: ``FilePart`` content of a successful,
   non-streaming response (never an error body);
-- tool call span: ``BinaryContent`` a tool returned.
+- tool call span: ``BinaryContent`` a tool returned. It is the tool span's
+  OUTPUT and the next request's model INPUT, so the local input AND output
+  hide flags both apply (deny-wins, as in the TypeScript MCP binding); it is
+  uploaded as model input (``direction="input"``, ``purpose="tool_result"``).
 
 ``BinaryContent.data`` must be complete bytes whose magic bytes match its
 declared ``media_type``. Videos, uploaded provider files and unknown content
-objects are not captured, and nothing is serialized to look for media. Bytes
-identical to ones a provider instrumentor (or the tool span) already uploaded in
-the same trace are not uploaded again.
+objects are not captured, and nothing is serialized to look for media. Every
+observing span (tool span, model request span, a provider instrumentor's span)
+gets its own occurrence; byte deduplication is server-side.
 """
 
 import dataclasses
@@ -134,12 +137,12 @@ class PydanticAIMedia:
     def __init__(self, manager: Any, trace_config: Any) -> None:
         self.manager, self.trace_config = manager, trace_config
 
-    def _capture(self, span, parts, direction: str) -> Mapping[str, Occurrence]:
+    def _capture(self, span, parts, direction: str, policy_directions=()) -> Mapping[str, Occurrence]:
         if span is None:
             return EMPTY
         try:
             return capture_parts(self.manager, span, "pydantic_ai", parts, direction=direction,
-                                 trace_configs=(self.trace_config,))
+                                 trace_configs=(self.trace_config,), policy_directions=policy_directions)
         except Exception:
             return EMPTY
 
@@ -155,4 +158,7 @@ class PydanticAIMedia:
 
     def tool_result(self, span, result: Any, tool_call_id: Any) -> Mapping[str, Occurrence]:
         tool_call_id = tool_call_id if isinstance(tool_call_id, str) else None
-        return self._capture(span, _content_parts(result, 0, 0, "tool", "tool_result", tool_call_id), "input")
+        # The tool span redacts this value under the OUTPUT hide flags (TOOL_RESULT -> OUTPUT_VALUE),
+        # and it is a later model input: fold both directions so either side's hide flag denies.
+        return self._capture(span, _content_parts(result, 0, 0, "tool", "tool_result", tool_call_id), "input",
+                             policy_directions=("input", "output"))

@@ -10,9 +10,9 @@ tracer receives (``dumpd`` messages under ``kwargs.content``):
 - Anthropic-style ``source: {"type": "base64"}`` blocks.
 
 Remote URLs go to the core's ``RemoteUrl`` policy and are never fetched; provider
-file IDs and anything else are ignored. Bytes identical to ones a provider
-instrumentor (or another observer) already uploaded in the same trace are not
-uploaded again (``media_capture`` claim table).
+file IDs and anything else are ignored. The LangChain span and a provider
+instrumentor's span each get their own occurrence of what they observed (byte
+deduplication is server-side).
 
 This module imports ``fi_instrumentation.attachments``; the tracer imports it only
 when an enabled attachment manager is passed.

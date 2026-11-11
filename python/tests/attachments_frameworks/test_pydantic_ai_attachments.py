@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("pydantic_ai")
 pytest.importorskip("traceai_pydantic_ai")
 
-from conftest import PDF, b64, flush, png, refs, wav  # noqa: E402
+from conftest import PDF, assert_uris_resolve, b64, flush, png, refs, wav  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402
 from fi_instrumentation.attachments import AttachmentConfig, create_attachment_manager  # noqa: E402
 from pydantic_ai import Agent, BinaryContent, ImageUrl  # noqa: E402
@@ -65,9 +65,7 @@ def test_binary_content_prompt(f01, instrument):
     assert len(owners) == 1 and len(refs(owners[0])) == 3
 
 
-def test_tool_result_binary_is_captured_once_across_tool_and_model_spans(f01, instrument):
-    manager = f01.manager()
-    exporter = instrument(manager)
+def _screenshot_agent():
     calls = {"n": 0}
 
     def model(messages, info: AgentInfo):
@@ -86,15 +84,57 @@ def test_tool_result_binary_is_captured_once_across_tool_and_model_spans(f01, in
         agent.run_sync("take a screenshot")
     except Exception as exc:  # noqa: BLE001
         # pydantic-ai 0.1.0's FunctionModel cannot JSON-serialize a binary tool return when it estimates
-        # usage for the second request; the tool span has already captured it by then.
+        # usage for the second request; the tool span has already finished by then.
         if "serializ" not in str(exc).lower():
             raise
+
+
+def tool_spans(exporter):
+    return [s for s in exporter.get_finished_spans() if s.name.startswith("pydantic_ai.tool.call")]
+
+
+def test_tool_result_binary_is_owned_by_each_observing_span(f01, instrument):
+    manager = f01.manager()
+    exporter = instrument(manager)
+    _screenshot_agent()
     flush(manager)
-    assert f01.payloads == [SCREEN]
-    (body,) = f01.uploads
-    assert body["purpose"] == "tool_result" and body.get("tool_call_id") == "call_1"
-    tool_spans = [s for s in exporter.get_finished_spans() if "tool" in s.name.lower() and refs(s)]
-    assert len(tool_spans) == 1
+    (tool,) = [s for s in tool_spans(exporter) if refs(s)]
+    (ref,) = refs(tool)
+    assert ref["purpose"] == "tool_result" and ref.get("tool_call_id") == "call_1"
+    by_occurrence = {b["occurrence_id"]: b for b in f01.uploads}
+    body = by_occurrence[ref["occurrence_id"]]
+    assert body["association"]["parent"]["span_id"] == format(tool.context.span_id, "016x")
+    assert body["purpose"] == "tool_result" and body["direction"] == "input" and body.get("tool_call_id") == "call_1"
+    # Newer SDKs reach the second model request, which re-sends the tool return as model input: that span
+    # owns ANOTHER occurrence of the same bytes (never the tool span's).
+    owners = [s for s in exporter.get_finished_spans() if refs(s)]
+    assert len(f01.payloads) == len(owners) and set(f01.payloads) == {SCREEN}
+    for span in owners:
+        for r in refs(span):
+            assert by_occurrence[r["occurrence_id"]]["association"]["parent"]["span_id"] == \
+                format(span.context.span_id, "016x")
+    assert_uris_resolve(exporter)
+
+
+@pytest.mark.parametrize("flag", ["hide_outputs", "hide_output_text", "hide_output_messages"])
+def test_tool_span_output_hide_flags_deny_its_tool_result_media(f01, instrument, flag):
+    """The tool span redacts its result under the OUTPUT hide flags; the same media must not be captured there."""
+    manager = f01.manager()
+    exporter = instrument(manager, config=TraceConfig(**{flag: True}))
+    _screenshot_agent()
+    flush(manager)
+    tools = tool_spans(exporter)
+    assert tools, [s.name for s in exporter.get_finished_spans()]
+    tool_ids = {format(s.context.span_id, "016x") for s in tools}
+    for span in tools:
+        assert refs(span) == [], (flag, span.name)
+        result = (span.attributes or {}).get("pydantic_ai.tool.result")
+        assert result is None or result == "__REDACTED__", (flag, result)
+    assert not [b for b in f01.uploads if b["association"]["parent"]["span_id"] in tool_ids], flag
+    # Only a later model request (input-governed, so not hidden by an output flag) may own a copy.
+    owners = {s.name for s in exporter.get_finished_spans() if refs(s)}
+    assert all(span in {s.name for s in request_spans(exporter)} for span in owners), owners
+    assert_uris_resolve(exporter)
 
 
 @pytest.mark.skipif(FilePart is None, reason="FilePart needs a newer pydantic-ai")

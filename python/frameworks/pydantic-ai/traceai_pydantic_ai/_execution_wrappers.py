@@ -158,7 +158,7 @@ def wrap_model_request(original, tracer, streaming=False, media=None):
     @functools.wraps(original)
     async def wrapper(self, *args, **kwargs):
         with _model_request_span(self, tracer) as span:
-            # Before the provider call, so a provider instrumentor sharing the manager reuses it.
+            # Input media is captured before the provider call; this span owns its own occurrences.
             _capture(media, "request", span, _request_messages(args, kwargs))
             response = await original(self, *args, **kwargs)
             _record_model_usage(span, response)

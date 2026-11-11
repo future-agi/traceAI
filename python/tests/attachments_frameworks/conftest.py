@@ -6,6 +6,7 @@
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -54,3 +55,21 @@ def all_refs(exporter):
     for span in exporter.get_finished_spans():
         found.extend((span.name, ref) for ref in refs(span))
     return found
+
+
+_URI = re.compile(r"fi-attachment:([A-Za-z0-9_-]+)")
+
+
+def assert_uris_resolve(exporter):
+    """F01 resolve checks the expected parent: every ``fi-attachment:<occurrence>`` a span carries
+    must be an occurrence in THAT span's own ``fi.attachment.refs``. Returns the URI count."""
+    seen = 0
+    for span in exporter.get_finished_spans():
+        own = {ref["occurrence_id"] for ref in refs(span)}
+        for name, value in (span.attributes or {}).items():
+            values = value if isinstance(value, (list, tuple)) else (value,)
+            for item in values:
+                for occurrence in _URI.findall(item) if isinstance(item, str) else ():
+                    seen += 1
+                    assert occurrence in own, (span.name, name, occurrence, sorted(own))
+    return seen

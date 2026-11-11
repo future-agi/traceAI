@@ -633,7 +633,7 @@ class _ModelWrapper:
         self._trace_configs = trace_configs
 
     def _capture_input(self, span: Any, arguments: Mapping[str, Any]) -> None:
-        # Before the provider call, so a provider instrumentor sharing the manager reuses it.
+        # Input media is captured before the provider call; this span owns its own occurrences.
         if self._attachments is None:
             return
         try:

@@ -654,7 +654,7 @@ class _Span(BaseSpan):
             GEN_AI_INPUT_MESSAGES,
             *event.messages,
         )
-        # Before the provider call, so a provider instrumentor sharing the manager reuses it.
+        # Input media is captured before the provider call; this span owns its own occurrences.
         self._capture_media(event.messages, "input")
         self[INPUT_VALUE] = safe_json_dumps(event.messages)
         self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))

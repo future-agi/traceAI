@@ -14,8 +14,9 @@ media references are ignored. Videos are not captured.
 
 Privacy is the INTERSECTION of the FI TraceConfig and the OpenInference
 TraceConfig the instrumentor runs with (either one hiding wins), the manager's
-own policy, and the per-call capture policy. Bytes identical to ones a provider
-instrumentor already uploaded in the same trace are not uploaded again.
+own policy, and the per-call capture policy. The Agno span and a provider
+instrumentor's span each get their own occurrence (byte deduplication is
+server-side).
 """
 
 from types import MappingProxyType

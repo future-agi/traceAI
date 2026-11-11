@@ -13,12 +13,11 @@ use these to capture inline base64/data-URI parts and speech audio. Rules:
 - One registry per manager remembers admitted (span, position) pairs, so a
   second observer of the same span and position gets the FIRST occurrence back
   and uploads nothing.
-- One claim table per manager remembers the bytes it uploaded in the last
-  ``CLAIM_TTL`` seconds, so a framework span and the provider span beneath it
-  upload identical bytes once, even when the framework does not make its span
-  the current context (separate traces). A later observer must be admitted
-  under its OWN policy before it may reuse a claim, and only admitted bytes are
-  hashed. One manager serves one project, so a reuse never points outside it.
+- Every observing span gets its OWN occurrence. A framework span and the
+  provider span beneath it each upload what they observed, and identical bytes
+  at two positions are two occurrences; byte deduplication is server-side. A
+  ``fi-attachment:`` reference is only ever projected onto the span whose
+  ``fi.attachment.refs`` carries that occurrence.
 
 Every public function is non-throwing and returns ``None``/empty on denial.
 """
@@ -26,10 +25,8 @@ Every public function is non-throwing and returns ``None``/empty on denial.
 import base64
 import binascii
 import dataclasses
-import hashlib
 import re
 import threading
-import time
 import weakref
 from collections import OrderedDict
 from types import MappingProxyType
@@ -55,11 +52,6 @@ AUDIO_MIMES = ("audio/wav", "audio/mpeg", "audio/ogg", "audio/flac", "audio/webm
 # Framework boundaries hand over complete inline parts (mirrors @traceai/framework-attachments).
 MAX_FRAMEWORK_BYTES = 1 * MiB
 MAX_FRAMEWORK_PARTS = 64
-# Claims cover "the same call observed twice" (milliseconds apart), not long-term
-# content dedup: a short window keeps the referenced occurrence live.
-CLAIM_TTL = 300.0
-MAX_CLAIMS = 4096
-_clock = time.monotonic  # the claim table's own clock (tests replace it, never the global one)
 TOOL_ID = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 _DATA_URI = re.compile(r"data:([a-z]+/[a-z0-9.+-]+);base64")
 _BASE64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
@@ -178,63 +170,17 @@ class _Registry:
 REGISTRY = _Registry()
 
 
-class _Claims:
-    """Uploaded bytes per manager: (mime, sha256) -> (occurrence, expiry). Digests and IDs only.
+def _attach_admitted(ticket, data: bytes, mime: str, fields: dict) -> Optional[Occurrence]:
+    """Attach ADMITTED bytes as a new occurrence of the ticket's span. Never raises.
 
-    Expiry is lazy (checked on access; no timer). The lock is held across the
-    lookup and ``ticket.attach`` (which only queues), so two concurrent observers
-    of identical bytes cannot both upload.
-    """
-
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self._managers: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
-
-    def get(self, manager, key: Tuple[str, str]) -> Optional[Occurrence]:
-        claims = self._managers.get(manager)
-        entry = claims.get(key) if claims is not None else None
-        if entry is None:
-            return None
-        if entry[1] <= _clock():
-            del claims[key]
-            return None
-        return entry[0]
-
-    def put(self, manager, key: Tuple[str, str], occurrence: Occurrence) -> None:
-        claims = self._managers.get(manager)
-        if claims is None:
-            claims = self._managers[manager] = OrderedDict()
-        claims.pop(key, None)
-        while len(claims) >= MAX_CLAIMS:
-            claims.popitem(last=False)
-        claims[key] = (occurrence, _clock() + CLAIM_TTL)
-
-
-CLAIMS = _Claims()
-
-
-def attach_claimed(manager, ticket, data: bytes, mime: str, fields: dict) -> Optional[Occurrence]:
-    """Attach ADMITTED bytes at most once per manager within ``CLAIM_TTL``. Never raises.
-
-    The caller's ``ticket`` was already admitted under its own policy, so reusing an
-    earlier occurrence never widens what this observer may capture. A reuse
-    releases the ticket and uploads nothing.
+    No cross-span reuse: an occurrence belongs to the span that observed it
+    (F01 resolve checks the parent), so every observer uploads its own.
     """
     try:
         if not ticket.admitted:
             return None
-        key = (mime, hashlib.sha256(data).hexdigest())
-        with CLAIMS.lock:
-            previous = CLAIMS.get(manager, key)
-            if previous is not None:
-                ticket.release()
-                return previous
-            handle = ticket.attach(Bytes(data), **fields)
-            if handle.admission != "queued":
-                return None
-            occurrence = Occurrence(handle.occurrence_id, mime)
-            CLAIMS.put(manager, key, occurrence)
-            return occurrence
+        handle = ticket.attach(Bytes(data), **fields)
+        return Occurrence(handle.occurrence_id, mime) if handle.admission == "queued" else None
     except Exception:
         try:
             ticket.release()
@@ -307,8 +253,7 @@ def attach_inline(manager, span, read: Callable[[], Any], mime_types: Tuple[str,
     """Preflight, then read once, decode strictly and attach. Never raises.
 
     ``verify`` also requires the decoded container (magic bytes) to match the
-    MIME it was admitted under. Identical bytes already uploaded in this trace
-    through the same manager are reused (``attach_claimed``).
+    MIME it was admitted under.
     """
     try:
         state = {}
@@ -347,7 +292,7 @@ def attach_inline(manager, span, read: Callable[[], Any], mime_types: Tuple[str,
         if data is None or (verify and sniff_media(data[:16]) != mime):
             ticket.release()
             return None
-        return attach_claimed(manager, ticket, data, mime, _fields(message_index, part_index, role, tool_call_id))
+        return _attach_admitted(ticket, data, mime, _fields(message_index, part_index, role, tool_call_id))
     except Exception:
         return None
 
@@ -397,7 +342,7 @@ def attach_bytes(manager, span, data: Any, mime_types: Tuple[str, ...], *, direc
             if not ticket.admitted:
                 return None
         payload = data if isinstance(data, bytes) else bytes(data)
-        return attach_claimed(manager, ticket, payload, mime, _fields(message_index, part_index, role, tool_call_id))
+        return _attach_admitted(ticket, payload, mime, _fields(message_index, part_index, role, tool_call_id))
     except Exception:
         return None
 
@@ -488,7 +433,7 @@ def attach_audio(manager, span, data: Any, *, direction: str, purpose: Optional[
             ticket = manager.preflight(span, mime_type=mime, **options)
             if not ticket.admitted:
                 return None
-        return attach_claimed(manager, ticket, bytes(data) if not isinstance(data, bytes) else data, mime,
+        return _attach_admitted(ticket, bytes(data) if not isinstance(data, bytes) else data, mime,
                               _fields(message_index, part_index, role))
     except Exception:
         return None
@@ -635,17 +580,23 @@ def intersect(*policies: CapturePolicy) -> CapturePolicy:
 
 def capture_parts(manager, span, namespace: str, parts: Iterable[MediaPart], *, direction: str,
                   trace_configs: Sequence[Any] = (), capture: Optional[CapturePolicy] = None,
-                  max_bytes: int = MAX_FRAMEWORK_BYTES) -> Mapping[str, Occurrence]:
+                  max_bytes: int = MAX_FRAMEWORK_BYTES,
+                  policy_directions: Sequence[str] = ()) -> Mapping[str, Occurrence]:
     """Capture typed framework parts on ``span``; returns admitted ``"{dir}/{msg}/{part}"`` positions.
 
     Every local ``trace_configs`` entry (FI TraceConfig, OpenInference TraceConfig, ...)
-    folds in deny-only; the strictest wins. At most ``MAX_FRAMEWORK_PARTS`` positions per
-    span. Never raises, never walks arbitrary objects, never fetches or opens anything.
+    folds in deny-only for every direction in ``policy_directions`` (default: the upload
+    ``direction``); the strictest wins. A tool span's result is that span's OUTPUT and a
+    later model INPUT, so it passes ``("input", "output")``: any input or output hide flag
+    denies it. At most ``MAX_FRAMEWORK_PARTS`` positions per span. Never raises, never
+    walks arbitrary objects, never fetches or opens anything.
     """
     observation = Observation(manager, span, namespace)
     if not observation.usable:
         return EMPTY
     try:
+        directions = tuple(policy_directions) or (direction,)
+        configs = tuple(trace_configs) or (None,)
         visited = 0
         for part in parts:
             visited += 1
@@ -654,8 +605,8 @@ def capture_parts(manager, span, namespace: str, parts: Iterable[MediaPart], *, 
             if not isinstance(part, MediaPart) or not part.mime_types:
                 continue
             image = part.mime_types[0].startswith("image/")
-            policy = intersect(*(local_capture_policy(config, direction=direction, base=capture, image=image)
-                                 for config in (tuple(trace_configs) or (None,))))
+            policy = intersect(*(local_capture_policy(config, direction=fold, base=capture, image=image)
+                                 for config in configs for fold in directions))
             fields = dict(direction=direction, purpose=part.purpose, capture=policy,
                           message_index=part.message_index, part_index=part.part_index, role=part.role,
                           tool_call_id=part.tool_call_id)

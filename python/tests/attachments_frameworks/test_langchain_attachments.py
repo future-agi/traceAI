@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("langchain_core")
 pytest.importorskip("traceai_langchain")
 
-from conftest import PDF, b64, flush, png, refs, wav  # noqa: E402
+from conftest import PDF, assert_uris_resolve, b64, flush, png, refs, wav  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402
 from fi_instrumentation.attachments import AttachmentConfig, create_attachment_manager  # noqa: E402
 from langchain_core.language_models.chat_models import BaseChatModel  # noqa: E402
@@ -209,7 +209,7 @@ def test_unsupported_sources_are_ignored(f01, instrument):
     assert f01.payloads == []
 
 
-def test_same_image_twice_in_one_trace_uploads_once(f01, instrument):
+def test_same_image_on_two_chat_spans_gives_each_span_its_own_occurrence(f01, instrument):
     from langchain_core.runnables import RunnableLambda
 
     manager = f01.manager()
@@ -219,6 +219,9 @@ def test_same_image_twice_in_one_trace_uploads_once(f01, instrument):
         RunnableLambda(lambda _: FakeChat().invoke([human(block)]))
     chain.invoke("x")
     flush(manager)
-    assert f01.payloads == [IMAGE]
-    llm_refs = [refs(s) for s in exporter.get_finished_spans() if s.name == "FakeChat"]
-    assert sorted(len(r) for r in llm_refs) == [0, 1]
+    assert f01.payloads == [IMAGE, IMAGE]  # byte deduplication is server-side
+    chats = [s for s in exporter.get_finished_spans() if s.name == "FakeChat"]
+    assert [len(refs(s)) for s in chats] == [1, 1]
+    owned = {r["occurrence_id"]: format(s.context.span_id, "016x") for s in chats for r in refs(s)}
+    assert owned == {b["occurrence_id"]: b["association"]["parent"]["span_id"] for b in f01.uploads}
+    assert_uris_resolve(exporter)
