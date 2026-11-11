@@ -30,7 +30,7 @@ async function harness(options = {}) {
       res.statusCode = 201;
       res.end(JSON.stringify({ upload_id: randomUUID(), attachment_id: request.attachment_id, occurrence_id: request.occurrence_id, state: 'pending_upload', reserved_bytes: request.declared_bytes, expires_at: new Date(Date.now() + 600000).toISOString(), transfer_mode: 'authenticated_stream', write_capability: 'synthetic-write-capability' }));
     } else if (req.url.endsWith('/content')) {
-      uploads.push(body); res.end(JSON.stringify({ upload_id: req.url.split('/').at(-2), state: 'pending_upload' }));
+      uploads.push(body); res.end(JSON.stringify({ upload_id: req.url.split('/').at(-2), state: 'pending_upload', reason: 'queued' }));
     } else if (req.url.endsWith('/complete')) {
       res.statusCode = 202; res.end(JSON.stringify({ upload_id: req.url.split('/').at(-2), state: 'validating', reason: 'binding_pending' }));
     } else { res.statusCode = 404; res.end('{}'); }

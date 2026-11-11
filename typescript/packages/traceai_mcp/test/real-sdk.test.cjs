@@ -47,12 +47,18 @@ test('real MCP SDK SSE tool screenshot, audio, resource read and cancellation', 
     const pending = traced.callTool({ name: 'wait', arguments: {} }, undefined, { signal: abort.signal });
     abort.abort(); await assert.rejects(pending);
     await h.manager.flush(); assert.equal(h.uploads.length, 4);
-    for (const policy of [{ enabled: false }, { enabled: true, traceConfig: { hideInputImages: true } }, { enabled: true, traceConfig: { hideInputs: true } }, { enabled: true, traceConfig: { piiRedaction: true } }]) {
-      h.manager.updatePolicy(policy);
-      await traced.callTool({ name: 'screenshot', arguments: {} }); await h.manager.flush();
-      // hideInputImages leaves typed audio/PDF allowed; the other controls deny all.
-      const expected = policy.traceConfig?.hideInputImages ? 6 : policy.enabled === false ? 4 : 6;
-      assert.equal(h.uploads.length, expected);
+    // The core's updatePolicy only tightens (deny-wins), so each control runs on its own fresh manager. A thin
+    // per-control delegate gets its own proxy; the tool result still comes from the real SDK client over SSE.
+    for (const [options, expected] of [[{ enabled: false }, 0], [{ traceConfig: { hideInputImages: true } }, 2], [{ traceConfig: { hideInputs: true } }, 0], [{ traceConfig: { piiRedaction: true } }, 0]]) {
+      const control = await harness({ manager: options });
+      try {
+        const delegate = { callTool: (...args) => client.callTool(...args) };
+        await wrapMCPClient(delegate, { tracerProvider: control.provider }).callTool({ name: 'screenshot', arguments: {} });
+        await control.manager.flush();
+        // hideInputImages leaves typed audio/PDF allowed; the other controls deny all.
+        assert.equal(control.uploads.length, expected, JSON.stringify(options));
+        if (options.enabled === false) assert.equal(control.requests.length, 0);
+      } finally { await control.close(); }
     }
   } finally {
     await client.close(); await protocol.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await h.close();

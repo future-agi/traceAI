@@ -149,6 +149,8 @@ test('every media part is preflighted before its encoded value is read, and read
     assert.deepEqual(spy.reasons, ['queued', 'queued', 'queued']);
     assert.deepEqual(handles.map(x => x.admission), ['queued', 'queued', 'queued']);
     assert.equal(h.uploads.length, 3);
+    // Transferred for validation under strict F01 response checks (no unsupported_version).
+    for (const x of handles) assert.equal((await x.completion).status, 'validating');
   } finally { await h.close(); }
 });
 
