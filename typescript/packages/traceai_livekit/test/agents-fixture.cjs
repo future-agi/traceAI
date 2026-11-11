@@ -133,7 +133,12 @@ async function startedSession(sdk, tracer, { redaction = false, audio = true, re
     await new Promise(resolve => setTimeout(resolve, 700));
   }
   return { ctx, session, span, recorder, file: path.join(ctx.sessionDirectory, 'audio.ogg'),
-    cleanup() { try { span.end(); } catch { /* ended */ } fs.rmSync(ctx.sessionDirectory, { recursive: true, force: true }); } };
+    // Runs even when an assertion failed, so a still-running recorder cannot keep the process alive.
+    async cleanup() {
+      try { if (recorder?.recording) await recorder.close(); } catch { /* best effort */ }
+      try { span.end(); } catch { /* ended */ }
+      fs.rmSync(ctx.sessionDirectory, { recursive: true, force: true });
+    } };
 }
 
 module.exports = { attachmentFixture, loadAgents, startedSession };
