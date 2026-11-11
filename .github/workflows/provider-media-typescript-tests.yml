@@ -3,7 +3,7 @@ name: TypeScript provider media attachments
 on:
   pull_request:
     paths:
-      - 'typescript/packages/traceai_provider_media/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/traceai_openai/**'
       - 'typescript/packages/traceai_groq/**'
@@ -15,6 +15,8 @@ on:
       - 'typescript/packages/traceai_portkey/**'
       - 'typescript/packages/traceai_vllm/**'
       - 'typescript/pnpm-lock.yaml'
+      - 'release-please-config.json'
+      - '.release-please-manifest.json'
       - '.github/workflows/provider-media-typescript-tests.yml'
   workflow_dispatch:
 
@@ -37,6 +39,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
+      - name: Helper layout and release metadata
+        working-directory: typescript
+        run: node --test packages/provider-media/test/layout.test.cjs
       - name: Install pinned workspace dependencies
         working-directory: typescript
         run: |
@@ -54,7 +59,7 @@ jobs:
             --workspace-concurrency=1 run build
       - name: Install the pinned real provider SDKs (floor and latest)
         working-directory: typescript
-        run: node packages/traceai_provider_media/test/install-sdks.cjs "$RUNNER_TEMP/provider-sdks"
+        run: node packages/provider-media/test/install-sdks.cjs "$RUNNER_TEMP/provider-sdks"
       - name: Helper privacy, lifetime and dedup tests; real SDKs against loopback only
         working-directory: typescript
         env:
@@ -64,15 +69,15 @@ jobs:
           # One SDK tier per process: some instrumentations keep process-wide patch state.
           sudo --preserve-env=MEDIA_SDK_ROOT unshare --net bash -c '
             ip link set lo up
-            "$1" --test packages/traceai_provider_media/test/media.test.cjs &&
-            MEDIA_SDK_TIER=floor "$1" --test packages/traceai_provider_media/test/sdk.test.cjs &&
-            MEDIA_SDK_TIER=latest "$1" --test packages/traceai_provider_media/test/sdk.test.cjs
+            "$1" --test packages/provider-media/test/media.test.cjs &&
+            MEDIA_SDK_TIER=floor "$1" --test packages/provider-media/test/sdk.test.cjs &&
+            MEDIA_SDK_TIER=latest "$1" --test packages/provider-media/test/sdk.test.cjs
           ' _ "$(command -v node)"
       - name: Install the packed helper in a clean consumer
         working-directory: typescript
         run: |
           pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
-          pnpm --dir packages/traceai_provider_media pack --out "$RUNNER_TEMP/provider-media.tgz"
+          pnpm --dir packages/provider-media pack --out "$RUNNER_TEMP/provider-media.tgz"
           npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/provider-media.tgz"
           cd "$RUNNER_TEMP/consumer"

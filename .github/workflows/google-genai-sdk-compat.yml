@@ -5,7 +5,7 @@ on:
     paths:
       - 'typescript/packages/traceai_google_genai_sdk/**'
       - 'typescript/packages/fi-core/**'
-      - 'typescript/packages/traceai_provider_media/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - '.github/workflows/google-genai-sdk-compat.yml'
       - '.github/scripts/loopback-network-diagnostics.cjs'
@@ -46,7 +46,7 @@ jobs:
           pnpm --filter @traceai/provider-media run build
           pnpm --dir packages/fi-semantic-conventions pack --out "$RUNNER_TEMP/semconv.tgz"
           pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
-          pnpm --dir packages/traceai_provider_media pack --out "$RUNNER_TEMP/provider-media.tgz"
+          pnpm --dir packages/provider-media pack --out "$RUNNER_TEMP/provider-media.tgz"
       - name: Build adapter against published shared dependencies
         shell: bash
         run: |

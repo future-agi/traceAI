@@ -268,6 +268,16 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/provider-media:
+    dependencies:
+      '@traceai/fi-core':
+        specifier: workspace:^
+        version: link:../fi-core
+    devDependencies:
+      tsc-alias:
+        specifier: ^1.8.16
+        version: 1.8.16
+
   packages/traceai_agent_core:
     dependencies:
       '@opentelemetry/api':
@@ -551,7 +561,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1296,7 +1306,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1351,7 +1361,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.1
@@ -1420,7 +1430,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -2043,7 +2053,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -2283,7 +2293,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -2684,7 +2694,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -2972,7 +2982,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.7.0
         version: 1.9.0
@@ -3052,7 +3062,7 @@ importers:
     dependencies:
       '@traceai/provider-media':
         specifier: workspace:^
-        version: link:../traceai_provider_media
+        version: link:../provider-media
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -3286,16 +3296,6 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.8.3
-
-  packages/traceai_provider_media:
-    dependencies:
-      '@traceai/fi-core':
-        specifier: workspace:^
-        version: link:../fi-core
-    devDependencies:
-      tsc-alias:
-        specifier: ^1.8.16
-        version: 1.8.16
 
 packages:
 

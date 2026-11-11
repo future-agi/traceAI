@@ -593,6 +593,11 @@
       "component": "npm-traceai-fi-semantic-conventions",
       "package-name": "@traceai/fi-semantic-conventions"
     },
+    "typescript/packages/provider-media": {
+      "release-type": "node",
+      "component": "npm-traceai-provider-media",
+      "package-name": "@traceai/provider-media"
+    },
     "typescript/packages/traceai_anthropic": {
       "release-type": "node",
       "component": "npm-traceai-anthropic",

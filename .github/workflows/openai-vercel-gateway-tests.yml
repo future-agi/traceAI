@@ -6,7 +6,7 @@ on:
     paths:
       - 'typescript/packages/traceai_openai/**'
       - 'typescript/packages/fi-core/**'
-      - 'typescript/packages/traceai_provider_media/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/openai-vercel-gateway-tests.yml'
@@ -53,7 +53,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/gateway-pack"
           pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
-          pnpm --dir packages/traceai_provider_media pack --out "$RUNNER_TEMP/provider-media.tgz"
+          pnpm --dir packages/provider-media pack --out "$RUNNER_TEMP/provider-media.tgz"
           pnpm --dir packages/traceai_openai pack --pack-destination "$RUNNER_TEMP/gateway-pack"
           npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP"/gateway-pack/*.tgz "$RUNNER_TEMP/fi-core.tgz" "$RUNNER_TEMP/provider-media.tgz"
           cp packages/traceai_openai/test/moduleTypes.mts packages/traceai_openai/test/moduleTypes.cts "$RUNNER_TEMP/openai-sdk/"

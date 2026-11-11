@@ -72,6 +72,7 @@
   "python/traceai": "0.1.0",
   "typescript/packages/fi-core": "1.2.3",
   "typescript/packages/fi-semantic-conventions": "1.2.0",
+  "typescript/packages/provider-media": "0.1.0",
   "typescript/packages/traceai_anthropic": "0.1.5",
   "typescript/packages/traceai_auto": "0.1.4",
   "typescript/packages/traceai_bedrock": "0.1.3",

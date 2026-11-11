@@ -6,7 +6,7 @@ on:
     paths:
       - 'typescript/packages/traceai_google_genai/**'
       - 'typescript/packages/fi-core/**'
-      - 'typescript/packages/traceai_provider_media/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - 'typescript/tsconfig*.json'
@@ -42,7 +42,7 @@ jobs:
           sandbox-exec -f "$policy" pnpm --dir typescript --filter '@traceai/google-genai...' run build
           sandbox-exec -f "$policy" pnpm --dir typescript --filter @traceai/google-genai test --runInBand
           sandbox-exec -f "$policy" pnpm --dir typescript/packages/fi-core pack --out "$RUNNER_TEMP/fi-core.tgz"
-          sandbox-exec -f "$policy" pnpm --dir typescript/packages/traceai_provider_media pack --out "$RUNNER_TEMP/provider-media.tgz"
+          sandbox-exec -f "$policy" pnpm --dir typescript/packages/provider-media pack --out "$RUNNER_TEMP/provider-media.tgz"
           sandbox-exec -f "$policy" pnpm --dir typescript/packages/traceai_google_genai pack --pack-destination "$RUNNER_TEMP/tarballs"
       - name: Install packed adapter and staged core with real SDKs
         env:
