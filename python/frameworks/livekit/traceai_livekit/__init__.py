@@ -19,7 +19,7 @@ from .integration import (
     flush_on_job_shutdown,
 )
 
-from .recording import import_completed_egress, record_egress, wrap_egress_client
+from .recording import LiveKitEgressResolver, import_completed_egress, record_egress, wrap_egress_client
 
 
 def bind_session(session, job_context, *, manager, owned_recording_files=False,
@@ -41,6 +41,7 @@ __all__ = [
     "flush_on_job_shutdown",
     "bind_session",
     "import_completed_egress",
+    "LiveKitEgressResolver",
     "record_egress",
     "wrap_egress_client",
     # Exporters

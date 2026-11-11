@@ -47,6 +47,41 @@ def test_explicit_session_binding_uses_shared_manager_without_recording_permissi
     assert "recording_source_ready" not in str(traceai.attachment_status())
 
 
+def test_pipecat_binding_passes_options_and_reports_adapter_status(monkeypatch):
+    manager = SimpleNamespace(status=lambda: SimpleNamespace(state="ready"))
+    monkeypatch.setattr(traceai, "_tracer_provider", SimpleNamespace(attachment_manager=manager))
+    binder = Mock(return_value=SimpleNamespace(status="policy_denied"))
+    monkeypatch.setattr(traceai.importlib, "import_module",
+                        Mock(return_value=SimpleNamespace(bind_audio_processor=binder)))
+    processor, context = object(), object()
+    result = traceai.bind_pipecat_audio_processor(processor, context, layout="separate_tracks")
+    assert result is binder.return_value
+    binder.assert_called_once_with(processor, context, manager=manager, layout="separate_tracks")
+    # A denied binding is never reported as bound.
+    assert traceai.attachment_status()["adapters"]["pipecat"] == "policy_denied"
+
+
+def test_livekit_egress_import_uses_shared_manager(monkeypatch):
+    import asyncio
+
+    manager = SimpleNamespace(status=lambda: SimpleNamespace(state="ready"))
+    monkeypatch.setattr(traceai, "_tracer_provider", SimpleNamespace(attachment_manager=manager))
+    calls = []
+
+    async def importer(info, **kwargs):
+        calls.append((info, kwargs))
+        return "handle"
+
+    monkeypatch.setattr(traceai.importlib, "import_module",
+                        Mock(return_value=SimpleNamespace(import_completed_egress=importer)))
+    info = object()
+    result = asyncio.run(traceai.import_livekit_completed_egress(
+        info, session_context="span", egress_id="EG_synthetic", room_name="room", existing_source_authorized=True))
+    assert result == "handle"
+    assert calls[0][0] is info and calls[0][1]["manager"] is manager
+    assert calls[0][1]["existing_source_authorized"] is True and calls[0][1]["registry"] is None
+
+
 def test_old_optional_adapter_reports_unsupported_without_exception_body(monkeypatch, capsys):
     monkeypatch.setattr(traceai, "_tracer_provider", SimpleNamespace(attachment_manager=SimpleNamespace(status=lambda: SimpleNamespace(state="ready"))))
     monkeypatch.setattr(traceai.importlib, "import_module", Mock(return_value=SimpleNamespace()))

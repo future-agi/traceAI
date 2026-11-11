@@ -16,37 +16,46 @@ from pathlib import Path
 from fi_instrumentation.attachments import (
     CapturePolicy, CorrelationHandle, RecordingFileScope,
 )
-from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, get_value
 
 _SUPPORTED = frozenset(("1.8.10", "1.8.11"))
 _BINDING = "_traceai_recording_binding"
 
 
-def _admission(manager, capture, correlation):
-    """Use the core's policy, never a weaker adapter-local privacy lattice.
+def _admission(manager, capture, correlation, *, binding_time=False):
+    """The core's public preflight decides; this adapter adds no weaker lattice.
 
-    P01 does not yet expose a public preflight. This versioned seam reads its
-    negotiated snapshot; attach() and the worker repeat admission before IO.
+    Nothing is retained: the one-byte ticket is released at once. At bind time
+    a still-running bootstrap is not a denial (finalization re-checks).
     """
+    if correlation is None:
+        return "correlation_unavailable"
     try:
-        session = manager._session
-        reason = manager.policy.evaluate(
-            session.policy if session else None, capture, direction="mixed",
-            mime_type="audio/ogg", source_kind="OwnedRecordingFile",
-        )
-        if reason:
-            return reason
-        if get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return "policy_denied"
-        if manager.status != "ready":
-            return manager.status
-        if correlation is None:
-            return "correlation_unavailable"
-        if not correlation.sampled:
-            return "unsampled"
+        ticket = manager.preflight(correlation, mime_type="audio/ogg", direction="mixed", max_bytes=1,
+                                   operation="import_existing", source_kind="OwnedRecordingFile",
+                                   purpose="conversation_recording", capture_policy=capture)
+        reason = ticket.reason
+        ticket.release()
     except Exception:
         return "source_unavailable"
-    return None
+    if reason == "queued" or (binding_time and reason == "bootstrap_pending"):
+        return None
+    return reason
+
+
+def mark_conversation_root(span) -> bool:
+    """Mark ``span`` as the conversation root ONLY when it is a true root.
+
+    A true root is a live SDK span with no parent at all (local or remote).
+    """
+    try:
+        from opentelemetry.sdk.trace import Span as SdkSpan
+        if not isinstance(span, SdkSpan) or span.parent is not None or not span.is_recording():
+            return False
+        span.set_attribute("fi.span.kind", "CONVERSATION")
+        span.set_attribute("gen_ai.span.kind", "CONVERSATION")
+        return True
+    except Exception:
+        return False
 
 
 def _native_denial(session, job, processors):
@@ -90,6 +99,7 @@ class SessionRecordingBinding:
         self._closed = False
         self._scope = None
         self._handle = None
+        self.root_marked = False
         self.status = "session_bound"
 
     @property
@@ -126,7 +136,7 @@ class SessionRecordingBinding:
                 self.status = "source_unavailable"
             finally:
                 if self._handle is not None and self.status != "validating":
-                    self._manager.cancel(self._handle)
+                    self._handle.cancel()
                 if self._scope is not None:
                     self._scope.close()
                     self._scope = None
@@ -166,20 +176,26 @@ class SessionRecordingBinding:
             return
         scope = RecordingFileScope(str(self._root), enabled=True)
         self._scope = scope
-        # Scope's no-follow root FD is part of this P01-version-qualified seam.
-        # The worker reopens independently and compares identity and size.
-        info = os.stat("audio.ogg", dir_fd=scope._fd, follow_symlinks=False)
+        # Deny-only pre-check (hard links, foreign owner, non-regular files).
+        # The scope's no-follow open and identity comparison stay the authority.
+        info = os.lstat(self._root / "audio.ogg")
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
             self.status = "source_unavailable"
             return
-        source = scope.source("audio.ogg", device=info.st_dev, inode=info.st_ino, size=info.st_size)
-        handle = self._manager.attach(
+        identity = scope.identify("audio.ogg")
+        if (identity.device, identity.inode, identity.size) != (info.st_dev, info.st_ino, info.st_size):
+            self.status = "source_unavailable"
+            return
+        source = scope.source("audio.ogg", identity)
+        # Encoded multi-channel report: tier ``single``, direction ``mixed`` and
+        # no track or role claim (design section 7), the same as TS #685.
+        handle = self._manager.attach_owned_recording(
             self._correlation, source, mime_type="audio/ogg", direction="mixed",
             purpose="conversation_recording", capture_policy=self._capture,
         )
         self._handle = handle
-        self.status = handle.admission
-        if handle.admission == "queued":
+        self.status = handle.reason
+        if handle.tier != "denied" and handle.reason == "queued":
             # Poll the content-free handle, not a blocking executor waiter.
             # Cancelling finalization must not leave asyncio.run() waiting for
             # a background Event.wait(timeout) during executor shutdown.
@@ -190,7 +206,7 @@ class SessionRecordingBinding:
     def close(self):
         self._closed = True
         if self._handle is not None and self._handle.result().status == "unfinished":
-            self._manager.cancel(self._handle)
+            self._handle.cancel()
         # Do not overwrite a hook installed by somebody else after this binding.
         if self._wrapper is not None and getattr(self._job, "_on_session_end", None) is self._wrapper:
             self._job._on_session_end = self._original
@@ -255,7 +271,7 @@ def bind_session(session, job_context, *, manager, owned_recording_files=False,
         from livekit.agents.telemetry.pii import _PIIFilteringSpanProcessor
         processors = getattr(getattr(span, "_span_processor", None), "_span_processors", ())
         binding._privacy_processors = tuple(p for p in processors if isinstance(p, _PIIFilteringSpanProcessor))
-        reason = _admission(manager, capture, binding._correlation)
+        reason = _admission(manager, capture, binding._correlation, binding_time=True)
         if reason:
             binding.status = reason
             binding.close()
@@ -287,6 +303,8 @@ def bind_session(session, job_context, *, manager, owned_recording_files=False,
         binding._original, binding._wrapper = original, chained
         job_context._on_session_end = chained
         setattr(job_context, _BINDING, binding)
+        # Only a true parentless session span is marked as the Voice root.
+        binding.root_marked = mark_conversation_root(span)
     except PackageNotFoundError:
         binding.status = "unsupported_version"
     except Exception:

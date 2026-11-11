@@ -7,6 +7,7 @@ on:
       - 'python/frameworks/livekit/**'
       - 'python/frameworks/pipecat/**'
       - 'python/voice-tests/**'
+      - 'python/traceai/**'
       - 'python/tests/attachments/**'
       - '.github/workflows/python-voice-attachments.yml'
   workflow_dispatch:
@@ -21,10 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both pinned Pipecat 1.x distributions require Python >=3.11.
+        # Pipecat 1.15.0 (the qualified recorder surface) requires Python >=3.11.
         python: ['3.11', '3.12']
         adapter:
-          - {name: pipecat, upstream: pipecat-ai, version: '1.0.0'}
           - {name: pipecat, upstream: pipecat-ai, version: '1.15.0'}
           - {name: livekit, upstream: livekit-agents, version: '1.8.10'}
           - {name: livekit, upstream: livekit-agents, version: '1.8.11'}

@@ -13,4 +13,5 @@ TransportDouble = _support.TransportDouble
 clean_attachment_env = _support.clean_attachment_env
 manager = _support.manager
 transport = _support.transport
+make_manager = _support.make_manager
 from test_http_contract import server  # noqa: E402,F401

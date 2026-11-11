@@ -68,6 +68,8 @@ async def test_real_report_tls_upload_survives_span_end_before_cleanup(server, t
     assert job.make_session_report(session).audio_recording_path == recorder.output_path
     binding = bind_session(session, job, manager=manager, owned_recording_files=True)
     assert binding.status == "session_bound"
+    # The synthetic session span has no parent: it is the true conversation root.
+    assert binding.root_marked and span.attributes["fi.span.kind"] == "CONVERSATION"
     expected_trace = format(span.get_span_context().trace_id, "032x")
     span.end()
     session._session_span = None
@@ -164,12 +166,12 @@ async def test_file_replacement_after_identity_snapshot_is_rejected(manager, tra
     session, job, _, _, provider, _ = owned_session(tmp_path)
     path = tmp_path / "audio.ogg"
     path.write_bytes(b"owned")
-    original = manager.attach
+    original = manager.attach_owned_recording
     def replace_before_attach(*args, **kwargs):
         path.rename(tmp_path / "original")
         path.write_bytes(b"rogue")
         return original(*args, **kwargs)
-    monkeypatch.setattr(manager, "attach", replace_before_attach)
+    monkeypatch.setattr(manager, "attach_owned_recording", replace_before_attach)
     binding = bind_session(session, job, manager=manager, owned_recording_files=True)
     assert await binding.finalize() == "source_unavailable"
     assert not transport.payloads
@@ -253,27 +255,120 @@ def test_exact_worker_lifecycle_orders_close_hook_before_cleanup():
     assert version("livekit-agents") in ("1.8.10", "1.8.11")
 
 
-@pytest.mark.parametrize("state,expected", [(api.EGRESS_STARTING, "waiting_for_completion"),
-    (api.EGRESS_ACTIVE, "waiting_for_completion"), (api.EGRESS_ENDING, "waiting_for_completion"),
-    (api.EGRESS_COMPLETE, "source_unavailable"), (api.EGRESS_FAILED, "source_unavailable")])
-def test_egress_never_marks_start_stop_or_complete_as_playable(manager, transport, state, expected):
+CONNECTION = "00000000-0000-4000-8000-00000000c0de"
+REGISTERED = "00000000-0000-4000-8000-0000000f11e5"
+CANARY = "https://private.invalid/CANARY_SIGNED_PATH?token=SECRET"
+
+
+class Registry:
+    def __init__(self, value=REGISTERED):
+        self.value, self.calls = value, []
+
+    async def lookup(self, *, connection_id, egress_id, file_index):
+        self.calls.append((connection_id, egress_id, file_index))
+        return self.value
+
+
+def egress(status=api.EGRESS_COMPLETE, *, audio_only=True, files=1, name="call.ogg", size=48213,
+           duration=12_345_678_901, egress_id="EG_synthetic", room="room"):
+    info = api.EgressInfo(egress_id=egress_id, room_name=room, status=status, ended_at=2 if status else 0)
+    info.room_composite.CopyFrom(api.RoomCompositeEgressRequest(room_name=room, audio_only=audio_only))
+    for _ in range(files):
+        info.file_results.add(filename="/private/CANARY_DIR/" + name, location=CANARY, size=size,
+                              duration=duration)
+    return info
+
+
+def import_args(manager, info, **overrides):
     from fi_instrumentation.attachments import CorrelationHandle
-    parent = CorrelationHandle("1" * 32, "2" * 16, True)
-    manager.update_policy(replace(transport.policy, allowed_sources=frozenset(("ProviderFile",))))
-    info = api.EgressInfo(egress_id="synthetic", room_name="room", status=state, ended_at=1)
-    info.file_results.add(location="https://private.invalid/CANARY_SIGNED_PATH?token=SECRET")
-    handle = import_completed_egress(info, session_context=parent, egress_id="synthetic", room_name="room",
-                                     manager=manager, existing_source_authorized=True)
-    assert handle.admission == expected
-    assert not transport.requests and not transport.payloads
+    args = dict(session_context=CorrelationHandle("1" * 32, "2" * 16, True), egress_id="EG_synthetic",
+                room_name="room", manager=manager, connection_id=CONNECTION, registry=Registry(),
+                existing_source_authorized=True)
+    args.update(overrides)
+    return info, args
+
+
+@pytest.mark.asyncio
+async def test_completed_audio_egress_imports_opaque_provider_file(manager, transport):
+    info, args = import_args(manager, egress())
+    handle = await import_completed_egress(info, **args)
+    assert handle.reason == "queued"
+    assert (await handle.wait(5)).status == "importing" and handle.job_id
+    [(body, key)] = transport.imports
+    assert key.startswith("im-")
+    assert body["mode"] == "completed_recording"
+    assert body["source"] == {"kind": "ProviderFile", "connection_id": CONNECTION,
+                              "registered_output_id": REGISTERED}
+    recording = body["recording"]
+    assert recording["mime_type"] == "audio/ogg" and recording["direction"] == "mixed"
+    assert recording["declared_bytes"] == 48213 and recording["declared_duration_ms"] == 12346
+    assert recording["association"]["parent"]["span_id"] == "2" * 16
+    assert args["registry"].calls == [(CONNECTION, "EG_synthetic", 0)]
+    assert "CANARY" not in repr(transport.imports) and "CANARY" not in repr(handle)
+    assert await handle.status() == ("importing", "binding_pending")
+    assert len(transport.statuses) == 1  # one GET, no polling
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["starting", "active", "ending", "failed", "video", "two_files", "unknown_ext",
+                                  "no_size", "no_duration", "wrong_id", "wrong_room", "unregistered", "no_registry"])
+async def test_incomplete_or_unprovable_egress_never_imports(manager, transport, case):
+    status = {"starting": api.EGRESS_STARTING, "active": api.EGRESS_ACTIVE, "ending": api.EGRESS_ENDING,
+              "failed": api.EGRESS_FAILED}.get(case, api.EGRESS_COMPLETE)
+    info = egress(status, audio_only=case != "video", files=2 if case == "two_files" else 1,
+                  name="call.flv" if case == "unknown_ext" else "call.ogg", size=0 if case == "no_size" else 9,
+                  duration=0 if case == "no_duration" else 9, egress_id="EG_other" if case == "wrong_id" else
+                  "EG_synthetic", room="other" if case == "wrong_room" else "room")
+    overrides = {}
+    if case == "unregistered":
+        overrides["registry"] = Registry(None)
+    if case == "no_registry":
+        overrides["registry"] = None
+    info, args = import_args(manager, info, **overrides)
+    handle = await import_completed_egress(info, **args)
+    assert handle.reason == "source_unavailable"
+    assert not transport.imports and not transport.payloads
     assert "CANARY" not in repr(handle)
 
 
-def test_egress_no_authority_does_not_inspect_response(manager):
+@pytest.mark.asyncio
+async def test_fixed_id_read_through_application_client(manager, transport):
+    class Client:
+        def __init__(self):
+            self.requests = []
+
+        async def list_egress(self, request):
+            self.requests.append(request)
+            return api.ListEgressResponse(items=[egress()])
+    client = Client()
+    _, args = import_args(manager, None, egress_client=client)
+    handle = await import_completed_egress(None, **args)
+    assert handle.reason == "queued" and (await handle.wait(5)).status == "importing"
+    assert len(transport.imports) == 1
+    assert [r.egress_id for r in client.requests] == ["EG_synthetic"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_PII_REDACTION"])
+async def test_privacy_denial_precedes_resolver(manager, transport, monkeypatch, flag):
+    class Poison:
+        async def lookup(self, **kwargs):
+            raise AssertionError("resolver consulted after denial")
+    monkeypatch.setenv(flag, "true")
+    info, args = import_args(manager, egress(), registry=Poison())
+    handle = await import_completed_egress(info, **args)
+    assert handle.reason in ("policy_denied", "redaction_unavailable")
+    assert not transport.imports
+
+
+@pytest.mark.asyncio
+async def test_egress_no_authority_does_not_inspect_response(manager):
     class Poison:
         def __getattribute__(self, name):
             raise AssertionError("denied object inspected")
-    assert import_completed_egress(Poison(), session_context=None, egress_id="", room_name="", manager=manager).admission == "disabled"
+    handle = await import_completed_egress(Poison(), session_context=None, egress_id="", room_name="",
+                                           manager=manager)
+    assert handle.reason == "disabled"
 
 
 @pytest.mark.asyncio
@@ -328,3 +423,31 @@ def test_cancelled_finalization_does_not_hold_process_for_full_deadline():
     result = subprocess.run([sys.executable, str(Path(__file__).with_name("process_exit_probe.py"))],
                             timeout=10, check=True, capture_output=True, text=True)
     assert "bounded-cancel-exit" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_child_session_span_is_never_marked_root(manager, tmp_path):
+    from opentelemetry import trace
+    session, job, _, span, provider, _ = owned_session(tmp_path)
+    span.end()
+    parent = provider.get_tracer("synthetic").start_span("job_entrypoint")
+    child = provider.get_tracer("synthetic").start_span("agent_session", context=trace.set_span_in_context(parent))
+    session._session_span = child
+    binding = bind_session(session, job, manager=manager, owned_recording_files=True)
+    assert binding.status == "session_bound" and not binding.root_marked
+    assert "fi.span.kind" not in child.attributes
+    binding.close()
+    child.end()
+    parent.end()
+    provider.shutdown()
+
+
+def test_no_private_manager_internals_in_livekit_adapter():
+    import inspect
+
+    import traceai_livekit.attachments as attachments
+    import traceai_livekit.recording as recording
+    for module in (attachments, recording):
+        source = inspect.getsource(module)
+        for private in ("manager._session", "manager.policy", "._fd", "manager._", "_manager._", "manager.status"):
+            assert private not in source, (module.__name__, private)
