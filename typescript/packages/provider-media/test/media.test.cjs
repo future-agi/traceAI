@@ -135,7 +135,9 @@ test('data URI MIME descriptors consume one part budget and capture JPEG/WebP on
     await f.manager.flush();
     assert.equal(f.uploads.length, 64);
     assert.equal(new Set(f.uploads.map(u => u.request.mime_type)).size, 1); assert.equal(f.uploads[0].request.mime_type, 'image/jpeg');
-    assert.deepEqual(f.uploads[0].data, jpeg); assert.equal(f.uploads[63].request.part_index, 63);
+    assert.deepEqual(f.uploads[0].data, jpeg);
+    // The manager runs two upload workers, so completion order is not part order: check the admitted set.
+    assert.deepEqual(f.uploads.map(u => u.request.part_index).sort((a, b) => a - b), Array.from({ length: 64 }, (_, i) => i));
   } finally { await f.close(); }
 });
 
