@@ -61,10 +61,12 @@ jobs:
           MEDIA_SDK_ROOT: ${{ runner.temp }}/provider-sdks
         run: |
           # Only loopback exists inside this namespace, so no provider request can leave.
+          # One SDK tier per process: some instrumentations keep process-wide patch state.
           sudo --preserve-env=MEDIA_SDK_ROOT unshare --net bash -c '
             ip link set lo up
             "$1" --test packages/traceai_provider_media/test/media.test.cjs &&
-            "$1" --test packages/traceai_provider_media/test/sdk.test.cjs
+            MEDIA_SDK_TIER=floor "$1" --test packages/traceai_provider_media/test/sdk.test.cjs &&
+            MEDIA_SDK_TIER=latest "$1" --test packages/traceai_provider_media/test/sdk.test.cjs
           ' _ "$(command -v node)"
       - name: Install the packed helper in a clean consumer
         working-directory: typescript

@@ -17,10 +17,17 @@ const sdkLoad = createRequire(path.join(process.env.MEDIA_SDK_ROOT, 'package.jso
 const routes = [];
 let server, base;
 const originalFetch = globalThis.fetch;
-const redirect = (input, init) => {
+const redirect = (input, init = {}) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-  return originalFetch(`${base}${url.pathname}${url.search}`, init);
+  // Older SDK shims pass node-fetch-only options (agent, polyfilled signals, stream bodies).
+  const { agent, signal, ...rest } = init;
+  const body = rest.body;
+  const streamed = body != null && typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer) &&
+    !(typeof FormData !== 'undefined' && body instanceof FormData) && !(typeof Blob !== 'undefined' && body instanceof Blob) && !(body instanceof URLSearchParams);
+  return originalFetch(`${base}${url.pathname}${url.search}`, { ...rest, ...(signal instanceof AbortSignal ? { signal } : {}), ...(streamed ? { duplex: 'half' } : {}) });
 };
+// The loopback fixture speaks HTTP/1.1; newer Bedrock clients default to HTTP/2.
+const http1 = tier => { const { NodeHttpHandler } = createRequire(sdkLoad.resolve(`sdk-bedrock-${tier}`))('@smithy/node-http-handler'); return new NodeHttpHandler(); };
 const messages = [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } }] }];
 before(async () => {
   server = http.createServer(async (req, res) => {
@@ -37,7 +44,9 @@ before(async () => {
 });
 after(async () => { await provider.shutdown(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
 
-for (const tier of ['floor', 'latest']) {
+// One tier per process: some instrumentations keep process-wide patch state.
+const tiers = process.env.MEDIA_SDK_TIER ? [process.env.MEDIA_SDK_TIER] : ['floor', 'latest'];
+for (const tier of tiers) {
   for (const privacy of ['enabled', 'disabled', 'hideInputs', 'piiRedaction']) test(`OpenAI ${tier}: speech ${privacy}; chat media stays with the OpenAI chat adapter`, async () => {
     const sdk = sdkLoad(`sdk-openai-${tier}`);
     const { OpenAIInstrumentation } = require('../../traceai_openai/dist/src');
@@ -141,7 +150,7 @@ for (const tier of ['floor', 'latest']) {
     const { BedrockInstrumentation } = require('../../traceai_bedrock/dist/src');
     const f = await fixture(); const inst = new BedrockInstrumentation({ attachments: f.manager, tracerProvider: provider, instrumentationConfig: { enabled: false } });
     inst.enable(); inst.manuallyInstrument(sdk);
-    const client = new sdk.BedrockRuntimeClient({ endpoint: base, region: 'us-east-1', credentials: { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' } });
+    const client = new sdk.BedrockRuntimeClient({ endpoint: base, region: 'us-east-1', credentials: { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' }, requestHandler: http1(tier) });
     try {
       await client.send(new sdk.ConverseCommand({ modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0', messages: [{ role: 'user', content: [{ image: { format: 'png', source: { bytes: png } } }] }] }));
       await f.manager.flush(); assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, png);
@@ -153,7 +162,7 @@ for (const tier of ['floor', 'latest']) {
     const { BedrockInstrumentation } = require('../../traceai_bedrock/dist/src');
     const f = await fixture(); const inst = new BedrockInstrumentation({ attachments: f.manager, tracerProvider: provider, instrumentationConfig: { enabled: false } });
     inst.enable(); inst.manuallyInstrument(sdk);
-    const client = new sdk.BedrockRuntimeClient({ endpoint: base, region: 'us-east-1', credentials: { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' } });
+    const client = new sdk.BedrockRuntimeClient({ endpoint: base, region: 'us-east-1', credentials: { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' }, requestHandler: http1(tier) });
     try {
       await client.send(new sdk.ConverseCommand({ modelId: 'meta.llama3-70b-instruct-v1:0', messages: [{ role: 'user', content: [{ image: { format: 'png', source: { bytes: png } } }] }] }));
       await f.manager.flush(); assert.equal(f.uploads.length, 0);
@@ -179,7 +188,8 @@ for (const tier of ['floor', 'latest']) {
   });
 
   for (const privacy of ['enabled', 'hideInputImages', 'piiRedaction']) test(`Mistral ${tier}: typed imageUrl chunk ${privacy}`, async () => {
-    const sdk = await import(pathToFileURL(sdkLoad.resolve(`sdk-mistral-${tier}`)).href);
+    const imported = await import(pathToFileURL(sdkLoad.resolve(`sdk-mistral-${tier}`)).href);
+    const sdk = imported.Mistral ? imported : imported.default;
     const { MistralInstrumentation } = require('../../traceai_mistral/dist/src');
     const f = await fixture({ traceConfig: privacy === 'enabled' ? {} : { [privacy]: true } });
     const inst = new MistralInstrumentation({ attachments: f.manager, instrumentationConfig: { enabled: false } });
@@ -222,4 +232,4 @@ for (const tier of ['floor', 'latest']) {
   });
 }
 
-test('provider requests reached only the loopback server', () => { assert.ok(routes.length >= 40); });
+test('provider requests reached only the loopback server', () => { assert.ok(routes.length >= 20 * tiers.length); });
