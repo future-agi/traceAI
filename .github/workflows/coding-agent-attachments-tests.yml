@@ -1,0 +1,71 @@
+name: Coding-agent attachments
+on:
+  pull_request:
+    paths:
+      - 'typescript/packages/fi-core/src/attachments/**'
+      - 'typescript/packages/traceai_agent_core/**'
+      - 'typescript/packages/traceai_pi_plugin/**'
+      - 'typescript/packages/traceai_oh_my_pi_plugin/**'
+      - 'typescript/packages/traceai_claude_code/**'
+      - 'typescript/packages/traceai_cursor_sdk/src/**'
+      - '.github/workflows/coding-agent-attachments-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attachments:
+    name: Coding-agent attachments (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.19.0 is the Pi plugin engines floor.
+        node: ['22.19.0', '24']
+    defaults:
+      run:
+        working-directory: typescript
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+      - name: Frozen filtered install
+        run: >-
+          pnpm install --frozen-lockfile --ignore-scripts
+          --filter '@traceai/agent-core...' --filter '@traceai/pi-plugin...'
+          --filter '@traceai/oh-my-pi-plugin...' --filter '@traceai/claude-code...'
+          --filter '@traceai/cursor-sdk...'
+      - name: Build
+        run: |
+          for p in fi-semantic-conventions fi-core agent-core pi-coding-agent pi-plugin oh-my-pi-plugin claude-code cursor-sdk; do
+            pnpm --filter "@traceai/$p" run build
+          done
+      - name: Package suites
+        run: |
+          pnpm --filter @traceai/agent-core run test
+          pnpm --filter @traceai/pi-plugin run test
+          pnpm --filter @traceai/oh-my-pi-plugin run test
+          pnpm --filter @traceai/claude-code run test
+          pnpm --filter @traceai/cursor-sdk exec jest --runInBand
+      - name: Real HTTPS attachment wire with real Pi host (floor) and OMP plugin API
+        run: |
+          mkdir -p "$RUNNER_TEMP/att-tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/att-tls/key.pem" -out "$RUNNER_TEMP/att-tls/cert.pem" \
+            -days 2 -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' > /dev/null 2>&1
+          export NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/att-tls/cert.pem" ATTACHMENT_TEST_KEY="$RUNNER_TEMP/att-tls/key.pem"
+          node packages/traceai_pi_plugin/test/attachments-native.cjs
+          node packages/traceai_oh_my_pi_plugin/test/attachments-wire.cjs
+      - name: Real Pi host (latest)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pi-latest" --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@latest
+          export NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/att-tls/cert.pem" ATTACHMENT_TEST_KEY="$RUNNER_TEMP/att-tls/key.pem"
+          PI_TEST_BINARY="$RUNNER_TEMP/pi-latest/node_modules/.bin/pi" node packages/traceai_pi_plugin/test/attachments-native.cjs
