@@ -256,7 +256,7 @@ def test_transcription_input_bytes_and_paths_only(f01, provider, instrument, tmp
     with open(path, "rb") as handle:
         resource.create(model="whisper-1", file=handle)  # an open file is the app's stream: not read
     flush(manager)
-    assert f01.payloads == [audio, wav(seed=5)]
+    assert sorted(f01.payloads) == sorted([audio, wav(seed=5)])  # two workers: completion order varies
     assert all(u["direction"] == "input" and u["purpose"] == "model_input" for u in f01.uploads)
     manager.shutdown(5)
 
@@ -318,6 +318,7 @@ def test_unsampled_span_uploads_nothing(f01, provider):
 def test_disabled_manager_is_a_strict_no_op(provider, spans):
     tracer_provider, exporter = spans
     manager = create_attachment_manager(config=AttachmentConfig(enabled=False))
+    before = {t.ident for t in threading.enumerate() if t.name.startswith("fi-attachment")}
     OpenAIInstrumentor().instrument(tracer_provider=tracer_provider, attachments=manager)
     try:
         client(provider).chat.completions.create(**chat_request())
@@ -326,8 +327,8 @@ def test_disabled_manager_is_a_strict_no_op(provider, spans):
             getattr(wrapper._self_wrapper, "_attachments", None) is None
     finally:
         OpenAIInstrumentor().uninstrument()
-    # The loopback server and HTTP client own their threads; no attachment thread exists.
-    assert not [t.name for t in threading.enumerate() if t.name.startswith("fi-attachment")]
+    # No attachment thread was started (earlier tests' managers may still be winding down theirs).
+    assert {t.ident for t in threading.enumerate() if t.name.startswith("fi-attachment")} <= before
     span = llm_span(exporter)
     assert "fi.attachment.refs" not in span.attributes
     assert "fi-attachment:" not in json.dumps(dict(span.attributes))
