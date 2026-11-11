@@ -1,8 +1,8 @@
 import { AttachmentTicket } from "./admission";
-import { AttachmentCorrelation } from "./correlation";
+import { AttachmentCorrelation, AttachmentDeferredCorrelation } from "./correlation";
 import { AttachmentManager } from "./manager";
 import type {
-  AttachmentAdmissionTicket, AttachmentCompletedRecordingRequest, AttachmentCompletion, AttachmentFlushResult, AttachmentHandle, AttachmentImportHandle,
+  AttachmentAdmissionTicket, AttachmentCompletedRecordingRequest, AttachmentCompletion, AttachmentDeferredCorrelationOptions, AttachmentFlushResult, AttachmentHandle, AttachmentImportHandle,
   AttachmentImportOptions, AttachmentManagerOptions, AttachmentOptions, AttachmentOwnedFileRef, AttachmentOwnedRecordingHandle, AttachmentOwnedRecordingOptions,
   AttachmentPreflightOptions, AttachmentRecordingOptions, AttachmentRecordingWriter, AttachmentSource, AttachmentSpan, AttachmentStatus, AttachmentStream,
   AttachmentStreamOptions, AttachmentTarget,
@@ -31,6 +31,8 @@ export class DisabledAttachmentManager extends AttachmentManager {
   constructor(_options: AttachmentManagerOptions = {}) { super({ enabled: false, environment: () => ({}) }); }
   async ready(): Promise<boolean> { return false; }
   correlation(spanOrContext?: AttachmentSpan): AttachmentCorrelation { return new AttachmentCorrelation(spanOrContext); }
+  /** Inert: no host, so binding it schedules nothing; every capture against it is `disabled`. */
+  deferredCorrelation(_options?: AttachmentDeferredCorrelationOptions): AttachmentDeferredCorrelation { return new AttachmentDeferredCorrelation(undefined, 0); }
   preflight(_target: AttachmentTarget, _options: AttachmentPreflightOptions): AttachmentAdmissionTicket {
     return new AttachmentTicket({ commitTicket: () => HANDLE, commitStream: () => STREAM, releaseReservation: () => undefined, deniedHandle: () => HANDLE, deniedStream: () => STREAM },
       "disabled", 0, undefined, undefined, -1, 0);

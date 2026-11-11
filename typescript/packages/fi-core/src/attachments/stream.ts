@@ -20,7 +20,7 @@ export interface StreamState {
 export interface StreamHost {
   streamWrite(state: StreamState, chunk: Uint8Array): boolean;
   streamFinish(state: StreamState): AttachmentHandle;
-  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large"): void;
+  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large" | "correlation_unavailable"): void;
 }
 /**
  * Single-object upload of chunks the application ALREADY consumed (design section 6). The core never pulls, clones
