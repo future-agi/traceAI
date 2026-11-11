@@ -140,6 +140,8 @@ class _Run:
     chunks: int = 0
     # A tool run's name as LangChain reported it (not capped or redacted).
     tool_name: Optional[str] = None
+    # The tool call id LangChain reported, when it is a safe token.
+    tool_call_id: Optional[str] = None
 
 
 def _describe(error: BaseException) -> str:
@@ -329,6 +331,13 @@ class FutureAGICallback(BaseCallbackHandler):
         redact: secret strings to remove from everything written (for
             example an LLM key or an MCP server header the environment does
             not hold).
+        attachments: the shared attachment manager for tool media (images,
+            audio and inline resource blobs an MCP tool returned). Defaults
+            to ``tracer_provider.attachment_manager``. Capture is off unless
+            that manager is enabled; ``config`` hide flags and PII redaction
+            deny it.
+        attachment_capture: a ``fi_instrumentation.attachments.CapturePolicy``
+            that can only add restrictions.
     """
 
     raise_error = False
@@ -345,6 +354,8 @@ class FutureAGICallback(BaseCallbackHandler):
         tracer_provider: Optional[trace_api.TracerProvider] = None,
         config: Optional[TraceConfig] = None,
         redact: Iterable[str] = (),
+        attachments: Any = None,
+        attachment_capture: Any = None,
     ) -> None:
         super().__init__()
         if config is None:
@@ -373,6 +384,11 @@ class FutureAGICallback(BaseCallbackHandler):
         self._hide_outputs = bool(config.hide_outputs)
         self._pii = bool(config.pii_redaction)
         self._secrets = Secrets(secrets)
+        self._config = config
+        self._attachments = (
+            attachments if attachments is not None else getattr(provider, "attachment_manager", None)
+        )
+        self._attachment_capture = attachment_capture
         self._lock = threading.RLock()
         self._runs: Dict[UUID, _Run] = {}
         self._roots: "OrderedDict[UUID, _Root]" = OrderedDict()
@@ -1042,6 +1058,9 @@ class FutureAGICallback(BaseCallbackHandler):
                 return
             if isinstance(raw_name, str):
                 run.tool_name = raw_name
+            raw_call_id = kwargs.get("tool_call_id")
+            if isinstance(raw_call_id, str):
+                run.tool_call_id = raw_call_id
             if run.span is None:
                 return
             arguments = _json(inputs) if isinstance(inputs, Mapping) else input_str
@@ -1092,6 +1111,8 @@ class FutureAGICallback(BaseCallbackHandler):
                     )
             except Exception:
                 logger.debug("Could not classify the tool result", exc_info=True)
+            if run.span is not None and self._attachments is not None:
+                self._capture_tool_media(run, output, failure is not None)
             text = _tool_output_text(output)
             self._remember(root, [text], output=True)
             if failure is not None and root is not None:
@@ -1114,6 +1135,16 @@ class FutureAGICallback(BaseCallbackHandler):
             self._end(span)
         except Exception:
             logger.debug("mcp-use callback on_tool_end failed", exc_info=True)
+
+    def _capture_tool_media(self, run: _Run, output: Any, failed: bool) -> None:
+        """Upload the typed inline media blocks a tool returned (never URLs or paths)."""
+        try:
+            from traceai_mcp_use._attachments import capture_tool_blocks
+        except ImportError:
+            return
+        content = getattr(output, "content", output)
+        capture_tool_blocks(self._attachments, run.span, content, trace_config=self._config,
+                            capture=self._attachment_capture, tool_call_id=run.tool_call_id, error=failed)
 
     def on_tool_error(
         self,

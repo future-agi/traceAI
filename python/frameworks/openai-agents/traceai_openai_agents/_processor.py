@@ -67,8 +67,19 @@ logger = logging.getLogger(__name__)
 class FiTracingProcessor(TracingProcessor):
     _MAX_HANDOFFS_IN_FLIGHT = 1000
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(
+        self,
+        tracer: Tracer,
+        *,
+        attachments: Any = None,
+        trace_config: Any = None,
+        attachment_capture: Any = None,
+    ) -> None:
         self._tracer = tracer
+        # The shared attachment manager (None unless an enabled one was passed).
+        self._attachments = attachments
+        self._trace_config = trace_config
+        self._attachment_capture = attachment_capture
         self._root_spans: dict[str, OtelSpan] = {}
         self._otel_spans: dict[str, OtelSpan] = {}
         self._tokens: dict[str, object] = {}
@@ -227,7 +238,19 @@ class FiTracingProcessor(TracingProcessor):
             for k, v in _get_attributes_from_generation_span_data(data):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, FunctionSpanData):
-            for k, v in _get_attributes_from_function_span_data(data):
+            output = data.output
+            if self._attachments is not None and output is not None:
+                from traceai_openai_agents._attachments import capture_function_output
+
+                _, output = capture_function_output(
+                    self._attachments,
+                    otel_span,
+                    data.name,
+                    output,
+                    trace_config=self._trace_config,
+                    capture=self._attachment_capture,
+                )
+            for k, v in _get_attributes_from_function_span_data(data, output):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, MCPListToolsSpanData):
             for k, v in _get_attributes_from_mcp_list_tool_span_data(data):
@@ -560,20 +583,27 @@ def _convert_to_primitive(value: Any) -> Union[bool, str, bytes, int, float]:
     return str(value)
 
 
+_UNSET = object()
+
+
 def _get_attributes_from_function_span_data(
     obj: FunctionSpanData,
+    output: Any = _UNSET,
 ) -> Iterator[tuple[str, AttributeValue]]:
+    # ``output`` is a telemetry copy in which admitted media are fi-attachment URIs.
+    if output is _UNSET:
+        output = obj.output
     yield GEN_AI_TOOL_NAME, obj.name
     if obj.input:
         yield INPUT_VALUE, obj.input
         yield INPUT_MIME_TYPE, JSON
-    if obj.output is not None:
-        yield OUTPUT_VALUE, _convert_to_primitive(obj.output)
+    if output is not None:
+        yield OUTPUT_VALUE, _convert_to_primitive(output)
         if (
-            isinstance(obj.output, str)
-            and len(obj.output) > 1
-            and obj.output[0] == "{"
-            and obj.output[-1] == "}"
+            isinstance(output, str)
+            and len(output) > 1
+            and output[0] == "{"
+            and output[-1] == "}"
         ):
             yield OUTPUT_MIME_TYPE, JSON
 

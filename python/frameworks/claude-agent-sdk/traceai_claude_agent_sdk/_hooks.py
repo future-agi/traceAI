@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
+from ._attachments import media_safe, remember_ended_tool
 from ._attributes import (
     ClaudeAgentAttributes,
     ClaudeAgentSpanKind,
@@ -304,10 +305,11 @@ def create_post_tool_use_hook(tracer: trace_api.Tracer) -> Callable:
             span, start_time, _ = span_info
             duration_ms = (time.time() - start_time) * 1000
 
-            # Set output and duration
+            # Set output and duration. Inline media bytes never go through text serialization
+            # or truncation; the attachment path uploads them from the typed tool result.
             span.set_attribute(
                 ClaudeAgentAttributes.TOOL_OUTPUT,
-                safe_json_serialize(tool_response),
+                safe_json_serialize(media_safe(tool_response)),
             )
             span.set_attribute(ClaudeAgentAttributes.TOOL_DURATION_MS, duration_ms)
 
@@ -341,8 +343,10 @@ def create_post_tool_use_hook(tracer: trace_api.Tracer) -> Callable:
                 },
             )
 
-            # End the span
+            # End the span. Its exact context stays available (bounded) so the tool's
+            # result media, which the SDK streams after this hook, keep this causal parent.
             span.end()
+            remember_ended_tool(tool_use_id, span)
 
             # Clean up subagent span if this launched a subagent
             if tool_name in SUBAGENT_TOOLS:

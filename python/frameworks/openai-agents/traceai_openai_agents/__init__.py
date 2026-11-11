@@ -12,6 +12,23 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for openai-agents
@@ -36,15 +53,22 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
 
         from traceai_openai_agents._processor import FiTracingProcessor
 
-
+        # The provider-owned shared manager, passed as ``attachments`` (auto also passes
+        # ``attachment_manager``). Nothing is captured unless an enabled manager is supplied.
+        processor = FiTracingProcessor(
+            cast(Tracer, tracer),
+            attachments=_attachment_manager(kwargs),
+            trace_config=config,
+            attachment_capture=kwargs.get("attachment_capture"),
+        )
         if exclusive_processor:
             from agents import set_trace_processors
 
-            set_trace_processors([FiTracingProcessor(cast(Tracer, tracer))])
+            set_trace_processors([processor])
         else:
             from agents import add_trace_processor
 
-            add_trace_processor(FiTracingProcessor(cast(Tracer, tracer)))
+            add_trace_processor(processor)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # TODO : OpenAI Agents does not support uninstrumentation currently

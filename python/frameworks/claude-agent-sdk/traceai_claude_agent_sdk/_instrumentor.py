@@ -20,6 +20,23 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("claude-agent-sdk >= 0.1.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class ClaudeAgentInstrumentor(BaseInstrumentor):
     """OpenTelemetry Instrumentor for Claude Agent SDK.
 
@@ -97,6 +114,12 @@ class ClaudeAgentInstrumentor(BaseInstrumentor):
             tracer_provider,
         )
 
+        # The provider-owned shared manager, passed as ``attachments`` (auto also passes
+        # ``attachment_manager``). Nothing is captured unless an enabled manager is supplied.
+        self._attachments = _attachment_manager(kwargs)
+        self._trace_config = kwargs.get("config")
+        self._attachment_capture = kwargs.get("attachment_capture")
+
         # Try to import and patch Claude Agent SDK
         try:
             self._patch_claude_agent_sdk()
@@ -129,6 +152,9 @@ class ClaudeAgentInstrumentor(BaseInstrumentor):
         wrapped_class = wrap_claude_sdk_client(
             self._original_client_class,
             self._tracer,
+            attachments=getattr(self, "_attachments", None),
+            trace_config=getattr(self, "_trace_config", None),
+            attachment_capture=getattr(self, "_attachment_capture", None),
         )
 
         # Replace in module
