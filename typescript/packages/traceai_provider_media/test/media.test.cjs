@@ -29,8 +29,14 @@ for (const mode of ['disabled', 'hideInputs', 'hideInputMessages', 'hideInputIma
       });
       capture.geminiContents([{ parts: [{ inlineData: { mimeType: 'image/png', get data() { reads++; throw Error('synthetic-secret'); } } }] }]);
       capture.compatibleMessages([{ content: [{ type: 'image_url', get image_url() { reads++; throw Error('synthetic-secret'); } }] }]);
+      capture.bedrockConverse({ modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0', messages: [{ content: [
+        { image: { format: 'png', source: { get bytes() { reads++; throw Error('synthetic-secret'); } } } },
+        { toolResult: { toolUseId: 'tool-1', content: [{ image: { format: 'png', source: { get bytes() { reads++; throw Error('synthetic-secret'); } } } }] } }] }] });
+      capture.speechInput(new Blob([Buffer.from('synthetic-secret')], { type: 'audio/wav' }));
       const before = f.requests.length; await f.manager.flush();
-      assert.equal(reads, 0); assert.equal(f.uploads.length, 0); assert.equal(f.requests.length, before);
+      // Hidden images do not hide audio: only the audio Blob may be admitted in that mode.
+      assert.equal(reads, 0); assert.equal(f.uploads.length, mode === 'hideInputImages' ? 1 : 0);
+      if (mode === 'hideInputImages') assert.equal(f.uploads[0].request.modality, 'audio'); else assert.equal(f.requests.length, before);
     } finally { await f.close(); }
   });
 }
