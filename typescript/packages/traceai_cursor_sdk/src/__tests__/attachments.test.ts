@@ -23,7 +23,9 @@ async function setup(options: { hideInputs?: boolean; packageDefault?: boolean; 
       uploads.push({ request });
       return broker.transport.initialize(s, request, signal);
     },
-    async upload(_s: unknown, _u: unknown, data: Uint8Array) { uploads[uploads.length - 1].bytes = Buffer.from(data); },
+    async upload(_s: unknown, u: { attachment_id: string }, data: Uint8Array) {
+      uploads.find((x) => x.request.attachment_id === u.attachment_id)!.bytes = Buffer.from(data);
+    },
   };
   const manager = new AttachmentManager({
     enabled: options.enabled ?? true, projectName: "cursor", projectType: "observe", transport,

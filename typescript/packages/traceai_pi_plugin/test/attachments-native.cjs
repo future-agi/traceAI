@@ -88,9 +88,12 @@ async function main() {
         FI_ATTACHMENTS_ENABLED: 'true', ...flags };
       const start = uploads.length, traceStart = batches.length, requestStart = requests.length;
       scopeDenied = name === 'scope-denied';
-      const result = await exec(binary, ['--offline', '--no-approve', '--mode', 'json', '-p', '--provider', 'mock', '--model', 'test',
+      const task = exec(binary, ['--offline', '--no-approve', '--mode', 'json', '-p', '--provider', 'mock', '--model', 'test',
         '--session-id', randomUUID(), '-e', path.resolve(__dirname, '../extension.mjs'), '-e', extension, 'Use fixture_image then answer Done.'],
         { cwd: root, env, timeout: 60000, maxBuffer: 4e6 });
+      // Print mode also reads piped stdin; close it or the CLI waits for input.
+      task.child.stdin.end();
+      const result = await task;
       assert.ok(result.stdout.includes('tool_execution_end'), name + ': real tool callback');
       assert.equal(requests.length - requestStart, 2, name + ': real provider loop');
       assert.equal(uploads.length - start, name === 'enabled' ? 1 : 0, name + ': attachment admission');
@@ -99,7 +102,8 @@ async function main() {
       if (name === 'enabled') {
         assert.deepEqual(bytes.at(-1), Buffer.from(png, 'base64'));
         const upload = uploads.at(-1);
-        const tool = spans.find(s => attrs(s)['tool.call_id'] === 'image_call' || attrs(s)['gen_ai.tool.call.id'] === 'image_call');
+        const tool = spans.find(s => attrs(s)['fi.span.kind'] === 'TOOL' && Object.values(attrs(s)).includes('image_call'));
+        if (!tool) console.error(JSON.stringify(spans.map(s => ({ name: s.name, parent: s.parentSpanId, kind: attrs(s)['fi.span.kind'] }))));
         assert.ok(tool, 'real tool span');
         assert.equal(upload.association.parent.span_id, tool.spanId);
         assert.equal(upload.tool_call_id, 'image_call');

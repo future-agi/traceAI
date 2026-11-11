@@ -111,7 +111,8 @@ async function main() {
       assert.equal(otlp.includes("synthetic-write-capability"), false, name + ": capability absent from OTLP");
       if (name === "enabled") {
         const root = spans.find((s) => !s.parentSpanId);
-        const tool = spans.find((s) => attrs(s)["tool.call_id"] === "image_call" || attrs(s)["gen_ai.tool.call.id"] === "image_call");
+        const tool = spans.find((s) => attrs(s)["fi.span.kind"] === "TOOL" && Object.values(attrs(s)).includes("image_call"));
+        if (!root || !tool) console.error(JSON.stringify(spans.map((s) => ({ name: s.name, parent: s.parentSpanId, kind: attrs(s)["fi.span.kind"] }))));
         assert.ok(root && tool, "root and tool spans");
         const prompt = caseUploads.find((u) => u.purpose === "model_input");
         const result = caseUploads.find((u) => u.purpose === "tool_result");

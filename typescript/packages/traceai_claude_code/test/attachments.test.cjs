@@ -105,7 +105,9 @@ async function fixture(t, overrides = {}, rowOptions = {}) {
       return broker.transport.initialize(s, request, signal);
     },
     async upload(s, upload, data) {
-      uploads.at(-1).bytes = Buffer.from(data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer()));
+      // Two transfer workers run concurrently; match the body to its own upload.
+      uploads.find((u) => u.request.attachment_id === upload.attachment_id).bytes =
+        Buffer.from(data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer()));
     },
   };
   return { home, config, transcript, state, received, broker, uploads, transport };
