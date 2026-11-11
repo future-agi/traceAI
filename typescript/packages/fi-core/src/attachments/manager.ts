@@ -85,6 +85,9 @@ class TokenBucket implements AttachmentPacer {
     if (this.tokens < 0) await pause(-this.tokens / rate * 1000, signal);
   }
 }
+/** ES2021 FinalizationRegistry, typed locally so consumers compiling this source with an older `lib` still build. */
+interface Finalizer { register(target: object, held: () => void, token?: object): void; unregister(token: object): boolean }
+type FinalizerConstructor = new (cleanup: (held: () => void) => void) => Finalizer;
 class Lane { readonly jobs: CoreJob[] = []; busy = false; constructor(readonly id: string) {} }
 interface Reservation { bytes: number; expiresAt: number }
 interface StreamExtra { facts: AdmissionFacts; fields: AttachmentFields; correlation: AttachmentCorrelation; purpose?: AttachmentOptions["purpose"] }
@@ -128,7 +131,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   private renewing = false;
   private nextRenewalAt = 0;
   private renewalFailures = 0;
-  private registry?: FinalizationRegistry<() => void>;
+  private registry?: Finalizer;
   private readonly pacer: TokenBucket;
   private readonly maxBytes: number;
   private readonly maxDescriptors: number;
@@ -285,8 +288,9 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     if (options.purpose !== undefined && !PURPOSES.includes(options.purpose)) return false;
     return this.validFields(options);
   }
-  private finalizer(): FinalizationRegistry<() => void> | undefined {
-    if (!this.registry && typeof FinalizationRegistry !== "undefined") this.registry = new FinalizationRegistry(release => { try { release(); } catch { /* bounded */ } });
+  private finalizer(): Finalizer | undefined {
+    const Registry = (globalThis as unknown as { FinalizationRegistry?: FinalizerConstructor }).FinalizationRegistry;
+    if (!this.registry && typeof Registry === "function") this.registry = new Registry((release: () => void) => { try { release(); } catch { /* bounded */ } });
     return this.registry;
   }
   /** Lazy sweep at every entry point: no timers are armed for tickets or streams (design 1.5, 6.3). */

@@ -26,6 +26,10 @@ test('Node TLS transfer uses upload capability, bounds readers and does not keep
     } else { res.statusCode = 202; res.end(JSON.stringify({ upload_id: ids[0], state: 'validating', reason: 'binding_pending' })); }
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  // T-TR-04: ambient proxy settings are a canary; the attachment client must never connect to them.
+  let proxied = 0; const canary = require('node:net').createServer(socket => { proxied++; socket.destroy(); });
+  canary.listen(0, '127.0.0.1'); await once(canary, 'listening');
+  const proxy = `http://127.0.0.1:${canary.address().port}`;
   const modulePath = path.resolve(path.dirname(process.env.FI_CORE_PACKAGE_JSON || path.resolve(__dirname, '../package.json')), 'dist/src/attachments/node.js');
   async function child(stall) {
     const script = `
@@ -42,7 +46,7 @@ test('Node TLS transfer uses upload capability, bounds readers and does not keep
         if (live) clearTimeout(live);
       })().catch(() => process.exitCode = 1);
     `;
-    const processChild = spawn(process.execPath, ['-e', script], { env: { ...process.env, NODE_EXTRA_CA_CERTS: cert }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const processChild = spawn(process.execPath, ['-e', script], { env: { ...process.env, NODE_EXTRA_CA_CERTS: cert, HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, NODE_USE_ENV_PROXY: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = ''; processChild.stdout.on('data', c => { stdout += c; }); processChild.stderr.on('data', c => { stderr += c; });
     const deadline = setTimeout(() => processChild.kill('SIGKILL'), 5000);
     const [code, signal] = await once(processChild, 'exit'); clearTimeout(deadline);
@@ -56,5 +60,6 @@ test('Node TLS transfer uses upload capability, bounds readers and does not keep
     assert.equal(headers[3].authorization, 'Bearer synthetic-write-capability');
     stalled = true;
     assert.match(await child(true), /TRANSFER_STARTED/); assert.equal(bodies.length, 2);
-  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); }
+    assert.equal(proxied, 0, 'environment proxy was used');
+  } finally { canary.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -11,7 +11,7 @@ const privacy = JSON.parse(fs.readFileSync(path.join(directory, 'privacy-fixture
 const identities = JSON.parse(fs.readFileSync(path.join(directory, 'identity-fixtures.json'))).cases;
 const keepalive = setInterval(() => {}, 1000);
 (async () => {
-  const results = [];
+  const results = []; const preflightResults = [];
   for (const fixture of privacy) {
     const c = fixture.context;
     const traceConfig = Object.fromEntries(['hide_inputs', 'hide_outputs', 'hide_input_messages', 'hide_output_messages', 'hide_input_images', 'hide_input_text', 'hide_output_text', 'hide_error_details', 'pii_redaction'].map(key => [key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()), c[key]]));
@@ -50,6 +50,18 @@ const keepalive = setInterval(() => {}, 1000);
       assert.notEqual(result.admission, 'queued', fixture.id);
       assert.equal(requests.includes(result.occurrenceId), false, fixture.id);
     } else assert.equal(result.admission, 'queued', fixture.id);
+    // T-PF-03: the same fixture through preflight. A denial never reads the source; a ticket whose denial
+    // depends on the source itself (availability, budget) is refused at commit without being uploaded.
+    let preflightRead = false;
+    const ticket = manager.preflight(context, { mimeType, direction: c.direction, maxBytes: 8, sourceKind: actualSource.kind,
+      operation: c.operation === 'create_recording' ? 'create_recording' : c.operation === 'import_existing' ? 'import_existing' : 'observe_consumed', capture: options.capture });
+    let preflightOutcome = ticket.reason;
+    if (ticket.admitted && (fixture.expected.decision === 'deny' || unsupported)) {
+      preflightOutcome = ticket.attach({ kind: actualSource.kind, get data() { preflightRead = true; return actualSource.data; } }).admission;
+      assert.notEqual(preflightOutcome, 'queued', fixture.id);
+    } else if (!ticket.admitted) assert.equal(preflightRead, false, fixture.id);
+    preflightResults.push({ id: fixture.id, expected: fixture.expected.reason, actual: preflightOutcome });
+    ticket.release();
     results.push({ id: fixture.id, expected: fixture.expected.reason, actual: result.admission,
       qualification: fixture.expected.decision === 'allow' && unsupported ? 'unsupported_fail_closed' : 'safety_pass' });
     await manager.shutdown(10);
@@ -61,6 +73,7 @@ const keepalive = setInterval(() => {}, 1000);
   }
   console.log(JSON.stringify({ privacyFixtures: results.length, identityFixtures: identities.length,
     exactReasons: results.filter(result => result.expected === result.actual).length,
+    preflightFixtures: preflightResults.length, preflightExactReasons: preflightResults.filter(r => r.expected === r.actual).length,
     unsupportedPositive: results.filter(result => result.qualification === 'unsupported_fail_closed'),
     conservativeReasonDifferences: results.filter(result => result.expected !== result.actual && result.qualification !== 'unsupported_fail_closed') }, null, 2));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => clearInterval(keepalive));

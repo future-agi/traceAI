@@ -587,9 +587,13 @@ test('T-CH-01 UploadRequest never carries role or channel; T-CH-02 the live refe
   await f.manager.shutdown();
 });
 test('T-CH-03 span ended before attach: no projection, the upload still proceeds; T-CH-05 carrier stamp only on admitted targets', async () => {
-  const f = await managerV1(); const ended = span(); ended.end();
+  const f = await managerV1(); const ended = span();
+  f.manager.correlation(ended); // snapshot taken while the span was live (adapters bind at span start)
+  ended.end();
   const h = f.manager.attach(ended, { kind: 'Bytes', data: new Uint8Array([1]) }, options);
   assert.equal((await h.completion).status, 'validating'); assert.equal(ended.writes, 0);
+  const never = span(); never.end(); // never observed live: not recording at admission (design 1.4 step 10)
+  assert.equal(f.manager.attach(never, { kind: 'Bytes', data: new Uint8Array([1]) }, options).admission, 'unsampled');
   const bystander = span(); f.manager.correlation(bystander); assert.equal(bystander.writes, 0, 'non-target spans are never stamped');
   const denied = span(); f.manager.attach(denied, { kind: 'Bytes', data: new Uint8Array([1]) }, { ...options, capture: { captureContent: false } });
   assert.equal(denied.writes, 0, 'a denied capture stamps nothing');
@@ -726,4 +730,46 @@ test('legacy four-method transports keep working through the adapter (stacked la
   const w = m.startRecording(identity, mono(8000)); w.tryWrite(pcm(800)); const r = await w.finish(2000);
   assert.equal(r.state, 'unpublished', 'legacy transports cannot PUT manifests: fail closed');
   await m.shutdown();
+});
+test('T-ST-16 BR-7 fallback: capability rejected after complete -> init, content, manifest, complete for the remaining segments', async () => {
+  const f = await managerV1(base => ({ putManifest: async (s, capability, rid, body, key, signal) => {
+    if ([...f.completed.values()].includes(capability)) throw new AttachmentTransportError('policy_denied', false, 0, 403);
+    return base.putManifest(s, capability, rid, body, key, signal);
+  } }), { limits: { segment_duration_ms: 1000 } });
+  const w = f.manager.startRecording(identity, mono(8000));
+  await writeSeconds(f.manager, w, 8000, 8, { flushEvery: 1 });
+  const result = await w.finish(10000);
+  assert.ok(f.manifests.length >= 2, `manifests ${f.manifests.length}`);
+  for (const m of f.manifests) {
+    const top = m.body.segments.at(-1);
+    assert.equal(f.completed.has(top.occurrence_id), true);
+    const order = f.calls.map(c => c.op + ':' + (c.capability || ''));
+    assert.ok(order.indexOf('putManifest:' + m.capability) < order.indexOf('complete:' + m.capability), 'manifest must precede that segment complete');
+  }
+  assert.equal(f.manifests.at(-1).body.capture_complete, true); assert.equal(result.state, 'published');
+  for (let i = 1; i < f.manifests.length; i++) assert.ok(f.manifests[i].body.segments.length >= f.manifests[i - 1].body.segments.length);
+  await f.manager.shutdown();
+  // Fallback also rejected: nothing published.
+  const g = await managerV1(() => ({ putManifest: async () => { throw new AttachmentTransportError('policy_denied', false, 0, 403); } }), { limits: { segment_duration_ms: 1000 } });
+  const w2 = g.manager.startRecording(identity, mono(8000));
+  await writeSeconds(g.manager, w2, 8000, 3, { flushEvery: 1 });
+  assert.equal((await w2.finish(10000)).state, 'unpublished');
+  await g.manager.shutdown();
+});
+test('T-CS-05 garbage-collected abandoned stream and ticket release their budget (best effort, forced GC)', () => {
+  const { spawnSync } = require('node:child_process');
+  const script = `
+    const { managerV1 } = require(${JSON.stringify(require.resolve('./attachments-v1.cjs'))});
+    const identity = { traceId: '0123456789abcdef0123456789abcdef', spanId: '0123456789abcdef', traceFlags: 1 };
+    (async () => {
+      const f = await managerV1();
+      (() => { const s = f.manager.startAttachmentStream(identity, { mimeType: 'audio/mpeg', direction: 'output', maxBytes: 4096 }); s.tryWrite(new Uint8Array(10));
+        f.manager.preflight(identity, { mimeType: 'image/png', direction: 'input', maxBytes: 2048 }); })();
+      for (let i = 0; i < 50 && f.manager.status().ownedBytes; i++) { global.gc(); await new Promise(r => setTimeout(r, 20)); }
+      const st = f.manager.status(); console.log(JSON.stringify({ owned: st.ownedBytes, streams: st.openStreams, tickets: st.openTickets }));
+      await f.manager.shutdown(100);
+    })();`;
+  const r = spawnSync(process.execPath, ['--expose-gc', '-e', script], { env: process.env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), { owned: 0, streams: 0, tickets: 0 });
 });

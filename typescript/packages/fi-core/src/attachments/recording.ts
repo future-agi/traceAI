@@ -234,6 +234,8 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
   private closed = false;
   private finalEnd?: number;
   private stamped = false;
+  private finalPublished = false;
+  private sealWaiters: (() => void)[] = [];
 
   constructor(init: RecordingInit) {
     this.init = init; this.host = init.host; this.options = init.options; this.identity = init.identity;
@@ -276,8 +278,9 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
   }
   private terminal(reason: AttachmentAdmission | AttachmentCompletion["status"]): void {
     if (this.mode === "terminal") return;
-    this.mode = "terminal"; this.terminalReason = reason;
+    this.mode = "terminal"; this.terminalReason = reason; this.wakeSeal();
   }
+  private wakeSeal(): void { const waiters = this.sealWaiters; this.sealWaiters = []; for (const wake of waiters) wake(); }
   private closeOnce(): void { if (!this.closed) { this.closed = true; try { this.init.close(); } catch { /* bounded */ } this.host.recordingClosed(this.recordingId); } }
 
   // --- block timeline -----------------------------------------------------------------------------
@@ -318,6 +321,7 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
       this.totalBytes += dataBytes + ATTACHMENT_WAV_HEADER_BYTES;
       track.pieces.push({ kind: "segment", track: track.ordinal, start: track.runStart, end: track.runStart + track.runFrames,
         source: attachmentChunkedSource(header, used), bytes: dataBytes, state: "sealed", occurrenceId: uuid(), attachmentId: uuid() });
+      this.wakeSeal();
     }
     track.runFrames = 0; track.runStart = track.pos;
     this.release();
@@ -516,6 +520,8 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
   }
   private async uploadSegment(piece: Piece, signal: AbortSignal): Promise<void> {
     if (piece.state !== "queued") return;
+    // Both manifest orders failed: the recording cannot publish, so stop spending uploads (design 2.8).
+    if (this.manifestFallback && this.manifestDisabled) { this.segmentSettled(piece, "incomplete"); return; }
     const reason = this.segmentDenied(piece);
     if (reason) { this.segmentSettled(piece, reason); return; }
     piece.state = "uploading";
@@ -663,12 +669,28 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
   }
   private async fallbackManifest(piece: Piece, outcome: UploadOutcome, signal: AbortSignal): Promise<void> {
     piece.outcome = outcome;
+    // Hold this segment's complete until a later segment is sealed or the recording finishes, so the LAST
+    // segment's capability can still PUT the final manifest (no completed capability can do it afterwards).
+    const later = () => this.finalEnd !== undefined || this.mode === "terminal" || signal.aborted ||
+      this.tracks.some(track => track.pieces.some(p => p !== piece && p.kind === "segment" && p.state !== "done" && p.state !== "failed"));
+    if (!later()) {
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+        const timer = setTimeout(done, MAX_SEGMENT_MS + 5000); (timer as unknown as { unref?: () => void }).unref?.();
+        this.sealWaiters.push(done); signal.addEventListener("abort", done, { once: true });
+      });
+    }
     // Prospectively include this segment; its own capability authorizes the PUT.
     const savedState = piece.state; piece.state = "done"; piece.index = this.completed;
     const end = this.settledEnd();
+    let pending = 0;
+    for (const track of this.tracks) for (const p of track.pieces) if (p !== piece && p.kind === "segment" && p.state !== "done" && p.state !== "failed") pending++;
     piece.state = savedState;
+    // The last segment of a finishing recording carries the FINAL manifest (no completed capability can PUT it later).
+    const final = this.finalEnd !== undefined && pending === 0 && end === this.finalEnd;
     let ok = false;
-    try { ok = await this.putManifest(end, false, signal, piece, outcome); } catch { ok = false; }
+    try { ok = await this.putManifest(end, final, signal, piece, outcome); } catch { ok = false; }
+    if (ok && final) this.finalPublished = true;
     piece.index = undefined;
     if (!ok) { this.manifestDisabled = true; throw new Error("manifest"); }
   }
@@ -718,6 +740,7 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
     const end = Math.max(0, ...this.tracks.map(track => track.pos));
     for (const track of this.tracks) if (track.pos < end) { this.appendGap(track, track.denied ? "policy_denied" : "source_unavailable", end - track.pos); track.pos = end; }
     this.finalEnd = end;
+    this.wakeSeal();
   }
   private idle(deadline: number): Promise<void> {
     if (this.outstanding === 0) return Promise.resolve();
@@ -756,7 +779,7 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
         piece.state = "failed"; piece.failure = "incomplete"; piece.source = undefined;
       }
     }
-    if (this.latestCapability() && !this.manifestDisabled) {
+    if (this.latestCapability() && !this.manifestDisabled && !this.finalPublished) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.max(1, deadline - this.host.clock.now()));
       try { await this.raceDeadline(this.putManifest(this.finalEnd ?? 0, true, controller.signal), deadline); }
@@ -812,7 +835,7 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
     if (signal.aborted) { this.discardAll(); this.terminal("incomplete"); this.closeOnce(); return "incomplete"; }
     let failed: AttachmentCompletion["status"] | undefined;
     for (const track of this.tracks) for (const piece of track.pieces) if (piece.state === "failed") failed = failed ?? piece.failure;
-    if (this.latestCapability()) await this.putManifest(this.finalEnd ?? 0, true, signal);
+    if (this.latestCapability() && !this.finalPublished && !this.manifestDisabled) await this.putManifest(this.finalEnd ?? 0, true, signal);
     this.terminal(failed ?? "incomplete"); this.closeOnce();
     return this.revision === 0 ? (failed ?? "incomplete") : failed ?? (this.publishedComplete ? "validating" : "incomplete");
   }

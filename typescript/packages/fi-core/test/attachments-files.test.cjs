@@ -42,7 +42,7 @@ test('T-LS-06 12 MiB OGG: tier single, streamed from the lease, owned memory nev
   const f = await managerV1(base => ({ putContent: async (s, u, src, sig) => {
     const out = Buffer.alloc(src.size);
     for (let o = 0; o < src.size; o += 262144) { await src.check(); const p = await src.read(o, Math.min(262144, src.size - o)); Buffer.from(p).copy(out, o); peak = Math.max(peak, manager.status().ownedBytes); }
-    base.contents.set ? null : null; f.contents.set(u.occurrence_id, out);
+    f.contents.set(u.occurrence_id, out);
   } }));
   manager = f.manager;
   const scope = await createRecordingFileScope(dir, { enabled: true });
