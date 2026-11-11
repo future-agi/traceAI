@@ -13,6 +13,11 @@ use these to capture inline base64/data-URI parts and speech audio. Rules:
 - One registry per manager remembers admitted (span, position) pairs, so a
   second observer of the same span and position gets the FIRST occurrence back
   and uploads nothing.
+- A per-call ``CapturePolicy`` set in the OpenTelemetry context under
+  ``CAPTURE_POLICY_KEY`` (``traceai.with_attachment_capture_policy``) can only
+  add restrictions. A context marked under ``OWNER_KEY``
+  (``traceai.with_attachment_ownership``) belongs to an adapter that captures
+  the media itself, so nothing is captured here for that call.
 
 Every public function is non-throwing and returns ``None``/empty on denial.
 """
@@ -25,6 +30,8 @@ import threading
 import weakref
 from collections import OrderedDict
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional, Tuple
+
+from opentelemetry import context as otel_context
 
 from .policy import CapturePolicy
 from .stream import StreamOptions
@@ -50,6 +57,13 @@ _OUTPUT_HIDE = ("hide_outputs", "hide_output_messages", "hide_output_text")
 # mulaw have no F01 MIME, so they are never captured.
 SPEECH_FORMATS = {"mp3": "audio/mpeg", "opus": "audio/ogg", "ogg": "audio/ogg", "flac": "audio/flac",
                   "wav": "audio/wav"}
+# Context keys shared BY NAME with the auto module (``traceai``) and any adapter, like the
+# TypeScript ``Symbol.for`` keys: plain strings, so no package has to import another.
+CAPTURE_POLICY_KEY = "traceai.auto.attachment_capture_policy.v1"
+OWNER_KEY = "traceai.auto.attachment_owner.v1"
+# CapturePolicy facts that grant capture; every other fact only restricts.
+_PERMISSIONS = frozenset(("capture_content", "record_inputs", "record_outputs", "requested"))
+_DENY_ALL = CapturePolicy(capture_content=False, requested=False)
 
 
 class Occurrence(NamedTuple):
@@ -93,6 +107,40 @@ def _restricted(config, name: str) -> bool:
         return True
 
 
+def merge_capture_policies(*policies: Any) -> CapturePolicy:
+    """Deny-wins intersection: a grant needs every policy, a restriction needs any one.
+
+    ``None`` adds nothing. Any other value that is not a ``CapturePolicy`` denies.
+    """
+    present = [policy for policy in policies if policy is not None]
+    if any(not isinstance(policy, CapturePolicy) for policy in present):
+        return _DENY_ALL
+    if not present:
+        return CapturePolicy()
+    values = {}
+    for item in dataclasses.fields(CapturePolicy):
+        facts = [getattr(policy, item.name) for policy in present]
+        values[item.name] = all(facts) if item.name in _PERMISSIONS else any(facts)
+    return CapturePolicy(**values)
+
+
+def context_capture_policy(context=None) -> Any:
+    """The per-call policy in the (current) OpenTelemetry context; None when unset."""
+    try:
+        return otel_context.get_value(CAPTURE_POLICY_KEY, context)
+    except Exception:
+        # An unreadable restriction is a restriction, never permission.
+        return _DENY_ALL
+
+
+def owned_elsewhere(context=None) -> bool:
+    """True when another adapter marked this call's media as its own."""
+    try:
+        return otel_context.get_value(OWNER_KEY, context) is not None
+    except Exception:
+        return True
+
+
 def local_capture_policy(trace_config=None, *, direction: str, image: bool = False, error_detail: bool = False,
                          base: Optional[CapturePolicy] = None) -> CapturePolicy:
     """Fold the instrumentor's local TraceConfig into a deny-only CapturePolicy.
@@ -103,6 +151,7 @@ def local_capture_policy(trace_config=None, *, direction: str, image: bool = Fal
     ancestry, so a tool screenshot is still treated as model input.
     """
     base = base if isinstance(base, CapturePolicy) else CapturePolicy()
+    base = merge_capture_policies(base, context_capture_policy())
     names = _INPUT_HIDE if direction == "input" else _OUTPUT_HIDE
     hidden = any(_restricted(trace_config, name) for name in names) or _restricted(trace_config, "pii_redaction")
     if image and direction == "input" and _restricted(trace_config, "hide_input_images"):
@@ -116,6 +165,8 @@ def local_capture_policy(trace_config=None, *, direction: str, image: bool = Fal
         changes["model_input"] = True
     if error_detail:
         changes["error_detail"] = True
+    if owned_elsewhere():
+        changes["requested"] = False
     return dataclasses.replace(base, **changes)
 
 
@@ -262,7 +313,7 @@ class Observation:
 
     def __init__(self, manager, span, namespace: str):
         self.manager, self.span, self.namespace = manager, span, namespace
-        self.key = span_key(span) if active(manager) else None
+        self.key = span_key(span) if active(manager) and not owned_elsewhere() else None
         self.captured: "OrderedDict[str, Occurrence]" = OrderedDict()
         self._visited = 0
 

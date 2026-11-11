@@ -39,6 +39,30 @@ The helper does not install instrumentors or supply provider credentials. See
 [OpenAI setup](https://docs.futureagi.com/docs/integrations/traceai/openai) for a
 provider-specific example.
 
+## Attachments (images, files, audio)
+
+Attachments are **off** by default; upgrading captures no new media. They need a
+`fi-instrumentation-otel` release that includes `fi_instrumentation.attachments`.
+
+| Setting | Behavior |
+|---|---|
+| `attachment_config=AttachmentConfig(enabled=True)` or `FI_ATTACHMENTS_ENABLED=true` | The provider creates one attachment manager |
+| `FI_ATTACHMENTS_ENABLED=false` | Kill switch: wins over code and denies every capture, even for a manager that is already running |
+| `attachment_manager=` | Borrow your own manager instead. `traceai` never shuts it down and only adds the hide and PII flags of `trace_config` to it |
+| `trace_config=TraceConfig(...)` | Hide flags and PII redaction also turn media capture off; nothing can relax them |
+
+`traceai` passes the same manager to every instrumentor it enables (as `attachments=`),
+and `traceai.get_attachment_manager()` returns it. Use `with_attachment_capture_policy(policy)`
+to add a `CapturePolicy` restriction for some calls, and `with_attachment_ownership()` to
+mark calls whose media your own code captures, so instrumentors do not upload it again.
+Both return an OpenTelemetry context to attach around those calls.
+
+`traceai.report()` shows the attachment state and, per integration, `media`:
+`provider_adapter` when the installed instrumentor captures media (today `traceAI-openai`,
+`traceAI-anthropic` and `traceAI-groq`), `session_binding` for voice integrations that
+capture only through an explicit `bind_*` call, otherwise `unqualified`. It contains no
+endpoint or credential and is not a playback claim.
+
 ## License
 
 Apache-2.0.
