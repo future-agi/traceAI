@@ -14,6 +14,7 @@ The adapters accept inline base64/data URIs and `Uint8Array` sources at the docu
 
 - Capture is off unless enabled on the shared manager.
 - Directional hide flags, required PII handling, server policy and native content restrictions deny capture before decoding or copying media.
+- Each part is sized from its shape (exact decoded length, no decode) and then preflighted with the shared manager (`manager.preflight`), which applies the deny-wins policy and reserves that many bytes. Only an admitted part is decoded and handed to `ticket.attach`. A part that fails strict decoding releases its ticket at once. A part that does not fit the manager's owned-byte budget is denied (`queue_full`) without being decoded.
 - Supply the integration's `traceConfig` and `capture` restrictions along with the manager. Binding-level denials cannot be relaxed by an individual part.
 - Tool images intended for a model are subject to both output and model-input restrictions.
 - No filenames, source URLs, hashes or provider credentials are added to references.
@@ -41,7 +42,7 @@ E means the adapter reads the original typed media value. R means the integratio
 | Genkit | `defineTool` implementation returning `Part[]`, wrapped with `withGenkitToolAttachments` | E |
 | Mastra (`@traceai/mastra`) | All exporter operations | N for raw capture. The exporter sees spans only after they end, has no manager and never uploads. Newer runtimes keep inline images in span input, but the core has no API to add references to an ended span. The exporter removes `fi.attachment.*` keys it did not issue. |
 
-Streams are never read for media, remote URLs and file paths are never fetched, and creating new recordings is not supported.
+Streams are never read for media, remote URLs and file paths are never fetched, and creating new recordings is not supported. Every supported framework boundary delivers each media part as one complete inline value (streamed AI SDK 7 files arrive whole in the end event), so no consumed byte stream exists here and the core's `startAttachmentStream` is not used.
 
 ## Known limitation: framework plus provider instrumentation
 

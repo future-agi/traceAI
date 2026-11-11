@@ -93,3 +93,53 @@ test('integration-level trace config also wins over a permissive shared manager'
     span.end(); await f.manager.flush(); assert.equal(f.uploads.length, 0);
   } finally { await f.close(); }
 });
+// SDK design section 1 (T-PF-09 analog): every part is preflighted before its source is decoded or copied.
+const warnings = [];
+process.on('warning', warning => { if (String(warning.code ?? '').startsWith('FI_ATTACHMENTS_')) warnings.push(warning.code); });
+test('preflight denies a part over the owned budget before any decode (queue_full, zero atob)', async () => {
+  for (const [dialect, content] of Object.entries(parts)) {
+    const f = await fixture({ maxOwnedBytes: 16 }); let decoded = 0; const atob = globalThis.atob;
+    globalThis.atob = (...args) => { decoded++; return atob(...args); };
+    try {
+      const span = f.tracer.startSpan('budget');
+      captureMediaMessages({ attachments: f.manager }, span, [{ role: 'user', content }], dialect, 'input');
+      span.end(); await f.manager.flush();
+      assert.equal(decoded, 0, dialect); assert.equal(f.uploads.length, 0, dialect); assert.equal(f.bodies.length, 0, dialect);
+      const status = f.manager.status();
+      assert.equal(status.openTickets, 0, dialect); assert.equal(status.ownedBytes, 0, dialect);
+    } finally { globalThis.atob = atob; await f.close(); }
+  }
+});
+test('every part goes through preflight + ticket.attach; manager.attach is never called', async () => {
+  for (const [dialect, content] of Object.entries(parts)) {
+    const f = await fixture(); const calls = { preflight: 0, attach: 0 };
+    const preflight = f.manager.preflight.bind(f.manager);
+    f.manager.preflight = (target, options) => { calls.preflight++; assert.equal(options.maxBytes, PNG.length, dialect); return preflight(target, options); };
+    f.manager.attach = () => { calls.attach++; throw new Error('legacy attach path'); };
+    try {
+      const span = f.tracer.startSpan('ticket');
+      captureMediaMessages({ attachments: f.manager }, span, [{ role: 'user', content }], dialect, 'input');
+      span.end(); await f.manager.flush();
+      assert.deepEqual(calls, { preflight: 1, attach: 0 }, dialect);
+      assert.equal(f.bodies.length, 1, dialect); assert.deepEqual(f.bodies[0], PNG);
+    } finally { await f.close(); }
+  }
+});
+test('an admitted part that fails strict decode releases its ticket; later parts still upload', async () => {
+  const f = await fixture();
+  try {
+    const span = f.tracer.startSpan('release');
+    // Shape-valid length (8 chars) with an invalid alphabet: admitted by size, rejected by the strict decoder.
+    captureMediaParts({ attachments: f.manager }, span, [{ type: 'image', image: 'invalid!', mediaType: 'image/png' },
+      { type: 'image', image: PNG.toString('base64'), mediaType: 'image/png' }], 'vercel', { direction: 'input' });
+    const status = f.manager.status();
+    assert.equal(status.openTickets, 0);
+    span.end(); await f.manager.flush();
+    assert.equal(f.uploads.length, 1); assert.equal(f.uploads[0].part_index, 1); assert.deepEqual(f.bodies[0], PNG);
+    assert.equal(f.manager.status().ownedBytes, 0);
+  } finally { await f.close(); }
+});
+test('the fixture speaks the v1 wire: no legacy-transport or wire-rejected warning fired', async () => {
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(warnings, []);
+});

@@ -1,6 +1,6 @@
 import type { Span } from "@opentelemetry/api";
 import type { TraceConfigOptions } from "@traceai/fi-core";
-import type { AttachmentCapturePolicy, AttachmentManager, AttachmentOptions } from "@traceai/fi-core/attachments";
+import type { AttachmentCapturePolicy, AttachmentFields, AttachmentManager, AttachmentOptions } from "@traceai/fi-core/attachments";
 
 export type MediaDialect = "langchain" | "llamaindex" | "vercel" | "genkit";
 export interface FrameworkAttachmentOptions {
@@ -28,20 +28,39 @@ function dataUriMime(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   return /^data:([a-zA-Z0-9/+.-]+);base64,/.exec(value.slice(0, 96))?.[1];
 }
-function decode(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array) return value;
+const BASE64_PREFIX = /^data:[a-zA-Z0-9/+.-]+;base64,/;
+function encodedPayload(value: string): string {
+  const prefix = BASE64_PREFIX.exec(value.slice(0, 96));
+  return prefix ? value.slice(prefix[0].length) : value;
+}
+/**
+ * Exact decoded length from the source's shape only: no decode, copy or allocation.
+ * 0 means unsupported (wrong type, empty, malformed length or over the per-part cap),
+ * and the part is skipped before preflight.
+ */
+function exactLength(value: unknown): number {
   // No implicit ArrayBuffer conversion, stream reads, paths or remote retrieval.
-  if (typeof value !== "string") throw new Error("unsupported media source");
-  const prefix = /^data:[a-zA-Z0-9/+.-]+;base64,/.exec(value.slice(0, 96));
-  const length = value.length - (prefix?.[0].length ?? 0);
-  if (!length || length > MAX_ENCODED || length % 4 !== 0) throw new Error("unsupported media size");
-  const encoded = prefix ? value.slice(prefix[0].length) : value;
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error("invalid media encoding");
-  const binary = atob(encoded);
-  if (binary.length > MAX_DECODED) throw new Error("unsupported media size");
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  if (value instanceof Uint8Array) return value.byteLength <= MAX_DECODED ? value.byteLength : 0;
+  if (typeof value !== "string") return 0;
+  const encoded = encodedPayload(value);
+  if (!encoded.length || encoded.length > MAX_ENCODED || encoded.length % 4 !== 0) return 0;
+  const length = (encoded.length / 4) * 3 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0);
+  return length > 0 && length <= MAX_DECODED ? length : 0;
+}
+/** Strict decode, called only AFTER preflight admitted the part. Never throws; undefined = unusable. */
+function decode(value: unknown, maxBytes: number): Uint8Array | undefined {
+  // The core detaches mutable bytes synchronously inside ticket.attach.
+  if (value instanceof Uint8Array) return value.byteLength && value.byteLength <= maxBytes ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const encoded = encodedPayload(value);
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return undefined;
+  try {
+    const binary = atob(encoded);
+    if (!binary.length || binary.length > maxBytes) return undefined;
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch { return undefined; }
 }
 
 function normalized(part: unknown, dialect: MediaDialect): { data: unknown; mime: string } | undefined {
@@ -99,7 +118,7 @@ function locallyDenied(config: TraceConfigOptions | undefined, options: Attachme
 /**
  * Observe only explicit typed content arrays at an original-value boundary.
  * No recursive scraping, uploads from serialized telemetry, or caller mutation.
- * The source getter runs synchronously INSIDE core admission, never before it.
+ * Every part is preflighted against the shared manager before its source is decoded or copied.
  */
 export function captureMediaParts(binding: FrameworkAttachmentOptions, span: Span, parts: unknown,
   dialect: MediaDialect, options: Omit<AttachmentOptions, "mimeType" | "partIndex">): void {
@@ -127,9 +146,20 @@ export function captureMediaParts(binding: FrameworkAttachmentOptions, span: Spa
       }
       const attachmentOptions: AttachmentOptions = { ...options, mimeType: media.mime, partIndex: i, capture };
       if (locallyDenied(binding.traceConfig, attachmentOptions)) continue;
-      // Lazy decode also ensures disabled, PII, unsampled and full-queue captures
-      // do not allocate decoded media. Core owns the detached mutable-byte copy.
-      const result = manager.attach(span, { kind: "Bytes", get data() { return decode(media.data); } }, attachmentOptions);
+      // Size from shape only, then preflight (deny-wins, budget reserved for the exact length)
+      // BEFORE any decode or copy (SDK design section 1). Denied, disabled, PII, unsampled and
+      // full-budget parts therefore never allocate decoded media.
+      const maxBytes = exactLength(media.data);
+      if (!maxBytes) continue;
+      const ticket = manager.preflight(span, { mimeType: media.mime, direction: options.direction, purpose: options.purpose,
+        capture, maxBytes });
+      if (!ticket.admitted) continue;
+      const bytes = decode(media.data, ticket.maxBytes);
+      // An admitted ticket that is not used returns its reservation at once.
+      if (!bytes) { ticket.release(); continue; }
+      const fields: AttachmentFields = { messageIndex: options.messageIndex, partIndex: i, role: options.role,
+        channel: options.channel, conversationId: options.conversationId, turnId: options.turnId, toolCallId: options.toolCallId };
+      const result = ticket.attach({ kind: "Bytes", data: bytes }, fields);
       if (result.admission === "queued") positions.add(key);
     }
   } catch { /* Unsupported/malformed media must never affect framework execution. */ }
