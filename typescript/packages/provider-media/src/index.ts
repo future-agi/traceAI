@@ -250,7 +250,8 @@ export class ProviderMediaCapture {
    * Observe only bytes the caller consumed: whole-body arrayBuffer()/blob() reads, and the
    * chunks of a reader the caller obtained with response.body.getReader() (SDK design 6.4),
    * up to the end of the stream. Unread, cancelled, partially read and released bodies upload
-   * nothing, and so do consumers that never call the public getReader() and Node-stream bodies.
+   * nothing, and so do a second reader on the same body, consumers that never call the public
+   * getReader(), and Node-stream bodies.
    */
   speechResponse<T>(response: T): T {
     this.safely(() => {
@@ -278,9 +279,15 @@ export class ProviderMediaCapture {
       const body = target.body as ReadableStream<Uint8Array> | null;
       const getReader = body?.getReader;
       if (body && typeof getReader === "function") {
+        // Only the first reader is observed. releaseLock() does not end the stream, so a
+        // later reader would see only the remaining bytes and must never upload them as whole.
+        let observed = false;
         Object.defineProperty(body, "getReader", { configurable: true, writable: true, value: function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
           const reader = (getReader as (...a: unknown[]) => unknown).apply(this, args);
-          if (this === body) capture.safely(() => capture.observeReader(mimeType, reader));
+          if (this === body && !observed) {
+            observed = true;
+            capture.safely(() => capture.observeReader(mimeType, reader));
+          }
           return reader;
         } });
       }

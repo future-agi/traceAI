@@ -108,3 +108,18 @@ test('S-07 the same span is captured once when the application reads through arr
     assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, wav());
   } finally { await f.close(); }
 });
+
+test('S-08 a second reader after releaseLock sees only the rest of the body, so nothing uploads', async () => {
+  const f = await fixture();
+  try {
+    const { response } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    const first = response.body.getReader();
+    const head = [(await first.read()).value, (await first.read()).value];
+    first.releaseLock();
+    const rest = await drain(response.body.getReader());
+    assert.deepEqual(Buffer.concat([...head, rest]), wav());
+    await f.manager.flush(); await idle(f);
+    assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
