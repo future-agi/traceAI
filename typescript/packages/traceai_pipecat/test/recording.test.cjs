@@ -40,6 +40,23 @@ for (const name of ['pipecat-floor', '@pipecat-ai/client-js']) {
     stop(); assert.equal(client.listenerCount('connected'), 0);
   });
 
+  test(`${name}: a throwing identity callback never interrupts the client and reports source_unavailable`, async t => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    t.after(() => provider.shutdown());
+    const { client } = createClient(require(name));
+    let seen = 0; client.on('connected', () => { seen++; });
+    const stop = observePipecatClient(client, { tracer: provider.getTracer('throwing-test'),
+      serverRecording: () => { throw new Error('synthetic-private-failure'); } });
+    t.after(stop); await client.connect(); await client.disconnect();
+    assert.equal(seen, 1);
+    const spans = exporter.getFinishedSpans(); assert.ok(spans.length > 0);
+    for (const s of spans) {
+      assert.equal(s.attributes['pipecat.server_recording.status'], 'source_unavailable');
+      assert.deepEqual(s.links, []); assert.ok(!JSON.stringify({ a: s.attributes, e: s.events, st: s.status }).includes('synthetic-private-failure'));
+    }
+  });
+
   for (const [caseName, supplied] of [
     ['missing', undefined], ['version', { ...identity(), schemaVersion: 2 }],
     ['zero trace', { ...identity(), parent: { ...identity().parent, traceId: '0'.repeat(32) } }],

@@ -9,6 +9,18 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
+    },
+    "./agents": {
+      "types": "./dist/src/agents.d.ts",
+      "import": "./dist/src/agents.js",
+      "require": "./dist/src/agents.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "agents": [
+        "dist/src/agents.d.ts"
+      ]
     }
   },
   "files": [
