@@ -67,6 +67,17 @@ PROBE = textwrap.dedent("""
 """)
 
 
+def _pydantic_ai_major():
+    from importlib.metadata import PackageNotFoundError, version
+
+    for name in ("pydantic-ai-slim", "pydantic-ai"):
+        try:
+            return int(version(name).split(".")[0])
+        except (PackageNotFoundError, ValueError):
+            continue
+    return 0
+
+
 def _available(framework):
     module = {"langchain": "traceai_langchain", "pydantic_ai": "traceai_pydantic_ai"}[framework]
     try:
@@ -82,10 +93,10 @@ def _available(framework):
 def test_process_exits_promptly(f01, tmp_path, framework, enabled, fork):
     if not _available(framework):
         pytest.skip(framework + " not installed")
-    if fork and framework == "pydantic_ai":
-        # run_sync in a forked child hangs with NO instrumentation at all (pydantic-ai 0.1.0 on a GCP VM);
-        # the fork row is covered by LangChain.
-        pytest.skip("pydantic-ai run_sync is not fork-safe on its own")
+    if fork and framework == "pydantic_ai" and _pydantic_ai_major() < 1:
+        # pydantic-ai 0.x run_sync hangs in a forked child with NO instrumentation at all (seen with 0.1.0);
+        # the fork row is still covered there by LangChain.
+        pytest.skip("pydantic-ai 0.x run_sync is not fork-safe on its own")
     script = tmp_path / "probe.py"
     script.write_text(PROBE)
     env = dict(os.environ, PROBE_DIR=os.path.dirname(__file__), PROBE_ENABLED="1" if enabled else "0",
