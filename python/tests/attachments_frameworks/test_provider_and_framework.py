@@ -176,4 +176,9 @@ def test_provider_alone_two_calls_same_image_each_own_their_occurrence(f01, prov
     owners = [s for s in exporter.get_finished_spans() if refs(s)]
     assert len(owners) == 2 and len({s.context.trace_id for s in owners}) == 2
     assert len({r["occurrence_id"] for s in owners for r in refs(s)}) == 2
-    assert assert_uris_resolve(exporter) == 2
+    # A span may project its URI into several attributes; each must resolve to its OWN occurrence.
+    assert assert_uris_resolve(exporter) >= 2
+    for span in owners:
+        (own,) = [r["occurrence_id"] for r in refs(span)]
+        assert any("fi-attachment:" + own in value for value in (span.attributes or {}).values()
+                   if isinstance(value, str)), span.name

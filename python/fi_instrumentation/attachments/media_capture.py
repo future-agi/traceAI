@@ -319,11 +319,26 @@ def attach_bytes(manager, span, data: Any, mime_types: Tuple[str, ...], *, direc
                  tool_call_id: Optional[str] = None, max_bytes: int = MAX_FRAMEWORK_BYTES) -> Optional[Occurrence]:
     """Complete in-memory bytes a framework already holds (never a stream, path or URL). Never raises.
 
-    Admitted at the exact length under the declared type first; the magic bytes
-    must then name one of ``mime_types``, re-admitted under that exact type.
+    ``data`` may be a zero-argument callable returning the bytes: it is called only
+    after a preflight at ``max_bytes`` passed every privacy, correlation and sampling
+    step, so a denied part is never read. The bytes are then admitted at their exact
+    length under the declared type; the magic bytes must name one of ``mime_types``,
+    re-admitted under that exact type.
     """
     try:
-        if not isinstance(data, (bytes, bytearray, memoryview)) or not mime_types:
+        if not mime_types:
+            return None
+        if callable(data):
+            probe = manager.preflight(span, mime_type=mime_types[0], direction=direction, purpose=purpose,
+                                      capture_policy=capture, max_bytes=max_bytes)
+            # too_large and queue_full come after every privacy, correlation and sampling step,
+            # so reading and sizing exactly is still allowed for them.
+            if not probe.admitted and probe.reason not in ("too_large", "queue_full"):
+                return None
+            if probe.admitted:
+                probe.release()
+            data = data()
+        if not isinstance(data, (bytes, bytearray, memoryview)):
             return None
         length = data.nbytes if isinstance(data, memoryview) else len(data)
         if not 0 < length <= max_bytes:
@@ -616,7 +631,7 @@ def capture_parts(manager, span, namespace: str, parts: Iterable[MediaPart], *, 
                     manager, span, p.read, p.mime_types, raw=p.raw, max_bytes=max_bytes, verify=True, **f))
             elif part.kind == "bytes":
                 observation.visit(position, lambda p=part, f=fields: attach_bytes(
-                    manager, span, p.read(), p.mime_types, max_bytes=max_bytes, **f))
+                    manager, span, p.read, p.mime_types, max_bytes=max_bytes, **f))
             elif part.kind == "url":
                 observation.visit(position, lambda p=part, f=fields: _remote(manager, span, p, f))
     except Exception:

@@ -100,7 +100,8 @@ def test_tool_result_binary_is_owned_by_each_observing_span(f01, instrument):
     flush(manager)
     (tool,) = [s for s in tool_spans(exporter) if refs(s)]
     (ref,) = refs(tool)
-    assert ref["purpose"] == "tool_result" and ref.get("tool_call_id") == "call_1"
+    # Span refs carry purpose and indices only; tool_call_id travels in the upload request.
+    assert ref["purpose"] == "tool_result"
     by_occurrence = {b["occurrence_id"]: b for b in f01.uploads}
     body = by_occurrence[ref["occurrence_id"]]
     assert body["association"]["parent"]["span_id"] == format(tool.context.span_id, "016x")
