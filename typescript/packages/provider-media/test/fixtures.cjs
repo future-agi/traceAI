@@ -10,14 +10,16 @@ function wav() {
   result.writeUInt32LE(32000, 28); result.writeUInt16LE(2, 32); result.writeUInt16LE(16, 34); result.write('data', 36); result.writeUInt32LE(2, 40);
   return result;
 }
-async function fixture(config = {}) {
+async function fixture(options = {}) {
+  // sessionLimits overrides F01 session limits in the loopback bootstrap; everything else configures the manager.
+  const { sessionLimits, ...config } = options;
   const uploads = []; const requests = []; const uploadsById = new Map();
   const server = http.createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const data = Buffer.concat(chunks); requests.push({ method: req.method, path: req.url });
       res.setHeader('content-type', 'application/json');
-      if (req.url.endsWith('attachment-sessions')) res.end(JSON.stringify(await fake().transport.bootstrap(JSON.parse(data))));
+      if (req.url.endsWith('attachment-sessions')) { const session = await fake().transport.bootstrap(JSON.parse(data)); res.end(JSON.stringify(sessionLimits ? { ...session, limits: { ...session.limits, ...sessionLimits } } : session)); }
       else if (req.url.endsWith('/uploads')) {
         const input = JSON.parse(data); const upload = { ...await fake().transport.initialize(null, input), upload_id: randomUUID() };
         uploadsById.set(upload.upload_id, input); res.statusCode = 201; res.end(JSON.stringify(upload));

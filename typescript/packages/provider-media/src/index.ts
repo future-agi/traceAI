@@ -1,5 +1,5 @@
 import { generateTraceConfig, type TraceConfigOptions } from "@traceai/fi-core";
-import { attachmentModality, type AttachmentManager, type AttachmentSpan, type AttachmentOptions, type AttachmentSource, type AttachmentCorrelation } from "@traceai/fi-core/attachments";
+import { attachmentModality, type AttachmentManager, type AttachmentSpan, type AttachmentOptions, type AttachmentSource, type AttachmentCorrelation, type AttachmentAdmission, type AttachmentAdmissionTicket } from "@traceai/fi-core/attachments";
 
 export interface ProviderMediaOptions {
   /** The provider-owned manager returned by register(). Never create an uploader per integration. */
@@ -10,11 +10,38 @@ export interface ProviderMediaOptions {
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-// Bound synchronous adapter scratch independently of the manager queue. Larger media
-// needs the core's future lazy-source/stream API, not an unbounded decoding callback.
+// Bound synchronous base64 decoding independently of the manager queue. Raw bytes and
+// Blobs are bounded by the manager alone (preflight too_large / queue_full).
 const MAX_DECODED_BYTES = 1024 * 1024;
+const MAX_ENCODED_CHARS = Math.ceil(MAX_DECODED_BYTES / 3) * 4;
 const MAX_PARTS = 64;
+const DATA_URI_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+// Steps 11-12 of the core's preflight order run only after every privacy, identity and
+// sampling check passed, so these two denials still allow sizing the source exactly.
+const SIZE_DENIALS: ReadonlySet<AttachmentAdmission> = new Set(["too_large", "queue_full"]);
 const seen = new WeakMap<AttachmentManager, WeakMap<object, Set<string>>>();
+
+type MediaFields = Omit<AttachmentOptions, "mimeType">;
+type Owned = Extract<AttachmentSource, { kind: "Bytes" | "Blob" }>;
+/** A source sized from its shape only. `take` decodes or hands over the bytes, and runs only after admission. */
+type Described = { mimeType: string; size: number; take(maxBytes: number): Owned | undefined };
+
+/** Exact decoded length of padded base64 from its shape only: no decode or allocation. 0 = unusable. */
+function base64Length(value: unknown): number {
+  if (typeof value !== "string" || !value.length || value.length > MAX_ENCODED_CHARS || value.length % 4 !== 0) return 0;
+  const length = (value.length / 4) * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0);
+  return length > 0 && length <= MAX_DECODED_BYTES ? length : 0;
+}
+function base64Source(value: unknown, mimeType: string): Described | undefined {
+  const size = base64Length(value);
+  if (!size) return undefined;
+  return { mimeType, size, take(maxBytes) {
+    // Strict alphabet check and decode happen only after the ticket was admitted.
+    if (size > maxBytes || !/^[A-Za-z0-9+/]*={0,2}$/.test(value as string)) return undefined;
+    const decoded = Buffer.from(value as string, "base64");
+    return decoded.byteLength === size ? { kind: "Bytes", data: decoded } : undefined;
+  } };
+}
 
 /** Typed extraction only. No recursion, URL fetch, provider file lookup, or filesystem access. */
 export class ProviderMediaCapture {
@@ -39,47 +66,77 @@ export class ProviderMediaCapture {
     }
   }
 
-  private submit(key: string, source: AttachmentSource, options: AttachmentOptions, counted = true): void {
-    // One budget slot per typed part, even when a lazily typed data URI tries several MIME descriptors.
-    if (!this.manager || !this.correlation || (counted && this.attempted++ >= MAX_PARTS) || this.seen.has(key)) return;
+  /** Wrapper-local restrictions intersect the shared manager policy, never replace it. */
+  private locallyDenied(mimeType: string, direction: AttachmentOptions["direction"]): boolean {
+    const config = generateTraceConfig(this.local);
+    const input = direction !== "output";
+    return !!(config.piiRedaction || (input
+      ? config.hideInputs || config.hideInputMessages || config.hideInputText || (attachmentModality(mimeType) === "image" && config.hideInputImages)
+      : config.hideOutputs || config.hideOutputMessages || config.hideOutputText));
+  }
+
+  private ticket(mimeType: string, sourceKind: "Bytes" | "Blob", maxBytes: number, fields: MediaFields): AttachmentAdmissionTicket {
+    return this.manager!.preflight(this.correlation, { mimeType, direction: fields.direction, purpose: fields.purpose, capture: fields.capture, sourceKind, maxBytes });
+  }
+
+  /**
+   * SDK design section 1: preflight BEFORE the source is read, sized or decoded. A denied
+   * part is never read. The gate is sized by the adapter's cap (or the known Blob/ArrayBuffer
+   * length); after admission the exact size shrinks the reservation at commit. A gate denied
+   * only for size, a different exact MIME type, or a part larger than the gate is
+   * preflighted once more at its exact type and length. Never more than two preflights.
+   */
+  private admit(key: string, gateMime: string, sourceKind: "Bytes" | "Blob", gateBytes: number, fields: MediaFields,
+    describe: () => Described | undefined): void {
+    const manager = this.manager;
+    // One budget slot per typed part. A manager without preflight (an older core) captures nothing.
+    if (!manager || !this.correlation || typeof manager.preflight !== "function" || this.attempted++ >= MAX_PARTS || this.seen.has(key)) return;
+    // Every ticket taken here is released on exit. release() is a no-op once a ticket was used.
+    const taken: AttachmentAdmissionTicket[] = [];
+    const preflight = (mimeType: string, maxBytes: number) => {
+      const ticket = this.ticket(mimeType, sourceKind, maxBytes, fields);
+      taken.push(ticket);
+      return ticket;
+    };
     try {
-      const config = generateTraceConfig(this.local);
-      const input = options.direction !== "output";
-      // Wrapper-local restrictions intersect the shared manager policy, never replace it.
-      if (config.piiRedaction || (input
-        ? config.hideInputs || config.hideInputMessages || config.hideInputText || (attachmentModality(options.mimeType) === "image" && config.hideInputImages)
-        : config.hideOutputs || config.hideOutputMessages || config.hideOutputText)) return;
-      const result = this.manager.attach(this.correlation, source, options);
+      if (this.locallyDenied(gateMime, fields.direction) || !(gateBytes > 0)) return;
+      let ticket = preflight(gateMime, gateBytes);
+      if (!ticket.admitted && !SIZE_DENIALS.has(ticket.reason)) return;
+      const source = describe();
+      if (!source || !(source.size > 0) || this.locallyDenied(source.mimeType, fields.direction)) return;
+      if (!ticket.admitted || source.mimeType !== gateMime || source.size > ticket.maxBytes) {
+        ticket.release();
+        ticket = preflight(source.mimeType, source.size);
+        if (!ticket.admitted) return;
+      }
+      const owned = source.take(ticket.maxBytes);
+      if (!owned) return;
       // Denied observations are not retained as per-part diagnostics or references.
-      if (result.admission === "queued") this.seen.add(key);
+      if (ticket.attach(owned, { messageIndex: fields.messageIndex, partIndex: fields.partIndex, role: fields.role, channel: fields.channel,
+        conversationId: fields.conversationId, turnId: fields.turnId, toolCallId: fields.toolCallId }).admission === "queued") this.seen.add(key);
     } catch { /* Never leak provider payloads or replace application behavior. */ }
-  }
-
-  private base64(key: string, read: () => unknown, options: AttachmentOptions, counted = true): void {
-    this.submit(key, { kind: "Bytes", get data() {
-      // AttachmentManager does not access this getter until all policy, identity,
-      // sampling and descriptor gates have passed. Never decode during extraction.
-      const value = read();
-      if (typeof value !== "string" || !value.length || value.length > Math.ceil(MAX_DECODED_BYTES / 3) * 4 ||
-        value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error("source_unavailable");
-      const decoded = Buffer.from(value, "base64");
-      if (decoded.byteLength > MAX_DECODED_BYTES) throw new Error("source_unavailable");
-      return decoded;
-    } }, options, counted);
-  }
-
-  private dataUri(key: string, read: () => unknown, options: Omit<AttachmentOptions, "mimeType">): void {
-    // MIME is a typed descriptor; payload slicing/decoding occurs only inside the
-    // admitted getter. Do not retain a remote/signed URL as fallback metadata.
-    if (this.attempted >= MAX_PARTS) return;
-    this.attempted++;
-    for (const mimeType of ["image/png", "image/jpeg", "image/webp"]) {
-      this.base64(`${key}:${mimeType}`, () => {
-        const value = read();
-        const prefix = `data:${mimeType};base64,`;
-        return typeof value === "string" && value.startsWith(prefix) ? value.slice(prefix.length) : undefined;
-      }, { ...options, mimeType }, false);
+    finally {
+      // An admitted ticket that is not used returns its reservation at once.
+      for (const ticket of taken) { try { ticket.release(); } catch { /* bounded */ } }
     }
+  }
+
+  private base64(key: string, read: () => unknown, mimeType: string, fields: MediaFields): void {
+    this.admit(key, mimeType, "Bytes", MAX_DECODED_BYTES, fields, () => base64Source(read(), mimeType));
+  }
+
+  private dataUri(key: string, read: () => unknown, fields: MediaFields): void {
+    // Every candidate type is an image, so one image gate decides the whole part before
+    // the URL string is read. Never retain a remote/signed URL as fallback metadata.
+    this.admit(key, DATA_URI_TYPES[0], "Bytes", MAX_DECODED_BYTES, fields, () => {
+      const value = read();
+      if (typeof value !== "string") return undefined;
+      for (const mimeType of DATA_URI_TYPES) {
+        const prefix = `data:${mimeType};base64,`;
+        if (value.startsWith(prefix)) return base64Source(value.slice(prefix.length), mimeType);
+      }
+      return undefined;
+    });
   }
 
   /** Gemini Content/Part shapes shared by all three maintained Google wrappers. */
@@ -93,8 +150,8 @@ export class ProviderMediaCapture {
         for (let p = 0; p < Math.min(parts.length, MAX_PARTS); p++) {
           const inline = record(record(parts[p]).inlineData);
           if (typeof inline.mimeType !== "string") continue;
-          this.base64(`gemini:${direction}:${m}:${p}`, () => inline.data, {
-            mimeType: inline.mimeType, direction, purpose: direction === "input" ? "model_input" : "model_output",
+          this.base64(`gemini:${direction}:${m}:${p}`, () => inline.data, inline.mimeType, {
+            direction, purpose: direction === "input" ? "model_input" : "model_output",
             messageIndex: m, partIndex: p,
           });
         }
@@ -130,7 +187,7 @@ export class ProviderMediaCapture {
           } else if (part.type === "input_audio" && dialect === "openai") {
             const audio = record(part.input_audio);
             const mimeType = audio.format === "wav" ? "audio/wav" : audio.format === "mp3" ? "audio/mpeg" : undefined;
-            if (mimeType) this.base64(`chat:${m}:${p}`, () => audio.data, { ...options, mimeType });
+            if (mimeType) this.base64(`chat:${m}:${p}`, () => audio.data, mimeType, options);
           }
         }
       }
@@ -163,20 +220,27 @@ export class ProviderMediaCapture {
     });
   }
 
-  private bedrockBlock(key: string, part: RecordValue, options: Omit<AttachmentOptions, "mimeType">): void {
+  private bedrockBlock(key: string, part: RecordValue, options: MediaFields): void {
     // Bedrock serializes Uint8Array bytes itself; S3 locations and other sources stay unsupported.
     const media = record(part.image ?? part.document);
     const mimeType = part.image ? ({ png: "image/png", jpeg: "image/jpeg", webp: "image/webp" } as Record<string, string>)[String(media.format)]
       : part.document && media.format === "pdf" ? "application/pdf" : undefined;
     if (!mimeType) return;
-    this.submit(key, { kind: "Bytes", get data() { return record(media.source).bytes as Uint8Array; } }, { ...options, mimeType });
+    this.admit(key, mimeType, "Bytes", MAX_DECODED_BYTES, options, () => {
+      const bytes = record(media.source).bytes;
+      // The core copies mutable bytes synchronously inside ticket.attach; no adapter-side copy.
+      return bytes instanceof Uint8Array && bytes.byteLength ? { mimeType, size: bytes.byteLength, take: max => bytes.byteLength <= max ? { kind: "Bytes", data: bytes } : undefined } : undefined;
+    });
   }
 
   /** Immutable File/Blob input only; never advance fs.ReadStream or fetch Response inputs. */
   speechInput(file: unknown): void {
     this.safely(() => {
       if (typeof Blob === "undefined" || !(file instanceof Blob) || attachmentModality(file.type) !== "audio") return;
-      this.submit("speech:input", { kind: "Blob", data: file }, { direction: "input", mimeType: file.type, purpose: "model_input" });
+      // Blob type and size are metadata; the content is never read here.
+      const blob: Blob = file; const mimeType = blob.type; const size = blob.size;
+      this.admit("speech:input", mimeType, "Blob", size, { direction: "input", purpose: "model_input" },
+        () => ({ mimeType, size, take: max => size <= max ? { kind: "Blob", data: blob } : undefined }));
     });
   }
 
@@ -196,18 +260,29 @@ export class ProviderMediaCapture {
           if (this !== target) return original.apply(this, args);
           // Preserve the native receiver/brand check and the application's error.
           return original.apply(this, args).then(value => {
-            capture.safely(() => {
-              const source: AttachmentSource = value instanceof ArrayBuffer
-                ? { kind: "Bytes", data: new Uint8Array(value) }
-                : { kind: "Blob", data: value as Blob };
-              capture.submit("speech:output", source, { direction: "output", mimeType, purpose: "model_output" });
-            });
+            // Preflight at read time (not at hook install), so a late read is judged against the
+            // current policy and never holds an install-time reservation past its TTL.
+            capture.safely(() => capture.consumed(mimeType, value));
             return value;
           });
         } });
       }
     });
     return response;
+  }
+
+  /** A whole body the application itself read, sized from the value it already holds. */
+  private consumed(mimeType: string, value: ArrayBuffer | Blob): void {
+    const fields: MediaFields = { direction: "output", purpose: "model_output" };
+    if (value instanceof ArrayBuffer) {
+      const buffer: ArrayBuffer = value; const size = buffer.byteLength;
+      this.admit("speech:output", mimeType, "Bytes", size, fields,
+        () => ({ mimeType, size, take: max => size <= max ? { kind: "Bytes", data: new Uint8Array(buffer) } : undefined }));
+    } else if (typeof Blob !== "undefined" && value instanceof Blob) {
+      const blob: Blob = value; const size = blob.size;
+      this.admit("speech:output", mimeType, "Blob", size, fields,
+        () => ({ mimeType, size, take: max => size <= max ? { kind: "Blob", data: blob } : undefined }));
+    }
   }
 
   private safely(fn: () => void): void { if (this.manager) { try { fn(); } catch { /* Content-free fail-open. */ } } }
