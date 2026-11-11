@@ -230,6 +230,31 @@ When error hiding is unset, any input/output value, message or text hide flag en
 
 Known-secret redaction is always active on traceAI-owned exports. The registry is bounded to 1024 values of at least eight characters. `registerSecret(value)` adds an exact string without coercing objects. Unknown free-text credentials, transformed secrets and credentials hidden in unparsed bodies may remain unknown; hide sensitive content instead of relying on inference.
 
+## Attachments (images, files, audio)
+
+Attachments are **off** by default. Upgrading `@traceai/auto` captures no new media. New recordings are a separate switch, also off.
+
+| Environment | `init` option | Default and behavior |
+|---|---|---|
+| `FI_ATTACHMENTS_ENABLED` | `attachments.enabled` | `false`. A manager that reads the process environment (the default) also treats a value that is not true as a deny at every admission |
+| `FI_ATTACHMENTS_ENDPOINT` | `attachments.endpoint` | Unset. The attachment control origin, independent of `baseUrl` and the OTLP collector; must be HTTPS |
+| — | `attachments` | Options for the manager auto creates. Hide and PII flags from either `traceConfig` win; an attachment-level `false` cannot relax a global hide flag |
+| — | `attachmentManager` | Borrow the application's manager. Auto never shuts down a borrowed manager and only adds restrictions to it |
+
+Auto uses ONE manager: `attachmentManager`, else the selected provider's `attachments`, else its own. It passes that manager to every instrumentor it enables as their `attachments` option, and `getAttachmentManager()` returns it. Every source is checked against the deny-wins policy (local hide/PII flags, server policy, sampling, budget) before it is read or decoded; storage stays private.
+
+Wire capture (`wire`) observes only allowlisted HTTPS protocol entries (`report().attachments.routes`): OpenAI speech, transcription and translation, image generation, edits and variations, chat completions, responses, and Deepgram speak. It never fetches URLs, opens files, clones, tees or reads a response body itself.
+
+| Source | Wire-only call | Under a native model span |
+|---|---|---|
+| JSON input images, files, computer screenshots (chat, responses) | Captured, from the wire request copy | By the instrumentor (`@traceai/openai`); the same position is never uploaded twice |
+| JSON output images (images `b64_json`, responses `image_generation_call`) | Captured, from the wire response copy | By the instrumentor where it covers the operation; wire capture needs an explicit integration policy (`withAttachmentCapturePolicy`) |
+| Speech audio the application read with `arrayBuffer()` / `blob()` | Captured | Needs an explicit integration policy |
+| Speech audio the application read incrementally (reader, async iterator) | Not captured: the wire span does not exist yet and nothing is retained | Needs an explicit integration policy; cancel, early return, pipe or tee upload nothing |
+| FormData audio / image files | Not captured (no retention before the span exists) | Needs an explicit integration policy |
+
+An adapter that captures media itself marks its context with `withAttachmentOwnership(context)` (context key `traceai.auto.attachment_owner.v1`), and wire capture then skips that call. `report().attachments` shows the manager state, queue counters, routes, sources and unsupported sources; `report().integrations[].media` shows whether an integration captures media through a provider adapter. No row is a playback claim.
+
 ## Bring your own OpenTelemetry destination
 
 With no complete FI key pair, `init({ exporter })`, `init({ spanProcessor })`, `init({ provider })`, or an existing application provider activates instrumentation **without creating an FI export route**. If neither a destination nor a complete pair exists, instrumentation is disabled. With a complete pair and a provider but no explicit exporter/processor, the agent attempts to attach its FI route to that provider.
@@ -275,6 +300,9 @@ Standard `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` preserve application
 | `forceFlush()` | Flush completed spans with a five-second deadline; does not consume unread responses |
 | `shutdown()` | Idempotent hook removal and bounded drain/shutdown; no supported reinitialization afterwards |
 | `registerSecret(value)` | Register an exact sensitive string of at least eight characters; ignore other values |
+| `getAttachmentManager()` | The one attachment manager auto selected and passed to instrumentors, or `undefined` before `init` |
+| `withAttachmentCapturePolicy(context, policy)` | Supply an integration's capture restrictions for wire media under its native span; inherited denials always win |
+| `withAttachmentOwnership(context)` | Mark a call whose media an adapter captures itself, so wire capture does not upload it again |
 
 ## CLI
 
