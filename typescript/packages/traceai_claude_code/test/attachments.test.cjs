@@ -60,6 +60,8 @@ async function fixture(t, overrides = {}, rowOptions = {}) {
     HOME: home,
     CLAUDE_CONFIG_DIR: home + "/.claude",
     XDG_DATA_HOME: home + "/.local/share",
+    // Hermetic: CI runners export their own XDG_CONFIG_HOME.
+    XDG_CONFIG_HOME: home + "/.config",
     FI_API_KEY: "dummy-fi-api",
     FI_SECRET_KEY: "dummy-fi-secret",
     FI_PROJECT_NAME: "claude-test",
