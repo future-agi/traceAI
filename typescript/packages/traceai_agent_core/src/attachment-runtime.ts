@@ -32,9 +32,9 @@ export function agentAttachmentRuntime(
   // Always hand the manager a transport, so fi-core never builds its own from
   // FI_ATTACHMENTS_ENDPOINT. Without an approved endpoint every call is endpoint_unconfigured.
   const unconfigured = async (): Promise<never> => { throw new AttachmentTransportError("endpoint_unconfigured"); };
-  const delegate: AttachmentTransport = transport ?? {
+  const delegate = (transport ?? {
     bootstrap: unconfigured, initialize: unconfigured, upload: unconfigured, complete: unconfigured,
-  };
+  }) as AttachmentTransport;
   const check = async () => {
     if (!allowed() || (config.revalidate && !(await config.revalidate())))
       throw new AttachmentTransportError("policy_denied");

@@ -60,7 +60,7 @@ export function captureAgentImages(
   blocks: unknown,
   options: AgentImageOptions,
 ): readonly AttachmentHandle[] {
-  if (!manager || !Array.isArray(blocks) || manager.status().state !== "queued") return [];
+  if (!manager || !Array.isArray(blocks) || manager.status().state !== "ready") return [];
   const handles: AttachmentHandle[] = [];
   let remaining = MAX_AGENT_IMAGE_BYTES;
   let spans = admitted.get(manager);

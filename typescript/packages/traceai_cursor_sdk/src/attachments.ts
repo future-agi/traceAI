@@ -42,7 +42,7 @@ export function captureCursorImages(
   traceConfig?: TraceConfigOptions,
 ): readonly AttachmentHandle[] {
   try {
-    if (!manager || policy.hideInputs || manager.status().state !== "queued") return [];
+    if (!manager || policy.hideInputs || manager.status().state !== "ready") return [];
     const denied = cursorImageCaptureDenied(policy, traceConfig);
     if (!message || typeof message !== "object") return [];
     const images = (message as { images?: unknown }).images;
