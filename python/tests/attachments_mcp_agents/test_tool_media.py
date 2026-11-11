@@ -46,7 +46,7 @@ def test_value_is_read_only_after_admission_and_only_once(f01, spans):
 
     def read():
         reads.append(1)
-        return b64(png(1))
+        return b64(png(seed=1))
 
     with provider.get_tracer("t").start_as_current_span("tool") as span:
         denied = tool_media.ToolMedia(manager, span, "test", trace_config=TraceConfig(hide_outputs=True))
@@ -69,13 +69,13 @@ def test_budget_and_part_cap(f01, spans):
     provider, _ = spans
     with provider.get_tracer("t").start_as_current_span("tool") as span:
         media = tool_media.ToolMedia(manager, span, "test", budget=200, max_parts=2)
-        image = png(2, width=4, height=4)
+        image = png(width=4, height=4, seed=2)
         assert len(image) < 200
         assert media.base64("1", lambda: b64(image), "image/png", purpose="tool_result") is not None
         assert media.remaining == 200 - len(image)
-        assert media.data_uri("2", lambda: data_uri("image/png", png(3, 40, 40)), ("image/png",),
+        assert media.data_uri("2", lambda: data_uri("image/png", png(width=40, height=40, seed=3)), ("image/png",),
                               purpose="tool_result") is None  # over the remaining budget
-        assert media.base64("3", lambda: b64(png(4)), "image/png", purpose="tool_result") is None  # part cap
+        assert media.base64("3", lambda: b64(png(seed=4)), "image/png", purpose="tool_result") is None  # part cap
     flush(manager)
     assert len(f01.uploads) == 1
     manager.shutdown(5)

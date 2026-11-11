@@ -43,17 +43,17 @@ def tool_span(exporter, name):
     return [s for s in exporter.get_finished_spans() if s.name == "execute_tool " + name][-1]
 
 
-def test_tool_image_audio_and_blob_upload_on_the_tool_span(f01, spans):
+def test_tool_image_and_blob_upload_on_the_tool_span(f01, spans):
     manager = f01.manager()
     provider, exporter = spans
     callback = FutureAGICallback(tracer_provider=provider, attachments=manager)
     assert run(callback, "screenshot") == support.ANSWER
+    # LangChain turns an audio-only tool result into a string before callbacks see it: no typed block, no upload.
     run(callback, "voice")
     run(callback, "report")
     flush(manager)
     assert sorted((u["mime_type"], u["direction"], u["purpose"], u.get("tool_call_id")) for u in f01.uploads) == [
         ("application/pdf", "output", "tool_result", "call_media_1"),
-        ("audio/wav", "output", "tool_result", "call_media_1"),
         ("image/png", "output", "tool_result", "call_media_1")]
     assert server.png(1) in f01.payloads
     span = tool_span(exporter, "screenshot")

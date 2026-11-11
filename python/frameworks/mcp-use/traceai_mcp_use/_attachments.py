@@ -20,7 +20,8 @@ mcp_use_attachment_capabilities = MappingProxyType({
     "operations": ("tool.output",),
     "sources": ("inline_base64",),
     "content_types": ("image", "audio", "file"),
-    "unsupported": ("url", "resource_uri", "resource_link", "local_path"),
+    # LangChain stringifies tool content it does not know as a block (audio), so no typed block reaches callbacks.
+    "unsupported": ("url", "resource_uri", "resource_link", "local_path", "audio_stringified_by_langchain"),
 })
 
 _EMPTY: Mapping[str, Any] = MappingProxyType({})

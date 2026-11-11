@@ -369,3 +369,27 @@ path is exported either way.
 The example test runs `examples/agent_with_tools.py` as its own process,
 once alone and once with `traceai_mcp` instrumented. The suite turns off
 mcp-use's usage telemetry.
+
+## Tool media (attachments)
+
+`FutureAGICallback(attachments=manager)` (default: the tracer provider's
+`attachment_manager`) uploads the typed base64 blocks mcp-use 1.7 makes from
+an MCP tool result: `image` and `file` (inline resource blob), on the tool
+span as `tool_result` occurrences with the tool call id (an `audio` block is
+captured when it reaches the callback as a typed block; LangChain 1.x turns
+audio tool content into a string first, so nothing is uploaded for it). At
+most 64 blocks and 256 KiB of decoded bytes per result.
+`attachment_capture=` only adds restrictions.
+
+Attachments are off unless the provider's attachment manager is enabled
+(`fi_instrumentation.register(..., attachment_config=AttachmentConfig(enabled=True))`
+or `traceai.init(attachment_config=...)`). Tool media is tool output and
+potential model input, so every input and output hide flag
+(`hide_inputs`, `hide_outputs` and their message/text variants),
+`hide_input_images` for images, and `pii_redaction` deny the upload; they
+cannot be relaxed by the server or the core. Only typed inline bytes are
+read, and only after the manager admitted them; URLs, file IDs, resource URIs
+and local paths are never fetched or opened. Call the manager's `flush()`
+before a short process exits. Upload completion means "transferred for
+validation"; playback needs an authorized occurrence through the media
+gateway.
