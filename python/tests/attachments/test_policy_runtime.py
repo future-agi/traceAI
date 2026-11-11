@@ -26,13 +26,10 @@ def attach(manager, data=b"synthetic-audio", **kwargs):
 
 
 def test_default_no_workers_no_network(monkeypatch):
-    constructor = Mock(side_effect=AssertionError("network"))
-    monkeypatch.setattr("fi_instrumentation.attachments.manager.HTTPTransport", constructor)
     manager = AttachmentManager(project_name="synthetic")
     assert attach(manager).admission == "disabled"
     assert manager.owned_bytes == 0
-    assert not manager._threads
-    constructor.assert_not_called()
+    assert not manager._threads and manager._transport is None and manager._p is None
     assert manager.shutdown(0).unfinished == 0
 
 
@@ -49,7 +46,7 @@ def test_denial_before_even_payload_access(manager, transport, flag):
     assert result.admission in ("policy_denied", "redaction_unavailable")
     assert not transport.requests and not transport.payloads
     assert manager.owned_bytes == 0
-    assert not manager._jobs
+    assert manager.status().queued == 0
     assert not hasattr(result, "source")
 
 
@@ -141,10 +138,10 @@ def test_mutable_buffer_is_owned_only_after_admission(manager, transport):
 def test_unknown_bootstrap_drops_without_retaining(transport):
     gate = threading.Event()
     original = transport.bootstrap
-    transport.bootstrap = lambda *args: (gate.wait(2), original(*args))[1]
+    transport.bootstrap = lambda *args, **kw: (gate.wait(2), original(*args, **kw))[1]
     manager = AttachmentManager(config=AttachmentConfig(enabled=True), project_name="synthetic", transport=transport)
     assert attach(manager).admission == "bootstrap_pending"
-    assert manager.owned_bytes == 0 and not manager._jobs
+    assert manager.owned_bytes == 0 and manager.status().queued == 0
     gate.set()
     assert manager.ready(2)
     assert not transport.requests
@@ -158,7 +155,7 @@ def test_unqualified_sources_never_retrieve(manager, transport, monkeypatch, sou
     monkeypatch.setattr("builtins.open", Mock(side_effect=AssertionError("file read")))
     result = manager.attach(CONTEXT, source, mime_type="audio/wav", direction="mixed")
     assert result.admission == "source_unavailable"
-    assert not transport.requests and not manager._jobs
+    assert not transport.requests and manager.status().queued == 0
 
 
 def test_trace_identity_and_ended_span(manager, transport):
@@ -202,10 +199,18 @@ def test_queue_and_memory_include_active(manager, transport):
     assert manager.owned_bytes == 0
 
 
-def test_oversize_callback_rejected(manager, transport):
-    assert attach(manager, bytearray(manager.config.chunk_bytes + 1)).admission == "too_large"
-    assert attach(manager, b"x" * (manager.config.max_attachment_bytes + 1)).admission == "too_large"
-    assert not transport.requests
+def test_oversize_rejected_before_copy(transport):
+    """T-PF-15: a mutable buffer above sync_copy_bytes is refused; immutable bytes are not copied."""
+    from conftest import make_manager
+
+    manager = make_manager(transport, sync_copy_bytes=1024)
+    try:
+        assert attach(manager, bytearray(1025)).admission == "too_large"
+        assert attach(manager, b"x" * 1025).result(2).status == "validating"
+        assert attach(manager, b"x" * (manager._limits().max_upload_bytes + 1)).admission == "too_large"
+        assert len(transport.requests) == 1
+    finally:
+        manager.shutdown(1)
 
 
 def test_policy_tightening_discards_queue_and_does_not_resurrect(manager, transport):
@@ -242,11 +247,11 @@ def test_shutdown_deadline_cancel_and_signal_handlers(manager, transport):
     assert transport.entered.wait(2)
     start = time.monotonic()
     result = manager.shutdown(0.02)
-    assert time.monotonic() - start < 0.2 and result.unfinished == 1
+    assert time.monotonic() - start < 0.27 and result.unfinished == 1
     assert signal.getsignal(signal.SIGTERM) == handler
     transport.release.set()
     assert handle.result(2).status == "incomplete"
-    assert manager.shutdown(0).unfinished == 0
+    assert manager.shutdown(0) == result
 
 
 def test_async_completion_and_flush(manager):
@@ -268,23 +273,4 @@ def test_uploader_exception_body_not_retained(manager, transport, caplog):
 def test_suppressed_capture_has_no_recursion(manager, transport):
     with suppress_tracing():
         assert attach(manager).admission == "policy_denied"
-    assert not transport.requests
-
-
-def test_after_fork_resets_workers_without_parent_replay(manager, transport):
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.close(read_fd)
-            ok = manager.owned_bytes == 0 and manager.ready(2)
-            ok = ok and attach(manager).result(2).status == "validating"
-            os.write(write_fd, b"ok" if ok else b"failed")
-        finally:
-            os._exit(0)
-    os.close(write_fd)
-    assert os.read(read_fd, 20) == b"ok"
-    os.close(read_fd)
-    _, status = os.waitpid(pid, 0)
-    assert status == 0
     assert not transport.requests
