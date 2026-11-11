@@ -23,6 +23,20 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("groq >= 0.9.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit."""
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """An instrumentor for the Groq framework."""
 
@@ -30,6 +44,7 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         "_original_completions_create",
         "_original_async_completions_create",
         "_tracer",
+        "_original_audio",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -61,6 +76,25 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
         )
 
+        # Audio spans exist only with an enabled attachment manager: plain tracing is unchanged.
+        self._original_audio = []
+        attachments = _attachment_manager(kwargs)
+        if attachments is not None:
+            from traceai_groq._audio import AUDIO_METHODS, wrapper_for
+
+            for module_name, class_name, operation, is_async in AUDIO_METHODS:
+                try:
+                    owner = getattr(import_module(module_name), class_name)
+                    original = owner.create
+                except (ImportError, AttributeError):
+                    continue  # Older SDKs have no such method (groq 0.9.0 has no speech).
+                wrap_function_wrapper(
+                    module=module_name,
+                    name=f"{class_name}.create",
+                    wrapper=wrapper_for(self._tracer, attachments, config, operation, is_async),
+                )
+                self._original_audio.append((owner, original))
+
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -72,6 +106,9 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
+        for owner, original in getattr(self, "_original_audio", None) or ():
+            owner.create = original
+        self._original_audio = []
         groq_module = import_module("groq.resources.chat.completions")
         if self._original_completions_create is not None:
             groq_module.Completions.create = self._original_completions_create

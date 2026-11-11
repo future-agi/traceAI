@@ -73,6 +73,7 @@ class _WithTracer(ABC):
         context_attributes: Iterable[Tuple[str, AttributeValue]],
         extra_attributes: Iterable[Tuple[str, AttributeValue]],
         secrets: Tuple[str, ...] = (),
+        prepare: Optional[Callable[[Any], Tuple[Iterable[Tuple[str, AttributeValue]], Any]]] = None,
     ) -> Iterator[_WithSpan]:
         # Keep primary attributes so finalization can restore them after optional
         # details: OTel's bounded attribute map evicts the oldest entries.
@@ -83,6 +84,17 @@ class _WithTracer(ABC):
         except Exception:
             logger.exception("Failed to start span")
             span = INVALID_SPAN
+        if prepare is not None:
+            # Attachment capture needs the emitted span, and admitted media must be
+            # projected out of content attributes, so those are set after capture.
+            try:
+                deferred, extra_attributes = prepare(span)
+                deferred = {key: redact(value, secrets) for key, value in deferred}
+                if deferred:
+                    span.set_attributes(deferred)
+                initial_attributes.update(deferred)
+            except Exception:
+                logger.exception("Failed to set request attributes")
         with trace_api.use_span(
             span,
             end_on_exit=False,
@@ -109,6 +121,7 @@ class _WithOpenAI(ABC):
         "_response_attributes_extractor",
         "_response_accumulator_factories",
         "_config",
+        "_attachments",
     )
 
     def __init__(
@@ -116,11 +129,14 @@ class _WithOpenAI(ABC):
         openai: ModuleType,
         *args: Any,
         config: Optional[TraceConfig] = None,
+        attachments: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._openai = openai
         self._config = config if config is not None else TraceConfig()
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
         self._stream_types = (openai.Stream, openai.AsyncStream)
         self._request_attributes_extractor = _RequestAttributesExtractor(openai=openai)
         self._response_attributes_extractor = _ResponseAttributesExtractor(
@@ -150,6 +166,54 @@ class _WithOpenAI(ABC):
             ),
             openai.types.responses.response.Response: responses_accumulator,
         }
+
+    def _request_media(self, options: Any) -> Any:
+        """Per-call attachment state for media routes; None leaves tracing unchanged."""
+        if self._attachments is None:
+            return None
+        try:
+            from traceai_openai._attachments import request_media
+
+            return request_media(self._attachments, options, self._config)
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
+            return None
+
+    def _span_arguments(
+        self, instance: Any, cast_to: type, request_parameters: Mapping[str, Any], media: Any,
+        holder: dict,
+    ) -> dict:
+        if media is None:
+            return dict(
+                attributes=chain(
+                    self._get_attributes_from_instance(instance, request_parameters),
+                    self._get_attributes_from_request(
+                        cast_to=cast_to,
+                        request_parameters=request_parameters,
+                    ),
+                ),
+                extra_attributes=self._get_extra_attributes_from_request(
+                    cast_to=cast_to,
+                    request_parameters=request_parameters,
+                ),
+            )
+
+        def prepare(span: Any) -> Tuple[Iterable[Tuple[str, AttributeValue]], Any]:
+            projected = media.capture_input(span, request_parameters)
+            holder["request_parameters"] = projected
+            return (
+                self._get_attributes_from_request(cast_to=cast_to, request_parameters=projected),
+                self._get_extra_attributes_from_request(cast_to=cast_to, request_parameters=projected),
+            )
+
+        return dict(
+            attributes=chain(
+                self._get_attributes_from_instance(instance, request_parameters),
+                ((SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind(cast_to=cast_to)),),
+            ),
+            extra_attributes=(),
+            prepare=prepare,
+        )
 
     def _get_span_kind(self, cast_to: type) -> str:
         return (
@@ -257,6 +321,7 @@ class _WithOpenAI(ABC):
         request_parameters: Mapping[str, Any],
         instance: Any = None,
         request_options: Any = None,
+        media: Any = None,
     ) -> Any:
         """
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
@@ -295,6 +360,10 @@ class _WithOpenAI(ABC):
                     response_attributes_extractor=extractor,
                     config=self._config,
                 )
+
+        if media is not None and isinstance(response_accumulator, _ResponsesAccumulator):
+            # Streamed Responses: only the terminal response.completed event the application consumed.
+            response_accumulator.observe_media(media.capture_output, media.project_output)
 
         def on_parse(parsed: Any) -> Any:
             if self._is_streaming(parsed):
@@ -336,6 +405,8 @@ class _WithOpenAI(ABC):
                     except Exception:
                         body = None
                     status = _raw_response_status(body)
+            if media is not None:
+                telemetry_output = self._media_output(media, parsed, telemetry_output)
             add_io_to_span_attributes(with_span, None, telemetry_output, config=self._config)
             _finish_tracing(
                 status=status,
@@ -358,6 +429,8 @@ class _WithOpenAI(ABC):
                     _AsyncRawResponse if iscoroutinefunction(response.parse) else _RawResponse
                 )
             raw = raw_wrapper(response, with_span, response_accumulator, on_parse)
+            if media is not None and media.route == "speech":
+                raw._self_media = media
             if isinstance(response, LegacyAPIResponse):
                 # Preserve eager legacy non-stream telemetry. Stream parse caches
                 # remain SDK-owned, and every later explicit parse type is traced.
@@ -376,6 +449,20 @@ class _WithOpenAI(ABC):
                     raw._trace_parsed(parsed)
             return raw
         return on_parse(response)
+
+    def _media_output(self, media: Any, parsed: Any, telemetry_output: Any) -> Any:
+        """Capture output media; telemetry carries fi-attachment URIs only for admitted positions."""
+        try:
+            captured = media.capture_output(parsed)
+            if captured and media.route == "responses" and telemetry_output is not None:
+                body = response_output(telemetry_output, self._config)
+                output_text = getattr(telemetry_output, "output_text", None)
+                if output_text:
+                    body = {"output_text": output_text, **body}
+                return media.project_output(body)
+        except Exception:
+            logger.debug("Failed to capture response attachments", exc_info=True)
+        return telemetry_output
 
     def _raw_embeddings_json(self, response: CreateEmbeddingResponse) -> str:
         """The raw embeddings response; vectors are replaced by their dimension
@@ -414,34 +501,23 @@ class _Request(_WithTracer, _WithOpenAI):
             cast_to, request_parameters = _parse_request_args(args)
             secrets = request_credentials(instance, args[1], request_parameters)
             request_parameters = safe_request(request_parameters)
-            # Extract input data more robustly
-            input_data = (
-                request_parameters.get("messages")
-                or request_parameters.get("prompt")
-                or request_parameters.get("input")
-            )
             llm_tools = request_parameters.get("tools")
             span_name: str = cast_to.__name__.split(".")[-1]
+            media = self._request_media(args[1])
         except Exception:
             logger.exception("Failed to parse request args")
             return wrapped(*args, **kwargs)
 
+        holder: dict = {}
         with self._start_as_current_span(
             span_name=span_name,
             secrets=secrets,
-            attributes=chain(
-                self._get_attributes_from_instance(instance, request_parameters),
-                self._get_attributes_from_request(
-                    cast_to=cast_to,
-                    request_parameters=request_parameters,
-                ),
-            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._get_extra_attributes_from_request(
-                cast_to=cast_to,
-                request_parameters=request_parameters,
-            ),
+            **self._span_arguments(instance, cast_to, request_parameters, media, holder),
         ) as with_span:
+            # Telemetry-only parameters: admitted media is replaced by fi-attachment URIs.
+            request_parameters = holder.get("request_parameters", request_parameters)
+            input_data = _input_data(request_parameters)
             # Add input data to span attributes before the request
             with_span.set_attribute(
                 SpanAttributes.GEN_AI_TOOL_DEFINITIONS, safe_json_dumps(llm_tools)
@@ -460,6 +536,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     request_parameters=request_parameters,
                     instance=instance,
                     request_options=args[1],
+                    media=media,
                 )
             except BaseException as e:
                 with_span.add_secrets(request_credentials(instance, getattr(e, "request", None), {}))
@@ -486,34 +563,23 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
             cast_to, request_parameters = _parse_request_args(args)
             secrets = request_credentials(instance, args[1], request_parameters)
             request_parameters = safe_request(request_parameters)
-            # Extract input data more robustly
-            input_data = (
-                request_parameters.get("messages")
-                or request_parameters.get("prompt")
-                or request_parameters.get("input")
-            )
             llm_tools = request_parameters.get("tools")
 
             span_name: str = cast_to.__name__.split(".")[-1]
+            media = self._request_media(args[1])
         except Exception:
             logger.exception("Failed to parse request args")
             return await wrapped(*args, **kwargs)
+        holder: dict = {}
         with self._start_as_current_span(
             span_name=span_name,
             secrets=secrets,
-            attributes=chain(
-                self._get_attributes_from_instance(instance, request_parameters),
-                self._get_attributes_from_request(
-                    cast_to=cast_to,
-                    request_parameters=request_parameters,
-                ),
-            ),
             context_attributes=get_attributes_from_context(),
-            extra_attributes=self._get_extra_attributes_from_request(
-                cast_to=cast_to,
-                request_parameters=request_parameters,
-            ),
+            **self._span_arguments(instance, cast_to, request_parameters, media, holder),
         ) as with_span:
+            # Telemetry-only parameters: admitted media is replaced by fi-attachment URIs.
+            request_parameters = holder.get("request_parameters", request_parameters)
+            input_data = _input_data(request_parameters)
             # Add input data to span attributes before the request
             with_span.set_attribute(
                 SpanAttributes.GEN_AI_TOOL_DEFINITIONS, safe_json_dumps(llm_tools)
@@ -545,6 +611,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     request_parameters=request_parameters,
                     instance=instance,
                     request_options=args[1],
+                    media=media,
                 )
             except Exception:
                 logger.exception(
@@ -552,6 +619,14 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                 )
                 with_span.finish_tracing()
         return response
+
+
+def _input_data(request_parameters: Mapping[str, Any]) -> Any:
+    return (
+        request_parameters.get("messages")
+        or request_parameters.get("prompt")
+        or request_parameters.get("input")
+    )
 
 
 def _parse_request_args(

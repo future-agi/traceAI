@@ -75,6 +75,8 @@ class _ResponsesAccumulator:
         "_request_parameters",
         "_response_attributes_extractor",
         "_chat_completion_type",
+        "_on_completed",
+        "_project_output",
     )
 
     def __init__(
@@ -91,6 +93,12 @@ class _ResponsesAccumulator:
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
         self._values: Optional["ResponseStreamEvent"] = None
+        self._on_completed: Optional[Callable[[Any], Any]] = None
+        self._project_output: Optional[Callable[[Any], Any]] = None
+
+    def observe_media(self, on_completed: Callable[[Any], Any], project_output: Callable[[Any], Any]) -> None:
+        """Attachment hooks: capture from the consumed terminal event, project telemetry output."""
+        self._on_completed, self._project_output = on_completed, project_output
 
     def process_chunk(self, chunk: Any) -> None:
         if getattr(chunk, "type", None) in {
@@ -99,6 +107,11 @@ class _ResponsesAccumulator:
             self._is_null = False
             self._cached_result = None
             self._values = chunk
+            if self._on_completed is not None and chunk.type == "response.completed":
+                try:
+                    self._on_completed(getattr(chunk, "response", None))
+                except Exception:
+                    pass
 
     def _result(self) -> Any:
         if self._is_null:
@@ -144,6 +157,8 @@ class _ResponsesAccumulator:
             # Keep response-owned data, never echoed request fields, and lead
             # with the answer just as non-streaming Responses previews do.
             output = response_output(result, self._config)
+            if self._project_output is not None:
+                output = self._project_output(output)
             if output_content:
                 output = {"output_text": output_content, **output}
             yield from _as_output_attributes(_io_value_and_type(output))
