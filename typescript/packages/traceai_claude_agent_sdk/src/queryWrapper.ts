@@ -11,12 +11,13 @@
  * idle right after a result), then forward.
  */
 import { Tracer, context as otelContext, diag } from "@opentelemetry/api";
+import type { AgentAttachmentContext } from "./attachments";
 import { ContentPolicy, QueryTracer, clockMs } from "./spans";
 import { QueryFunctionLike, QueryParamsLike } from "./types";
 
 const WRAPPED = Symbol.for("@traceai/claude-agent-sdk/wrapped");
 
-export interface QueryTracingContext {
+export interface QueryTracingContext extends AgentAttachmentContext {
   tracer: Tracer;
   policy: ContentPolicy;
 }
@@ -50,8 +51,8 @@ export function wrapQueryFunction<Q extends QueryFunctionLike>(
 
     let queryTracer: QueryTracer | undefined;
     try {
-      const { tracer, policy } = getContext();
-      queryTracer = new QueryTracer({ tracer, policy, params, parentContext, startTimeMs });
+      const tracing = getContext();
+      queryTracer = new QueryTracer({ ...tracing, params, parentContext, startTimeMs });
     } catch (error) {
       diag.debug(`@traceai/claude-agent-sdk: tracing disabled for this query: ${error}`);
     }

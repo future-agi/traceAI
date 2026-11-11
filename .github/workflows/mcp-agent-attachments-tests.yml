@@ -1,0 +1,50 @@
+name: MCP and Agent SDK attachments
+on:
+  pull_request:
+    paths:
+      - 'typescript/packages/traceai_mcp/**'
+      - 'typescript/packages/traceai_claude_agent_sdk/**'
+      - 'typescript/packages/fi-core/**'
+      - '.github/workflows/mcp-agent-attachments-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attachments:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+      - name: Build adapters and shared core
+        working-directory: typescript
+        run: |
+          pnpm --filter @traceai/mcp... --filter @traceai/claude-agent-sdk... install --frozen-lockfile --ignore-scripts
+          for package in fi-semantic-conventions fi-core mcp claude-agent-sdk; do
+            pnpm --filter "@traceai/$package" run build
+          done
+      - name: Existing and attachment boundary suites
+        working-directory: typescript
+        run: |
+          pnpm --filter @traceai/mcp test --runInBand
+          pnpm --filter @traceai/claude-agent-sdk test --runInBand
+          node packages/traceai_mcp/test/run-attachments.cjs
+      - name: Real SDK floor and latest-qualified loopback flows
+        if: matrix.node == '24'
+        working-directory: typescript
+        run: node packages/traceai_mcp/test/run-sdk-matrix.cjs "$RUNNER_TEMP/attachment-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.node == '24'
+        with:
+          name: mcp-agent-attachment-evidence
+          path: ${{ runner.temp }}/attachment-evidence
+          if-no-files-found: ignore

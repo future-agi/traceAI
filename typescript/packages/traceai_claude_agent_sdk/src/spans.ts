@@ -36,6 +36,7 @@ import {
   getToolSource,
   parseMcpToolName,
 } from "./attributes";
+import { AgentAttachmentContext, captureAgentMedia } from "./attachments";
 import { ScrubContext, defaultScrubContext, scrubContent, scrubErrorText } from "./scrub";
 import {
   AbortSignalLike,
@@ -235,9 +236,11 @@ function flattenToolResult(content: unknown): string {
     return content
       .map((block: ContentBlockLike) => {
         if (block && typeof block.text === "string") return block.text;
-        if (block && block.type === "image") return "[image]";
+        // Binary/source metadata never goes through JSON serialization or text truncation.
+        if (block && ["image", "document", "audio", "resource", "resource_link"].includes(block.type ?? "")) return "";
         return safeJson(block);
       })
+      .filter(Boolean)
       .join("\n");
   }
   return safeJson(content);
@@ -285,6 +288,8 @@ function errorParts(error: unknown): { type: string; message: string } {
 
 export class QueryTracer {
   private readonly tracer: Tracer;
+  private readonly media: AgentAttachmentContext;
+  private messageIndex = 0;
   private readonly policy: ContentPolicy;
   private readonly params: QueryParamsLike;
   private readonly options: OptionsLike | undefined;
@@ -331,8 +336,9 @@ export class QueryTracer {
     params: QueryParamsLike;
     parentContext: Context;
     startTimeMs?: number;
-  }) {
+  } & AgentAttachmentContext) {
     this.tracer = args.tracer;
+    this.media = { attachments: args.attachments, attachmentCapture: args.attachmentCapture, attachmentTraceConfig: args.attachmentTraceConfig };
     this.policy = args.policy;
     this.params = args.params ?? ({} as QueryParamsLike);
     this.options = this.params.options;
@@ -396,6 +402,7 @@ export class QueryTracer {
       return;
     }
     try {
+      this.messageIndex = Math.min(this.messageIndex + 1, 65535);
       const type = (message as { type?: unknown }).type;
       this.trackIdleAfterResult(type, message as { parent_tool_use_id?: unknown; subtype?: unknown; state?: unknown });
       if (type === "assistant") {
@@ -597,6 +604,9 @@ export class QueryTracer {
   private onUser(message: UserMessageLike): void {
     const scope: Scope = message.parent_tool_use_id ?? null;
     const affectedTurns = new Set<TurnState>();
+    captureAgentMedia({ ...this.media, attachmentCapture: { ...this.media.attachmentCapture,
+      recordInputs: this.policy.hideInputMessages ? false : this.media.attachmentCapture?.recordInputs } },
+    this.conversation!, message.message?.content, { messageIndex: this.messageIndex, toolResult: false });
     for (const block of contentBlocks(message.message?.content)) {
       if (block && block.type === "tool_result" && typeof block.tool_use_id === "string") {
         const turn = this.endTool(block.tool_use_id, block.content, block.is_error === true);
@@ -890,6 +900,10 @@ export class QueryTracer {
     const endMs = clockMs();
     span.setAttribute(A.TOOL_DURATION_MS, endMs - tool.startMs);
     span.setAttribute(A.TOOL_IS_ERROR, isError);
+    captureAgentMedia({ ...this.media, attachmentCapture: { ...this.media.attachmentCapture,
+      recordInputs: this.policy.hideInputMessages ? false : this.media.attachmentCapture?.recordInputs,
+      recordOutputs: this.policy.hideOutputMessages ? false : this.media.attachmentCapture?.recordOutputs } },
+    span, content, { toolCallId: id, messageIndex: this.messageIndex, isError, toolResult: true });
     const output = this.policy.hideOutputs ? "" : this.clean(flattenToolResult(content), CONTENT_MAX);
     if (!this.policy.hideOutputs) {
       const serialized = output;

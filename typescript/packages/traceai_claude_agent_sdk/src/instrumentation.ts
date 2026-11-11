@@ -19,6 +19,7 @@ import {
   FI_HIDE_OUTPUT_TEXT,
   TraceConfigOptions,
 } from "@traceai/fi-core";
+import type { AttachmentCapturePolicy, AttachmentManager } from "@traceai/fi-core/attachments";
 import { ContentPolicy } from "./spans";
 import { QueryTracingContext, wrapQueryFunction } from "./queryWrapper";
 import { QueryFunctionLike } from "./types";
@@ -27,6 +28,10 @@ import { VERSION } from "./version";
 export const INSTRUMENTATION_NAME = "@traceai/claude-agent-sdk";
 
 export interface ClaudeAgentSDKInstrumentationConfig {
+  /** Shared provider-owned manager. Defaults to tracerProvider.attachments when available. */
+  attachments?: AttachmentManager;
+  /** Integration restrictions can only tighten manager policy. */
+  attachmentCapture?: AttachmentCapturePolicy;
   /** Provider to create spans with. Defaults to the global provider at call time. */
   tracerProvider?: TracerProvider;
   /**
@@ -128,9 +133,13 @@ export function trackedProviderCount(): number {
 export class ClaudeAgentSDKInstrumentation {
   private tracerProvider?: TracerProvider;
   private readonly traceConfig?: TraceConfigOptions;
+  private readonly attachments?: AttachmentManager;
+  private readonly attachmentCapture?: AttachmentCapturePolicy;
 
   constructor(config: ClaudeAgentSDKInstrumentationConfig = {}) {
     this.traceConfig = config.traceConfig;
+    this.attachments = config.attachments;
+    this.attachmentCapture = config.attachmentCapture;
     if (config.tracerProvider) {
       this.setTracerProvider(config.tracerProvider);
     }
@@ -153,6 +162,7 @@ export class ClaudeAgentSDKInstrumentation {
 
   /** Flush the provider's span processors. Does not shut the provider down. */
   async forceFlush(): Promise<void> {
+    await this.attachments?.flush();
     await flushProvider(this.tracerProvider ?? trace.getTracerProvider());
   }
 
@@ -170,7 +180,9 @@ export class ClaudeAgentSDKInstrumentation {
       tracer: provider.getTracer(INSTRUMENTATION_NAME, VERSION),
       traceConfig: { ...(this.traceConfig ?? {}), ...resolveHideFlags(this.traceConfig) },
     });
-    return { tracer, policy };
+    const owner = resolveDelegate(provider) as TracerProvider & { attachments?: AttachmentManager };
+    return { tracer, policy, attachments: this.attachments ?? owner.attachments,
+      attachmentCapture: this.attachmentCapture, attachmentTraceConfig: this.traceConfig };
   }
 }
 

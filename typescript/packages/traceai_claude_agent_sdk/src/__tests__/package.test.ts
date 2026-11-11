@@ -25,9 +25,7 @@ describe("package.json", () => {
       directory: "typescript/packages/traceai_claude_agent_sdk",
     });
     expect(ours.bugs).toEqual(sibling.bugs);
-    expect(ours.homepage).toBe(
-      (sibling.homepage as string).replace("traceai_anthropic", "traceai_claude_agent_sdk"),
-    );
+    expect(ours.homepage).toBe("https://docs.futureagi.com/docs/tracing");
     expect(JSON.stringify([ours.repository, ours.bugs, ours.homepage])).not.toContain("github.com/futureagi/");
   });
 });

@@ -1,0 +1,4 @@
+{
+  "mcp": { "floor": "1.10.2", "latest": "1.32.2" },
+  "claudeAgent": { "floor": "0.3.277", "latest": "0.3.322" }
+}
