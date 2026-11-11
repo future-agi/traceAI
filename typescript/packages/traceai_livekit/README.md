@@ -81,7 +81,7 @@ const room = new client.Room();
 
 LiveKit Agents for Node can record a session to `audio.ogg` in the job's session directory when you start the session with recording on (`session.start({ ..., record: true })`, or the project's LiveKit Cloud setting). This package can upload **that existing file** to Future AGI at session end. It never turns recording on, never starts or stops the recorder, and never deletes the file. Attachments stay off unless you enable them on your provider.
 
-Supported `@livekit/agents` versions: 1.8.0, 1.8.1 and 1.9.0 to 1.9.5. Any other version reports `unsupported_version` and uploads nothing. Linux and macOS only.
+Supported `@livekit/agents` versions: 1.8.0, 1.8.1 and 1.9.0 to 1.9.5. Any other version reports `unsupported_version` and uploads nothing. Qualified on Linux. On macOS the default session directory is under `/var`, which is a symlink, so the binding reports `source_unavailable` there. Windows is not supported.
 
 ```javascript
 const agents = require("@livekit/agents");
