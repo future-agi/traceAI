@@ -160,10 +160,11 @@ def test_auto_borrowed_manager_is_shared_and_tightened(f01, provider, auto_state
                                            trace_config=TraceConfig(pii_redaction=True))
         assert traceai.get_attachment_manager() is borrowed is tracer_provider.attachment_manager
         assert openai.OpenAI.request._self_wrapper._attachments is borrowed
-        # Auto's PII flag now restricts the application's manager itself, for every caller.
+        # Auto's PII flag now restricts the application's manager itself, for every caller:
+        # raw media under PII redaction needs a sanitizer, and none exists.
         with sdk.get_tracer("synthetic").start_as_current_span("probe") as span:
             assert borrowed.preflight(span, mime_type="image/png", direction="input",
-                                      max_bytes=16).reason == "policy_denied"
+                                      max_bytes=16).reason == "redaction_unavailable"
         _chat_image(provider, png(seed=53))
         flush(borrowed)
         assert f01.payloads == []
