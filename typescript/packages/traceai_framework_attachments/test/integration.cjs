@@ -89,7 +89,7 @@ async function main() {
         instrumentation.disable();
       } else if (framework === 'genkit') {
         const { enableTelemetry, flushTracing } = upstream(`${alias}/tracing`);
-        const { withGenkitModelAttachments, withGenkitToolAttachments } = require('../../traceai_genkit/dist/src/media.js');
+        const { withGenkitModelAttachments, withGenkitToolAttachments, genkitAttachmentMiddleware } = require('../../traceai_genkit/dist/src/media.js');
         const ai = sdk.genkit({});
         await enableTelemetry({ spanProcessors: [{ onStart() {}, onEnd() {}, async forceFlush() {}, async shutdown() {} }] });
         const model = ai.defineModel({ name: `test/media-${privacy}`, supports: { media: true } }, withGenkitModelAttachments(binding, async () => ({
@@ -99,11 +99,18 @@ async function main() {
         assert.equal(result.message.content[0].media.url, URI);
         const tool = ai.defineTool({ name: `media_tool_${privacy}`, description: 'synthetic tool' }, withGenkitToolAttachments(binding, async () => [{ media: { url: URI, contentType: 'image/png' } }]));
         const toolResult = await tool({}); assert.equal(toolResult[0].media.url, URI);
+        // A model the application does not implement (as with plugin models) is
+        // observed only through Genkit's documented generate middleware.
+        const plain = ai.defineModel({ name: `test/plain-${privacy}`, supports: { media: true } }, async () => ({
+          message: { role: 'model', content: [{ media: { url: URI, contentType: 'image/png' } }] }, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        }));
+        const viaMiddleware = await ai.generate({ model: plain, prompt: [{ media: { url: URI, contentType: 'image/png' } }], use: [genkitAttachmentMiddleware(binding)] });
+        assert.equal(viaMiddleware.message.content[0].media.url, URI);
         await flushTracing();
       } else throw new Error('unknown framework');
       await f.manager.flush();
       if (privacy === 'allowed') {
-        const expected = framework === 'genkit' ? 3 : framework === 'ai' ? (version === 'floor' ? 3 : 5) : 1;
+        const expected = framework === 'genkit' ? 5 : framework === 'ai' ? (version === 'floor' ? 3 : 5) : 1;
         assert.equal(f.bodies.length, expected, `${alias}: uploaded count ${f.bodies.length}; spans ${f.exporter.getFinishedSpans().map(span => span.name).join(',')}`);
         assert.ok(f.bodies.some(body => body.equals(PNG)));
         assert.equal(f.completed.length, expected);

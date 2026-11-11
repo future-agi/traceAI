@@ -23,6 +23,23 @@ export function withGenkitModelAttachments<Args extends unknown[], Result>(
 }
 
 /**
+ * Genkit model middleware for any model, including plugin models the application
+ * cannot wrap: `ai.generate({ ..., use: [genkitAttachmentMiddleware(binding)] })`.
+ * It observes the original GenerateRequest/GenerateResponseData on the span that
+ * is active when Genkit runs middleware. Streaming chunks are not read; only the
+ * final response message is observed, after Genkit has assembled it.
+ */
+export function genkitAttachmentMiddleware(binding: FrameworkAttachmentOptions) {
+  return async function <Req, Res>(request: Req, next: (request?: Req) => Promise<Res>): Promise<Res> {
+    const span = trace.getSpan(context.active());
+    if (span?.isRecording()) captureMediaMessages(binding, span, mediaField(request, "messages"), "genkit", "input");
+    const result = await next(request);
+    if (span?.isRecording()) captureMediaMessages(binding, span, [mediaField(result, "message")], "genkit", "output");
+    return result;
+  };
+}
+
+/**
  * Only tools explicitly returning Genkit Part[] are media boundaries. Ordinary
  * tool JSON is not searched for URLs or keys that happen to look like media.
  * Tool output is also model input, so input and output restrictions intersect.

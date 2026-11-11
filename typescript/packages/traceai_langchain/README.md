@@ -162,6 +162,10 @@ header alone does not cause server spans to appear. Stream spans end after the
 stream is fully consumed or closed, not when `runs.stream()` returns.
 Requests and outputs are not copied onto these client spans.
 
+## Attachments (opt-in)
+
+Pass the provider's attachment manager as `attachments` (and optional `capture` restrictions) to `LangChainInstrumentation`. Chat model input and output messages with inline typed media (`image_url` data URIs, or `image`/`audio`/`file` parts with `source_type: "base64"`) are then attached to the LLM span through the shared manager. Nothing is captured unless attachments are enabled on that manager. Remote URLs are not fetched, and chain, tool and retriever objects are not scanned. Hide flags and PII redaction deny capture before any decoding. If a provider integration uses the same manager, the same media is uploaded once per span; see `@traceai/framework-attachments` for coverage and this limitation.
+
 ## Peer Dependencies
 
 This package requires the following peer dependencies:

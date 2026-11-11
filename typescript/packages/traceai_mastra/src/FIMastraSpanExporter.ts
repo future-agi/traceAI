@@ -133,6 +133,10 @@ export function enrichSpan(
   inferenceEnabled = runtimeEmitsInference(),
 ): void {
   const attrs = otelSpan.attributes as Record<string, unknown>;
+  // Attachment references are issued only by a live attachment manager on the
+  // span that owns the media. This exporter sees ended, serialized Mastra spans
+  // and has no manager, so any such key came from application metadata/attributes.
+  for (const key of Object.keys(attrs)) if (key.startsWith("fi.attachment.")) delete attrs[key];
 
   const kind = isModelCall(span.type, inferenceEnabled) ? FISpanKind.LLM
     : span.type === SpanType.MODEL_GENERATION ? FISpanKind.CHAIN : SPAN_KIND_BY_TYPE[span.type];

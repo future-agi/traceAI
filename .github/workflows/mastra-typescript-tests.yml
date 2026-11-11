@@ -8,6 +8,7 @@ on:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/packages/traceai_vercel/**'
+      - 'typescript/packages/traceai_framework_attachments/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/mastra-typescript-tests.yml'
   push:
@@ -90,7 +91,8 @@ jobs:
               "$PWD/packages/traceai_mastra/contract/http.test.cjs" \
               "$PWD/packages/traceai_mastra/contract/tool-errors.test.cjs" \
               "$PWD/packages/traceai_mastra/contract/continued-history.test.cjs" \
-              "$PWD/packages/traceai_mastra/contract/terminal-history.test.cjs"
+              "$PWD/packages/traceai_mastra/contract/terminal-history.test.cjs" \
+              "$PWD/packages/traceai_mastra/contract/attachments.test.cjs"
           done
           sudo unshare --net bash -c 'ip link set lo up; exec "$@"' _ \
             "$(command -v node)" "$PWD/packages/traceai_mastra/contract/readme.test.mjs" "$MASTRA_TEST_DEPS"

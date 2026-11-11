@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
     paths:
       - 'typescript/packages/traceai_langchain/**'
+      - 'typescript/packages/traceai_framework_attachments/**'
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
@@ -15,6 +16,7 @@ on:
     branches: [main, dev]
     paths:
       - 'typescript/packages/traceai_langchain/**'
+      - 'typescript/packages/traceai_framework_attachments/**'
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'

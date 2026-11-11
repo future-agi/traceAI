@@ -210,6 +210,10 @@ The model span's `genkit:output` is the model response JSON: `message`, `finishR
 
 `contract/auto_s5.cjs` includes three failing release regressions: `catalog-header` uses real instrumented fetch beneath an intermediate native SDK span while the Genkit model's wire span is suppressed, with an immediately exported application child's ordinary-key attribute array, status and event; `catalog-field` and `catalog-media` compare real flow `output.value` exactly against `pattern-password-response` and `magic-png-standard-response_body` in the shared golden bundle. The header case also reads its request from `pattern-token-headers`. No local predicate, copied fixture expectation, manual registration or mocked sanitizer masks the shared defect. Both source and built Genkit mappings currently fail all three privacy assertions while application results, native exports, span IDs and timing remain intact. Fixing this gate requires edits in the shared core's `src/wire/privacy.ts` and its export-time catalog integration, outside this package; it cannot be corrected by restoring forbidden integration-local discovery. This release gate is separate from the OTHER limitations below.
 
+## Attachments (opt-in)
+
+Three explicit bindings pass inline Genkit media (data URI `media` parts) to the provider's attachment manager: `genkitAttachmentMiddleware(binding)` for `generate({ use: [...] })` with any model, `withGenkitModelAttachments(binding, implementation)` for a `defineModel` implementation, and `withGenkitToolAttachments(binding, implementation)` for a tool returning `Part[]`. `binding` is `{ attachments, traceConfig, capture }`. Remote media URLs are never fetched and streaming chunks are not read. See `@traceai/framework-attachments` for coverage and limits.
+
 ## Known limitations
 
 - **2026-10-30 — Bootstrap contract.** `enable()` requires the agent's existing FI-only export branch (versioned process-state contract `traceai.auto.agent.v1`), or the explicit `spanProcessor` option. It does not create an agent or activate itself on import. This package change alone does not enable dispatch in the separate `@traceai/auto` catalog.

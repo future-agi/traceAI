@@ -51,4 +51,4 @@ export {
   type ScrubContext,
 } from "./privacy";
 
-export { withGenkitModelAttachments, withGenkitToolAttachments } from "./media";
+export { withGenkitModelAttachments, withGenkitToolAttachments, genkitAttachmentMiddleware } from "./media";

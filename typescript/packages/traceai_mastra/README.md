@@ -95,6 +95,10 @@ For a long-running application, call this from your application shutdown lifecyc
 
 If you already manage a Mastra `Observability` instance, add `createFIMastraExporter(options)` to its `exporters` array instead of creating a second observability instance. Pass `projectName` explicitly to this lower-level factory (or set `FI_PROJECT_NAME`); it does not default the project name to the service name.
 
+## Attachments
+
+The Mastra exporter does not capture media. It receives ended, serialized Mastra spans after the run, has no attachment manager and never uploads. It also removes any `fi.attachment.*` attribute it did not issue, so application metadata cannot forge an attachment reference.
+
 ## Mastra v0
 
 The deprecated `FITraceExporter` and `isFISpan` exports remain available from `@traceai/mastra/legacy` for existing Mastra v0 applications. They are not root exports and do not work with Mastra v1's removed `telemetry` configuration. For new applications, use the v1 setup above.

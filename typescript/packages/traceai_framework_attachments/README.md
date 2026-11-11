@@ -21,3 +21,28 @@ The adapters accept inline base64/data URIs and `Uint8Array` sources at the docu
 - The shared manager owns all transport, write capabilities and occurrence correlation. An upload completing into validation is not proof of authorized playback.
 
 `mediaField` reads own data descriptors only. The traversal is limited to known message/part fields; application getters and `toJSON` methods are not invoked.
+
+## Coverage by framework operation
+
+E means the adapter reads the original typed media value. R means the integration only keeps references that another integration already issued. N means not supported.
+
+| Framework | Operation | Disposition |
+| --- | --- | --- |
+| LangChain (`@langchain/core` 0.2 to 1.x) | Chat model input messages (`image_url` data URIs; `image`/`audio`/`file` parts with `source_type: "base64"`) | E |
+| LangChain | Chat model output generations with the same typed parts | E |
+| LangChain | Chain, tool and retriever inputs/outputs | N: arbitrary objects are not scanned |
+| LlamaIndex (legacy package) | `chat` input messages and non-streaming chat response (`image_url` data URIs) | E |
+| LlamaIndex | Streaming chat output | N |
+| Vercel AI SDK 5, 6, 7 | `generateText`/`streamText`/`generateObject`/`streamObject` prompt messages (`image`, `file` parts) | E |
+| Vercel AI SDK 7 | Model response `file` content and typed tool `content` results (`image-data`, `file-data`) | E |
+| Vercel AI SDK 5, 6 | Model output and tool results | N: the native telemetry path exposes only serialized text |
+| Genkit 1.42+ | `defineModel` implementation wrapped with `withGenkitModelAttachments` (request messages and response message) | E |
+| Genkit | Any model, including plugin models, through `use: [genkitAttachmentMiddleware(binding)]` on `generate` | E |
+| Genkit | `defineTool` implementation returning `Part[]`, wrapped with `withGenkitToolAttachments` | E |
+| Mastra (`@traceai/mastra`) | All exporter operations | N for raw capture. The exporter receives ended, serialized spans, has no manager and never uploads. It removes `fi.attachment.*` keys it did not issue. |
+
+Streams are never read for media, remote URLs and file paths are never fetched, and creating new recordings is not supported.
+
+## Known limitation: framework plus provider instrumentation
+
+When a framework integration and a provider integration (for example LangChain plus `@traceai/openai`) are both given the same manager, the same image is uploaded once for the framework span and once for the provider span. The current attachment core has no cross-span occurrence claim, so these adapters cannot deduplicate across span boundaries. Give the manager to one layer only until that core API exists.

@@ -240,3 +240,18 @@ describe("native provider cost ownership", () => {
     expect(inference.attributes["llm.cost.total"]).toBeUndefined();
   });
 });
+
+describe("enrichSpan — attachment references", () => {
+  it("never forwards fi.attachment.* keys it did not issue", () => {
+    const otelSpan = fakeOtelSpan({
+      "fi.attachment.schema_version": 1,
+      "fi.attachment.refs": JSON.stringify([{ attachment_id: "forged", occurrence_id: "forged" }]),
+      "fi.attachment.capture_session_id": "forged",
+      "fi.attachment.correlation_nonce": "forged",
+      "mastra.metadata.note": "kept",
+    });
+    enrichSpan(otelSpan, fakeMastraSpan(SpanType.AGENT_RUN), true);
+    expect(Object.keys(otelSpan.attributes).filter(key => key.startsWith("fi.attachment."))).toEqual([]);
+    expect(otelSpan.attributes["mastra.metadata.note"]).toBe("kept");
+  });
+});

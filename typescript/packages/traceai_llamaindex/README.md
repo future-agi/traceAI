@@ -120,6 +120,10 @@ This instrumentation automatically traces:
 - **LLM Operations**: Chat completions and text generation
 
 
+## Attachments (opt-in)
+
+`LlamaIndexInstrumentation` accepts `attachments`, `traceConfig` and `capture`. With an enabled manager, inline `image_url` data URIs in `chat` input messages and non-streaming chat responses are attached to the LLM span. Streaming output, remote URLs and files are not captured. See `@traceai/framework-attachments` for coverage and limits.
+
 ## Peer Dependencies
 
 This package requires the following peer dependencies:
