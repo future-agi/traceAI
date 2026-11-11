@@ -280,3 +280,92 @@ def test_finalization_deadline(tmp_path):
         transport.release.set()
         scope.close()
         manager.shutdown(1)
+
+
+# --- Review finding (P1): owned WAV admission must match the wire direction ---
+# Every wav_recording segment is sent as ``mixed`` (design 2.4/2.6/7), so a hide
+# flag on EITHER side must deny the whole file whatever label the caller passed.
+STEREO_ROLES = (TrackSpec((0,), "input", "user"), TrackSpec((1,), "output", "assistant"))
+
+
+def _owned(tmp_path, channels, *, trace_config=None, direction, wav_tracks):
+    from fi_instrumentation.attachments import AttachmentPolicy
+
+    transport, manager = big_manager()
+    if trace_config is not None:
+        manager.policy = AttachmentPolicy(manager.config, trace_config)
+    path = tmp_path / "call.wav"
+    write_wav(path, channels, 24000, 24000 * 2)
+    scope = RecordingFileScope(str(tmp_path), enabled=True)
+    source = scope.source(path.name, scope.identify(path.name))
+    handle = manager.attach_owned_recording(CONTEXT, source, mime_type="audio/wav", direction=direction,
+                                            wav_tracks=wav_tracks)
+    return transport, manager, scope, handle
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_outputs"])
+@pytest.mark.parametrize("direction", ["input", "output", "mixed"])
+@pytest.mark.parametrize("channels,tracks", [(2, STEREO_ROLES), (1, (TrackSpec((0,), "mixed", "user"),))])
+def test_owned_wav_one_side_hidden_denies_whole_file(tmp_path, monkeypatch, flag, direction, channels, tracks):
+    from fi_instrumentation.instrumentation.config import TraceConfig
+
+    transport, manager, scope, handle = _owned(tmp_path, channels, trace_config=TraceConfig(**{flag: True}),
+                                               direction=direction, wav_tracks=tracks)
+    try:
+        assert (handle.tier, handle.reason) == ("denied", "policy_denied")
+        assert not transport.requests and not transport.payloads and not transport.manifests
+        assert manager.owned_bytes == 0
+    finally:
+        scope.close()
+        manager.shutdown(1)
+
+
+@pytest.mark.parametrize("direction", ["input", "output", "mixed"])
+def test_owned_stereo_wav_wire_direction_is_mixed(tmp_path, direction):
+    transport, manager, scope, handle = _owned(tmp_path, 2, direction=direction, wav_tracks=STEREO_ROLES)
+    try:
+        assert handle.tier == "wav_recording"
+        assert handle.result(20).status == "validating"
+        assert transport.requests and {r["direction"] for r in transport.requests} == {"mixed"}
+        manifest = transport.manifests[-1][1]
+        assert manifest["layout"] == "stereo"
+        assert [t["direction"] for t in manifest["tracks"]] == ["input", "output"]
+    finally:
+        scope.close()
+        manager.shutdown(1)
+
+
+def test_owned_wav_invalid_direction_denied(tmp_path):
+    transport, manager, scope, handle = _owned(tmp_path, 2, direction="left", wav_tracks=STEREO_ROLES)
+    try:
+        assert (handle.tier, handle.reason) == ("denied", "policy_denied")
+        assert not transport.requests
+    finally:
+        scope.close()
+        manager.shutdown(1)
+
+
+def test_owned_wav_policy_tightening_mid_file_stops_upload(tmp_path):
+    """Per-chunk re-checks evaluate ``mixed`` too: hiding one side mid-file stops the rest."""
+    from fi_instrumentation.attachments import AttachmentPolicy
+    from fi_instrumentation.instrumentation.config import TraceConfig
+
+    transport, manager = big_manager(segment_duration_ms=1000)
+    path = tmp_path / "call.wav"
+    write_wav(path, 2, 24000, 24000 * 4)
+    scope = RecordingFileScope(str(tmp_path), enabled=True)
+    try:
+        source = scope.source(path.name, scope.identify(path.name))
+        transport.release.clear()
+        handle = manager.attach_owned_recording(CONTEXT, source, mime_type="audio/wav", direction="input",
+                                                wav_tracks=STEREO_ROLES)
+        assert handle.tier == "wav_recording"
+        assert transport.entered.wait(5)
+        manager.policy = AttachmentPolicy(manager.config, TraceConfig(hide_outputs=True))
+        transport.release.set()
+        assert handle.result(20).status != "validating"
+        assert len(transport.payloads) == 0
+    finally:
+        transport.release.set()
+        scope.close()
+        manager.shutdown(1)

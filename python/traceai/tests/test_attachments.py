@@ -71,3 +71,49 @@ def test_disabled_init_is_strict_noop(monkeypatch):
         assert {t.ident for t in threading.enumerate()} == before
     finally:
         provider.shutdown()
+
+
+_OLD_CORE_PROBE = r'''
+import sys
+# A core release without the attachments package (e.g. fi-instrumentation-otel 1.3.1).
+sys.modules["fi_instrumentation.attachments"] = None
+import fi_instrumentation
+
+calls = []
+
+def old_register(*, project_name=None, project_type=None, project_version_name=None, batch=True,
+                 set_global_tracer_provider=False, verbose=True, transport=None, semantic_convention=None):
+    calls.append(project_name)
+    return object()
+
+import traceai
+assert traceai.AttachmentConfig is None
+traceai.register = old_register
+assert traceai.attachment_status()["runtime"] == "unsupported_version"
+provider = traceai.init(project_name="synthetic", verbose=False, set_global_tracer_provider=False)
+assert calls == ["synthetic"], calls
+assert traceai.bind_livekit_session(object(), object()) is None
+assert traceai.attachment_status()["adapters"]["livekit"] == "unsupported_version"
+traceai._tracer_provider = None
+try:
+    traceai.init(project_name="other", verbose=False, trace_config=object())
+except RuntimeError as error:
+    assert "fi-instrumentation-otel" in str(error)
+else:
+    raise AssertionError("trace_config accepted on a core without attachments")
+assert calls == ["synthetic"], calls
+print("OLD_CORE_OK")
+'''
+
+
+def test_import_and_init_on_core_without_attachments():
+    """Review finding (P1): traceai must not crash on a core that predates attachments."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    result = subprocess.run([sys.executable, "-c", _OLD_CORE_PROBE], capture_output=True, text=True,
+                            timeout=120, env=env)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "OLD_CORE_OK" in result.stdout

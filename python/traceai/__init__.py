@@ -22,8 +22,22 @@ from fi_instrumentation import (
     register,
 )
 from fi_instrumentation.fi_types import ProjectType
-from fi_instrumentation.attachments import AttachmentConfig
 from fi_instrumentation.instrumentation.config import TraceConfig
+
+# traceai's floor still admits fi-instrumentation-otel releases without the
+# attachments package (it can move only once a core release ships it). On such a
+# core, importing traceai and plain init() keep working; asking for attachments
+# raises a clear error instead.
+try:
+    from fi_instrumentation.attachments import AttachmentConfig
+
+    _ATTACHMENTS_SUPPORTED = True
+except ImportError:  # pragma: no cover - exercised in a subprocess test
+    AttachmentConfig = None
+    _ATTACHMENTS_SUPPORTED = False
+
+_CORE_TOO_OLD = ("attachment_config and trace_config need a fi-instrumentation-otel release that "
+                 "includes fi_instrumentation.attachments; upgrade fi-instrumentation-otel")
 
 # Registry of available instrumentors
 _INSTRUMENTOR_REGISTRY: Dict[str, str] = {
@@ -96,7 +110,7 @@ def init(
     batch: bool = False,
     verbose: bool = True,
     set_global_tracer_provider: bool = True,
-    attachment_config: Optional[AttachmentConfig] = None,
+    attachment_config: Optional["AttachmentConfig"] = None,
     trace_config: Optional[TraceConfig] = None,
 ) -> TracerProvider:
     """
@@ -157,6 +171,11 @@ def init(
     semantic_convention_enum = SemanticConvention(semantic_convention.lower())
     transport_enum = Transport(transport.lower())
 
+    if not _ATTACHMENTS_SUPPORTED and (attachment_config is not None or trace_config is not None):
+        raise RuntimeError(_CORE_TOO_OLD)
+    # An older core's register() accepts neither keyword: pass them only when supported.
+    attachment_kwargs = (dict(attachment_config=attachment_config, trace_config=trace_config)
+                         if _ATTACHMENTS_SUPPORTED else {})
     options = (project_name, project_type, project_version_name, semantic_convention,
                transport, batch, set_global_tracer_provider, attachment_config, trace_config)
     with _init_lock:
@@ -174,8 +193,7 @@ def init(
                 verbose=verbose,
                 transport=transport_enum,
                 semantic_convention=semantic_convention_enum,
-                attachment_config=attachment_config,
-                trace_config=trace_config,
+                **attachment_kwargs,
             )
             _tracer_provider = provider
             _init_options = options
@@ -225,13 +243,11 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
             instrumentor_class = getattr(module, _ENTRY_POINTS[instrumentor_module])
             instrumentor = instrumentor_class()
             provider = _tracer_provider
-            manager = getattr(provider, "attachment_manager", None)
-            instrumentor.instrument(
-                tracer_provider=provider,
-                config=getattr(provider, "trace_config", None),
-                attachment_manager=manager,
-                attachment_policy=getattr(manager, "policy", None),
-            )
+            kwargs = dict(tracer_provider=provider, config=getattr(provider, "trace_config", None))
+            if _ATTACHMENTS_SUPPORTED:
+                manager = getattr(provider, "attachment_manager", None)
+                kwargs.update(attachment_manager=manager, attachment_policy=getattr(manager, "policy", None))
+            instrumentor.instrument(**kwargs)
             _instrumented.add(instrumentor_module)
             _adapter_status[lib_name_lower] = "registered"
 
@@ -276,12 +292,17 @@ def instrument(*libraries: str, verbose: bool = True) -> None:
 
 def attachment_status() -> dict:
     """Content-free setup status, never an integrated recording-ready claim."""
+    if not _ATTACHMENTS_SUPPORTED:
+        return {"runtime": "unsupported_version", "adapters": dict(_adapter_status)}
     manager = getattr(_tracer_provider, "attachment_manager", None)
     return {"runtime": manager.status().state if manager is not None else "uninitialized",
             "adapters": dict(_adapter_status)}
 
 
 def _bind(library: str, entry_point: str, *args, **kwargs):
+    if not _ATTACHMENTS_SUPPORTED:
+        _adapter_status[library] = "unsupported_version"
+        return None
     manager = getattr(_tracer_provider, "attachment_manager", None)
     if manager is None:
         raise RuntimeError("initialize traceai before binding a session")

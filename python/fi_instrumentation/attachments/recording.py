@@ -228,6 +228,10 @@ class RecordingWriter:
         self._window = _Window(0, self._frames)
         self._windows: List[_Window] = []
         self._retained = 0
+        # Cumulative bytes this recording has sealed into segments, 44-byte WAV
+        # headers included. Unlike _retained (memory still held), it never goes
+        # down when a segment uploads: it is what the recording_bytes cap limits.
+        self._sealed_bytes = 0
         self._completed = 0
         self._published_prefix = 0      # frames covered by the last successful manifest
         self._revision = 0
@@ -331,12 +335,35 @@ class RecordingWriter:
                 entry = _Entry(interval[1], interval[2], stream.track_id, SegmentSource(header, interval[3]),
                                len(interval[3]))
                 window.entries.append(entry)
+                self._sealed_bytes += 44 + len(interval[3])
             else:
                 window.gaps.append((interval[1], interval[2], interval[3], stream.track_id))
         self._windows.append(window)
         for entry in window.entries:
             self._manager._enqueue_segment(self, entry)
         self._window = _Window(end, end + self._frames)
+
+    def _projected_bytes(self, stream: _Stream, nbytes: int, frames: int) -> int:
+        """Total recording bytes if ``nbytes`` more were accepted on ``stream``.
+
+        Sealed segments plus every unsealed data run (each will become a segment
+        with its own 44-byte header), plus a header for each new segment the part
+        would start: one when the stream has no open run, and one per window
+        boundary the part crosses.
+        """
+        total = self._sealed_bytes + nbytes
+        for s in self._streams:
+            if s.run_start is not None:
+                total += 44 + len(s.run)
+            for interval in s.intervals:
+                if interval[0] == "data":
+                    total += 44 + len(interval[3])
+        if stream.run_start is None:
+            total += 44
+        beyond = stream.cursor + frames - self._window.f1
+        if beyond > 0 and self._frames:
+            total += 44 * (-(-beyond // self._frames))
+        return total
 
     def _pending_segments(self) -> int:
         return sum(1 for w in self._windows for e in w.entries if e.state == "pending")
@@ -455,7 +482,7 @@ class RecordingWriter:
         if reason == "denied":
             return False
         if reason is None and (stream.cursor + frames > self._max_frames
-                               or self._retained + len(part) + 44 > self._max_bytes):
+                               or self._projected_bytes(stream, len(part), frames) > self._max_bytes):
             self._truncated = True
             for s in self._streams:
                 self._close_run(s)

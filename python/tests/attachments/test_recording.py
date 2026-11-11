@@ -405,3 +405,106 @@ def test_partial_frames_carry(manager, transport):
     assert writer.try_write(data[:3]) and writer.try_write(data[3:])
     writer.finish(5)
     assert len(transport.payloads[0]) == 44 + 2000
+
+
+# --- Review finding (P1): a stereo recording carries both sides in every byte ---
+STEREO = (TrackSpec((0,), "input", "user"), TrackSpec((1,), "output", "assistant"))
+
+
+@pytest.mark.parametrize("flag", ["hide_inputs", "hide_outputs"])
+def test_live_stereo_one_side_hidden_denies_whole_recording(transport, flag):
+    """Design 2.4: stereo is evaluated as ``mixed``; hiding one channel is not removal."""
+    from fi_instrumentation.attachments import AttachmentPolicy
+    from fi_instrumentation.instrumentation.config import TraceConfig
+
+    manager = make_manager(transport)
+    manager.policy = AttachmentPolicy(manager.config, TraceConfig(**{flag: True}))
+    try:
+        writer = manager.start_recording(CONTEXT, options(layout="stereo", tracks=STEREO))
+        assert writer.reason == "policy_denied"
+        assert writer.try_write(pcm(2400, 2)) is False
+        assert writer.finish(2).state == "denied"
+        assert not transport.requests and not transport.payloads and not transport.manifests
+        assert manager.owned_bytes == 0
+        # Control: separate tracks keep the visible side and drop only the hidden one.
+        separate = manager.start_recording(CONTEXT, options(layout="separate_tracks", tracks=STEREO))
+        assert separate.reason == "queued"
+        separate.abort()
+    finally:
+        manager.shutdown(1)
+
+
+# --- Review finding (P1): recording_bytes caps the TOTAL uploaded, not what is buffered ---
+def test_recording_bytes_cap_is_cumulative(transport):
+    """Design 0.7/2.6: ``truncated`` once the total reaches min(limits.recording_bytes, 1 GiB),
+    even when earlier segments have already uploaded and released their memory."""
+    limit = 3_000_000
+    transport.limits = Limits(recording_bytes=limit)
+    manager = make_manager(transport)
+    try:
+        writer = manager.start_recording(CONTEXT, options())
+        accepted = 0
+        for _ in range(120):                       # 120 s of 24 kHz mono, 48 000 B/s
+            if writer.try_write(pcm(24000)):
+                accepted += 48000
+            deadline = time.monotonic() + 5
+            while writer.status().segments_pending and time.monotonic() < deadline:
+                time.sleep(0.01)                   # drain: the old check only saw buffered bytes
+        assert writer.status().state == "truncated"
+        result = writer.finish(15)
+        manifest = last_manifest(transport)
+        uploaded = sum(len(p) for p in transport.payloads)
+        assert uploaded <= limit, uploaded
+        assert accepted <= limit
+        assert uploaded >= 2 * 1440044            # two full 30 s segments fit under 3 MB
+        assert not manifest["capture_complete"] and manifest["gaps"][-1]["reason"] == "truncated"
+        assert manifest["duration_ms"] == 120000
+        assert result.state == "partial"
+    finally:
+        manager.shutdown(1)
+
+
+def test_recording_bytes_cap_counts_every_track(transport):
+    """Separate tracks share one recording total: headers and both tracks' bytes count."""
+    limit = 2_000_000
+    transport.limits = Limits(recording_bytes=limit, segment_duration_ms=5000)
+    manager = make_manager(transport)
+    try:
+        writer = manager.start_recording(CONTEXT, options(layout="separate_tracks", tracks=STEREO))
+        assert writer.reason == "queued"
+        for _ in range(60):
+            writer.try_write(pcm(24000), track=0)
+            writer.try_write(pcm(24000), track=1)
+            deadline = time.monotonic() + 5
+            while writer.status().segments_pending and time.monotonic() < deadline:
+                time.sleep(0.01)
+        writer.finish(15)
+        assert sum(len(p) for p in transport.payloads) <= limit
+        assert any(g["reason"] == "truncated" for g in last_manifest(transport)["gaps"])
+    finally:
+        manager.shutdown(1)
+
+
+def test_recording_bytes_cap_counts_segment_headers():
+    """Every sealed segment's 44-byte header counts toward recording_bytes.
+
+    1 s segments of 24 kHz mono are 48 044 bytes. Counting the two sealed headers
+    (96 088 bytes sealed), a third segment fits its own header and 4 writes of 960
+    bytes under this limit; ignoring them (96 000 bytes) would admit a 5th write
+    and upload 48 bytes past the cap.
+    """
+    full = 44 + 48000
+    limit = 2 * 48000 + 44 + 5 * 960 + 40          # 100 884
+    transport = TransportDouble(limits=Limits(segment_duration_ms=1000, recording_bytes=limit))
+    manager = make_manager(transport)
+    try:
+        writer = manager.start_recording(CONTEXT, options())
+        feed(writer, 24000 * 3, step=480)
+        assert writer.status().state == "truncated"
+        writer.finish(15)
+        sizes = [len(p) for p in transport.payloads]
+        assert sizes == [full, full, 44 + 4 * 960], sizes
+        assert sum(sizes) <= limit
+        assert last_manifest(transport)["gaps"][-1]["reason"] == "truncated"
+    finally:
+        manager.shutdown(1)

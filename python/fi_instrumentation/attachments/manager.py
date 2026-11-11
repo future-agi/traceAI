@@ -819,7 +819,15 @@ class AttachmentManager:
                                            operation="observe_consumed")
                 if len(tracks) not in (1, 2) or validate_options(options):
                     return OwnedRecordingHandle("denied", "policy_denied")
-            ticket = self.preflight(target, mime_type=mime_type, direction=direction, max_bytes=source.size,
+            if direction not in ("input", "output", "mixed"):
+                return OwnedRecordingHandle("denied", "policy_denied")
+            # Every wav_recording segment goes on the wire as ``mixed``: a stereo file
+            # carries both sides in every byte, and its segments carry no track_id
+            # (design 2.4, 2.6 and 7). Admission and every per-chunk re-check must
+            # therefore evaluate ``mixed`` too, so a hide flag on EITHER side denies the
+            # whole file. The caller's label is kept only for the unparseable-header
+            # fallback to tier ``single``, whose wire direction is "as given".
+            ticket = self.preflight(target, mime_type=mime_type, direction="mixed", max_bytes=source.size,
                                     operation="import_existing", source_kind="OwnedRecordingFile", purpose=purpose,
                                     capture_policy=capture_policy, _skip_cap=True)
             if not ticket.admitted:
@@ -834,7 +842,7 @@ class AttachmentManager:
             job = _Job("owned_wav", handle=handle, payload=source, spec=ticket._spec, epoch=self._epoch,
                        nbytes=reservation.nbytes, descriptors=1,
                        extra={"tracks": wav_tracks, "recording_id": recording_id, "correlation": ticket.correlation,
-                              "conversation_id": conversation_id})
+                              "conversation_id": conversation_id, "caller_direction": direction})
             handle._job = job
             with self._cond:
                 if self._stopped or self._stopping:
@@ -1403,7 +1411,7 @@ class AttachmentManager:
                 index = len(completed)
                 request = self._upload_request(
                     extra["correlation"], attachment_id=str(uuid.uuid4()), occurrence_id=part.occurrence_id,
-                    mime_type="audio/wav", direction="mixed" if layout == "mixed" else job.spec[1],
+                    mime_type="audio/wav", direction="mixed",
                     source_kind="OwnedRecordingFile", purpose=job.spec[4], declared_bytes=len(source),
                     fields={"conversation_id": extra["conversation_id"]} if extra["conversation_id"] else None,
                     recording_id=extra["recording_id"], segment_index=index)
@@ -1443,7 +1451,8 @@ class AttachmentManager:
         extra = job.extra
         request = self._upload_request(
             extra["correlation"], attachment_id=str(uuid.uuid4()), occurrence_id=str(uuid.uuid4()),
-            mime_type="audio/wav", direction=job.spec[1], source_kind="OwnedRecordingFile", purpose=job.spec[4],
+            mime_type="audio/wav", direction=extra["caller_direction"], source_kind="OwnedRecordingFile",
+            purpose=job.spec[4],
             declared_bytes=job.payload.size,
             fields={"conversation_id": extra["conversation_id"]} if extra["conversation_id"] else None)
         single = _Job("upload", body=self._p.encode(request), spec=job.spec, epoch=job.epoch,
