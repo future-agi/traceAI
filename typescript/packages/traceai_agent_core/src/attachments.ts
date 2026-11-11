@@ -1,6 +1,5 @@
 import type { TracerProvider } from "@opentelemetry/api";
 import type {
-  AttachmentCapturePolicy,
   AttachmentHandle,
   AttachmentManager,
   AttachmentOptions,
@@ -33,8 +32,24 @@ function decodeImage(value: unknown): Uint8Array {
   return bytes;
 }
 
+/** Typed inline image shapes: Pi/OMP `{type, mimeType, data}` and Anthropic/Claude Code base64 `source`. */
+function imageShape(part: unknown): { mimeType: string; read: () => unknown } | undefined {
+  if (!part || typeof part !== "object") return undefined;
+  const block = part as { type?: unknown; mimeType?: unknown; data?: unknown; source?: unknown };
+  if (block.type !== "image") return undefined;
+  if (block.source === undefined) {
+    const mimeType = block.mimeType;
+    return typeof mimeType === "string" && IMAGE_MIMES.has(mimeType) ? { mimeType, read: () => block.data } : undefined;
+  }
+  const source = block.source as { type?: unknown; media_type?: unknown; data?: unknown } | null;
+  // URL/file sources are retrieval, not inline bytes; they stay unsupported.
+  if (!source || typeof source !== "object" || source.type !== "base64") return undefined;
+  const mimeType = source.media_type;
+  return typeof mimeType === "string" && IMAGE_MIMES.has(mimeType) ? { mimeType, read: () => source.data } : undefined;
+}
+
 /**
- * Pi/OMP's typed image content boundary. Not a recursive object walker.
+ * The typed inline image content boundary shared by coding-agent hosts. Not a recursive object walker.
  * Data access and base64 decoding happen inside core admission, after policy,
  * bootstrap, sampling, correlation and descriptor checks. No paths/URLs fetched.
  * The caller must select the original occurrence, not replayed provider history.
@@ -55,21 +70,25 @@ export function captureAgentImages(
   for (let partIndex = 0; partIndex < Math.min(blocks.length, 64); partIndex++) {
     try {
       const part = blocks[partIndex];
-      if (!part || part.type !== "image" || !IMAGE_MIMES.has(part.mimeType) || seen.get(part)?.has(partIndex)) continue;
+      const shape = imageShape(part);
+      if (!shape || seen.get(part)?.has(partIndex)) continue;
+      let decoded = 0;
       const result = manager.attach(span, {
         kind: "Bytes",
         get data() {
-          const value = part.data;
+          const value = shape.read();
           if (typeof value !== "string" || value.length > 4 * Math.ceil(remaining / 3))
             throw new Error("UNAVAILABLE_IMAGE");
           const bytes = decodeImage(value);
           if (bytes.length > remaining) throw new Error("UNAVAILABLE_IMAGE");
-          remaining -= bytes.length;
+          decoded = bytes.length;
           return bytes;
         },
-      }, { ...options, mimeType: part.mimeType, partIndex });
+      }, { ...options, mimeType: shape.mimeType, partIndex });
       handles.push(result);
       if (result.admission === "queued") {
+        // Only bytes the core actually owns count against the per-call budget.
+        remaining -= decoded;
         let positions = seen.get(part);
         if (!positions) seen.set(part, positions = new Set());
         positions.add(partIndex);
@@ -79,18 +98,4 @@ export function captureAgentImages(
     }
   }
   return handles;
-}
-
-/** Restrictions only: adapter defaults cannot undo the provider's hide/PII policy. */
-export function agentImagePolicy(policy: {
-  hideInputs: boolean;
-  hideOutputs: boolean;
-  hideErrorDetails: boolean;
-}, error = false): AttachmentCapturePolicy {
-  return {
-    recordInputs: !policy.hideInputs,
-    recordOutputs: !policy.hideOutputs,
-    errorDetail: error,
-    requested: !(error && policy.hideErrorDetails),
-  };
 }

@@ -23,6 +23,7 @@ import {
   type ResolveOptions,
   type ResolvedConfig,
 } from "./config.js";
+import { agentAttachmentStatus } from "./attachment-status.js";
 import {
   contentHash,
   readJson,
@@ -584,8 +585,6 @@ export interface DeliveryState {
   activatedAt?: string;
   binding?: string;
 }
-import { agentAttachmentStatus } from "./attachment-status.js";
-
 export interface AgentStatus {
   attachments: ReturnType<typeof agentAttachmentStatus>;
   agent: string;

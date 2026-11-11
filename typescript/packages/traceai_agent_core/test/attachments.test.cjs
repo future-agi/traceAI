@@ -177,7 +177,37 @@ test('status distinguishes requested capture, unsupported sources and unverified
   assert.equal(agentAttachmentStatus(config, { FI_ATTACHMENTS_ENABLED: 'true' }).state, 'endpoint_unconfigured');
   const enabled = { FI_ATTACHMENTS_ENABLED: 'true', FI_ATTACHMENTS_ENDPOINT: 'https://example.invalid' };
   assert.equal(agentAttachmentStatus(config, enabled).state, 'scope_unverified');
-  for (const agent of ['codex', 'cursor', 'claude-code', 'copilot', 'goose', 'hermes', 'kiro', 'opencode']) {
-    assert.equal(agentAttachmentStatus({ ...config, agent }, enabled).state, 'source_unavailable');
+  for (const agent of ['pi', 'oh-my-pi', 'claude']) {
+    assert.equal(agentAttachmentStatus({ ...config, agent }, enabled).source, 'typed-image-blocks');
   }
+  // Every adapter id without an inline typed source, plus unknown/prototype keys, fails closed.
+  for (const agent of ['codex', 'cursor', 'cursor-cli', 'cursor-cloud', 'copilot', 'copilot-vscode', 'goose', 'hermes',
+    'kiro-cli', 'kiro-ide', 'opencode', 'opencode-v1', 'openclaw', 'gemini', 'antigravity', 'antigravity-ide', 'augment',
+    'augment-ide', 'devin-cascade', 'grok', 'muse', 'unknown-host', 'constructor', '__proto__']) {
+    assert.equal(agentAttachmentStatus({ ...config, agent }, enabled).state, 'source_unavailable', agent);
+  }
+  assert.equal(agentAttachmentStatus({ ...config, hideInputs: true, hideOutputs: true }, enabled).state, 'policy_denied');
+  assert.equal(agentAttachmentStatus({ ...config, captureContent: false }, enabled).state, 'policy_denied');
+});
+
+test('Anthropic/Claude Code base64 source blocks share the same lazy boundary; URL/file sources are never read', async t => {
+  const f = await fixture(t);
+  const data = image().data;
+  let urlReads = 0;
+  const parts = [
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data } },
+    { type: 'image', source: { type: 'url', get url() { urlReads++; return 'https://example.invalid/secret'; } } },
+    { type: 'image', source: { type: 'file', file_id: 'file_secret' } },
+    { type: 'image', source: { type: 'base64', media_type: 'image/svg+xml', data } },
+  ];
+  const results = captureAgentImages(f.manager, identity, parts, input);
+  assert.deepEqual(results.map(r => r.admission), ['queued']);
+  await f.manager.flush();
+  assert.deepEqual(f.body(), [...Buffer.from(data, 'base64')]);
+  assert.equal(urlReads, 0);
+  const hidden = await fixture(t, { traceConfig: { hideInputImages: true } });
+  let reads = 0;
+  const secret = { type: 'image', source: { type: 'base64', media_type: 'image/png', get data() { reads++; return data; } } };
+  assert.equal(captureAgentImages(hidden.manager, identity, [secret], input)[0].admission, 'policy_denied');
+  assert.equal(reads, 0);
 });

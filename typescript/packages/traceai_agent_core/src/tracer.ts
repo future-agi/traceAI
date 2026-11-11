@@ -33,6 +33,9 @@ import type { AttachmentManager } from "@traceai/fi-core/attachments";
 import { captureAgentImages, type AgentImageOptions } from "./attachments.js";
 import { agentAttachmentRuntime } from "./attachment-runtime.js";
 
+/** Provider-owned attachment runtime options; defaults come from FI_ATTACHMENTS_* and the resolved config. */
+export type AgentAttachmentRuntimeOptions = NodeAttachmentManagerOptions;
+
 export type TurnOutcome = "success" | "error" | "interrupted" | "incomplete";
 export type EventTiming =
   | "source"
@@ -151,7 +154,7 @@ function content(
 /** A private FI provider: no global tracer/context registration, host/process detectors or model gateway. */
 export function createTurnTracer(options: {
   config: ResolvedConfig;
-  attachments?: NodeAttachmentManagerOptions;
+  attachments?: AgentAttachmentRuntimeOptions;
   identityKey?: Uint8Array;
   onDelivery?: (result: DeliveryResult) => void;
   /** Revalidate a durable snapshot's privacy/routing policy immediately before each HTTP batch. */
