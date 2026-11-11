@@ -9,6 +9,7 @@ import time
 import pytest
 
 pytest.importorskip("openai")
+pytest.importorskip("traceai_openai")
 
 PROBE = textwrap.dedent("""
     import base64, os, ssl, sys, threading

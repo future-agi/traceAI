@@ -7,6 +7,7 @@ import threading
 import pytest
 
 openai = pytest.importorskip("openai")
+pytest.importorskip("traceai_openai")
 
 from conftest import PDF, b64, flush, png, refs, wait_uploads, wav  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402

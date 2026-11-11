@@ -4,6 +4,7 @@ import pytest
 
 traceai = pytest.importorskip("traceai")
 openai = pytest.importorskip("openai")
+pytest.importorskip("traceai_openai")
 
 from conftest import b64, flush, png  # noqa: E402
 from fi_instrumentation.attachments import AttachmentConfig  # noqa: E402

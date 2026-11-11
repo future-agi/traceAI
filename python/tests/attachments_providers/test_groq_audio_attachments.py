@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 groq = pytest.importorskip("groq")
+pytest.importorskip("traceai_groq")
 
 from conftest import flush, refs, wav  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402

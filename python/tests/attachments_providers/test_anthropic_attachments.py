@@ -6,6 +6,7 @@ import json
 import pytest
 
 anthropic = pytest.importorskip("anthropic")
+pytest.importorskip("traceai_anthropic")
 
 from conftest import PDF, b64, flush, png, refs  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402
