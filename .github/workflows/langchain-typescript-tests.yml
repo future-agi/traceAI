@@ -178,6 +178,7 @@ jobs:
             const local = {
               "@traceai/fi-core": tarball("traceai-fi-core-"),
               "@traceai/fi-semantic-conventions": tarball("traceai-fi-semantic-conventions-"),
+              "@traceai/framework-attachments": tarball("traceai-framework-attachments-"),
             };
             fs.writeFileSync(consumer + "/package.json", JSON.stringify({
               private: true,
