@@ -585,11 +585,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   if (endSpan) span.end();
                   return;
                 }
-                // endSpan is false only on the streamed path. Streamed output media is unsupported
-                // until the core has a consumed-stream observation API.
-                const outputMedia = endSpan ? captureOpenAIAttachments(instrumentation.attachments, span, result, {
+                // On the streamed path (endSpan false) `result` is the terminal response the application consumed
+                // from its own iterator, observed before the span ends. Partial (preview) images are never captured.
+                const outputMedia = captureOpenAIAttachments(instrumentation.attachments, span, result, {
                   operation: "responses", direction: "output", traceConfig: instrumentation._traceConfig,
-                }) : new Map();
+                });
                 const projected = projectOpenAIMedia(result, outputMedia, "responses", "output") as ResponseType;
                 const output = {
                   id: result.id, object: result.object, status: result.status,

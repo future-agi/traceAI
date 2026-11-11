@@ -25,17 +25,26 @@ const host = globalThis as typeof globalThis & { [registryKey]?: Registry };
 const observations = (host[registryKey] ??= new WeakMap());
 const TOOL_ID = /^[a-zA-Z0-9_-]{1,128}$/;
 
-function decode(encoded: unknown): Uint8Array {
-  const max = anthropicAttachmentCapabilities.maxInlineBytes;
-  // Bound allocation BEFORE decoding. Padding and alphabet are strict.
-  if (typeof encoded !== "string" || !encoded.length || encoded.length % 4 !== 0 ||
-    encoded.length > 4 * Math.ceil(max / 3) || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return new Uint8Array();
-  const bytes = Buffer.from(encoded, "base64");
-  return bytes.length <= max && bytes.toString("base64") === encoded ? bytes : new Uint8Array();
+const MAX_ENCODED = 4 * Math.ceil(anthropicAttachmentCapabilities.maxInlineBytes / 3);
+
+/** Exact decoded length from the encoded string's shape only (no decode); 0 when out of bounds. */
+function bound(encoded: unknown): number {
+  if (typeof encoded !== "string" || !encoded.length || encoded.length % 4 !== 0 || encoded.length > MAX_ENCODED) return 0;
+  return (encoded.length / 4) * 3 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0);
+}
+
+/** Strict decode after admission. The ticket's budget is a hard bound; padding and alphabet are strict. */
+function decode(encoded: unknown, maxBytes: number): Uint8Array | undefined {
+  // Bound allocation BEFORE decoding.
+  if (!bound(encoded) || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded as string)) return undefined;
+  const bytes = Buffer.from(encoded as string, "base64");
+  return bytes.length && bytes.length <= maxBytes && bytes.length <= anthropicAttachmentCapabilities.maxInlineBytes &&
+    bytes.toString("base64") === encoded ? bytes : undefined;
 }
 
 /** Observe only Messages' typed image/document blocks and one level of tool_result content.
- * The manager owns policy, upload, lifecycle and references. A native integration
+ * Every part is preflighted (deny-wins, budget reserved) before its base64 is read or decoded; an admitted
+ * ticket that is not used is released at once. The manager owns policy, upload, lifecycle and references. A native integration
  * must supply its actual emitted span/correlation, never an ambient guessed span.
  * Returns the admitted positions so the caller can project them out of span telemetry.
  */
@@ -88,13 +97,24 @@ export function captureAnthropicAttachments(manager: AttachmentManager | undefin
         const previous = spans!.get(spanKey)?.get(positionKey);
         if (previous) { captured.set(positionKey, previous); return; }
         const role: AttachmentOptions["role"] = toolCallId ? "tool" : message.role === "assistant" ? "assistant" : "user";
-        const handle = manager.attach(correlation, { kind: "Bytes", get data() { return decode(source.data); } },
-          { mimeType: mime, direction: "input", messageIndex, partIndex: index, role,
-            purpose: part.type === "document" ? "document" : toolCallId ? computerCalls.has(toolCallId) ? "computer_screenshot" : "tool_result" : "model_input",
-            ...(toolCallId ? { toolCallId } : {}),
-            capture: { ...options.capture, modelInput: true, errorDetail: errorDetail || options.capture?.errorDetail,
-              ...(hidden || (part.type === "image" && config.hideInputImages) || (errorDetail && config.hideErrorDetails) ? { captureContent: false } : {}) },
-          });
+        const request = { mimeType: mime, direction: "input" as const,
+          purpose: (part.type === "document" ? "document" : toolCallId ? computerCalls.has(toolCallId) ? "computer_screenshot" : "tool_result" : "model_input") as AttachmentOptions["purpose"],
+          capture: { ...options.capture, modelInput: true, errorDetail: errorDetail || options.capture?.errorDetail,
+            ...(hidden || (part.type === "image" && config.hideInputImages) || (errorDetail && config.hideErrorDetails) ? { captureContent: false } : {}) } };
+        // Preflight (deny-wins, budget reserved) before the base64 source is read or decoded (design section 1).
+        // The source is read at most once.
+        let data: unknown, dataRead = false;
+        const read = () => { if (!dataRead) { dataRead = true; data = source.data; } return data; };
+        let ticket = manager.preflight(correlation, { ...request, maxBytes: anthropicAttachmentCapabilities.maxInlineBytes });
+        // too_large is evaluated after every privacy, correlation and sampling step, so sizing the source exactly is safe here.
+        if (ticket.reason === "too_large") {
+          const exact = bound(read());
+          if (exact > 0) ticket = manager.preflight(correlation, { ...request, maxBytes: exact });
+        }
+        if (!ticket.admitted) return;
+        const bytes = decode(read(), ticket.maxBytes);
+        if (!bytes) { ticket.release(); return; }
+        const handle = ticket.attach({ kind: "Bytes", data: bytes }, { messageIndex, partIndex: index, role, ...(toolCallId ? { toolCallId } : {}) });
         if (handle.admission === "queued") {
           const occurrence = Object.freeze({ occurrenceId: handle.occurrenceId, mimeType: mime });
           let positions = spans!.get(spanKey);

@@ -4,10 +4,11 @@ import type { AttachmentManager, AttachmentOptions, AttachmentSpan, AttachmentCo
 /** Declarative handoff to auto/wire owners; this is not a native/wire hookup. */
 export const openAIAttachmentCapabilities = Object.freeze({
   schemaVersion: 1,
-  operations: ["chat.completions.create.input", "responses.create.input", "responses.create.output", "images.generate.output"] as const,
+  operations: ["chat.completions.create.input", "responses.create.input", "responses.create.output", "responses.stream.output", "images.generate.output"] as const,
   sources: ["inline_base64"] as const,
-  /** Fail closed: no capture is attempted for these. */
-  unsupported: ["remote_url", "provider_file", "streamed_output", "partial_image", "images.edit", "images.createVariation", "speech"] as const,
+  /** Fail closed: no capture is attempted for these. Streamed Responses output is captured only from the
+   * terminal `response.completed` event the application consumed; partial (preview) images never are. */
+  unsupported: ["remote_url", "provider_file", "partial_image", "images.generate.stream", "images.edit", "images.createVariation", "speech"] as const,
   maxInlineBytes: 256 * 1024,
 });
 
@@ -50,18 +51,35 @@ function restrictions(options: OpenAIAttachmentCaptureOptions): AttachmentCaptur
   };
 }
 
-function decode(value: unknown, mimeType: string, raw: boolean): Uint8Array {
-  if (typeof value !== "string") return new Uint8Array();
-  const prefix = `data:${mimeType};base64,`;
-  if (!raw && !value.startsWith(prefix)) return new Uint8Array();
-  // Bound allocation BEFORE slicing/decoding. Padding and alphabet are strict.
-  const start = raw ? 0 : prefix.length;
+type Parsed = { mimeType: string; encoded: string; bound: number };
+const MAX_ENCODED = 4 * Math.ceil(openAIAttachmentCapabilities.maxInlineBytes / 3);
+
+/** Structural parse only: no decode or allocation beyond the string the application already holds.
+ * Returns the candidate MIME named by a data URI (or the typed MIME for raw base64) and the exact decoded length.
+ */
+function parse(value: unknown, mimeTypes: string[], raw: boolean): Parsed | undefined {
+  if (typeof value !== "string") return undefined;
+  let mimeType = mimeTypes[0], start = 0;
+  if (!raw) {
+    const comma = value.indexOf(",");
+    const header = comma > 5 && comma < 128 ? value.slice(0, comma) : "";
+    const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64$/.exec(header);
+    if (!match || !mimeTypes.includes(match[1])) return undefined;
+    mimeType = match[1]; start = comma + 1;
+  }
   const length = value.length - start;
-  if (length <= 0 || length > 4 * Math.ceil(openAIAttachmentCapabilities.maxInlineBytes / 3) || length % 4 !== 0) return new Uint8Array();
+  // Bound allocation BEFORE slicing/decoding.
+  if (length <= 0 || length > MAX_ENCODED || length % 4 !== 0) return undefined;
   const encoded = value.slice(start);
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return new Uint8Array();
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  return { mimeType, encoded, bound: (length / 4) * 3 - padding };
+}
+
+/** Strict decode after admission. Padding and alphabet are strict; the ticket's budget is a hard bound. */
+function decode(encoded: string, maxBytes: number): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return undefined;
   const bytes = Buffer.from(encoded, "base64");
-  if (bytes.length > openAIAttachmentCapabilities.maxInlineBytes || bytes.toString("base64") !== encoded) return new Uint8Array();
+  if (!bytes.length || bytes.length > maxBytes || bytes.length > openAIAttachmentCapabilities.maxInlineBytes || bytes.toString("base64") !== encoded) return undefined;
   return bytes;
 }
 
@@ -71,7 +89,8 @@ const key = (options: Pick<OpenAIAttachmentCaptureOptions, "operation" | "direct
 /** Typed, synchronous observation only. No provider downloads or stream consumption.
  * Pass the SAME emitted identity to SDK and wire observations: a second observation of a position
  * returns the first occurrence instead of uploading again.
- * Denied sources are never read: the shared manager calls the getter only after admission.
+ * Denied sources are never read: every part is preflighted (deny-wins, budget reserved) before its value is
+ * read or decoded, and an admitted ticket that is not used is released at once.
  * Returns the admitted positions so the caller can project them out of span telemetry.
  */
 export function captureOpenAIAttachments(manager: AttachmentManager | undefined,
@@ -93,27 +112,44 @@ export function captureOpenAIAttachments(manager: AttachmentManager | undefined,
       const position = key(options, messageIndex, partIndex);
       const previous = spans!.get(spanKey)?.get(position);
       if (previous) { captured.set(position, previous); return; }
-      for (const mimeType of mimeTypes) {
-        const handle = manager.attach(correlation, { kind: "Bytes", get data() { return decode(read(), mimeType, raw); } },
-          { mimeType, direction: options.direction, purpose, messageIndex, partIndex, role,
-            ...(toolCallId ? { toolCallId } : {}), capture: {
-              ...capture,
-              ...(options.direction === "input" && mimeType.startsWith("image/") && options.traceConfig?.hideInputImages ? { captureContent: false } : {}),
-            } });
-        if (handle.admission === "queued") {
-          const occurrence = Object.freeze({ occurrenceId: handle.occurrenceId, mimeType });
-          let positions = spans!.get(spanKey);
-          if (!positions) {
-            if (spans!.size >= MAX_SPANS) spans!.delete(spans!.keys().next().value!);
-            positions = new Map(); spans!.set(spanKey, positions);
-          }
-          if (positions.size < MAX_PARTS) positions.set(position, occurrence);
-          captured.set(position, occurrence);
-          return;
+      // The source is read at most once, and only after a preflight admitted this modality (design section 1).
+      let source: Parsed | undefined, sourceRead = false;
+      const parsed = () => { if (!sourceRead) { sourceRead = true; source = parse(read(), mimeTypes, raw); } return source; };
+      const preflight = (mimeType: string) => {
+        const request = { mimeType, direction: options.direction, purpose, capture: {
+          ...capture,
+          ...(options.direction === "input" && mimeType.startsWith("image/") && options.traceConfig?.hideInputImages ? { captureContent: false } : {}),
+        } };
+        let ticket = manager.preflight(correlation, { ...request, maxBytes: openAIAttachmentCapabilities.maxInlineBytes });
+        // too_large is evaluated after every privacy, correlation and sampling step, so sizing the source exactly is safe here.
+        if (ticket.reason === "too_large") {
+          const bound = parsed()?.bound ?? 0;
+          if (bound > 0) ticket = manager.preflight(correlation, { ...request, maxBytes: bound });
         }
-        // Only a non-matching data-URI type (decoded as empty) tries the next candidate. Denials stop.
-        if (handle.admission !== "too_large") return;
+        return ticket;
+      };
+      let ticket = preflight(mimeTypes[0]);
+      if (!ticket.admitted) return;
+      const found = parsed();
+      if (!found) { ticket.release(); return; }
+      // A data URI names a sibling MIME of the same modality: re-admit under the exact type before decoding.
+      if (found.mimeType !== mimeTypes[0]) {
+        ticket.release();
+        ticket = preflight(found.mimeType);
+        if (!ticket.admitted) return;
       }
+      const bytes = decode(found.encoded, ticket.maxBytes);
+      if (!bytes) { ticket.release(); return; }
+      const handle = ticket.attach({ kind: "Bytes", data: bytes }, { messageIndex, partIndex, role, ...(toolCallId ? { toolCallId } : {}) });
+      if (handle.admission !== "queued") return;
+      const occurrence = Object.freeze({ occurrenceId: handle.occurrenceId, mimeType: found.mimeType });
+      let positions = spans!.get(spanKey);
+      if (!positions) {
+        if (spans!.size >= MAX_SPANS) spans!.delete(spans!.keys().next().value!);
+        positions = new Map(); spans!.set(spanKey, positions);
+      }
+      if (positions.size < MAX_PARTS) positions.set(position, occurrence);
+      captured.set(position, occurrence);
     };
     const toolCallId = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : undefined;
     const parts = (content: unknown, messageIndex: number, role: AttachmentOptions["role"]) => {

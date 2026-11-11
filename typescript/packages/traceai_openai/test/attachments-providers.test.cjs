@@ -19,11 +19,19 @@ const document = () => ({ type: 'document', title: 'synthetic-private-filename',
 const identity = () => ({ traceId: randomUUID().replace(/-/g, ''), spanId: randomUUID().replace(/-/g, '').slice(0, 16), traceFlags: 1 });
 const keepalive = setInterval(() => {}, 1000);
 after(() => clearInterval(keepalive));
+// The core reports a silently degraded fixture (legacy transport, rejected F01 shape) as a process warning.
+const coreWarnings = [];
+process.on('warning', warning => { if (/^FI_ATTACHMENTS_/.test(warning.code ?? '')) coreWarnings.push(warning.code); });
+// Preflight tickets that are not used must be released at once, never left to the TTL sweep.
+const assertNoOpenTickets = async manager => {
+  assert.equal(manager.status().openTickets, 0, 'open tickets'); await manager.flush(); assert.equal(manager.status().ownedBytes, 0, 'owned bytes');
+};
 
-async function fixture(config = {}, serverPolicy = {}) {
+async function fixture(config = {}, serverPolicy = {}, serverLimits = {}) {
   const calls = [], initialized = [], uploaded = [];
   const scope = { organization_id: randomUUID(), workspace_id: randomUUID(), project_id: randomUUID() };
-  const expiry = () => new Date(Date.now() + 60000).toISOString();
+  // Sessions of one hour or more: the core renews within max(60 s, 20% of lifetime) of expiry.
+  const expiry = () => new Date(Date.now() + 3600000).toISOString();
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
     const bytes = Buffer.concat(chunks); calls.push(req.url);
@@ -37,7 +45,7 @@ async function fixture(config = {}, serverPolicy = {}) {
         limits: { max_upload_bytes: 1024 * 1024, segment_bytes: 8388608, segment_duration_ms: 30000, recording_bytes: 1073741824,
           recording_duration_ms: 7200000, active_transfers: 16, active_recordings: 4, reserved_bytes: 1073741824, validation_jobs: 1024,
           initializations_per_minute: 120, links_per_minute: 1000, upload_bytes_per_second: 1073741824, playback_bytes_per_second: 1073741824,
-          transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5 }, expires_at: expiry(), transfer_modes: ['authenticated_stream'] }));
+          transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5, ...serverLimits }, expires_at: expiry(), transfer_modes: ['authenticated_stream'] }));
     } else if (req.url.endsWith('/uploads')) {
       const body = JSON.parse(bytes); initialized.push(body);
       res.statusCode = 201;
@@ -121,6 +129,23 @@ for (const provider of ['openai', 'anthropic']) {
       capture(f.manager, identity(), provider === 'openai' ? { input: [{ role: 'user', content: [{ type: 'input_file', file_id: 'file_secret' }] }] }
         : { messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'file', file_id: 'file_secret' } }, null, { type: 'tool_result', tool_use_id: {}, content: [image()] }] }] });
       await f.manager.flush(); assert.equal(f.initialized.length, 0);
+      await assertNoOpenTickets(f.manager);
+    } finally { await f.close(); }
+  });
+  test(`${provider}: a negotiated upload limit below the inline cap still captures small media exactly`, async () => {
+    const f = await fixture({}, {}, { max_upload_bytes: 100 * 1024 });
+    try {
+      const id = identity(), captured = capture(f.manager, id, input());
+      await f.manager.flush();
+      assert.equal(captured.size, provider === 'openai' ? 3 : 4);
+      assert.equal(f.uploaded.length, captured.size);
+      assert.ok(f.initialized.every(r => r.declared_bytes <= 100 * 1024));
+      // Above the negotiated limit nothing is decoded or uploaded, and the reservation is returned.
+      const big = Buffer.alloc(150 * 1024, 7).toString('base64');
+      capture(f.manager, identity(), provider === 'openai' ? { input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${big}` }] }] }
+        : { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: big } }] }] });
+      await f.manager.flush(); assert.equal(f.uploaded.length, captured.size);
+      await assertNoOpenTickets(f.manager);
     } finally { await f.close(); }
   });
   test(`${provider}: unsampled identity and queued policy tightening cannot upload`, async () => {
@@ -202,7 +227,10 @@ test('Hostile payloads fail capture without throwing into the application', asyn
 });
 
 test('Capability descriptors name every unsupported source explicitly', () => {
-  for (const name of ['remote_url', 'provider_file', 'streamed_output', 'partial_image', 'images.edit', 'speech']) assert.ok(oa.openAIAttachmentCapabilities.unsupported.includes(name));
+  for (const name of ['remote_url', 'provider_file', 'partial_image', 'images.generate.stream', 'images.edit', 'speech']) assert.ok(oa.openAIAttachmentCapabilities.unsupported.includes(name));
+  // Streamed Responses output is captured from the consumed terminal event; partial images never are.
+  assert.ok(oa.openAIAttachmentCapabilities.operations.includes('responses.stream.output'));
+  assert.ok(!oa.openAIAttachmentCapabilities.unsupported.includes('streamed_output'));
   for (const name of ['remote_url', 'provider_file', 'native_span_hookup', 'generated_image', 'streamed_output']) assert.ok(an.anthropicAttachmentCapabilities.unsupported.includes(name));
   assert.ok(Object.isFrozen(oa.openAIAttachmentCapabilities) && Object.isFrozen(an.anthropicAttachmentCapabilities));
 });
@@ -337,10 +365,22 @@ test('Real SDKs preserve APIPromise/request/response behavior and upload only th
       for (const ref of refs.filter(r => r.direction === 'input')) assert.ok(text.includes(`fi-attachment:${ref.occurrence_id}`), span.name);
     }
     if (client.responses) {
-      // Streamed output media is unsupported: the stream is delivered unchanged and nothing uploads.
+      // Streamed Responses: the stream is delivered unchanged; the generated image in the terminal event the
+      // application consumed uploads once and is projected out of that span's output telemetry.
       const stream = await client.responses.create({ model: 'synthetic-model', input: 'synthetic', stream: true });
-      const events = []; for await (const event of stream) events.push(event.type);
+      const events = []; for await (const event of stream) { events.push(event.type); if (event.type === 'response.completed') assert.equal(event.response.output[0].result, PNG); }
       assert.deepEqual(events, ['response.created', 'response.completed']);
+      expected++;
+      await f.manager.flush(); await provider.forceFlush(); assert.equal(f.uploaded.length, expected);
+      assert.equal(f.uploaded.at(-1).toString('base64'), PNG);
+      const streamed = exporter.getFinishedSpans().filter(s => s.name === 'OpenAI Responses').at(-1);
+      const refs = JSON.parse(streamed.attributes['fi.attachment.refs'] ?? '[]');
+      assert.equal(refs.length, 1); assert.equal(refs[0].direction, 'output'); assert.equal(refs[0].purpose, 'model_output');
+      assert.ok(String(streamed.attributes['output.value']).includes(`fi-attachment:${refs[0].occurrence_id}`));
+      assert.ok(!JSON.stringify(streamed.attributes).includes(PNG));
+      // A consumer that stops early never reaches the terminal event: nothing is captured.
+      const early = await client.responses.create({ model: 'synthetic-model', input: 'synthetic', stream: true });
+      for await (const event of early) { if (event.type === 'response.created') break; }
       await f.manager.flush(); assert.equal(f.uploaded.length, expected);
     }
     // A raw-response caller owns the body; instrumentation must not parse for media.
@@ -389,4 +429,23 @@ test('A configured but disabled manager leaves existing span telemetry byte-iden
     assert.deepEqual(off, baseline);
     assert.equal(disabled.calls.length, 0);
   } finally { await disabled.close(); await p.close(); }
+});
+
+test('OpenAI data URIs of a sibling image type are admitted under their exact MIME', async () => {
+  const f = await fixture(); try {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]).toString('base64');
+    const captured = oa.captureOpenAIAttachments(f.manager, identity(), { messages: [{ role: 'user', content: [
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${jpeg}` } },
+      { type: 'image_url', image_url: { url: `data:image/gif;base64,${jpeg}` } },
+    ] }] }, { operation: 'chat', direction: 'input' });
+    await f.manager.flush();
+    assert.deepEqual([...captured.values()].map(v => v.mimeType), ['image/jpeg']);
+    assert.deepEqual(f.initialized.map(r => r.mime_type), ['image/jpeg']);
+    assert.equal(f.uploaded[0].toString('base64'), jpeg);
+    await assertNoOpenTickets(f.manager);
+  } finally { await f.close(); }
+});
+
+test('No core degradation warning was raised by any fixture', () => {
+  assert.deepEqual(coreWarnings, []);
 });
