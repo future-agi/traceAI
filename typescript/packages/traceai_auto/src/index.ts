@@ -10,6 +10,10 @@ import { installOutgoingPropagation } from "./outgoing-node";
 import { enableLibraries, IntegrationStatus, inventory } from "./libraries";
 import { FetchHook, patchFetch, trackCoverage } from "./wire/fetch";
 import { captureSecrets, SpanResult } from "./wire/core";
+import type { Span } from "@opentelemetry/api";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { attachmentOptions, attachmentReport, selectAttachmentManager } from "./attachments";
+export { withAttachmentOwnership, withAttachmentCapturePolicy } from "./wire/attachments";
 import { withDeadline } from "./deadline";
 import { privacyFilter } from "./export-privacy";
 
@@ -24,6 +28,7 @@ export type { Options } from "./config";
 interface AgentState {
   config: Config; statuses: IntegrationStatus[]; active: boolean; provider?: any; ownsProvider?: boolean;
   spanDelivery?: AutoSpanDelivery;
+  attachments?: AttachmentManager; ownsAttachments?: boolean;
   ownsSpanExporter?: boolean;
   processor?: SpanProcessor; processorIsObserver?: boolean; convertedSpanDestination?: ConvertedSpanDestination;
   detach?: () => void; removeLibraries?: () => void; fetch?: FetchHook;
@@ -90,8 +95,10 @@ function removeHooks(agent: AgentState): void {
     () => agent.removeOutgoing?.(), () => agent.fetch?.remove(), () => agent.removeObservation?.(), () => agent.removeLibraries?.(),
   ]) { try { remove(); } catch { /* A broken cleanup must not skip the others. */ } }
 }
-export interface Report { active: boolean; config: Record<string, unknown>; integrations: IntegrationStatus[]; collector: string }
-/** Initialize once. No network calls or thrown startup errors. */
+export interface Report { active: boolean; config: Record<string, unknown>; integrations: IntegrationStatus[]; collector: string; attachments: ReturnType<typeof attachmentReport> }
+/** The same manager passed to adapters; await ready() explicitly at startup if needed. */
+export function getAttachmentManager(): AttachmentManager | undefined { return sharedState()?.attachments; }
+/** Initialize once. No awaited network calls or thrown startup errors; opted-in attachments bootstrap asynchronously. */
 export function init(options: Options = {}): TracerProvider | undefined {
   const existing = sharedState();
   if (existing) { warn("initialized", "Already initialized; keeping the existing provider and configuration."); return existing.active ? existing.provider : undefined; }
@@ -142,10 +149,13 @@ export function init(options: Options = {}): TracerProvider | undefined {
     if (!agent.provider) {
       agent.provider = register({ projectName: config.projectName, projectType: config.projectType === "observe" ? ProjectType.OBSERVE : ProjectType.EXPERIMENT,
         setGlobalTracerProvider: false, verbose: false, endpoint: config.baseUrl, batch: true, spanProcessors: [processor],
+        traceConfig: config.traceConfig, attachments: options.attachmentManager ? { enabled: false } : attachmentOptions(config, options),
         sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(config.sampleRate) }) });
       agent.ownsProvider = true;
       if (!existing) agent.ownsGlobalProvider = trace.setGlobalTracerProvider(agent.provider);
     }
+    const attachmentRuntime = selectAttachmentManager(agent.provider, config, options, agent.ownsProvider === true);
+    agent.attachments = attachmentRuntime.manager; agent.ownsAttachments = attachmentRuntime.owned;
     if (agent.processorIsObserver) {
       agent.convertedSpanDestination = borrowConvertedSpanDestination(agent.provider, processor);
       const destination = agent.convertedSpanDestination;
@@ -180,7 +190,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
     const admissionPrivacy = privacyFilter(options.traceConfig, [config.apiKey, config.secretKey].filter((v): v is string => !!v));
     const wirePipeline = (tracer as any)._spanProcessor;
     const wireDestinationReady = () => hasAutoSpanSink(wirePipeline, agent.processorIsObserver ? [processor] : []);
-    const emit = (result: SpanResult, parent: Context, start: number, end: number) => {
+    const emit = (result: SpanResult, parent: Context, start: number, end: number, bindMedia?: (span: Span) => void) => {
       const canDeliver = () => agent.spanDelivery?.canForward(wireDestinationReady) === true;
       // Credential discovery is independent of which semantic copy wins delivery.
       let secrets: ReturnType<typeof captureSecrets>;
@@ -210,6 +220,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
         if (secrets === null) failedCaptures.add(span.getContextSpan());
         span.setStatus({ code: result.ok ? SpanStatusCode.OK : SpanStatusCode.ERROR, message: result.description });
         const recording = span.isRecording();
+        try { bindMedia?.(span); } catch { /* Media never affects semantic delivery. */ }
         span.end(end);
         submitted = recording;
       } catch { /* Internal failures are not application failures. */ }
@@ -219,14 +230,14 @@ export function init(options: Options = {}): TracerProvider | undefined {
     // Adapters stay off unless explicitly selected; destination policy is not activation.
     agent.removeOutgoing = installOutgoingPropagation(outgoingPolicyForConfig(config), createOutgoingPrivacy(config.traceConfig, credentialsForConfig(config)), agent.statuses, warn, config.propagateOutgoingAdapters);
     if (config.wireCapture && enabled("wire", config)) agent.removeObservation = observeTransports();
-    agent.removeLibraries = enableLibraries(config, options, instrumentationProvider, agent.statuses, warn, processor);
+    agent.removeLibraries = enableLibraries(config, { ...options, attachmentManager: agent.attachments }, instrumentationProvider, agent.statuses, warn, processor);
     // Stay outside the installed mapping adapters: Genkit can shorten an SDK-
     // truncated value when it scrubs a local path or identity. Inspect the native
     // span first so that its detached export copy cannot erase that loss signal.
     const mappedEnd = processor.onEnd.bind(processor);
     processor.onEnd = span => { rememberSpanValueLimit(span); mappedEnd(span); };
     if (config.wireCapture && enabled("wire", config) && typeof globalThis.fetch === "function") {
-      agent.fetch = patchFetch(config.wireMaxBodyBytes, emit, [config.apiKey, config.secretKey].filter((v): v is string => !!v)); agent.statuses.push({ name: "wire", status: "instrumented" });
+      agent.fetch = patchFetch(config.wireMaxBodyBytes, emit, [config.apiKey, config.secretKey].filter((v): v is string => !!v), agent.attachments); agent.statuses.push({ name: "wire", status: "instrumented" });
     } else agent.statuses.push({ name: "wire", status: "disabled" });
     agent.active = true;
     agent.beforeExit = () => { void forceFlush(); };
@@ -244,7 +255,7 @@ export function init(options: Options = {}): TracerProvider | undefined {
       try { if (failed.propagator && (propagation as any)._getGlobalPropagator?.() === failed.propagator) propagation.disable(); } catch { /* Leave application globals alone. */ }
       try { if (failed.ownsGlobalProvider && existingProvider() === failed.provider) trace.disable(); } catch { /* Leave app globals alone. */ }
       try { if (failed.contextManager && (context as any)._getContextManager?.() === failed.contextManager) context.disable(); } catch { /* Fail open. */ }
-      void withDeadline(async () => { await failed.processor?.shutdown(); }).catch(() => {});
+      void withDeadline(async () => { await Promise.all([failed.processor?.shutdown(), failed.ownsAttachments ? failed.attachments?.shutdown() : undefined]); }).catch(() => {});
       // Configuration is terminal for this process, even after failed startup.
       // Hooks are rolled back, but init never installs a second provider or loader.
     }
@@ -255,16 +266,16 @@ export function report(): Report {
   sharedState();
   if (!state) {
     const config = resolveConfig();
-    return { active: false, config: maskConfig(config), integrations: inventory(config), collector: "not_tested (agent not initialized)" };
+    return { active: false, config: maskConfig(config), integrations: inventory(config), collector: "not_tested (agent not initialized)", attachments: attachmentReport() };
   }
-  return { active: state.active, config: maskConfig(state.config), integrations: state.statuses.map(s => ({ ...s })), collector: state.collector };
+  return { active: state.active, config: maskConfig(state.config), integrations: state.statuses.map(s => ({ ...s })), collector: state.collector, attachments: attachmentReport(state.attachments) };
 }
 export async function forceFlush(): Promise<void> {
   sharedState();
   try {
     await withDeadline(async () => {
       await Promise.all([...(state?.fetch?.pending ?? []), state?.spanDelivery?.drain()]);
-      await state?.processor?.forceFlush();
+      await Promise.all([state?.processor?.forceFlush(), state?.attachments?.flush(2500)]);
     });
   } catch { if (state?.collector !== "failed") warn("flush", "Trace flush failed; the application will continue."); }
 }
@@ -284,7 +295,7 @@ export async function shutdown(): Promise<void> {
       await withDeadline(async () => {
         await Promise.all([...(agent.fetch?.pending ?? []), agent.spanDelivery?.drain()]);
         // Never start a late flush after the outer deadline race has returned.
-        if (Date.now() < drainDeadline) await agent.processor?.forceFlush();
+        if (Date.now() < drainDeadline) await Promise.all([agent.processor?.forceFlush(), agent.attachments?.flush(remaining(drainDeadline))]);
       }, remaining(drainDeadline));
     } catch { warn("shutdown", "Trace shutdown failed; the application will continue."); }
     finally {
@@ -294,7 +305,7 @@ export async function shutdown(): Promise<void> {
       agent.spanDelivery?.revoke();
       agent.convertedSpanDestination?.revoke();
       try { agent.detach?.(); } catch { /* Leave the application's processors intact. */ }
-      try { await withDeadline(async () => { await agent.processor?.shutdown(); }, Math.min(2500, remaining(deadline))); }
+      try { await withDeadline(async () => { await Promise.all([agent.processor?.shutdown(), agent.ownsAttachments ? agent.attachments?.shutdown(Math.max(1, remaining(deadline))) : undefined]); }, Math.min(2500, remaining(deadline))); }
       catch { warn("shutdown", "Trace shutdown failed; the application will continue."); }
     }
   })();

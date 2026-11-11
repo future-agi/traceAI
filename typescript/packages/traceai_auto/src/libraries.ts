@@ -13,7 +13,7 @@ import { Config, enabled, Options } from "./config";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
 export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string }
-export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string }
+export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string; media?: "unqualified" }
 export const integrations: Integration[] = catalog as Integration[];
 export function appRequire() { return createRequire(join(process.cwd(), "__traceai_auto__.cjs")); }
 function resolvable(name: string): boolean {
@@ -22,7 +22,7 @@ function resolvable(name: string): boolean {
   }
 }
 export function inventory(config: Config): IntegrationStatus[] {
-  return integrations.map(i => ({ name: i.name, package: i.package, targets: i.targets,
+  return integrations.map(i => ({ name: i.name, package: i.package, targets: i.targets, media: "unqualified",
     status: !enabled(i.name, config) ? "disabled" : ![...i.targets, ...i.modules].some(resolvable) ? "not_installed" : i.manual && !i.enable ? "manual" : !resolvable(i.package) && i.name !== "openai" ? "missing_instrumentor" : "pending",
     ...(i.manual ? { reason: i.manual } : {}) }));
 }
@@ -114,7 +114,7 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
         if (typeof enable !== "function") { status.status = "manual"; status.reason = "Installed instrumentor has no zero-argument enable entry; wire capture remains available"; continue; }
         // Enable entries receive the selected neutral destination explicitly.
         // Never synthesize FI credentials to unlock a framework integration.
-        const result = enable({ tracerProvider: provider, spanProcessor, traceConfig: options.traceConfig });
+        const result = enable({ tracerProvider: provider, spanProcessor, traceConfig: options.traceConfig, attachmentManager: options.attachmentManager });
         if (result && typeof result.setTracerProvider === "function") result.setTracerProvider(provider);
         status.status = result === false || result === undefined ? "manual" : result?.status ?? "instrumented";
         status.reason = result?.reason;
@@ -123,7 +123,7 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       }
       const Instrumentor = exports[entry.className!];
       if (typeof Instrumentor !== "function") throw new Error("Missing exported Instrumentation class");
-      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false, attachmentManager: options.attachmentManager });
       const known = (instance._modules ?? []).map((definition: any) => ({ definition, version: moduleVersion(definition.name) })).filter((item: any) => item.version);
       if (known.length && known.every(({ definition, version }: any) => !definition.supportedVersions.some((range: string) => satisfies(version, range, { includePrerelease: definition.includePrerelease })))) {
         instance.disable(); status.status = "failed"; status.reason = "Installed target version is outside the instrumentor's supported range";

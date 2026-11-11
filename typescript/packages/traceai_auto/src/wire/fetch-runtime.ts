@@ -2,7 +2,14 @@ import { build, checkRequest, header, isBinary, match, RequestData, ResponseData
 import { encodeBytes, byteLength, concatBytes } from "./bytes";
 import { BodyDecoder, decodeResponse, responseEncoding } from "./encoding";
 import { streamingMilestones } from "./stream-timing";
+import type { Span } from "@opentelemetry/api";
+export interface FetchMediaObserver {
+  bind(span: Span): void;
+  request(body: BodyInit | null | undefined): void;
+  materialized(value: unknown, method: "arrayBuffer" | "blob" | "json", mimeType: string, successful: boolean): void;
+}
 export interface FetchContext<T> {
+  media?(parent: T, method: string, url: string): FetchMediaObserver | undefined;
   active(): T; skip(parent: T): boolean; run<R>(parent: T, fn: () => R): R;
   observe?<R>(promise: Promise<R>, ok: (value: R) => void, fail: (error: unknown) => void): void;
   observeRequest?(request: RequestData): void;
@@ -91,7 +98,7 @@ function observeMethod(object: any, name: PropertyKey, after: (result: any, args
   } catch { /* Frozen/custom runtime objects stay untouched. */ }
 }
 export interface FetchHook { remove(): void; pending: Set<Promise<void>> }
-export function createFetchHook<T>(max: number, emit: (result: SpanResult, parent: T, start: number, end: number) => void, scope: FetchContext<T>, secrets: string[] = [], decodeBody?: BodyDecoder): FetchHook {
+export function createFetchHook<T>(max: number, emit: (result: SpanResult, parent: T, start: number, end: number, bindMedia?: (span: Span) => void) => void, scope: FetchContext<T>, secrets: string[] = [], decodeBody?: BodyDecoder): FetchHook {
   const original = globalThis.fetch;
   const observe = scope.observe ?? tap;
   const pending = new Set<Promise<void>>();
@@ -114,11 +121,13 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
       try { skip = scope.skip(parent); } catch { /* Broken context still observes headers/URL. */ }
       if (skip) return passThrough();
       const capture = () => { try { return scope.capture?.(parent) !== false; } catch { return false; } };
+      let media: FetchMediaObserver | undefined;
       let req: RequestData | undefined, found: ReturnType<typeof match>, initial: ReturnType<typeof checkRequest>;
       const inspect = () => {
         const [input, init] = argArray, info = head();
         observeRequest(info); // Every route, not just catalog-matched AI calls.
         found = match(info.method, info.url);
+        try { media = scope.media?.(parent, info.method, info.url); media?.request(init?.body); } catch { /* Independent, fail-open media admission. */ }
         // Covered model operations observe URL/headers only, as before. Selection
         // is delayed until catalog match; unsupported calls cannot choose a route.
         if (found && capture()) {
@@ -145,6 +154,22 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         throw hostError;
       }
       try { inspect(); } catch { return result; }
+      if (media) {
+        const observer = media, observed = new WeakSet<Response>();
+        const decorate = (response: Response) => {
+          if (observed.has(response)) return;
+          observed.add(response);
+          const mimeType = header(headersOf(response.headers), "content-type");
+          for (const method of ["arrayBuffer", "blob", "json"] as const) {
+            observeMethod(response, method, promise => observe(promise, value => {
+              if (active) observer.materialized(value, method, mimeType, response.ok);
+            }, () => {}));
+          }
+          // Only follow clones explicitly created by the application. Never call clone ourselves.
+          observeMethod(response, "clone", clone => decorate(clone));
+        };
+        observe(result, decorate, () => {});
+      }
       if (!found || !req || !initial) return result;
       const matched = found, request = req, parsed = initial;
       let resolve!: () => void;
@@ -154,7 +179,7 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         if (finished) return; finished = true;
         const complete = () => {
           if (audio) { response.audioOutputBytes = audio.bytes; response.body = undefined; }
-          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end); } catch { /* Capture must not reach application code. */ }
+          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value) : undefined); } catch { /* Capture must not reach application code. */ }
           finally { resolve(); pending.delete(done); }
         };
         // Only completed responses awaiting bounded decoding are flushable, never unread streams.
