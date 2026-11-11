@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require(process.argv[2]);
 const bundle = process.argv[3];
 const id = '10000000-0000-4000-8000-000000000001';
-const expires = new Date(Date.now() + 60000).toISOString();
+const expires = new Date(Date.now() + 3600000).toISOString();
 const policy = { version: 'v1', enabled: true, allowed_sources: ['Bytes', 'Blob'], allowed_modalities: ['audio', 'image'],
   require_media_redaction: false, require_metadata_removal: false, allow_unredacted_media_with_text_pii: false, record_audio: false, record_video: false };
 const limits = { max_upload_bytes: 52428800, segment_bytes: 8388608, segment_duration_ms: 30000, recording_bytes: 1073741824,
