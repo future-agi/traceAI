@@ -1056,9 +1056,6 @@ class AttachmentManager:
                         self._inflight.discard(job)
                     if job.handle is not None:
                         self._running.pop(id(job.handle), None)
-                    if job.lane is not None:
-                        job.lane.busy = False
-                        self._active_jobs.pop(id(job.lane), None)
                 self._finish_job(job, status)
 
     def _finish_job(self, job: _Job, status: str, notify_lane: bool = True) -> None:
@@ -1071,8 +1068,6 @@ class AttachmentManager:
                 if status not in ("validating", "importing"):
                     self._dropped += 1
             job.payload = None
-            if notify_lane and job.lane is not None:
-                self._schedule_lane(job.lane)
             self._cond.notify_all()
         if job.kind == "segment":
             job.lane.writer._segment_done(job.entry, status, job.upload if status == "validating" else None,
@@ -1088,6 +1083,14 @@ class AttachmentManager:
             else:
                 job.handle._finish(status)
         job.upload = None
+        if notify_lane and job.lane is not None:
+            # The lane stays busy until the writer has recorded this result, so the
+            # next segment reads the right index and finish() never sees a gap.
+            with self._cond:
+                job.lane.busy = False
+                self._active_jobs.pop(id(job.lane), None)
+                self._schedule_lane(job.lane)
+                self._cond.notify_all()
 
     def _ctl(self) -> float:
         return time.monotonic() + self.config.request_timeout
