@@ -24,6 +24,23 @@ logger = logging.getLogger(__name__)
 _instruments = ("anthropic >= 0.30.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """An instrumentor for the Anthropic framework."""
 
@@ -76,6 +93,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
+        attachments = _attachment_manager(kwargs)
 
         if Completions is not None:
             self._original_completions_create = Completions.create
@@ -102,7 +120,10 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             module="anthropic.resources.messages",
             name="Messages.create",
             wrapper=_MessagesWrapper(
-                tracer=self._tracer, native_tracing=native_tracing
+                tracer=self._tracer,
+                native_tracing=native_tracing,
+                attachments=attachments,
+                config=config,
             ),
         )
 
@@ -111,7 +132,10 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             module="anthropic.resources.messages",
             name="AsyncMessages.create",
             wrapper=_AsyncMessagesWrapper(
-                tracer=self._tracer, native_tracing=native_tracing
+                tracer=self._tracer,
+                native_tracing=native_tracing,
+                attachments=attachments,
+                config=config,
             ),
         )
 
@@ -169,3 +193,19 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         if native_tracing is not None:
             native_tracing.uninstall()
             self._native_tracing = None
+
+
+_ATTACHMENT_EXPORTS = (
+    "capture_anthropic_attachments",
+    "project_anthropic_media",
+    "anthropic_attachment_capabilities",
+)
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: these need a fi-instrumentation-otel release with attachments.
+    if name in _ATTACHMENT_EXPORTS:
+        from traceai_anthropic import _attachments
+
+        return getattr(_attachments, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

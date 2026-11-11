@@ -66,12 +66,52 @@ class _WithTracer(ABC):
         tracer: trace_api.Tracer,
         *args: Any,
         native_tracing: Optional[_NativeTracing] = None,
+        attachments: Any = None,
+        config: Any = None,
         **kwargs: Any,
     ) -> None:
 
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         self._native_tracing = native_tracing
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    @contextmanager
+    def _start_messages_media_span(self, span_name: str, arguments: Mapping[str, Any]) -> Iterator[_WithSpan]:
+        """Messages span with attachment capture: content attributes are set after capture,
+        from a telemetry-only copy whose admitted media blocks are fi-attachment URIs."""
+        with self._start_as_current_span(
+            span_name=span_name,
+            attributes=dict(
+                chain(
+                    get_attributes_from_context(),
+                    _get_llm_model_name_from_input(arguments),
+                    _get_llm_provider(),
+                    _get_llm_system(),
+                    _get_llm_span_kind(),
+                )
+            ),
+        ) as span:
+            telemetry = arguments
+            try:
+                from traceai_anthropic._attachments import (
+                    capture_anthropic_attachments,
+                    project_anthropic_media,
+                )
+
+                captured = capture_anthropic_attachments(
+                    self._attachments, span._span, arguments, trace_config=self._config
+                )
+                telemetry = project_anthropic_media(arguments, captured)
+            except Exception:
+                logger.debug("Attachment capture unavailable", exc_info=True)
+            try:
+                span.set_attributes(_content_attributes(telemetry))
+            except Exception:
+                logger.warning("Failed to set input attributes")
+            yield span
 
     def _without_native_span(self, wrapped: Callable[..., Any], instance: Any) -> Callable[..., Any]:
         """The original method for this call, with the SDK's duplicate native span turned off."""
@@ -279,6 +319,15 @@ class _MessagesWrapper(_BaseWrapper):
             return wrapped(*args, **kwargs)
         wrapped = self._without_native_span(wrapped, instance)
 
+        if self._attachments is not None:
+            with self._start_messages_media_span("Messages", kwargs) as span:
+                try:
+                    response = wrapped(*args, **kwargs)
+                except BaseException as exception:
+                    _finish_request_error(span, exception)
+                    raise
+                return _observe_message_response(response, span)
+
         arguments = kwargs
         llm_input_messages = dict(arguments).pop("messages", None)
         llm_prompt = dict(arguments).pop("system", None)
@@ -336,6 +385,15 @@ class _AsyncMessagesWrapper(_WithTracer):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
         wrapped = self._without_native_span_async(wrapped, instance)
+
+        if self._attachments is not None:
+            with self._start_messages_media_span("AsyncMessages", kwargs) as span:
+                try:
+                    response = await wrapped(*args, **kwargs)
+                except BaseException as exception:
+                    _finish_request_error(span, exception)
+                    raise
+                return _observe_message_response(response, span, is_async=True)
 
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
@@ -467,6 +525,27 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             return response
 
 
+def _content_attributes(arguments: Mapping[str, Any]) -> Dict[str, Any]:
+    """The Messages content attributes, in the same order the non-attachment path sets them."""
+    llm_input_messages = dict(arguments).pop("messages", None)
+    llm_prompt = dict(arguments).pop("system", None)
+    invocation_parameters = _get_invocation_parameters(arguments)
+    extracted_data = _extract_image_data(llm_input_messages)
+    return dict(
+        chain(
+            _get_llm_prompts(llm_prompt),
+            _get_llm_input_messages(llm_input_messages),
+            _get_llm_invocation_parameters(invocation_parameters),
+            _get_llm_tools(invocation_parameters),
+            _get_inputs(extracted_data["filtered_messages"]),
+            _get_image_inputs(extracted_data["input_images"]),
+            _get_eval_input(extracted_data["eval_input"]),
+            _get_raw_input(arguments),
+            _get_query(extracted_data["query"]),
+        )
+    )
+
+
 def _get_inputs(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
     yield INPUT_VALUE, safe_json_dumps(arguments)
     yield INPUT_MIME_TYPE, JSON
@@ -519,7 +598,12 @@ def _extract_image_data(messages):
 
         def process_image_item(item):
             source = item.get("source", {})
-            if source.get("type") == "base64":
+            url = source.get("url")
+            if source.get("type") == "url" and isinstance(url, str) and url.startswith("fi-attachment:"):
+                # A captured image (telemetry-only projection) keeps its eval placeholder.
+                input_images.append(url)
+                eval_input.append("{{" + f"{SpanAttributes.INPUT_IMAGES}.{len(input_images) - 1}" + "}}")
+            elif source.get("type") == "base64":
                 data = source.get("data")
                 if data:
                     input_images.append(data)

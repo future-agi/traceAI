@@ -136,6 +136,25 @@ class _RawResponse(ObjectProxy):
         self._self_on_parse = on_parse
         self._self_parsed = {}
         self._self_body_status: Optional[trace_api.Status] = None
+        # Speech attachment capture (set by the request wrapper only for audio.speech with a manager).
+        self._self_media: Any = None
+
+    def _speech_observer(self) -> Any:
+        # Only the FIRST consumer of the body is observed; a later read is not the whole body.
+        media, self._self_media = self._self_media, None
+        return media.speech_observer() if media is not None else None
+
+    def _speech_bytes(self, method: str, result: Any) -> None:
+        if method == "read" and self._self_media is not None:
+            media, self._self_media = self._self_media, None
+            media.speech_bytes(result)
+
+    def _stream_to_file_via_proxy(self) -> Any:
+        """The SDK's own stream_to_file, bound to this proxy so its iter_bytes is observed."""
+        if self._self_media is None:
+            return None
+        method = getattr(type(self.__wrapped__), "stream_to_file", None)
+        return method if callable(method) else None
 
     def _body_buffer(self) -> Optional[_RawBodyBuffer]:
         if (
@@ -172,6 +191,7 @@ class _RawResponse(ObjectProxy):
         except BaseException as exc:
             _finish_on_exit(self, exc)
             raise
+        self._speech_bytes(method, result)
         self._record_body_consumption()
         return result
 
@@ -186,17 +206,24 @@ class _RawResponse(ObjectProxy):
 
     def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> Iterator[Any]:
         buffer = self._body_buffer()
+        audio = self._speech_observer() if method == "iter_bytes" else None
         try:
             for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
                 if buffer is not None:
                     buffer.add(chunk)
                     if method == "iter_lines":
                         buffer.add(b"\n")
+                if audio is not None:
+                    audio.write(chunk)
                 yield chunk
         except BaseException as exc:
+            if audio is not None:
+                audio.abort()
             _finish_on_exit(self, exc)
             raise
         else:
+            if audio is not None:
+                audio.finish()
             # The caller may stop iteration early; only exhaustion consumes it.
             self._record_body_consumption(buffer)
 
@@ -210,6 +237,14 @@ class _RawResponse(ObjectProxy):
         return self._consume_iterator("iter_lines", *args, **kwargs)
 
     def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        method = self._stream_to_file_via_proxy()
+        if method is not None:
+            try:
+                method(self, *args, **kwargs)
+            except BaseException as exc:
+                _finish_on_exit(self, exc)
+                raise
+            return
         self._consume_body("stream_to_file", *args, **kwargs)
 
     @property
@@ -307,6 +342,7 @@ class _AsyncRawResponse(_RawResponse):
         except BaseException as exc:
             _finish_on_exit(self, exc)
             raise
+        self._speech_bytes(method, result)
         self._record_body_consumption()
         return result
 
@@ -321,17 +357,24 @@ class _AsyncRawResponse(_RawResponse):
 
     async def _consume_iterator(self, method: str, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         buffer = self._body_buffer()
+        audio = self._speech_observer() if method == "iter_bytes" else None
         try:
             async for chunk in getattr(self.__wrapped__, method)(*args, **kwargs):
                 if buffer is not None:
                     buffer.add(chunk)
                     if method == "iter_lines":
                         buffer.add(b"\n")
+                if audio is not None:
+                    audio.write(chunk)
                 yield chunk
         except BaseException as exc:
+            if audio is not None:
+                audio.abort()
             _finish_on_exit(self, exc)
             raise
         else:
+            if audio is not None:
+                audio.finish()
             self._record_body_consumption(buffer)
 
     async def iter_bytes(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
@@ -347,6 +390,14 @@ class _AsyncRawResponse(_RawResponse):
             yield chunk
 
     async def stream_to_file(self, *args: Any, **kwargs: Any) -> None:
+        method = self._stream_to_file_via_proxy()
+        if method is not None:
+            try:
+                await method(self, *args, **kwargs)
+            except BaseException as exc:
+                _finish_on_exit(self, exc)
+                raise
+            return
         await self._consume_body("stream_to_file", *args, **kwargs)
 
     async def parse(self, *args: Any, **kwargs: Any) -> Any:
