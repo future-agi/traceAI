@@ -25,10 +25,10 @@ function run(mode: string, preload?: string) {
       else assert.equal(selected, provider.attachments);
       assert.equal(await selected.ready(100), false);
       assert.equal(selected.status().state, 'disabled');
-      assert.equal(auto.report().attachments.integration, 'component_only');
+      assert.equal(auto.report().attachments.state, 'disabled'); assert.equal(auto.report().attachments.transport, 'shared_manager');
       await auto.forceFlush();
       await auto.shutdown(); await auto.shutdown();
-      assert.equal(selected.status().state, ${JSON.stringify(mode)} === 'owned' ? 'incomplete' : 'disabled');
+      assert.equal(selected.status().state, 'disabled');
       assert.equal(network, 0);
       await manager.shutdown(); await host.shutdown();
       process.stdout.write('LIFECYCLE_OK');

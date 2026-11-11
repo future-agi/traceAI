@@ -3,9 +3,14 @@ import { encodeBytes, byteLength, concatBytes } from "./bytes";
 import { BodyDecoder, decodeResponse, responseEncoding } from "./encoding";
 import { streamingMilestones } from "./stream-timing";
 import type { Span } from "@opentelemetry/api";
+/** Receives only chunks the application already consumed; never pulls. */
+export interface FetchMediaSink { write(chunk: Uint8Array): boolean; end(): void; abort(): void }
 export interface FetchMediaObserver {
-  bind(span: Span): void;
+  /** The wire span, before it ends, with the wire path's own bounded request copy. */
+  bind(span: Span, request?: RequestData): void;
   request(body: BodyInit | null | undefined): void;
+  /** The application started incremental consumption of a response body (reader or async iterator). */
+  consumed?(mimeType: string, successful: boolean, contentLength: number | undefined): FetchMediaSink | undefined;
   materialized(value: unknown, method: "arrayBuffer" | "blob" | "json", mimeType: string, successful: boolean): void;
 }
 export interface FetchContext<T> {
@@ -103,6 +108,58 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
   const observe = scope.observe ?? tap;
   const pending = new Set<Promise<void>>();
   let active = true;
+  /**
+   * A04: forward chunks the application reads from THIS response body (reader `read()` or async-iterator `next()`)
+   * to the media sink, after the application's own promise fulfils. No read, clone, tee or pipe is ever issued here.
+   * The sink opens only when the application starts consuming; piping, teeing or a clone of the body is unsupported
+   * and aborts the object, so nothing partial is uploaded as if complete.
+   */
+  function observeConsumption(response: Response, observer: FetchMediaObserver, mimeType: string, responseHeaders: Record<string, string>): void {
+    let stream: ReadableStream<Uint8Array> | null;
+    try { stream = response.body; } catch { return; }
+    if (!stream) return;
+    const body = stream;
+    let sink: FetchMediaSink | undefined, state: "idle" | "open" | "closed" = "idle";
+    const length = responseHeaders["content-length"];
+    const declared = length && /^\d+$/.test(length) && !header(responseHeaders, "content-encoding") ? Number(length) : undefined;
+    const open = () => {
+      if (state !== "idle" || !active) return;
+      try { sink = observer.consumed!(mimeType, response.ok, declared); } catch { sink = undefined; }
+      state = sink ? "open" : "closed";
+    };
+    const close = (complete: boolean) => {
+      if (state !== "open") { state = "closed"; return; }
+      state = "closed";
+      try { if (complete && active) sink!.end(); else sink!.abort(); } catch { /* Media never reaches the application. */ }
+    };
+    const read = (item: ReadableStreamReadResult<Uint8Array>) => {
+      if (state !== "open") return;
+      if (item.done) { close(true); return; }
+      if (!(item.value instanceof Uint8Array) || !active) { close(false); return; }
+      // The core copies synchronously, so a reused BYOB buffer cannot change uploaded bytes.
+      try { if (!sink!.write(item.value)) close(false); } catch { close(false); }
+    };
+    const readers = new WeakSet<object>();
+    observeMethod(body, "getReader", reader => {
+      if (readers.has(reader)) return; readers.add(reader);
+      open();
+      observeMethod(reader, "read", promise => observe(promise, read, () => close(false)));
+      observeMethod(reader, "cancel", () => close(false));
+      observeMethod(reader, "releaseLock", () => close(false));
+    });
+    const iterator = (it: any) => {
+      if (readers.has(it)) return; readers.add(it);
+      open();
+      observeMethod(it, "next", promise => observe(promise, read, () => close(false)));
+      // An early return (break) leaves the object incomplete, cancelled or not.
+      observeMethod(it, "return", () => close(false));
+    };
+    observeMethod(body, "values", it => iterator(it));
+    observeMethod(body, Symbol.asyncIterator, it => iterator(it));
+    observeMethod(body, "cancel", () => close(false));
+    for (const name of ["tee", "pipeTo", "pipeThrough"]) observeMethod(body, name, () => close(false));
+    observeMethod(response, "clone", () => close(false));
+  }
   const patched = new Proxy(original, {
     apply(target, receiver, argArray: [RequestInfo | URL, RequestInit?]) {
       if (!active) return Reflect.apply(target, receiver, argArray);
@@ -159,12 +216,14 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         const decorate = (response: Response) => {
           if (observed.has(response)) return;
           observed.add(response);
-          const mimeType = header(headersOf(response.headers), "content-type");
+          const responseHeaders = headersOf(response.headers);
+          const mimeType = header(responseHeaders, "content-type");
           for (const method of ["arrayBuffer", "blob", "json"] as const) {
             observeMethod(response, method, promise => observe(promise, value => {
               if (active) observer.materialized(value, method, mimeType, response.ok);
             }, () => {}));
           }
+          if (observer.consumed) observeConsumption(response, observer, mimeType, responseHeaders);
           // Only follow clones explicitly created by the application. Never call clone ourselves.
           observeMethod(response, "clone", clone => decorate(clone));
         };
@@ -179,7 +238,7 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         if (finished) return; finished = true;
         const complete = () => {
           if (audio) { response.audioOutputBytes = audio.bytes; response.body = undefined; }
-          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value) : undefined); } catch { /* Capture must not reach application code. */ }
+          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value, request) : undefined); } catch { /* Capture must not reach application code. */ }
           finally { resolve(); pending.delete(done); }
         };
         // Only completed responses awaiting bounded decoding are flushable, never unread streams.

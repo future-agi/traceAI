@@ -3,7 +3,7 @@ import { autoModelResponsibility, autoModelWireAllowed, hasAutoModelCoverage } f
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { createFetchHook } from "./fetch-runtime";
 import type { AttachmentManager } from "@traceai/fi-core/attachments";
-import { wireAttachmentObserver } from "./attachments";
+import { attachmentsActive, wireAttachmentObserver } from "./attachments";
 import { decodeNodeBody } from "./encoding-node";
 import { observePromise, preparePromiseObservation } from "./promise-node";
 import type { SpanResult } from "./core";
@@ -39,8 +39,11 @@ export function shouldSkip(ctx: Context, consultOperation = true): boolean {
 }
 export function patchFetch(max: number, emit: (result: SpanResult, parent: Context, start: number, end: number, bindMedia?: (span: Span) => void) => void, secrets: string[] = [], attachments?: AttachmentManager) {
   preparePromiseObservation();
-  return createFetchHook(max, emit, { active: () => context.active(), skip: parent => attachments ? isTracingSuppressed(parent) || !!parent.getValue(IN_FLIGHT) : shouldSkip(parent, false),
-    media: attachments ? (parent, method, url) => wireAttachmentObserver(attachments, parent, method, url) : undefined,
+  // With attachments OFF (the default) both decisions are exactly the pre-attachment ones. When ON, a call that
+  // native coverage keeps out of wire spans still reaches media observation; span capture keeps its own gate below.
+  return createFetchHook(max, emit, { active: () => context.active(),
+    skip: parent => attachmentsActive(attachments) ? isTracingSuppressed(parent) || !!parent.getValue(IN_FLIGHT) : shouldSkip(parent, false),
+    media: attachments ? (parent, method, url) => attachmentsActive(attachments) ? wireAttachmentObserver(attachments, parent, method, url) : undefined : undefined,
     // Same context decision, now after supported URL matching. Only the emit
     // completion boundary can commit wire; credential observation stays separate.
     capture: parent => wireAllowed(parent, "request"), observe: observePromise, observeRequest: observeOutgoing,
