@@ -617,9 +617,46 @@ def _usage_attributes(metrics: Any) -> Iterator[Tuple[str, Any]]:
 
 
 class _ModelWrapper:
-    def __init__(self, tracer: trace_api.Tracer, *, hide_inputs: bool = False) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *,
+        hide_inputs: bool = False,
+        attachments: Any = None,
+        trace_configs: Tuple[Any, ...] = (),
+    ) -> None:
         self._tracer = tracer
         self._hide_inputs = hide_inputs
+        # The shared, provider-owned attachment manager (already checked active), or None.
+        # trace_configs are the FI and OpenInference configs: either one hiding wins.
+        self._attachments = attachments
+        self._trace_configs = trace_configs
+
+    def _capture_input(self, span: Any, arguments: Mapping[str, Any]) -> None:
+        # Before the provider call, so a provider instrumentor sharing the manager reuses it.
+        if self._attachments is None:
+            return
+        try:
+            from traceai_agno._attachments import capture_agno_input
+
+            capture_agno_input(
+                self._attachments, span, arguments.get("messages"),
+                trace_configs=self._trace_configs,
+            )
+        except Exception:
+            pass
+
+    def _capture_output(self, span: Any, response: Any) -> None:
+        if self._attachments is None:
+            return
+        try:
+            from traceai_agno._attachments import capture_agno_output
+
+            capture_agno_output(
+                self._attachments, span, response, trace_configs=self._trace_configs
+            )
+        except Exception:
+            pass
 
     def run(
         self,
@@ -657,10 +694,12 @@ class _ModelWrapper:
             span.set_attribute(LLM_PROVIDER, model.provider)
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
+            self._capture_input(span, arguments)
 
             with span_scope(span, _invocation_context(instance, "invoke", wrapped)):
                 response = wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
+            self._capture_output(span, response)
             span.set_attributes(dict(_output_value_and_mime_type(output_message)))
 
             span.set_attributes(
@@ -708,6 +747,7 @@ class _ModelWrapper:
             span.set_attribute(LLM_PROVIDER, model.provider)
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
+            self._capture_input(span, arguments)
             # Token usage will be set after streaming completes based on final response
 
             responses = []
@@ -769,10 +809,12 @@ class _ModelWrapper:
             span.set_attribute(LLM_PROVIDER, model.provider)
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
+            self._capture_input(span, arguments)
 
             with span_scope(span, _invocation_context(instance, "ainvoke", wrapped)):
                 response = await wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
+            self._capture_output(span, response)
 
             span.set_attributes(
                 dict(_usage_attributes(getattr(response, "response_usage", None)))
@@ -822,6 +864,7 @@ class _ModelWrapper:
             span.set_attribute(LLM_PROVIDER, model.provider)
             if llm_system := _get_llm_system(model):
                 span.set_attribute(LLM_SYSTEM, llm_system)
+            self._capture_input(span, arguments)
             # Token usage will be set after streaming completes based on final response
 
             responses = []

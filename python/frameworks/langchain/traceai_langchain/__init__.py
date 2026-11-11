@@ -35,6 +35,23 @@ __all__ = [
 _MODULE = "langchain_core"
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for LangChain
@@ -63,7 +80,11 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-        self._tracer: Optional[LangChainFiTracer] = LangChainFiTracer(self.fi_tracer)
+        self._tracer: Optional[LangChainFiTracer] = LangChainFiTracer(
+            self.fi_tracer,
+            attachments=_attachment_manager(kwargs),
+            trace_config=config,
+        )
         self._original_callback_manager_init = BaseCallbackManager.__init__
         wrap_function_wrapper(
             module="langchain_core.callbacks",

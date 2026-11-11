@@ -20,6 +20,23 @@ from wrapt import wrap_function_wrapper
 logger.addHandler(logging.NullHandler())
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for LlamaIndex
@@ -83,7 +100,9 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             from ._handler import EventHandler, instrument_workflow_runs
             from ._stream import StreamInstrumentation
 
-            self._event_handler = EventHandler(tracer=tracer, config=config)
+            self._event_handler = EventHandler(
+                tracer=tracer, config=config, attachments=_attachment_manager(kwargs)
+            )
             self._span_handler = self._event_handler._span_handler
             dispatcher = get_dispatcher()
             for span_handler in dispatcher.span_handlers:

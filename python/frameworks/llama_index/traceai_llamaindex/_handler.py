@@ -241,6 +241,7 @@ class _Span(BaseSpan):
     _cancel_reason: Optional[str] = PrivateAttr()
     _workflow_run: bool = PrivateAttr()
     _run_handler: Any = PrivateAttr()
+    _attachments: Any = PrivateAttr()
 
     def __init__(
         self,
@@ -248,9 +249,12 @@ class _Span(BaseSpan):
         config: Optional[TraceConfig] = None,
         span_kind: Optional[str] = None,
         parent: Optional["_Span"] = None,
+        attachments: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+        # The shared, provider-owned attachment manager (already checked active), or None.
+        self._attachments = attachments
         self._config = config if config is not None else TraceConfig()
         self._otel_span = otel_span
         self._active = otel_span.is_recording()
@@ -650,6 +654,8 @@ class _Span(BaseSpan):
             GEN_AI_INPUT_MESSAGES,
             *event.messages,
         )
+        # Before the provider call, so a provider instrumentor sharing the manager reuses it.
+        self._capture_media(event.messages, "input")
         self[INPUT_VALUE] = safe_json_dumps(event.messages)
         self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
@@ -667,6 +673,7 @@ class _Span(BaseSpan):
             GEN_AI_OUTPUT_MESSAGES,
             response.message,
         )
+        self._capture_media([response.message], "output")
         self[OUTPUT_VALUE] = safe_json_dumps(
             {
                 "message": _to_dict(response.message),
@@ -823,6 +830,20 @@ class _Span(BaseSpan):
                             f"{prefix}.{i}.{MESSAGE_CONTENTS}.{index}.{MESSAGE_CONTENT_AUDIO}"
                         ] = (block.audio or block.path or block.url)
 
+    def _capture_media(self, messages: Any, direction: str) -> None:
+        if self._attachments is None or not self._active:
+            return
+        try:
+            from ._attachments import capture_llamaindex_messages
+
+            capture_llamaindex_messages(
+                self._attachments, self._otel_span, list(messages or ()),
+                direction=direction, trace_config=self._config,
+            )
+        except Exception:
+            # Media observation must never affect the call or log source-bearing data.
+            pass
+
     def _process_query_type(self, query: Optional[QueryType]) -> None:
         if query is None:
             return
@@ -956,9 +977,13 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
     _otel_tracer: Tracer = PrivateAttr()
     _config: TraceConfig = PrivateAttr()
     _export_queue: _ExportQueue = PrivateAttr()
+    _attachments: Any = PrivateAttr()
 
-    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
+    def __init__(
+        self, tracer: Tracer, config: Optional[TraceConfig] = None, attachments: Any = None
+    ) -> None:
         super().__init__()
+        self._attachments = attachments
         self._config = config if config is not None else TraceConfig()
         self._otel_tracer = tracer
         self._export_queue = _ExportQueue()
@@ -994,6 +1019,7 @@ class _SpanHandler(BaseSpanHandler[_Span], extra="allow"):
             config=self._config,
             span_kind=_init_span_kind(instance),
             parent=parent,
+            attachments=self._attachments,
             id_=id_,
             parent_id=parent_span_id,
         )
@@ -1234,9 +1260,11 @@ def uninstrument_workflow_runs(patched: Iterable[Tuple[type, str]]) -> None:
 class EventHandler(BaseEventHandler, extra="allow"):
     _span_handler: _SpanHandler = PrivateAttr()
 
-    def __init__(self, tracer: Tracer, config: Optional[TraceConfig] = None) -> None:
+    def __init__(
+        self, tracer: Tracer, config: Optional[TraceConfig] = None, attachments: Any = None
+    ) -> None:
         super().__init__()
-        self._span_handler = _SpanHandler(tracer=tracer, config=config)
+        self._span_handler = _SpanHandler(tracer=tracer, config=config, attachments=attachments)
 
     def handle(self, event: BaseEvent, **kwargs: Any) -> Any:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):

@@ -22,6 +22,27 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("pydantic-ai >= 0.0.1",)
 
 
+def _attachment_binding(kwargs, config):
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    if not active(manager):
+        return None
+    from ._attachments import PydanticAIMedia
+
+    return PydanticAIMedia(manager, config)
+
+
 class PydanticAIInstrumentor(BaseInstrumentor):
     """OpenTelemetry Instrumentor for Pydantic AI.
 
@@ -67,6 +88,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         self._execution_patches = []
         self._legacy_usage_original = None
         self._use_builtin: bool = False
+        self._media = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
         """Return the instrumentation dependencies."""
@@ -105,6 +127,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
 
         # Retain the option for compatibility, but never bypass FI's policy.
         self._use_builtin = kwargs.get("use_builtin", False)
+        self._media = _attachment_binding(kwargs, config)
 
         # Try to import and patch Pydantic AI
         try:
@@ -198,7 +221,8 @@ class PydanticAIInstrumentor(BaseInstrumentor):
                 if callable(original) and not getattr(original, "__isabstractmethod__", False):
                     self._install_execution_patch(
                         cls, name, wrap_model_request(
-                            original, self._tracer, streaming=name == "request_stream"))
+                            original, self._tracer, streaming=name == "request_stream",
+                            media=self._media))
             for subclass in cls.__subclasses__():
                 patch_model(subclass)
 
@@ -223,11 +247,12 @@ class PydanticAIInstrumentor(BaseInstrumentor):
             from pydantic_ai.tools import Tool
             if isinstance(Tool, type) and hasattr(Tool, "run"):
                 self._install_execution_patch(
-                    Tool, "run", wrap_tool_call(Tool.run, self._tracer, legacy=True))
+                    Tool, "run", wrap_tool_call(Tool.run, self._tracer, legacy=True, media=self._media))
         else:
             if isinstance(FunctionToolset, type):
                 self._install_execution_patch(
-                    FunctionToolset, "call_tool", wrap_tool_call(FunctionToolset.call_tool, self._tracer))
+                    FunctionToolset, "call_tool",
+                    wrap_tool_call(FunctionToolset.call_tool, self._tracer, media=self._media))
 
     def _install_execution_patch(self, cls, name, replacement):
         original = cls.__dict__.get(name)
@@ -394,6 +419,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         self._restore_execution_methods()
         self._is_instrumented = False
         self._tracer = None
+        self._media = None
 
         logger.info("Pydantic AI instrumentation disabled")
 
@@ -476,6 +502,7 @@ def instrument_pydantic_ai(
     tracer_provider: Optional[Any] = None,
     use_builtin: bool = False,
     config: Optional[TraceConfig] = None,
+    attachments: Optional[Any] = None,
 ) -> PydanticAIInstrumentor:
     """Convenience function to instrument Pydantic AI.
 
@@ -483,6 +510,8 @@ def instrument_pydantic_ai(
         tracer_provider: Optional OpenTelemetry tracer provider
         use_builtin: Deprecated compatibility flag; uses FI-aware wrappers
         config: Content privacy policy; defaults resolve from the environment
+        attachments: The provider-owned attachment manager
+            (``register(...).attachment_manager``); media is captured only when enabled
 
     Returns:
         The instrumentor instance
@@ -503,6 +532,8 @@ def instrument_pydantic_ai(
         kwargs["use_builtin"] = use_builtin
     if config is not None:
         kwargs["config"] = config
+    if attachments is not None:
+        kwargs["attachments"] = attachments
 
     instrumentor.instrument(**kwargs)
     return instrumentor

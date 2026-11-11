@@ -178,8 +178,18 @@ class FiTracer(BaseTracer):
         except Exception as e:
             logger.exception(f"Error sending span data to API: {e}")
 
-    def __init__(self, fi_tracer: "FITracer", *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        fi_tracer: "FITracer",
+        *args: Any,
+        attachments: Any = None,
+        trace_config: Optional[TraceConfig] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
+        # The shared, provider-owned attachment manager (already checked active), or None.
+        self._attachments = attachments
+        self._attachment_config = trace_config
         if TYPE_CHECKING:
             # check that `run_map` still exists in parent class
             assert self.run_map
@@ -239,6 +249,9 @@ class FiTracer(BaseTracer):
         # token = context_api.attach(context)
         with self._lock:
             self._spans_by_run[run.id] = span
+        # Chat-model input media is captured BEFORE the provider call, so a provider
+        # instrumentor sharing the manager reuses this upload instead of a second one.
+        self._capture_media(span, run, "input")
 
         # Send initial span data with input
         input_data = None
@@ -279,6 +292,9 @@ class FiTracer(BaseTracer):
                     is_interrupt=is_interrupt,
                     error=error,
                 )
+                # Never from a failed run: its outputs can carry provider error bodies.
+                if run.error is None:
+                    self._capture_media(span, run, "output")
 
                 # Send final span data with both input and output
                 output_data = None
@@ -305,6 +321,22 @@ class FiTracer(BaseTracer):
 
     def _persist_run(self, run: Run) -> None:
         pass
+
+    def _capture_media(self, span: Span, run: Run, direction: str) -> None:
+        if self._attachments is None or run.run_type != "llm":
+            return
+        try:
+            from traceai_langchain._attachments import capture_langchain_messages, run_messages
+
+            messages = run_messages(run, direction)
+            if messages:
+                capture_langchain_messages(
+                    self._attachments, span, messages, direction=direction,
+                    trace_config=self._attachment_config,
+                )
+        except Exception:
+            # Media observation must never affect the run or log source-bearing data.
+            pass
 
     def _handle_error(
         self,
