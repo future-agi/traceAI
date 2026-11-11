@@ -14,9 +14,11 @@ export type ElevenLabsInputAudioMimeType =
 // A bounded complete-response path for convertWithTimestamps (one JSON value).
 const MAX_DECODED_BYTES = 256 * 1024;
 /**
- * Consumed-stream cap. The manager reserves the whole cap when a stream is admitted, so it
- * also bounds per-call memory. About 4.4 minutes of the SDK's default 128 kbit/s MP3. A longer
- * response uploads nothing (`too_large`); a truncated object is never uploaded as complete.
+ * Requested consumed-stream cap: about 4.4 minutes of the SDK's default 128 kbit/s MP3. The
+ * manager reserves min(this, the server's single-upload limit, its owned budget) when a stream is
+ * admitted, so a server whose `max_upload_bytes` is below 4 MiB still admits the stream with a
+ * smaller cap. The reservation bounds per-call memory. A response above the effective cap uploads
+ * nothing (`too_large`); a truncated object is never uploaded as complete.
  */
 export const ELEVENLABS_STREAM_MAX_BYTES = 4 * 1024 * 1024;
 const INPUT_TYPES: readonly string[] = [

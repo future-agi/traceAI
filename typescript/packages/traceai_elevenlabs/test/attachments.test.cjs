@@ -6,6 +6,7 @@ const { attachmentFixture, wav } = require('./attachments-fixture.cjs');
 const { SpeechAttachments } = require('../dist/src/attachments.js');
 const { generateTraceConfig } = require('@traceai/fi-core');
 const tone = readFileSync(require('node:path').join(__dirname, 'fixtures/tone.mp3'));
+const MiB = 1024 * 1024;
 
 for (const sdkName of ['@elevenlabs/sdk-floor', '@elevenlabs/elevenlabs-js']) {
   const SDK = require(sdkName);
@@ -83,6 +84,21 @@ for (const sdkName of ['@elevenlabs/sdk-floor', '@elevenlabs/elevenlabs-js']) {
       assert.equal(a.requests[0].mime_type, 'audio/mpeg'); assert.equal(a.requests[0].direction, 'output');
       assert.equal(a.requests[0].declared_bytes, tone.length);
       assert.equal(a.requests[0].association.parent.span_id, span.spanContext().spanId);
+    });
+  }
+
+  for (const method of ['convert', 'stream']) {
+    test(`${sdkName}: a server single-upload limit below 4 MiB still admits and uploads a consumed ${method}`, async t => {
+      // The stream reserves min(4 MiB, max_upload_bytes); before the core clamp this was denied too_large.
+      const a = await attachmentFixture({}, {}, { max_upload_bytes: MiB }); t.after(() => a.close());
+      const f = await fixture(SDK, { attachments: a.manager }, { audio: tone }); t.after(() => f.close());
+      const received = await bytes(await f.client.textToSpeech[method]('voice', { text: 'synthetic' }));
+      assert.deepEqual(Buffer.from(received), tone);
+      await a.manager.flush();
+      assert.equal(f.spans()[0].attributes['elevenlabs.attachment.output'], 'queued');
+      assert.equal(a.uploaded.length, 1); assert.deepEqual(a.uploaded[0], tone);
+      assert.equal(a.requests[0].declared_bytes, tone.length);
+      assert.equal(a.manager.status().ownedBytes, 0);
     });
   }
 
@@ -203,4 +219,51 @@ test('a stream above the cap uploads nothing (too_large) and returns its reserva
   await a.manager.flush();
   assert.equal(a.uploaded.length, 0); assert.equal(attrs['elevenlabs.attachment.output'], 'too_large');
   assert.equal(a.manager.status().ownedBytes, 0);
+});
+
+let spans = 0;
+function syntheticSpan(attrs = {}) {
+  const spanId = (++spans).toString(16).padStart(16, '0');
+  return { spanContext: () => ({ traceId: '0123456789abcdef0123456789abcdef', spanId, traceFlags: 1 }),
+    isRecording: () => true, setAttribute(k, v) { attrs[k] = v; } };
+}
+
+test('a server limit below 4 MiB caps the stream there: exactly the limit uploads, one byte more is too_large', async t => {
+  const a = await attachmentFixture({}, {}, { max_upload_bytes: MiB }); t.after(() => a.close());
+  const fits = {}, over = {};
+  const ok = new SpeechAttachments(a.manager, syntheticSpan(fits), generateTraceConfig(), undefined);
+  ok.chunk(new Uint8Array(MiB - 1)); ok.chunk(new Uint8Array(1)); ok.close('complete');
+  const big = new SpeechAttachments(a.manager, syntheticSpan(over), generateTraceConfig(), undefined);
+  big.chunk(new Uint8Array(MiB)); big.chunk(new Uint8Array(1)); big.close('complete');
+  await a.manager.flush();
+  assert.equal(fits['elevenlabs.attachment.output'], 'queued');
+  assert.equal(over['elevenlabs.attachment.output'], 'too_large');
+  assert.equal(a.uploaded.length, 1); assert.equal(a.uploaded[0].length, MiB);
+  assert.equal(a.requests.length, 1);
+  assert.equal(a.manager.status().ownedBytes, 0);
+});
+
+test('concurrency: about 7 open 4 MiB streams fit the owned budget; the 8th is queue_full; a 1 MiB server limit fits more', async t => {
+  const { ELEVENLABS_STREAM_MAX_BYTES } = require('../dist/src/attachments.js');
+  const open = async (serverLimits, n) => {
+    const a = await attachmentFixture({}, {}, serverLimits); t.after(() => a.close());
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const attrs = {};
+      const capture = new SpeechAttachments(a.manager, syntheticSpan(attrs), generateTraceConfig(), undefined);
+      capture.chunk(new Uint8Array(1)); // admission happens at the first observed chunk
+      out.push({ capture, attrs });
+    }
+    return { a, out };
+  };
+  const wide = await open({}, 8);
+  assert.equal(ELEVENLABS_STREAM_MAX_BYTES, 4 * MiB);
+  assert.deepEqual(wide.out.map(s => s.attrs['elevenlabs.attachment.output'] ?? 'open'), [...Array(7).fill('open'), 'queue_full']);
+  for (const s of wide.out) s.capture.close('incomplete');
+  assert.equal(wide.a.manager.status().ownedBytes, 0);
+  const narrow = await open({ max_upload_bytes: MiB }, 16);
+  assert.ok(narrow.out.every(s => s.attrs['elevenlabs.attachment.output'] === undefined), 'every 1 MiB reservation admitted');
+  for (const s of narrow.out) s.capture.close('incomplete');
+  await narrow.a.manager.flush();
+  assert.equal(narrow.a.uploaded.length, 0); assert.equal(narrow.a.manager.status().ownedBytes, 0);
 });

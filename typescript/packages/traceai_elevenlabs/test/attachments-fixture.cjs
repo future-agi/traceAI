@@ -6,7 +6,7 @@ const ids = [1, 2, 3].map(n => `10000000-0000-4000-8000-00000000000${n}`);
 // Sessions of at least 1 h, so the core's near-expiry renewal never adds a bootstrap here.
 const expiry = () => new Date(Date.now() + 3600000).toISOString();
 
-async function attachmentFixture(config = {}, serverPolicy = {}) {
+async function attachmentFixture(config = {}, serverPolicy = {}, serverLimits = {}) {
   const calls = [], uploaded = [], requests = [], uploads = new Map();
   const policy = { version: 'v1', enabled: true, allowed_sources: ['Bytes', 'Blob'], allowed_modalities: ['audio'],
     require_media_redaction: false, require_metadata_removal: false, allow_unredacted_media_with_text_pii: false,
@@ -23,7 +23,7 @@ async function attachmentFixture(config = {}, serverPolicy = {}) {
           segment_duration_ms: 30000, recording_bytes: 1073741824, recording_duration_ms: 7200000,
           active_transfers: 16, active_recordings: 4, reserved_bytes: 1073741824, validation_jobs: 1024,
           initializations_per_minute: 120, links_per_minute: 1000, upload_bytes_per_second: 1073741824,
-          playback_bytes_per_second: 1073741824, transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5 },
+          playback_bytes_per_second: 1073741824, transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5, ...serverLimits },
         expires_at: expiry(), transfer_modes: ['authenticated_stream'] }));
     } else if (req.url.endsWith('/uploads')) {
       const body = JSON.parse(bytes); requests.push(body);

@@ -125,6 +125,93 @@ test('policy tightened after bind: finalization re-checks before any stat or ope
   assert.equal(binding.status, 'redaction_unavailable'); assert.equal(a.requests.length, 0);
 });
 
+/**
+ * Records every fs call on the session directory made while the binding is still finalizing
+ * (status `session_bound`). The binding assigns its outcome before the SDK's own `_onSessionEnd`
+ * runs, so the SDK's later work is excluded. Covers the binding's lstat and the core scope's
+ * realpath/open (both go through the shared `node:fs` promises object).
+ */
+function watchSessionFs(t, s, binding) {
+  const fsp = require('node:fs/promises');
+  const seen = [];
+  const inDir = p => { try { return String(p).startsWith(s.ctx.sessionDirectory); } catch { return false; } };
+  const wrap = (target, names) => {
+    for (const name of names) {
+      const original = target[name];
+      if (typeof original !== 'function') continue;
+      target[name] = function (p, ...rest) {
+        if (binding.status === 'session_bound' && inDir(p)) seen.push(`${name}:${path.relative(s.ctx.sessionDirectory, String(p)) || '.'}`);
+        return original.call(this, p, ...rest);
+      };
+      t.after(() => { target[name] = original; });
+    }
+  };
+  wrap(fsp, ['lstat', 'stat', 'open', 'realpath', 'readFile', 'readdir', 'opendir', 'access']);
+  wrap(fs, ['lstatSync', 'statSync', 'openSync', 'realpathSync', 'readFileSync', 'readdirSync', 'accessSync', 'createReadStream']);
+  return seen;
+}
+
+test('control: an admitted session end does stat and open audio.ogg (the fs watch sees the binding)', async t => {
+  const a = await attachmentFixture(); t.after(() => a.close());
+  const s = await startedSession(sdk, tracer); t.after(() => s.cleanup());
+  const binding = bindLiveKitSessionRecording(s.session, s.ctx, { manager: a.manager, agents: sdk.agents, ownedRecordingFiles: true });
+  const seen = watchSessionFs(t, s, binding);
+  await endSession(s);
+  assert.equal(binding.status, 'validating');
+  assert.ok(seen.includes('lstat:audio.ogg'), `seen: ${seen.join(',')}`);
+  assert.ok(seen.includes('open:audio.ogg'), `seen: ${seen.join(',')}`);
+  assert.equal(a.uploaded.length, 1);
+});
+
+for (const [name, tighten, expected] of [
+  ['manager PII redaction enabled', a => a.manager.updatePolicy({ traceConfig: { piiRedaction: true } }), 'redaction_unavailable'],
+  ['manager output hidden', a => a.manager.updatePolicy({ traceConfig: { hideOutputs: true } }), 'policy_denied'],
+  ['manager disabled', a => a.manager.updatePolicy({ enabled: false }), 'disabled'],
+  ['environment kill switch flipped', (a, env) => { env.FI_ATTACHMENTS_ENABLED = 'false'; }, 'disabled'],
+  ['manager invalidated (revoked)', a => a.manager.invalidate('policy_denied'), 'policy_denied'],
+]) {
+  for (const removeFile of [false, true]) {
+    test(`session-end deny before any stat or open: ${name}${removeFile ? ', recording removed' : ''} -> ${expected}`, async t => {
+      const env = {};
+      const a = await attachmentFixture({ environment: () => env }); t.after(() => a.close());
+      const s = await startedSession(sdk, tracer); t.after(() => s.cleanup());
+      const binding = bindLiveKitSessionRecording(s.session, s.ctx, { manager: a.manager, agents: sdk.agents, ownedRecordingFiles: true });
+      assert.equal(binding.status, 'session_bound', 'admitted at bind');
+      const seen = watchSessionFs(t, s, binding);
+      await s.recorder.close();
+      tighten(a, env);
+      // A removed file would make a stat-first order report source_unavailable instead of the policy reason.
+      if (removeFile) fs.rmSync(s.file);
+      await endSession(s, { closeRecorder: false });
+      assert.equal(binding.status, expected);
+      assert.deepEqual(seen, [], 'no stat, open or realpath of the session directory before the deny');
+      await a.manager.flush().catch(() => undefined);
+      assert.equal(a.requests.length, 0); assert.equal(a.uploaded.length, 0);
+      assert.deepEqual(s.session._recordedEvents, [], 'the SDK _onSessionEnd still ran');
+    });
+  }
+}
+
+test('a recording file owned by another user is rejected (source_unavailable), nothing uploaded', async t => {
+  // Only root can hand a file to another uid; CI and the qualification VM run this suite as root.
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) {
+    t.diagnostic('SKIPPED: needs uid 0 to chown the recording to another user');
+    t.skip('needs uid 0'); return;
+  }
+  const a = await attachmentFixture(); t.after(() => a.close());
+  const s = await startedSession(sdk, tracer); t.after(() => s.cleanup());
+  const binding = bindLiveKitSessionRecording(s.session, s.ctx, { manager: a.manager, agents: sdk.agents, ownedRecordingFiles: true });
+  assert.equal(binding.status, 'session_bound');
+  await s.recorder.close();
+  fs.chownSync(s.file, 65534, 65534);
+  const info = fs.lstatSync(s.file);
+  assert.ok(info.isFile() && info.nlink === 1 && info.uid === 65534, 'only the owner differs');
+  await endSession(s, { closeRecorder: false });
+  assert.equal(binding.status, 'source_unavailable');
+  await a.manager.flush(); assert.equal(a.requests.length, 0); assert.equal(a.uploaded.length, 0);
+  assert.ok(fs.existsSync(s.file), 'the binding never deletes the recording');
+});
+
 for (const [name, mutate] of [
   ['report absent (no recorder)', s => { s.session._recorderIO = undefined; }],
   ['recording replaced by a symlink', s => { const other = path.join(s.ctx.sessionDirectory, 'other.ogg'); fs.renameSync(s.file, other); fs.symlinkSync(other, s.file); }],

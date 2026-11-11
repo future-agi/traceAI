@@ -167,6 +167,12 @@ export class LiveKitSessionRecording {
     const session = this.session!, job = this.job!, root = this.root!;
     const denial = nativeDenial(session, job, this.env);
     if (denial) return denial;
+    // The manager policy is checked again FIRST at session end, before the SDK report is built and
+    // before any stat or open of the session directory: a policy tightened mid-session wins.
+    const ticket = this.manager.preflight(this.correlation, { mimeType: "audio/ogg", direction: "mixed", maxBytes: 1,
+      operation: "import_existing", sourceKind: "OwnedRecordingFile", purpose: "conversation_recording", capture: this.capture });
+    ticket.release();
+    if (!ticket.admitted) return ticket.reason;
     // The report path is NOT authority. Only the job's primary session, its SDK recorder (closed)
     // and the SDK's fixed filename under the bound job's session directory are eligible.
     if (job._primaryAgentSession !== session || job.sessionDirectory !== root) return "source_unavailable";
@@ -176,11 +182,6 @@ export class LiveKitSessionRecording {
     const report = job.makeSessionReport!(session);
     if (report?.audioRecordingPath !== expected) return "source_unavailable";
     if (this.stopped) return "incomplete";
-    // Policy is checked again before any stat or open of the session directory.
-    const ticket = this.manager.preflight(this.correlation, { mimeType: "audio/ogg", direction: "mixed", maxBytes: 1,
-      operation: "import_existing", sourceKind: "OwnedRecordingFile", purpose: "conversation_recording", capture: this.capture });
-    ticket.release();
-    if (!ticket.admitted) return ticket.reason;
     const info = await lstat(expected);
     if (this.stopped) return "incomplete";
     if (!info.isFile() || info.nlink !== 1 || (typeof process.getuid === "function" && info.uid !== process.getuid())) return "source_unavailable";
