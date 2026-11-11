@@ -232,9 +232,31 @@ test('OpenAI image error bodies are not treated as generated media', async () =>
 });
 
 test('Local instrumentor privacy restrictions cannot be loosened by a permissive shared manager', async () => {
+  for (const traceConfig of [{ hideInputs: true }, { hideInputMessages: true }, { hideInputText: true }, { piiRedaction: true }]) {
+    const f = await fixture(); try {
+      assert.equal(oa.captureOpenAIAttachments(f.manager, identity(), oaInput(), { operation: 'responses', direction: 'input', traceConfig }).size, 0);
+      assert.equal(an.captureAnthropicAttachments(f.manager, identity(), anInput(), { traceConfig }).size, 0);
+      await f.manager.flush(); assert.equal(f.initialized.length, 0, JSON.stringify(traceConfig));
+    } finally { await f.close(); }
+  }
+  for (const traceConfig of [{ hideOutputs: true }, { piiRedaction: true }]) {
+    const f = await fixture(); try {
+      oa.captureOpenAIAttachments(f.manager, identity(), { data: [{ b64_json: PNG }] }, { operation: 'images', direction: 'output', traceConfig });
+      await f.manager.flush(); assert.equal(f.initialized.length, 0, JSON.stringify(traceConfig));
+    } finally { await f.close(); }
+  }
+  // Image-only restriction: the PDF still uploads, no image (including screenshots) does.
   const f = await fixture(); try {
-    oa.captureOpenAIAttachments(f.manager, identity(), oaInput(), { operation: 'responses', direction: 'input', traceConfig: { hideInputs: true } });
-    an.captureAnthropicAttachments(f.manager, identity(), anInput(), { traceConfig: { piiRedaction: true } });
+    oa.captureOpenAIAttachments(f.manager, identity(), oaInput(), { operation: 'responses', direction: 'input', traceConfig: { hideInputImages: true } });
+    an.captureAnthropicAttachments(f.manager, identity(), anInput(), { traceConfig: { hideInputImages: true } });
+    await f.manager.flush(); assert.deepEqual(f.initialized.map(r => r.mime_type), ['application/pdf', 'application/pdf']);
+  } finally { await f.close(); }
+});
+
+test('Local hideErrorDetails denies Anthropic error tool media even when the manager allows it', async () => {
+  const f = await fixture(); try {
+    an.captureAnthropicAttachments(f.manager, identity(), { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_error', is_error: true, content: [image()] }] }] },
+      { traceConfig: { hideErrorDetails: true } });
     await f.manager.flush(); assert.equal(f.initialized.length, 0);
   } finally { await f.close(); }
 });
