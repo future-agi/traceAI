@@ -51,7 +51,7 @@ jobs:
               langchain-core==0.2.43 llama-index-core==0.12.41 agno==2.7.2
               openinference-instrumentation-agno==1.1.0 pydantic-ai-slim[openai]==0.1.0 openai==1.74.0
               fastapi 'httpx<0.28' 'opentelemetry-api>=1.28,<1.39' 'opentelemetry-sdk>=1.28,<1.39'
-          # Latest releases, including the framework OpenAI integrations for the dedup tests.
+          # Latest releases, including the framework OpenAI integrations for the provider-and-framework tests.
           - name: latest
             python: '3.12'
             sdks: >-
