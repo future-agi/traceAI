@@ -110,8 +110,11 @@ export class ProviderMediaCapture {
     });
   }
 
-  /** Compatible chat messages: inline image URL and typed input_audio only. */
-  compatibleMessages(messages: unknown, dialect: "openai" | "mistral" = "openai"): void {
+  /**
+   * Compatible chat messages: inline image URL, plus typed input_audio for OpenAI-shaped
+   * routes that accept it. Groq chat is image-only, so its audio parts are not advertised or read.
+   */
+  compatibleMessages(messages: unknown, dialect: "openai" | "groq" | "mistral" = "openai"): void {
     this.safely(() => {
       const values = list(messages);
       for (let m = 0; m < Math.min(values.length, MAX_PARTS); m++) {
@@ -124,7 +127,7 @@ export class ProviderMediaCapture {
               const image = dialect === "mistral" ? part.imageUrl ?? part.image_url : part.image_url;
               return typeof image === "string" ? image : record(image).url;
             }, options);
-          } else if (part.type === "input_audio") {
+          } else if (part.type === "input_audio" && dialect === "openai") {
             const audio = record(part.input_audio);
             const mimeType = audio.format === "wav" ? "audio/wav" : audio.format === "mp3" ? "audio/mpeg" : undefined;
             if (mimeType) this.base64(`chat:${m}:${p}`, () => audio.data, { ...options, mimeType });

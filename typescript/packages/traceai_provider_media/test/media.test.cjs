@@ -181,3 +181,15 @@ test('speech routes, manager activity and capability descriptors are explicit', 
   }
   assert.equal(PROVIDER_MEDIA_CAPABILITIES['@traceai/openai'].some(e => e.operation.startsWith('chat')), false);
 });
+
+test('input_audio is captured only for OpenAI-shaped routes that advertise it', async () => {
+  const f = await fixture();
+  try {
+    const audio = [{ content: [{ type: 'input_audio', input_audio: { format: 'wav', data: wav().toString('base64') } }] }];
+    new ProviderMediaCapture({ ...identity, spanId: '0000000000000001' }, { attachments: f.manager }).compatibleMessages(audio, 'groq');
+    new ProviderMediaCapture({ ...identity, spanId: '0000000000000002' }, { attachments: f.manager }).compatibleMessages(audio, 'mistral');
+    await f.manager.flush(); assert.equal(f.uploads.length, 0);
+    new ProviderMediaCapture(identity, { attachments: f.manager }).compatibleMessages(audio);
+    await f.manager.flush(); assert.equal(f.uploads.length, 1); assert.equal(f.uploads[0].request.mime_type, 'audio/wav'); assert.deepEqual(f.uploads[0].data, wav());
+  } finally { await f.close(); }
+});

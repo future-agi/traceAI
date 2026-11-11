@@ -243,7 +243,7 @@ export class GroqInstrumentation extends InstrumentationBase {
         },
       );
       const media = new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig });
-      if (operation === "chat") media.compatibleMessages(body.messages);
+      if (operation === "chat") media.compatibleMessages(body.messages, "groq");
       if (operation === "transcription" || operation === "translation") media.speechInput(body.file);
       const execContext = trace.setSpan(context.active(), span);
       const execPromise = safeExecuteInTheMiddle(
