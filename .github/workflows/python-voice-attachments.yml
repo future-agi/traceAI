@@ -21,12 +21,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.11', '3.12']
+        # Both pinned Pipecat 1.x distributions require Python >=3.11.
+        python: ['3.11', '3.12']
         adapter:
           - {name: pipecat, upstream: pipecat-ai, version: '1.0.0'}
           - {name: pipecat, upstream: pipecat-ai, version: '1.15.0'}
           - {name: livekit, upstream: livekit-agents, version: '1.8.10'}
           - {name: livekit, upstream: livekit-agents, version: '1.8.11'}
+        include:
+          - python: '3.10'
+            adapter: {name: livekit, upstream: livekit-agents, version: '1.8.10'}
+          - python: '3.10'
+            adapter: {name: livekit, upstream: livekit-agents, version: '1.8.11'}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
