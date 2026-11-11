@@ -131,6 +131,19 @@ for (const provider of ['openai', 'anthropic']) {
   });
 }
 
+test('Inline parts are capped at exactly 256 KiB of decoded bytes for both providers', async () => {
+  const f = await fixture(); try {
+    const at = Buffer.alloc(256 * 1024, 7).toString('base64'), over = Buffer.alloc(256 * 1024 + 3, 7).toString('base64');
+    for (const data of [at, over]) {
+      oa.captureOpenAIAttachments(f.manager, identity(), { input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${data}` }] }] }, { operation: 'responses', direction: 'input' });
+      oa.captureOpenAIAttachments(f.manager, identity(), { data: [{ b64_json: data }] }, { operation: 'images', direction: 'output' });
+      an.captureAnthropicAttachments(f.manager, identity(), { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }] });
+    }
+    await f.manager.flush();
+    assert.deepEqual(f.uploaded.map(b => b.length), [262144, 262144, 262144]);
+  } finally { await f.close(); }
+});
+
 test('OpenAI generated images obey output and PII restrictions', async () => {
   for (const traceConfig of [{}, { hideOutputs: true }, { hideOutputMessages: true }, { hideOutputText: true }, { piiRedaction: true }]) {
     const f = await fixture({ traceConfig }); try {
