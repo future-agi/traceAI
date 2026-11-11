@@ -225,7 +225,12 @@ test('discard and async route revocation prevent binary delivery', async t => {
   await f.tracer.flush();
   assert.equal(f.requests.filter(r => r.path === '/upload').length, 0);
   await f.tracer.discard();
-  assert.equal(f.tracer.attachments.status().state, 'policy_denied');
+  // discard() invalidates (policy_denied) and then shuts the provider down; ts-core f0a56b37's shutdown()
+  // overwrites the closed reason with `incomplete`. Either way the runtime is closed and nothing is admitted.
+  assert.ok(['policy_denied', 'incomplete'].includes(f.tracer.attachments.status().state));
+  const turn2 = f.tracer.startTurn({ sessionId: 's', turnId: 't2' });
+  turn2.images([image()], input);
+  assert.equal(f.requests.filter(r => r.path === '/upload').length, 0);
 });
 
 test('status distinguishes requested capture, unsupported sources and unverified scope', () => {
@@ -295,20 +300,27 @@ test('runtime binds the credential to the approved destination origin', () => {
   assert.equal(same.transport.upload, undefined);
 });
 
+// A collectable config: no persistent disable fence exists (ENOENT), so collection is enabled.
+const runtimeConfig = () => ({ agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
+  credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p', generation: 0,
+  hideInputs: false, hideOutputs: false, hideErrorDetails: false,
+  paths: { manifest: path.join(os.tmpdir(), `fi-absent-${process.pid}-${Date.now()}`, 'manifest.json') } });
+
 test('the runtime guard keeps a V1 caller transport versioned and re-checks policy on every wire call', async () => {
-  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
-    credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p',
-    hideInputs: false, hideOutputs: false, hideErrorDetails: false };
   let allowed = true;
   const d = v1();
-  const runtime = agentAttachmentRuntime({ ...config, revalidate: async () => allowed }, { transport: d.transport });
+  const runtime = agentAttachmentRuntime({ ...runtimeConfig(), revalidate: async () => allowed }, { transport: d.transport });
+  assert.notEqual(runtime.enabled, false);
   const methods = ['bootstrap', 'renewSession', 'initialize', 'renewUpload', 'putContent', 'complete', 'abort', 'uploadStatus',
     'putManifest', 'submitImport', 'importStatus'];
   for (const m of methods) assert.equal(typeof runtime.transport[m], 'function', m);
+  // Allowed: the call reaches the V1 delegate unchanged.
+  await runtime.transport.bootstrap({ capture_session_id: 'c' }, 'bs-c-0', new AbortController().signal);
+  assert.deepEqual(d.ops(), ['bootstrap']);
   allowed = false;
   for (const m of methods)
     await assert.rejects(runtime.transport[m](), e => e instanceof AttachmentTransportError && e.code === 'policy_denied', m);
-  assert.deepEqual(d.ops(), [], 'no wire call reaches the delegate after revocation');
+  assert.deepEqual(d.ops(), ['bootstrap'], 'no wire call reaches the delegate after revocation');
   assert.deepEqual(warnings, []);
 });
 
@@ -404,10 +416,7 @@ test('a four-method caller transport still captures, and fi-core flags it once a
     upload: async (_s, _u, data) => { legacyCalls.push('upload'); body = Buffer.from(data); },
     complete: async () => { legacyCalls.push('complete'); },
   };
-  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
-    credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p',
-    hideInputs: false, hideOutputs: false, hideErrorDetails: false };
-  const runtime = agentAttachmentRuntime(config, { enabled: true, transport });
+  const runtime = agentAttachmentRuntime(runtimeConfig(), { enabled: true, transport });
   assert.equal(runtime.transport.putContent, undefined, 'a legacy delegate is not silently upgraded');
   const manager = new AttachmentManager({ ...runtime, environment: () => ({}) });
   t.after(() => manager.shutdown());
