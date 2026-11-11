@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -131,16 +132,19 @@ function audioInput(body: Record<string, unknown>): Record<string, unknown> {
 export class GroqInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
   // Base construction can call enable()/patch() before our constructor runs.
   private manualModules?: Set<Record<string, unknown>>;
   private patches?: Map<Resource, Patch>;
 
-  constructor({ instrumentationConfig, traceConfig }: {
+  constructor({ instrumentationConfig, traceConfig, attachments }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
   } = {}) {
     super("@traceai/groq", VERSION, { ...instrumentationConfig });
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
     this.refreshTracer();
   }
 
@@ -238,6 +242,9 @@ export class GroqInstrumentation extends InstrumentationBase {
           },
         },
       );
+      const media = new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig });
+      if (operation === "chat") media.compatibleMessages(body.messages);
+      if (operation === "transcription" || operation === "translation") media.speechInput(body.file);
       const execContext = trace.setSpan(context.active(), span);
       const execPromise = safeExecuteInTheMiddle(
         () => context.with(execContext, () => original.apply(this, args)),
@@ -251,7 +258,7 @@ export class GroqInstrumentation extends InstrumentationBase {
       );
       // Speech resolves to a binary Response owned by the caller. Record completion
       // at response availability, without reading/cloning the body or logging audio.
-      const output = operation === "chat" ? undefined : operation === "speech" ? () => ({}) : audioResponseAttributes;
+      const output = operation === "chat" ? undefined : operation === "speech" ? (result: unknown) => { media.speechResponse(result); return {}; } : audioResponseAttributes;
       return observeResponse(execPromise, span, execContext, output);
     };
   }

@@ -12,4 +12,6 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"]
+,
+  "references": [{ "path": "../traceai_provider_media" }]
 }

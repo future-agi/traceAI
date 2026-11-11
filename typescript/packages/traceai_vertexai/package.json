@@ -49,7 +49,8 @@
     "@opentelemetry/api": "^1.7.0",
     "@opentelemetry/instrumentation": "^0.46.0",
     "@traceai/fi-core": "workspace:^",
-    "@traceai/fi-semantic-conventions": "workspace:^"
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@traceai/provider-media": "workspace:^"
   },
   "devDependencies": {
     "@google-cloud/vertexai": "^1.0.0",

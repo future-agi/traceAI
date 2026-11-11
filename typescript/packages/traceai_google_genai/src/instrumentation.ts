@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -148,14 +149,17 @@ interface BatchEmbedContentsResponse {
 export class GoogleGenAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
   public readonly instrumentationName = "@traceai/google-genai";
 
   constructor({
     instrumentationConfig,
     traceConfig,
+    attachments,
   }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
   } = {}) {
     super(
       "@traceai/google-genai",
@@ -163,6 +167,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
     // InstrumentationBase calls enable() before our traceConfig is assigned.
     // Rebuild even when the globally registered tracer has not changed, so the
     // first manually or automatically instrumented call honors privacy options.
@@ -223,7 +228,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
         if (typeof original !== "function") return original;
         return function (this: GenerationModelMetadata, ...args: unknown[]) {
           return instrumentation.traceCall(
-            method, this, () => original.apply(this, args),
+            method, this, args[0], () => original.apply(this, args),
             () => {
               // Normalize only for capture. The SDK always receives the original arguments.
               const request = args[0];
@@ -325,6 +330,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
   private traceCall<T>(
     method: string,
     model: { model?: string },
+    request: unknown,
     invoke: () => Promise<T>,
     input: () => Attributes,
     output: (result: T) => Attributes,
@@ -343,6 +349,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
         },
       });
     } catch { return invoke(); }
+    const media = new ProviderMediaCapture(span, { attachments: this.attachments, traceConfig: this._traceConfig });
+    if (method === "generateContent") capture(() => media.geminiContents(normalizeGeneration(request).contents));
     capture(() => span.setAttributes(input()));
     const finish = (failed: boolean) => {
       // Provider errors may echo credentials (including malformed header values).
@@ -361,6 +369,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
       throw error;
     }
     return Promise.resolve(promise).then(result => {
+      if (method === "generateContent") media.geminiResponse(result);
       capture(() => span.setAttributes(output(result)));
       finish(false);
       return result;

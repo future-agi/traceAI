@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -97,10 +98,12 @@ export class BedrockInstrumentation extends InstrumentationBase {
   private fiTracer: FITracer;
   private tracerProvider?: TracerProvider;
   private traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
 
   constructor({
     instrumentationConfig,
     traceConfig,
+    attachments,
     tracerProvider,
   }: {
     /**
@@ -113,6 +116,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
      * @see {@link TraceConfigOptions}
      */
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
     /**
      * An optional custom trace provider to be used for tracing. If not provided, a tracer will be created using the global tracer provider.
      * This is useful if you want to use a non-global tracer provider.
@@ -128,6 +132,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
     );
     this.tracerProvider = tracerProvider;
     this.traceConfig = traceConfig;
+    this.attachments = attachments;
     this.fiTracer = new FITracer({
       tracer:
         this.tracerProvider?.getTracer(INSTRUMENTATION_NAME) ?? this.tracer,
@@ -433,6 +438,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
     const contextAttributes = getAttributesFromContext(context.active());
     span.setAttributes(contextAttributes);
 
+    new ProviderMediaCapture(span, { attachments: this.attachments, traceConfig: this.traceConfig }).bedrockConverse(command.input);
     extractConverseRequestAttributes({ span, command });
 
     try {

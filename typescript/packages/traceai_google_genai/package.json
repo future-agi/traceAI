@@ -41,7 +41,8 @@
     "@opentelemetry/instrumentation": "^0.202.0",
     "@opentelemetry/core": "^2.0.1",
     "@traceai/fi-core": "workspace:^",
-    "@traceai/fi-semantic-conventions": "workspace:^"
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@traceai/provider-media": "workspace:^"
   },
   "peerDependencies": {
     "@google/generative-ai": ">=0.1.0"

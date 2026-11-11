@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import { InstrumentationBase, InstrumentationNodeModuleDefinition } from '@opentelemetry/instrumentation';
 import { context, trace, Context, Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { isTracingSuppressed, suppressTracing } from '@opentelemetry/core';
@@ -5,7 +6,7 @@ import { FITracer, generateTraceConfig, TraceConfigOptions, safelyJSONStringify 
 import { SemanticConventions as S, FISpanKind, MimeType } from '@traceai/fi-semantic-conventions';
 import { VERSION } from './version';
 
-export interface PortkeyInstrumentationConfig {
+export interface PortkeyInstrumentationConfig extends ProviderMediaOptions {
   instrumentationConfig?: Record<string, unknown>;
   traceConfig?: TraceConfigOptions;
 }
@@ -21,10 +22,12 @@ export class PortkeyInstrumentation extends InstrumentationBase {
   // Lazily initialized: InstrumentationBase calls enable() during super().
   private patches?: Patch[];
   private traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
 
   constructor(config: PortkeyInstrumentationConfig = {}) {
     super('@traceai/fi-instrumentation-portkey', VERSION, config.instrumentationConfig || {});
     this.traceConfig = config.traceConfig;
+    this.attachments = config.attachments;
   }
 
   protected init() {
@@ -146,6 +149,7 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     );
     // Portkey Responses delegates to OpenAI internally. Suppress a second provider
     // span, while preserving the Portkey parent across request and stream work.
+    if (operation === "chat") new ProviderMediaCapture(span, { attachments: this.attachments, traceConfig: this.traceConfig }).compatibleMessages(params.messages);
     const exec = suppressTracing(trace.setSpan(context.active(), span));
     const finish = (result: any) => {
       if (result && typeof result[Symbol.asyncIterator] === 'function') {

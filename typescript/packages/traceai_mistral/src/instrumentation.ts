@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -64,11 +65,15 @@ export class MistralInstrumentation extends InstrumentationBase {
   private registrations?: WeakMap<Target, Map<string, Patch>>;
   public readonly instrumentationName = "@traceai/mistral";
 
-  constructor({ instrumentationConfig, traceConfig }: {
+  private attachments?: ProviderMediaOptions["attachments"];
+
+  constructor({ instrumentationConfig, traceConfig, attachments }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
   } = {}) {
     super("@traceai/mistral", VERSION, { ...instrumentationConfig });
+    this.attachments = attachments;
     this.traceConfig = traceConfig;
     this.refreshTracer();
   }
@@ -174,6 +179,7 @@ export class MistralInstrumentation extends InstrumentationBase {
         attributes: inputAttributes(input, operation, instrumentation.resolvedConfig),
       }));
       if (!span) return original.apply(this, args);
+      if (operation === "chat") new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation.resolvedConfig }).compatibleMessages(record(input).messages, "mistral");
       const spanContext = trace.setSpan(context.active(), span);
       let ended = false;
       const finish = (error?: unknown) => {
