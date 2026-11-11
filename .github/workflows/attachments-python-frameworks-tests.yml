@@ -43,20 +43,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Declared floors (ChatMessage blocks need llama-index-core 0.12.3+).
+          # Declared floors (ChatMessage blocks need llama-index-core 0.12.3+). pydantic-ai 0.1.0 imports
+          # opentelemetry._events, which OpenTelemetry API 1.39+ no longer ships; Agno imports fastapi.
           - name: floor
             python: '3.10'
             sdks: >-
               langchain-core==0.2.43 llama-index-core==0.12.41 agno==2.7.2
               openinference-instrumentation-agno==1.1.0 pydantic-ai-slim[openai]==0.1.0 openai==1.74.0
-              'httpx<0.28' 'opentelemetry-sdk>=1.28'
+              fastapi 'httpx<0.28' 'opentelemetry-api>=1.28,<1.39' 'opentelemetry-sdk>=1.28,<1.39'
           # Latest releases, including the framework OpenAI integrations for the dedup tests.
           - name: latest
             python: '3.12'
             sdks: >-
               langchain-core==1.8.0 langchain-openai==1.7.4 llama-index-core==0.14.25
               llama-index-llms-openai==0.8.4 agno==3.1.12 openinference-instrumentation-agno==1.1.0
-              pydantic-ai-slim[openai]==2.67.0
+              pydantic-ai-slim[openai]==2.67.0 fastapi
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
