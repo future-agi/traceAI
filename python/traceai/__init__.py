@@ -60,9 +60,21 @@ _MEDIA_ADAPTERS = {
     "traceai_openai": ("traceai_openai", "openai_attachment_capabilities"),
     "traceai_anthropic": ("traceai_anthropic", "anthropic_attachment_capabilities"),
     "traceai_groq": ("traceai_groq._audio", "groq_attachment_capabilities"),
+    # MCP and agent tool media. MCP and mcp-use capture only through their explicit entry
+    # points (``wrap_mcp_client`` and ``mcp_use_callback`` below): the MCP instrumentor only
+    # propagates context, and mcp-use has a callback, not an instrumentor.
+    "traceai_mcp": ("traceai_mcp", "mcp_attachment_capabilities"),
+    "traceai_mcp_use": ("traceai_mcp_use._attachments", "mcp_use_attachment_capabilities"),
+    "traceai_openai_agents": ("traceai_openai_agents._attachments", "openai_agents_attachment_capabilities"),
+    "traceai_claude_agent_sdk": ("traceai_claude_agent_sdk._attachments", "claude_agent_attachment_capabilities"),
+    "traceai_smolagents": ("traceai_smolagents._attachments", "smolagents_attachment_capabilities"),
+    "traceai_firecrawl": ("traceai_firecrawl._attachments", "firecrawl_attachment_capabilities"),
 }
 # Voice integrations capture only through an explicit session binding (bind_* below).
 _SESSION_BINDINGS = {"traceai_pipecat": "bind_audio_processor", "traceai_livekit": "bind_session"}
+# Integrations with no Instrumentor: enabling one only records it, and the application
+# connects it explicitly (a pipeline processor, a live session, a LangChain callback).
+_EXPLICIT_ONLY = frozenset(("traceai_pipecat", "traceai_livekit", "traceai_mcp_use"))
 
 # Registry of available instrumentors
 _INSTRUMENTOR_REGISTRY: Dict[str, str] = {
@@ -97,6 +109,15 @@ _INSTRUMENTOR_REGISTRY: Dict[str, str] = {
     "instructor": "traceai_instructor",
     "guardrails": "traceai_guardrails",
     "mcp": "traceai_mcp",
+    "mcp_use": "traceai_mcp_use",
+    "mcp-use": "traceai_mcp_use",
+    # Agent frameworks and tools
+    "openai_agents": "traceai_openai_agents",
+    "openai-agents": "traceai_openai_agents",
+    "claude_agent_sdk": "traceai_claude_agent_sdk",
+    "claude-agent-sdk": "traceai_claude_agent_sdk",
+    "smolagents": "traceai_smolagents",
+    "firecrawl": "traceai_firecrawl",
     "pipecat": "traceai_pipecat",
     "livekit": "traceai_livekit",
 }
@@ -115,6 +136,8 @@ _ENTRY_POINTS = {
     "traceai_autogen": "AutogenInstrumentor", "traceai_dspy": "DSPyInstrumentor",
     "traceai_haystack": "HaystackInstrumentor", "traceai_instructor": "InstructorInstrumentor",
     "traceai_guardrails": "GuardrailsInstrumentor", "traceai_mcp": "MCPInstrumentor",
+    "traceai_openai_agents": "OpenAIAgentsInstrumentor", "traceai_claude_agent_sdk": "ClaudeAgentInstrumentor",
+    "traceai_smolagents": "SmolagentsInstrumentor", "traceai_firecrawl": "FirecrawlInstrumentor",
 }
 
 _tracer_provider: Optional[TracerProvider] = None
@@ -284,9 +307,10 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
         # Import the instrumentor package
         module = importlib.import_module(instrumentor_module)
 
-        if lib_name_lower in ("pipecat", "livekit"):
-            # These use native/session integrations, not an Instrumentor. Auto
-            # cannot insert a pipeline processor or guess a live job/session.
+        if instrumentor_module in _EXPLICIT_ONLY:
+            # These use native/session/callback integrations, not an Instrumentor. Auto
+            # cannot insert a pipeline processor, guess a live job/session or attach a
+            # LangChain callback (``mcp_use_callback()`` builds one on the shared manager).
             _adapter_status[lib_name_lower] = "registered"
             return True
         with _init_lock:
@@ -545,6 +569,56 @@ def _bind(library: str, entry_point: str, *args, **kwargs):
     return binding
 
 
+def _explicit_kwargs(library: str, kwargs: dict, provider_key: str, config_key: str) -> dict:
+    """Defaults for an explicit entry point: auto's provider, its trace config and, only
+    while capture is on and the installed package has the media adapter, the ONE manager."""
+    if _tracer_provider is None:
+        raise RuntimeError("initialize traceai before connecting " + library)
+    kwargs.setdefault(provider_key, _tracer_provider)
+    config = getattr(_tracer_provider, "trace_config", None)
+    if config is not None:
+        # Auto's hide and PII flags reach the integration; the caller can pass its own.
+        kwargs.setdefault(config_key, config)
+    if _ATTACHMENTS_SUPPORTED:
+        manager = get_attachment_manager()
+        module = _INSTRUMENTOR_REGISTRY[library]
+        if _capturing(manager) and _media_support(module)["media"] == "provider_adapter":
+            kwargs.setdefault("attachments", manager)
+    return kwargs
+
+
+def mcp_use_callback(**kwargs):
+    """A ``traceai_mcp_use.FutureAGICallback`` on auto's provider and shared manager.
+
+    Pass it to the agent: ``MCPAgent(..., callbacks=[traceai.mcp_use_callback()])``.
+    With attachments off, or an installed ``traceAI-mcp-use`` without the media adapter,
+    it is the same callback as before (no ``attachments=`` argument). Keyword arguments
+    are passed through and win over auto's defaults.
+    """
+    module = importlib.import_module(_INSTRUMENTOR_REGISTRY["mcp_use"])
+    callback = module.FutureAGICallback(**_explicit_kwargs("mcp_use", kwargs, "tracer_provider", "config"))
+    _adapter_status["mcp_use"] = "registered"
+    return callback
+
+
+def wrap_mcp_client(session, **kwargs):
+    """Trace an ``mcp.ClientSession`` with ``traceai_mcp.wrap_mcp_client`` on auto's provider
+    and shared manager, so tool and resource media reach Future AGI.
+
+    The MCP instrumentor only propagates context; this is the entry point that captures
+    media. An installed ``traceAI-mcp`` without ``wrap_mcp_client`` returns the session
+    unchanged and reports ``unsupported_version``.
+    """
+    module = importlib.import_module(_INSTRUMENTOR_REGISTRY["mcp"])
+    wrap = getattr(module, "wrap_mcp_client", None)
+    if wrap is None:
+        _adapter_status["mcp"] = "unsupported_version"
+        return session
+    wrapped = wrap(session, **_explicit_kwargs("mcp", kwargs, "tracer_provider", "trace_config"))
+    _adapter_status.setdefault("mcp", "registered")
+    return wrapped
+
+
 def bind_pipecat_audio_processor(processor, session_context):
     """Observe an existing processor; never start a new recording implicitly."""
     return _bind("pipecat", "bind_audio_processor", processor, session_context)
@@ -568,6 +642,8 @@ __all__ = [
     "with_attachment_ownership",
     "bind_pipecat_audio_processor",
     "bind_livekit_session",
+    "mcp_use_callback",
+    "wrap_mcp_client",
     "instrument",
     "get_tracer_provider",
     "SemanticConvention",

@@ -305,3 +305,171 @@ def test_report_media_rows_are_version_aware_and_content_free(monkeypatch):
     assert rows["anthropic"]["status"] == "not_enabled"
     assert "mistral" not in rows  # aliases share one row
     assert traceai.report()["attachments"]["state"] == "not_initialized"
+
+
+# ------------------------------------------------- MCP and agent media adapters (#693)
+_AGENT_INSTRUMENTORS = {  # registry name -> (module, entry point)
+    "openai_agents": ("traceai_openai_agents", "OpenAIAgentsInstrumentor"),
+    "claude_agent_sdk": ("traceai_claude_agent_sdk", "ClaudeAgentInstrumentor"),
+    "smolagents": ("traceai_smolagents", "SmolagentsInstrumentor"),
+    "firecrawl": ("traceai_firecrawl", "FirecrawlInstrumentor"),
+}
+_MCP_AGENT_DESCRIPTORS = {  # report row name -> (descriptor module, descriptor name)
+    "mcp": ("traceai_mcp", "mcp_attachment_capabilities"),
+    "mcp_use": ("traceai_mcp_use._attachments", "mcp_use_attachment_capabilities"),
+    "openai_agents": ("traceai_openai_agents._attachments", "openai_agents_attachment_capabilities"),
+    "claude_agent_sdk": ("traceai_claude_agent_sdk._attachments", "claude_agent_attachment_capabilities"),
+    "smolagents": ("traceai_smolagents._attachments", "smolagents_attachment_capabilities"),
+    "firecrawl": ("traceai_firecrawl._attachments", "firecrawl_attachment_capabilities"),
+}
+
+
+def test_mcp_and_agent_packages_are_registered_with_explicit_entry_points():
+    for name, (module, entry) in _AGENT_INSTRUMENTORS.items():
+        assert traceai._INSTRUMENTOR_REGISTRY[name] == module
+        assert traceai._ENTRY_POINTS[module] == entry
+    for alias, name in (("openai-agents", "openai_agents"), ("claude-agent-sdk", "claude_agent_sdk"),
+                        ("mcp-use", "mcp_use")):
+        assert traceai._INSTRUMENTOR_REGISTRY[alias] == traceai._INSTRUMENTOR_REGISTRY[name]
+    assert traceai._INSTRUMENTOR_REGISTRY["mcp_use"] == "traceai_mcp_use"
+    # mcp-use has a LangChain callback, not an instrumentor: auto must never guess a class for it.
+    assert "traceai_mcp_use" not in traceai._ENTRY_POINTS
+    assert "traceai_mcp_use" in traceai._EXPLICIT_ONLY
+
+
+@pytest.mark.parametrize("name", sorted(_AGENT_INSTRUMENTORS))
+def test_agent_instrumentors_get_the_shared_manager_and_the_off_kwargs_when_off(monkeypatch, name):
+    module_name, entry = _AGENT_INSTRUMENTORS[name]
+    for env, expected in ((None, "on"), ("false", "off")):
+        if env is None:
+            monkeypatch.delenv("FI_ATTACHMENTS_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("FI_ATTACHMENTS_ENABLED", env)
+        monkeypatch.setattr(traceai, "_tracer_provider", None)
+        monkeypatch.setattr(traceai, "_init_options", None)
+        manager = _enabled_like_manager()
+        provider = SimpleNamespace(attachment_manager=manager, trace_config=TraceConfig())
+        monkeypatch.setattr(traceai, "register", Mock(return_value=provider))
+        constructor = Mock()
+        imported = []
+
+        def import_module(requested, constructor=constructor, imported=imported):
+            imported.append(requested)
+            return SimpleNamespace(**{entry: constructor})
+
+        monkeypatch.setattr(traceai.importlib, "import_module", import_module)
+        traceai.init(project_name="synthetic", auto_instrument=[name], verbose=False)
+        assert imported == [module_name]
+        if expected == "on":
+            constructor.return_value.instrument.assert_called_once_with(
+                tracer_provider=provider, config=provider.trace_config, attachments=manager, attachment_manager=manager)
+        else:  # attachments OFF: exactly the keyword arguments every other instrumentor gets
+            constructor.return_value.instrument.assert_called_once_with(
+                tracer_provider=provider, config=provider.trace_config, attachment_manager=manager,
+                attachment_policy=manager.policy)
+        assert traceai.attachment_status()["adapters"][name] == "registered"
+
+
+def test_enabling_mcp_use_records_it_and_constructs_nothing(monkeypatch):
+    module = SimpleNamespace(FutureAGICallback=Mock(side_effect=AssertionError("constructed a callback")),
+                             SomethingInstrumentor=Mock(side_effect=AssertionError("guessed a class")))
+    monkeypatch.setattr(traceai.importlib, "import_module", Mock(return_value=module))
+    assert traceai._instrument_library("mcp-use", verbose=False)
+    assert traceai.attachment_status()["adapters"]["mcp-use"] == "registered"
+
+
+def test_mcp_and_agent_report_rows_read_each_installed_descriptor(monkeypatch):
+    modules = {}
+    for name, (path, attr) in _MCP_AGENT_DESCRIPTORS.items():
+        modules[path] = SimpleNamespace(**{attr: {"operations": (name + ".output",)}})
+        modules.setdefault(traceai._INSTRUMENTOR_REGISTRY[name], SimpleNamespace())
+
+    def import_module(requested):
+        if requested in modules:
+            return modules[requested]
+        raise ImportError(requested)
+
+    monkeypatch.setattr(traceai, "_installed", lambda module: module in modules)
+    monkeypatch.setattr(traceai.importlib, "import_module", import_module)
+    rows = {row["name"]: row for row in traceai.report()["integrations"]}
+    for name in _MCP_AGENT_DESCRIPTORS:
+        assert rows[name]["media"] == "provider_adapter", name
+        assert rows[name]["media_operations"] == [name + ".output"], name
+        assert rows[name]["status"] == "not_enabled", name
+    for alias in ("mcp-use", "openai-agents", "claude-agent-sdk"):
+        assert alias not in rows  # aliases share one row
+    # An installed package version without the media adapter (no descriptor) is unqualified.
+    for name, (path, _attr) in _MCP_AGENT_DESCRIPTORS.items():
+        saved = modules[path]
+        if path == traceai._INSTRUMENTOR_REGISTRY[name]:
+            modules[path] = SimpleNamespace()  # the package is installed, its descriptor is not
+        else:
+            del modules[path]  # this package version has no _attachments module
+        rows = {row["name"]: row for row in traceai.report()["integrations"]}
+        assert rows[name] == {"name": name, "package": traceai._INSTRUMENTOR_REGISTRY[name],
+                              "status": "not_enabled", "media": "unqualified"}, name
+        modules[path] = saved
+
+
+def _explicit_setup(monkeypatch, manager, config=None, module=None, adapter=True):
+    provider = SimpleNamespace(attachment_manager=manager, trace_config=config or TraceConfig(hide_outputs=True))
+    monkeypatch.setattr(traceai, "_tracer_provider", provider)
+    monkeypatch.setattr(traceai, "_media_support", lambda m: {"media": "provider_adapter" if adapter else "unqualified"})
+    monkeypatch.setattr(traceai.importlib, "import_module", Mock(return_value=module))
+    return provider
+
+
+def test_mcp_use_callback_uses_the_shared_manager_only_while_capturing(monkeypatch):
+    callback_class = Mock()
+    module = SimpleNamespace(FutureAGICallback=callback_class)
+    manager = _enabled_like_manager()
+    provider = _explicit_setup(monkeypatch, manager, module=module)
+    assert traceai.mcp_use_callback() is callback_class.return_value
+    callback_class.assert_called_once_with(tracer_provider=provider, config=provider.trace_config, attachments=manager)
+    assert traceai.attachment_status()["adapters"]["mcp_use"] == "registered"
+    # Caller arguments win over auto's defaults.
+    callback_class.reset_mock()
+    own = TraceConfig()
+    traceai.mcp_use_callback(config=own, redact=["x"])
+    assert callback_class.call_args.kwargs["config"] is own and callback_class.call_args.kwargs["redact"] == ["x"]
+    # Attachments OFF: the callback auto built before (no attachments argument at all).
+    for off in ("env", "disabled", "no_adapter"):
+        callback_class.reset_mock()
+        monkeypatch.delenv("FI_ATTACHMENTS_ENABLED", raising=False)
+        if off == "env":
+            monkeypatch.setenv("FI_ATTACHMENTS_ENABLED", "false")
+            provider = _explicit_setup(monkeypatch, manager, module=module)
+        elif off == "disabled":
+            provider = _explicit_setup(monkeypatch, DisabledAttachmentManager(), module=module)
+        else:
+            provider = _explicit_setup(monkeypatch, manager, module=module, adapter=False)
+        traceai.mcp_use_callback()
+        callback_class.assert_called_once_with(tracer_provider=provider, config=provider.trace_config)
+
+
+def test_wrap_mcp_client_uses_the_shared_manager_and_tolerates_old_packages(monkeypatch):
+    wrap = Mock()
+    manager = _enabled_like_manager()
+    provider = _explicit_setup(monkeypatch, manager, module=SimpleNamespace(wrap_mcp_client=wrap))
+    session = object()
+    assert traceai.wrap_mcp_client(session) is wrap.return_value
+    wrap.assert_called_once_with(session, tracer_provider=provider, trace_config=provider.trace_config,
+                                 attachments=manager)
+    wrap.reset_mock()
+    monkeypatch.setenv("FI_ATTACHMENTS_ENABLED", "false")
+    traceai.wrap_mcp_client(session)
+    wrap.assert_called_once_with(session, tracer_provider=provider, trace_config=provider.trace_config)
+    # An installed traceAI-mcp without wrap_mcp_client: the session comes back untouched.
+    _explicit_setup(monkeypatch, manager, module=SimpleNamespace())
+    assert traceai.wrap_mcp_client(session) is session
+    assert traceai.attachment_status()["adapters"]["mcp"] == "unsupported_version"
+
+
+def test_explicit_entry_points_need_init(monkeypatch):
+    monkeypatch.setattr(traceai, "_tracer_provider", None)
+    monkeypatch.setattr(traceai.importlib, "import_module",
+                        Mock(return_value=SimpleNamespace(FutureAGICallback=Mock(), wrap_mcp_client=Mock())))
+    with pytest.raises(RuntimeError):
+        traceai.mcp_use_callback()
+    with pytest.raises(RuntimeError):
+        traceai.wrap_mcp_client(object())

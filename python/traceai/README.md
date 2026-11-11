@@ -57,11 +57,22 @@ to add a `CapturePolicy` restriction for some calls, and `with_attachment_owners
 mark calls whose media your own code captures, so instrumentors do not upload it again.
 Both return an OpenTelemetry context to attach around those calls.
 
+MCP and agent tool media (screenshots, images, audio, files) uses the same manager:
+
+| Integration | How to enable it |
+|---|---|
+| `openai_agents`, `claude_agent_sdk`, `smolagents`, `firecrawl` | `auto_instrument=[...]` with the name |
+| `mcp` | `session = traceai.wrap_mcp_client(session)` on your `mcp.ClientSession` (the `mcp` instrumentor only propagates context) |
+| `mcp_use` | `MCPAgent(..., callbacks=[traceai.mcp_use_callback()])` (mcp-use has a callback, not an instrumentor) |
+
+Both helpers use the provider and hide flags from `traceai.init`, and pass the shared
+manager only while capture is on.
+
 `traceai.report()` shows the attachment state and, per integration, `media`:
 `provider_adapter` when the installed instrumentor captures media (today `traceAI-openai`,
-`traceAI-anthropic` and `traceAI-groq`), `session_binding` for voice integrations that
-capture only through an explicit `bind_*` call, otherwise `unqualified`. It contains no
-endpoint or credential and is not a playback claim.
+`traceAI-anthropic`, `traceAI-groq` and the six MCP and agent packages above),
+`session_binding` for voice integrations that capture only through an explicit `bind_*`
+call, otherwise `unqualified`. It contains no endpoint or credential and is not a playback claim.
 
 ## License
 

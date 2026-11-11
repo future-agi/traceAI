@@ -17,6 +17,7 @@ on:
       - 'python/frameworks/firecrawl/**'
       - 'python/tests/attachments_mcp_agents/**'
       - 'python/tests/attachments_providers/conftest.py'
+      - 'python/traceai/**'
       - '.github/workflows/attachments-python-mcp-agents-tests.yml'
   push:
     branches: [dev]
@@ -30,6 +31,7 @@ on:
       - 'python/frameworks/firecrawl/**'
       - 'python/tests/attachments_mcp_agents/**'
       - 'python/tests/attachments_providers/conftest.py'
+      - 'python/traceai/**'
       - '.github/workflows/attachments-python-mcp-agents-tests.yml'
   workflow_dispatch:
 
@@ -76,6 +78,10 @@ jobs:
              sdks: 'firecrawl-py==4.46.2'}
           - {package: firecrawl, tier: latest, python: '3.12', path: firecrawl, suite: test_firecrawl_attachments.py,
              sdks: 'firecrawl-py==4.55.0'}
+          # traceai.init enabling all six by name (registry, report rows, capture through auto).
+          - {package: auto, tier: latest, python: '3.12', expect: '1', suite: test_auto_registry.py,
+             path: 'mcp mcp-use openai-agents claude-agent-sdk smolagents firecrawl',
+             sdks: 'mcp==2.3.0 mcp-use==1.7.1 openai-agents==0.24.0 claude-agent-sdk==0.2.180 smolagents==1.26.0 openai pillow firecrawl-py==4.55.0'}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -90,15 +96,16 @@ jobs:
         run: |
           python -m venv .venv
           extra=""
-          if [ -n "$PKG_PATH" ]; then extra="-e python/frameworks/$PKG_PATH"; fi
+          for pkg in $PKG_PATH; do extra="$extra -e python/frameworks/$pkg"; done
           # shellcheck disable=SC2086
           .venv/bin/pip install -e python $extra opentelemetry-sdk 'pytest>=8,<9' 'pytest-asyncio<0.25' packaging $SDKS
           .venv/bin/pip freeze | grep -iE '^(mcp|mcp-use|openai-agents|openai|claude-agent-sdk|smolagents|firecrawl-py|pillow|langchain-core)==' || true
       - name: Run with outbound network disabled
         env:
           SUITE: ${{ matrix.suite }}
+          TRACEAI_EXPECT_MCP_AGENT_ADAPTERS: ${{ matrix.expect || '0' }}
         run: |
-          sudo --preserve-env=MCP_USE_ANONYMIZED_TELEMETRY,MCP_USE_LANGFUSE,MCP_USE_LAMINAR unshare --net -- bash -e -c '
+          sudo --preserve-env=MCP_USE_ANONYMIZED_TELEMETRY,MCP_USE_LANGFUSE,MCP_USE_LAMINAR,TRACEAI_EXPECT_MCP_AGENT_ADAPTERS unshare --net -- bash -e -c '
             ip link set lo up
             cd "$2/python"
             PYTHONPATH=. "$1" -m pytest "tests/attachments_mcp_agents/$3" -q -p no:cacheprovider -o addopts="" \
