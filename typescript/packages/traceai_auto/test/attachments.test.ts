@@ -1,6 +1,8 @@
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { context, trace, ROOT_CONTEXT } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
@@ -100,10 +102,12 @@ beforeEach(async () => {
       if (req.headers["x-attachment-control"]) { control(req, body, res); return; }
       providerRequests++; providerBodies.push(body);
       res.writeHead(responseStatus, { "content-type": responseType });
-      // Several network chunks, so incremental readers see more than one read.
-      const size = Math.ceil(responseData.length / responseChunks);
-      for (let i = 0; i < responseData.length; i += size) res.write(responseData.subarray(i, i + size));
-      res.end();
+      // Several network chunks, spaced so loopback does not coalesce them: incremental readers see several reads.
+      const size = Math.ceil(responseData.length / responseChunks), data = responseData;
+      void (async () => {
+        for (let i = 0; i < data.length; i += size) { res.write(data.subarray(i, i + size)); if (responseChunks > 1) await new Promise(r => setTimeout(r, 15)); }
+        res.end();
+      })();
     });
   });
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done)); origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -363,6 +367,14 @@ describe("A02 ownership and configuration", () => {
 
 describe("real SDKs against loopback", () => {
   const sdk = () => require(process.env.ATT_OPENAI_MODULE || "openai");
+  // The package's exports map hides package.json; walk up from the resolved entry instead.
+  const sdkVersion = (): string => {
+    let dir = dirname(require.resolve(process.env.ATT_OPENAI_MODULE || "openai"));
+    for (let i = 0; i < 8; i++, dir = dirname(dir)) {
+      try { const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")); if (pkg.name === "openai") return pkg.version; } catch { /* keep walking */ }
+    }
+    return "0.0.0";
+  };
   test("OpenAI SDK speech (wire-only) preserves WAV bytes and correlation", async () => {
     const OpenAI = sdk().default ?? sdk().OpenAI;
     install(); const client = new OpenAI({ apiKey: "synthetic-provider-key", fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
@@ -382,7 +394,7 @@ describe("real SDKs against loopback", () => {
   test("OpenAI SDK transcription (wire-only) keeps the multipart request intact and captures nothing", async () => {
     const mod = sdk();
     // openai 4.x sends multipart as a Node stream, which a WHATWG fetch rejects without `duplex` (SDK limitation, not auto).
-    if (Number(require(`${process.env.ATT_OPENAI_MODULE || "openai"}/package.json`).version.split(".")[0]) < 5) return; const OpenAI = mod.default ?? mod.OpenAI; const toFile = mod.toFile;
+    if (Number(sdkVersion().split(".")[0]) < 5) return; const OpenAI = mod.default ?? mod.OpenAI; const toFile = mod.toFile;
     responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}');
     install(); const client = new OpenAI({ apiKey: "synthetic-provider-key", fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
     const result = await client.audio.transcriptions.create({ model: "whisper-1", file: await toFile(audio, "synthetic.wav", { type: "audio/wav" }) });
