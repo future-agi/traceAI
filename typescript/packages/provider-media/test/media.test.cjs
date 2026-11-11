@@ -75,7 +75,7 @@ test('generated Gemini Part uses output restrictions and stays distinct from inp
   }
 });
 
-for (const method of ['arrayBuffer', 'blob', 'unread', 'cancel', 'stream']) test(`speech ${method}: only application whole-body reads capture`, async () => {
+for (const method of ['arrayBuffer', 'blob', 'unread', 'cancel', 'stream']) test(`speech ${method}: only bodies the application consumed to the end capture`, async () => {
   const f = await fixture();
   try {
     const response = new Response(wav(), { headers: { 'content-type': 'audio/wav' } });
@@ -86,7 +86,8 @@ for (const method of ['arrayBuffer', 'blob', 'unread', 'cancel', 'stream']) test
     if (method === 'blob') assert.deepEqual(Buffer.from(await (await response.blob()).arrayBuffer()), wav());
     if (method === 'cancel') await response.body.cancel();
     if (method === 'stream') { const reader = response.body.getReader(); while (!(await reader.read()).done) {} }
-    await f.manager.flush(); assert.equal(f.uploads.length, ['arrayBuffer', 'blob'].includes(method) ? 1 : 0);
+    // A reader the application obtained and read to its end is a consumed stream (SDK design 6.4).
+    await f.manager.flush(); assert.equal(f.uploads.length, ['arrayBuffer', 'blob', 'stream'].includes(method) ? 1 : 0);
     if (f.uploads.length) assert.deepEqual(f.uploads[0].data, wav());
   } finally { await f.close(); }
 });

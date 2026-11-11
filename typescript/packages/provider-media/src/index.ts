@@ -15,6 +15,8 @@ const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const MAX_DECODED_BYTES = 1024 * 1024;
 const MAX_ENCODED_CHARS = Math.ceil(MAX_DECODED_BYTES / 3) * 4;
 const MAX_PARTS = 64;
+// Consumed speech streams have no length up front; the whole cap is reserved while they are read.
+const MAX_SPEECH_STREAM_BYTES = 4 * 1024 * 1024;
 const DATA_URI_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 // Steps 11-12 of the core's preflight order run only after every privacy, identity and
 // sampling check passed, so these two denials still allow sizing the source exactly.
@@ -244,7 +246,12 @@ export class ProviderMediaCapture {
     });
   }
 
-  /** Observe only caller-requested whole-body reads. Unread/cancelled/stream reads upload nothing. */
+  /**
+   * Observe only bytes the caller consumed: whole-body arrayBuffer()/blob() reads, and the
+   * chunks of a reader the caller obtained with response.body.getReader() (SDK design 6.4),
+   * up to the end of the stream. Unread, cancelled, partially read and released bodies upload
+   * nothing, and so do consumers that never call the public getReader() and Node-stream bodies.
+   */
   speechResponse<T>(response: T): T {
     this.safely(() => {
       const target = response as unknown as Response;
@@ -267,6 +274,16 @@ export class ProviderMediaCapture {
           });
         } });
       }
+      // Reading the body property neither locks nor reads the stream.
+      const body = target.body as ReadableStream<Uint8Array> | null;
+      const getReader = body?.getReader;
+      if (body && typeof getReader === "function") {
+        Object.defineProperty(body, "getReader", { configurable: true, writable: true, value: function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
+          const reader = (getReader as (...a: unknown[]) => unknown).apply(this, args);
+          if (this === body) capture.safely(() => capture.observeReader(mimeType, reader));
+          return reader;
+        } });
+      }
     });
     return response;
   }
@@ -283,6 +300,46 @@ export class ProviderMediaCapture {
       this.admit("speech:output", mimeType, "Blob", size, fields,
         () => ({ mimeType, size, take: max => size <= max ? { kind: "Blob", data: blob } : undefined }));
     }
+  }
+
+  /**
+   * Forward each chunk the caller's own read() resolved to a consumed stream (design 6).
+   * Never calls read, clone, tee or getReader itself. A whole stream within the cap
+   * uploads once at its end; anything else uploads nothing.
+   */
+  private observeReader(mimeType: string, reader: unknown): void {
+    const manager = this.manager;
+    const target = reader as { read?: (...a: unknown[]) => Promise<{ done?: boolean; value?: unknown }>; releaseLock?: () => void; cancel?: (...a: unknown[]) => Promise<void> };
+    if (!manager || !this.correlation || typeof manager.startAttachmentStream !== "function" || !target || typeof target.read !== "function" ||
+      this.seen.has("speech:output") || this.locallyDenied(mimeType, "output")) return;
+    // The whole budget is reserved at admission, so a write never fails mid-stream for budget reasons.
+    const stream = manager.startAttachmentStream(this.correlation, { mimeType, direction: "output", purpose: "model_output", maxBytes: MAX_SPEECH_STREAM_BYTES });
+    if (stream.reason !== "queued") return;
+    let open = true;
+    const end = (complete: boolean) => {
+      if (!open) return;
+      open = false;
+      try {
+        if (!complete) stream.abort("incomplete");
+        else if (stream.finish().admission === "queued") this.seen.add("speech:output");
+      } catch { /* bounded */ }
+    };
+    const { read, releaseLock, cancel } = target;
+    const define = (name: string, value: (...a: unknown[]) => unknown) => Object.defineProperty(target, name, { configurable: true, writable: true, value });
+    define("read", function (this: unknown, ...args: unknown[]) {
+      const pending = read.apply(this, args);
+      if (this !== target || !open) return pending;
+      // The caller receives the same result or rejection; chunks are copied by tryWrite.
+      return pending.then(result => {
+        if (open) {
+          if (result?.done) end(true);
+          else if (!(result?.value instanceof Uint8Array) || !stream.tryWrite(result.value)) end(false);
+        }
+        return result;
+      }, error => { end(false); throw error; });
+    });
+    if (typeof releaseLock === "function") define("releaseLock", function (this: unknown) { if (this === target) end(false); return releaseLock.apply(this); });
+    if (typeof cancel === "function") define("cancel", function (this: unknown, ...args: unknown[]) { if (this === target) end(false); return cancel.apply(this, args); });
   }
 
   private safely(fn: () => void): void { if (this.manager) { try { fn(); } catch { /* Content-free fail-open. */ } } }
@@ -318,7 +375,7 @@ export function attachmentsActive(manager: AttachmentManager | undefined): manag
 
 export type ProviderMediaOperation = Readonly<{
   operation: string;
-  sources: readonly ("inline_base64" | "data_uri" | "bytes" | "blob" | "consumed_response")[];
+  sources: readonly ("inline_base64" | "data_uri" | "bytes" | "blob" | "consumed_response" | "consumed_reader")[];
   modalities: readonly ("image" | "audio" | "document")[];
   directions: readonly ("input" | "output")[];
 }>;
@@ -337,11 +394,11 @@ export const PROVIDER_MEDIA_CAPABILITIES: Readonly<Record<string, readonly Provi
   "@traceai/groq": [{ operation: "chat.completions.create", sources: ["data_uri"], modalities: ["image"], directions: ["input"] },
     { operation: "audio.transcriptions.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
     { operation: "audio.translations.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
-    { operation: "audio.speech.create", sources: ["consumed_response"], modalities: ["audio"], directions: ["output"] }],
+    { operation: "audio.speech.create", sources: ["consumed_response", "consumed_reader"], modalities: ["audio"], directions: ["output"] }],
   "@traceai/mistral": [{ operation: "chat.complete", sources: ["data_uri"], modalities: ["image"], directions: ["input"] }],
   "@traceai/portkey": [{ operation: "chat.completions.create", sources: ["data_uri", "inline_base64"], modalities: ["image", "audio"], directions: ["input"] }],
   "@traceai/vllm": [{ operation: "chat.completions.create", sources: ["data_uri", "inline_base64"], modalities: ["image", "audio"], directions: ["input"] }],
   "@traceai/openai": [{ operation: "audio.transcriptions.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
     { operation: "audio.translations.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
-    { operation: "audio.speech.create", sources: ["consumed_response"], modalities: ["audio"], directions: ["output"] }],
+    { operation: "audio.speech.create", sources: ["consumed_response", "consumed_reader"], modalities: ["audio"], directions: ["output"] }],
 });

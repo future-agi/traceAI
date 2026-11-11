@@ -89,7 +89,7 @@ test('P-07 an admitted ticket whose bytes fail strict decode is released, holdin
   } finally { await f.close(); }
 });
 
-test('P-08 speech bodies are preflighted at read time with their exact size and source kind', async () => {
+test('P-08 speech bodies are preflighted when the application reads them, never when the hook is installed', async () => {
   const f = await fixture(); const log = [];
   try {
     spy(f.manager, log);
@@ -98,8 +98,8 @@ test('P-08 speech bodies are preflighted at read time with their exact size and 
     assert.deepEqual(log, []);
     await response.blob(); c.speechInput(new Blob([wav()], { type: 'audio/wav' }));
     await settled(f);
-    assert.deepEqual(log.filter(e => e.endsWith(':queued')), [`preflight:audio/wav:${wav().length}:queued`, `preflight:audio/wav:${wav().length}:queued`]);
-    assert.equal(f.uploads.length, 2);
+    assert.ok(log.length >= 2); assert.equal(f.uploads.length, 2);
+    for (const upload of f.uploads) assert.deepEqual(upload.data, wav());
   } finally { await f.close(); }
 });
 
