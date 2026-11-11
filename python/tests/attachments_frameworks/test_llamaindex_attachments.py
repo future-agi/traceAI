@@ -17,12 +17,13 @@ if not hasattr(types, "ImageBlock"):
     pytest.skip("ChatMessage blocks need llama-index-core 0.12.3+", allow_module_level=True)
 
 from llama_index.core.base.llms.types import (  # noqa: E402
-    AudioBlock, ChatMessage, ChatResponse, CompletionResponse, ImageBlock, LLMMetadata, TextBlock,
+    ChatMessage, ChatResponse, CompletionResponse, ImageBlock, LLMMetadata, TextBlock,
 )
 from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_callback  # noqa: E402
 from llama_index.core.llms.custom import CustomLLM  # noqa: E402
 
 DocumentBlock = getattr(types, "DocumentBlock", None)
+AudioBlock = getattr(types, "AudioBlock", None)
 IMAGE = png(seed=41)
 OUTPUT = png(seed=42)
 
@@ -73,17 +74,21 @@ def test_input_and_output_blocks(f01, instrument):
     manager = f01.manager()
     exporter = instrument(manager)
     llm = MediaLLM(reply_blocks=[TextBlock(text="here"), ImageBlock(image=OUTPUT, image_mimetype="image/png")])
-    blocks = [TextBlock(text="what"), ImageBlock(image=IMAGE, image_mimetype="image/png"),
-              AudioBlock(audio=wav(), format="wav")]
+    blocks = [TextBlock(text="what"), ImageBlock(image=IMAGE, image_mimetype="image/png")]
+    if AudioBlock is not None:
+        blocks.append(AudioBlock(audio=wav(), format="wav"))
     if DocumentBlock is not None:
         blocks.append(DocumentBlock(data=PDF, document_mimetype="application/pdf"))
     llm.chat([ChatMessage(role="user", blocks=blocks)])
     flush(manager)
-    expected = [IMAGE, wav(), OUTPUT] + ([PDF] if DocumentBlock is not None else [])
+    expected = [IMAGE, OUTPUT] + ([wav()] if AudioBlock is not None else []) + \
+        ([PDF] if DocumentBlock is not None else [])
     assert sorted(f01.payloads) == sorted(expected)
     found = {(r["direction"], r.get("message_index"), r.get("part_index"), r["mime_type"])
              for r in chat_refs(exporter)}
-    assert ("input", 0, 1, "image/png") in found and ("input", 0, 2, "audio/wav") in found
+    assert ("input", 0, 1, "image/png") in found
+    if AudioBlock is not None:
+        assert ("input", 0, 2, "audio/wav") in found
     assert ("output", 0, 1, "image/png") in found
     purposes = {body["mime_type"]: body["purpose"] for body in f01.uploads if body["direction"] == "input"}
     assert purposes["image/png"] == "model_input"

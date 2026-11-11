@@ -49,16 +49,33 @@ def test_raw_bytes_and_inline_base64_of_the_same_image_share_one_claim(f01, span
     assert a == b and f01.payloads == [IMAGE]
 
 
-def test_another_trace_uploads_again(f01, spans):
+def test_separate_traces_on_one_manager_share_the_claim(f01, spans):
+    # LangChain and LlamaIndex do not make their span current, so the provider span is a separate root.
     tracer_provider, _ = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
-    with tracer.start_as_current_span("one") as one:
+    with tracer.start_as_current_span("framework") as one:
         a = _inline(manager, one)
-    with tracer.start_as_current_span("two") as two:
+    with tracer.start_as_current_span("provider") as two:
         b = _inline(manager, two)
     flush(manager)
-    assert a != b and f01.payloads == [IMAGE, IMAGE]
+    assert a == b and f01.payloads == [IMAGE]
+
+
+def test_another_manager_or_an_expired_claim_uploads_again(f01, spans, monkeypatch):
+    tracer_provider, _ = spans
+    first, second = f01.manager(), f01.manager()
+    tracer = tracer_provider.get_tracer("t")
+    with tracer.start_as_current_span("s") as span:
+        a = _inline(first, span)
+        b = _inline(second, span)
+    now = mc.time.monotonic()
+    monkeypatch.setattr(mc.time, "monotonic", lambda: now + mc.CLAIM_TTL + 1)
+    with tracer.start_as_current_span("later") as span:
+        c = _inline(first, span)
+    flush(first)
+    flush(second)
+    assert len({a, b, c}) == 3 and f01.payloads == [IMAGE, IMAGE, IMAGE]
 
 
 def test_a_later_observer_denied_by_its_own_policy_gets_nothing(f01, spans):

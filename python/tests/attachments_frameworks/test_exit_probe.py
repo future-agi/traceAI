@@ -18,7 +18,9 @@ PROBE = textwrap.dedent("""
 
     enabled = os.environ["PROBE_ENABLED"] == "1"
     framework = os.environ["PROBE_FRAMEWORK"]
-    before = threading.active_count()
+    def attachment_threads():
+        return {t.ident for t in threading.enumerate() if t.name.startswith("fi-attachment")}
+    before = attachment_threads()
     if enabled:
         transport = HTTPTransport(os.environ["PROBE_F01"], {"X-API-Key": "SYNTHETIC_KEY"},
                                   ssl_context=ssl.create_default_context(cafile=os.environ["PROBE_CERT"]))
@@ -44,14 +46,16 @@ PROBE = textwrap.dedent("""
         from pydantic_ai.messages import ModelResponse, TextPart
         from pydantic_ai.models.function import FunctionModel
         from traceai_pydantic_ai import PydanticAIInstrumentor
-        PydanticAIInstrumentor().instrument(tracer_provider=TracerProvider(), attachments=manager)
+        PydanticAIInstrumentor().instrument(tracer_provider=TracerProvider(), attachments=manager,
+                                            skip_dep_check=True)
         agent = Agent(FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("ok")])))
         def call():
             agent.run_sync(["x", BinaryContent(data=image, media_type="image/png")])
 
     call()
     if not enabled:
-        assert threading.active_count() == before, "disabled attachments started a thread"
+        # Frameworks may start their own threads (event loops, executors); attachments must not.
+        assert attachment_threads() == before, "disabled attachments started a thread"
     if os.environ.get("PROBE_FORK") == "1" and hasattr(os, "fork"):
         pid = os.fork()
         if pid == 0:

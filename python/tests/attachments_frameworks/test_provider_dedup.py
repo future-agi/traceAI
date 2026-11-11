@@ -44,8 +44,12 @@ def sent_image(provider):
     return False
 
 
-def assert_once(f01, manager, provider):
+def assert_once(f01, manager, provider, exporter=None):
     flush(manager)
+    if exporter is not None:
+        # Diagnostic only: LangChain/LlamaIndex spans are not made current, so the provider span may
+        # be a separate trace. The claim is per manager, so the bytes still upload once.
+        print({s.name: format(s.context.trace_id, "032x") for s in exporter.get_finished_spans()})
     assert sent_image(provider), "the framework did not send the image to the provider"
     assert f01.payloads == [IMAGE], len(f01.payloads)
     assert len(f01.uploads) == 1
@@ -69,7 +73,7 @@ def test_langchain_openai(f01, provider, spans, openai_on):
                                             {"type": "image_url", "image_url": {"url": URI}}])])
     finally:
         LangChainInstrumentor().uninstrument()
-    assert_once(f01, manager, provider)
+    assert_once(f01, manager, provider, exporter)
     owners = [s.name for s in exporter.get_finished_spans() if refs(s)]
     assert owners == ["ChatOpenAI"], owners  # the framework span (captured first) owns the occurrence
 
@@ -91,7 +95,7 @@ def test_llamaindex_openai(f01, provider, spans, openai_on):
                                                                                       image_mimetype="image/png")])])
     finally:
         LlamaIndexInstrumentor().uninstrument()
-    assert_once(f01, manager, provider)
+    assert_once(f01, manager, provider, exporter)
 
 
 # ------------------------------------------------------------------ Agno + OpenAIChat
@@ -109,8 +113,12 @@ def test_agno_openai(f01, provider, spans, openai_on, monkeypatch):
     configure_agno_tracing(tracer_provider=tracer_provider, attachments=manager)
     openai_on(manager)
     try:
-        agent = Agent(model=OpenAIChat(id="gpt-4o-mini", api_key="sk-synthetic", base_url=provider.url + "/v1",
-                                       max_retries=0), telemetry=False)
+        model = OpenAIChat(id="gpt-4o-mini", api_key="sk-synthetic", base_url=provider.url + "/v1",
+                           max_retries=0)
+        try:
+            agent = Agent(model=model, telemetry=False)
+        except TypeError:
+            agent = Agent(model=model)
         agent.run("what is this", images=[Image(content=IMAGE, format="png")])
     finally:
         AgnoInstrumentorWrapper().uninstrument()
@@ -131,7 +139,8 @@ def test_pydantic_ai_openai(f01, provider, spans, openai_on):
 
     tracer_provider, exporter = spans
     manager = f01.manager()
-    PydanticAIInstrumentor().instrument(tracer_provider=tracer_provider, attachments=manager)
+    # skip_dep_check: CI installs pydantic-ai-slim, which the instrumentor's "pydantic-ai" requirement does not name.
+    PydanticAIInstrumentor().instrument(tracer_provider=tracer_provider, attachments=manager, skip_dep_check=True)
     openai_on(manager)
     try:
         model = Model("gpt-4o-mini", provider=OpenAIProvider(base_url=provider.url + "/v1", api_key="sk-synthetic"))
@@ -141,15 +150,16 @@ def test_pydantic_ai_openai(f01, provider, spans, openai_on):
     assert_once(f01, manager, provider)
 
 
-def test_without_the_claim_both_spans_would_upload(f01, provider, spans, openai_on, monkeypatch):
-    """Control for the dedup tests: the provider alone uploads the image it sees (claims are per trace)."""
+def test_provider_alone_uploads_the_image(f01, provider, spans, openai_on):
+    """Control: with only traceai_openai on the manager, the provider span uploads the image itself."""
     import openai
 
+    tracer_provider, exporter = spans
     manager = f01.manager()
     openai_on(manager)
     client = openai.OpenAI(api_key="sk-synthetic", base_url=provider.url + "/v1", max_retries=0)
-    for _ in range(2):  # two separate traces
-        client.chat.completions.create(model="m", messages=[{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": URI}}]}])
+    client.chat.completions.create(model="m", messages=[{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": URI}}]}])
     flush(manager)
-    assert f01.payloads == [IMAGE, IMAGE]
+    assert f01.payloads == [IMAGE]
+    assert [s.name for s in exporter.get_finished_spans() if refs(s)]

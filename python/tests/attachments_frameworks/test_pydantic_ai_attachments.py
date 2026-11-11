@@ -36,8 +36,9 @@ def instrument(spans):
     state = {}
 
     def install(manager, config=None):
+        # skip_dep_check: pydantic-ai-slim does not satisfy the instrumentor's "pydantic-ai" requirement.
         PydanticAIInstrumentor().instrument(tracer_provider=tracer_provider, attachments=manager,
-                                            config=config or TraceConfig())
+                                            config=config or TraceConfig(), skip_dep_check=True)
         state["on"] = True
         return exporter
 

@@ -13,11 +13,12 @@ use these to capture inline base64/data-URI parts and speech audio. Rules:
 - One registry per manager remembers admitted (span, position) pairs, so a
   second observer of the same span and position gets the FIRST occurrence back
   and uploads nothing.
-- One claim table per manager remembers the bytes each trace already uploaded,
-  so a framework span and the provider span beneath it (or any later observer in
-  the same trace) upload identical bytes once. A later observer must be admitted
+- One claim table per manager remembers the bytes it uploaded in the last
+  ``CLAIM_TTL`` seconds, so a framework span and the provider span beneath it
+  upload identical bytes once, even when the framework does not make its span
+  the current context (separate traces). A later observer must be admitted
   under its OWN policy before it may reuse a claim, and only admitted bytes are
-  hashed.
+  hashed. One manager serves one project, so a reuse never points outside it.
 
 Every public function is non-throwing and returns ``None``/empty on denial.
 """
@@ -28,6 +29,7 @@ import dataclasses
 import hashlib
 import re
 import threading
+import time
 import weakref
 from collections import OrderedDict
 from types import MappingProxyType
@@ -53,6 +55,10 @@ AUDIO_MIMES = ("audio/wav", "audio/mpeg", "audio/ogg", "audio/flac", "audio/webm
 # Framework boundaries hand over complete inline parts (mirrors @traceai/framework-attachments).
 MAX_FRAMEWORK_BYTES = 1 * MiB
 MAX_FRAMEWORK_PARTS = 64
+# Claims cover "the same call observed twice" (milliseconds apart), not long-term
+# content dedup: a short window keeps the referenced occurrence live.
+CLAIM_TTL = 300.0
+MAX_CLAIMS = 4096
 TOOL_ID = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 _DATA_URI = re.compile(r"data:([a-z]+/[a-z0-9.+-]+);base64")
 _BASE64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
@@ -172,53 +178,53 @@ REGISTRY = _Registry()
 
 
 class _Claims:
-    """Uploaded bytes per manager and trace: (mime, sha256) -> occurrence. Digests and IDs only.
+    """Uploaded bytes per manager: (mime, sha256) -> (occurrence, expiry). Digests and IDs only.
 
-    The lock is held across the lookup and ``ticket.attach`` (which only queues),
-    so two concurrent observers of identical bytes cannot both upload.
+    Expiry is lazy (checked on access; no timer). The lock is held across the
+    lookup and ``ticket.attach`` (which only queues), so two concurrent observers
+    of identical bytes cannot both upload.
     """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self._managers: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
-    def get(self, manager, trace: str, key: Tuple[str, str]) -> Optional[Occurrence]:
-        traces = self._managers.get(manager)
-        claims = traces.get(trace) if traces is not None else None
-        return claims.get(key) if claims is not None else None
+    def get(self, manager, key: Tuple[str, str]) -> Optional[Occurrence]:
+        claims = self._managers.get(manager)
+        entry = claims.get(key) if claims is not None else None
+        if entry is None:
+            return None
+        if entry[1] <= time.monotonic():
+            del claims[key]
+            return None
+        return entry[0]
 
-    def put(self, manager, trace: str, key: Tuple[str, str], occurrence: Occurrence) -> None:
-        traces = self._managers.get(manager)
-        if traces is None:
-            traces = OrderedDict()
-            self._managers[manager] = traces
-        claims = traces.get(trace)
+    def put(self, manager, key: Tuple[str, str], occurrence: Occurrence) -> None:
+        claims = self._managers.get(manager)
         if claims is None:
-            if len(traces) >= MAX_SPANS:
-                traces.popitem(last=False)
-            claims = traces[trace] = {}
-        else:
-            traces.move_to_end(trace)
-        if len(claims) < MAX_PARTS:
-            claims[key] = occurrence
+            claims = self._managers[manager] = OrderedDict()
+        claims.pop(key, None)
+        while len(claims) >= MAX_CLAIMS:
+            claims.popitem(last=False)
+        claims[key] = (occurrence, time.monotonic() + CLAIM_TTL)
 
 
 CLAIMS = _Claims()
 
 
 def attach_claimed(manager, ticket, data: bytes, mime: str, fields: dict) -> Optional[Occurrence]:
-    """Attach ADMITTED bytes at most once per trace and manager. Never raises.
+    """Attach ADMITTED bytes at most once per manager within ``CLAIM_TTL``. Never raises.
 
     The caller's ``ticket`` was already admitted under its own policy, so reusing an
     earlier occurrence never widens what this observer may capture. A reuse
     releases the ticket and uploads nothing.
     """
     try:
-        correlation = ticket.correlation
-        trace = correlation.trace_id if correlation is not None else None
-        key = (mime, hashlib.sha256(data).hexdigest()) if trace is not None else None
+        if not ticket.admitted:
+            return None
+        key = (mime, hashlib.sha256(data).hexdigest())
         with CLAIMS.lock:
-            previous = CLAIMS.get(manager, trace, key) if key is not None else None
+            previous = CLAIMS.get(manager, key)
             if previous is not None:
                 ticket.release()
                 return previous
@@ -226,8 +232,7 @@ def attach_claimed(manager, ticket, data: bytes, mime: str, fields: dict) -> Opt
             if handle.admission != "queued":
                 return None
             occurrence = Occurrence(handle.occurrence_id, mime)
-            if key is not None:
-                CLAIMS.put(manager, trace, key, occurrence)
+            CLAIMS.put(manager, key, occurrence)
             return occurrence
     except Exception:
         try:

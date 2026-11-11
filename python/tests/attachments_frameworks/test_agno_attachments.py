@@ -40,8 +40,11 @@ def instrument(spans):
 
 
 def agent(provider):
-    return Agent(model=OpenAIChat(id="gpt-4o-mini", api_key="sk-synthetic", base_url=provider.url + "/v1",
-                                  max_retries=0), telemetry=False)
+    model = OpenAIChat(id="gpt-4o-mini", api_key="sk-synthetic", base_url=provider.url + "/v1", max_retries=0)
+    try:
+        return Agent(model=model, telemetry=False)
+    except TypeError:  # older Agno has no telemetry switch; AGNO_TELEMETRY=false covers it
+        return Agent(model=model)
 
 
 def model_spans(exporter):
