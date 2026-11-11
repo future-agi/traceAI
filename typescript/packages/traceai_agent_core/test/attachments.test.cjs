@@ -10,7 +10,16 @@ const path = require('node:path');
 const { AttachmentManager, AttachmentTransportError } = require('@traceai/fi-core/attachments');
 const { captureAgentImages, MAX_AGENT_IMAGE_BYTES, createTurnTracer, agentAttachmentStatus } = require('../dist/src/index.js');
 const { agentAttachmentRuntime } = require('../dist/src/attachment-runtime.js');
-const { identity, fake } = require('../../fi-core/test/attachments-fixtures.cjs');
+const { identity } = require('../../fi-core/test/attachments-fixtures.cjs');
+const { v1 } = require('../../fi-core/test/attachments-v1.cjs');
+// Every FI_ATTACHMENTS_* process warning: the V1 paths below must emit none (the legacy row, last, emits one).
+const warnings = [];
+process.on('warning', w => { if (String(w.code).startsWith('FI_ATTACHMENTS_')) warnings.push(w.code); });
+/** An in-memory AttachmentTransportV1 double: `calls` lists wire operations, `body()` the last content PUT. */
+function fake(overrides = {}) {
+  const d = v1(overrides);
+  return { transport: d.transport, get calls() { return d.ops(); }, body: () => [...[...d.contents.values()].at(-1)] };
+}
 const image = () => ({ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' });
 const input = { direction: 'input', purpose: 'model_input', role: 'user' };
 const tool = { direction: 'output', purpose: 'tool_result', role: 'tool', toolCallId: 'call_1', capture: { modelInput: true } };
@@ -78,10 +87,46 @@ test('byte-perfect capture, bounded callback budget and no history replay', asyn
   const samePixels = captureAgentImages(f.manager, identity, [image(), image()], input);
   assert.equal(samePixels.length, 2);
   assert.notEqual(samePixels[0].occurrenceId, samePixels[1].occurrenceId);
+  // Over the per-call budget: admitted by preflight, refused by exact length before decode, reservation released.
   const large = { ...image(), data: Buffer.alloc(MAX_AGENT_IMAGE_BYTES + 1).toString('base64') };
-  assert.equal(captureAgentImages(f.manager, identity, [large], input)[0].admission, 'source_unavailable');
+  assert.equal(captureAgentImages(f.manager, identity, [large], input)[0].admission, 'too_large');
+  assert.equal(f.manager.status().openTickets, 0);
   const half = () => ({ ...image(), data: Buffer.alloc(MAX_AGENT_IMAGE_BYTES / 2).toString('base64') });
-  assert.deepEqual(captureAgentImages(f.manager, identity, [half(), half(), half()], input).map(h => h.admission), ['queued', 'queued', 'source_unavailable']);
+  assert.deepEqual(captureAgentImages(f.manager, identity, [half(), half(), half()], input).map(h => h.admission), ['queued', 'queued', 'too_large']);
+});
+
+test('preflight runs before any base64 read; a small server cap re-preflights once at the exact size', async t => {
+  const exact = Buffer.from(image().data, 'base64').length;
+  const d = v1({}, { limits: { max_upload_bytes: exact } });
+  const manager = new AttachmentManager({ enabled: true, projectName: 'fixture', projectType: 'observe', transport: d.transport });
+  t.after(() => manager.shutdown());
+  await manager.ready();
+  const sizes = []; let preflights = 0, early = 0;
+  const preflight = manager.preflight.bind(manager);
+  manager.preflight = (target, options) => { preflights++; sizes.push(options.maxBytes); return preflight(target, options); };
+  const data = image().data;
+  const part = { type: 'image', mimeType: 'image/png', get data() { if (!preflights) early++; return data; } };
+  const [h] = captureAgentImages(manager, identity, [part], input);
+  assert.equal(h.admission, 'queued');
+  assert.equal(early, 0);
+  assert.deepEqual(sizes, [MAX_AGENT_IMAGE_BYTES, exact]);
+  await manager.flush();
+  assert.deepEqual([...d.contents.values()][0], Buffer.from(data, 'base64'));
+  // A part bigger than the cap is refused at its exact size without decode, and the ticket is released.
+  const big = { ...image(), data: Buffer.alloc(exact + 1).toString('base64') };
+  assert.equal(captureAgentImages(manager, identity, [big], input)[0].admission, 'too_large');
+  assert.equal(manager.status().openTickets, 0);
+});
+
+test('malformed base64 after admission releases the ticket and reports source_unavailable', async t => {
+  const f = await fixture(t);
+  const bad = ['not base64!', 'abc', '', 'data:image/png;base64,' + image().data].map(data => ({ type: 'image', mimeType: 'image/png', data }));
+  const thrower = { type: 'image', mimeType: 'image/png', get data() { throw Error('host accessor'); } };
+  const results = captureAgentImages(f.manager, identity, [...bad, thrower], input);
+  assert.deepEqual(results.map(r => r.admission), Array(5).fill('source_unavailable'));
+  assert.equal(f.manager.status().openTickets, 0);
+  assert.equal(f.manager.status().ownedBytes, 0);
+  await f.manager.flush(); assert.deepEqual(f.calls, ['bootstrap']);
 });
 
 test('unknown bootstrap and unsupported scope never read media', async t => {
@@ -102,7 +147,7 @@ test('tightening policy after capture cancels before any upload', async t => {
 async function networkFixture(t, configOverrides = {}, runtimeOverrides = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'fi-media-'));
   const requests = [];
-  const f = fake();
+  const f = v1();
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -110,19 +155,26 @@ async function networkFixture(t, configOverrides = {}, runtimeOverrides = {}) {
     const body = req.url === '/upload' ? bytes : JSON.parse(bytes.toString());
     requests.push({ path: req.url, body });
     const result = req.url === '/bootstrap' ? await f.transport.bootstrap(body) :
-      req.url === '/initialize' ? await f.transport.initialize(null, body) : {};
+      req.url === '/initialize' ? await f.transport.initialize(null, JSON.stringify(body)) : {};
     res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(result));
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const send = async (route, body, signal) => (await fetch(origin + route, {
-    method: 'POST', body: body instanceof Uint8Array ? body : JSON.stringify(body), signal,
+    method: 'POST', body: typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body), signal,
   })).json();
+  const unsupported = async () => { throw new AttachmentTransportError('unsupported_version'); };
+  // AttachmentTransportV1 over a loopback HTTP double: the runtime's guard wraps every one of these calls.
   const transport = {
-    bootstrap: (body, signal) => send('/bootstrap', body, signal),
-    initialize: (session, body, signal) => send('/initialize', body, signal),
-    upload: (session, upload, bytes, signal) => send('/upload', bytes, signal),
-    complete: (session, upload, body, signal) => send('/complete', body, signal),
+    bootstrap: (body, key, signal) => send('/bootstrap', body, signal),
+    initialize: (session, body, key, signal) => send('/initialize', body, signal),
+    putContent: async (session, upload, source, signal) => {
+      await send('/upload', source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer()), signal);
+    },
+    complete: async (session, upload, key, signal) => { await send('/complete', { upload_id: upload.upload_id }, signal); return 'validating'; },
+    abort: async () => undefined,
+    renewSession: unsupported, renewUpload: unsupported, uploadStatus: unsupported,
+    putManifest: unsupported, submitImport: unsupported, importStatus: unsupported,
   };
   const config = { agent: 'pi', enabled: true, captureContent: true, projectName: 'media', endpoint: origin + '/traces',
     credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, tags: [], generation: 0, destinationApproved: true,
@@ -162,6 +214,7 @@ test('real provider lifecycle emits exact span correlation and no payload in OTL
   assert.equal(serialized.includes(image().data), false);
   const before = f.requests.length; child.images([image()], tool); await f.tracer.flush();
   assert.equal(f.requests.length, before);
+  assert.deepEqual(warnings, [], 'the V1 runtime path emits no FI_ATTACHMENTS_* warning');
 });
 
 test('discard and async route revocation prevent binary delivery', async t => {
@@ -232,8 +285,31 @@ test('runtime binds the credential to the approved destination origin', () => {
     assert.equal(other.endpoint, undefined, endpoint);
     assert.deepEqual(other.headers, {}, endpoint);
     // A transport is always supplied, so fi-core never builds its own from FI_ATTACHMENTS_ENDPOINT.
+    // It is V1-shaped, so an unapproved endpoint is not reported as a legacy transport.
     assert.equal(typeof other.transport?.bootstrap, 'function', endpoint);
+    assert.equal(typeof other.transport?.putContent, 'function', endpoint);
   }
+  // The real HTTPS transport is the versioned surface, never the legacy four-method shape.
+  assert.equal(typeof same.transport.putContent, 'function');
+  assert.equal(typeof same.transport.renewSession, 'function');
+  assert.equal(same.transport.upload, undefined);
+});
+
+test('the runtime guard keeps a V1 caller transport versioned and re-checks policy on every wire call', async () => {
+  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
+    credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p',
+    hideInputs: false, hideOutputs: false, hideErrorDetails: false };
+  let allowed = true;
+  const d = v1();
+  const runtime = agentAttachmentRuntime({ ...config, revalidate: async () => allowed }, { transport: d.transport });
+  const methods = ['bootstrap', 'renewSession', 'initialize', 'renewUpload', 'putContent', 'complete', 'abort', 'uploadStatus',
+    'putManifest', 'submitImport', 'importStatus'];
+  for (const m of methods) assert.equal(typeof runtime.transport[m], 'function', m);
+  allowed = false;
+  for (const m of methods)
+    await assert.rejects(runtime.transport[m](), e => e instanceof AttachmentTransportError && e.code === 'policy_denied', m);
+  assert.deepEqual(d.ops(), [], 'no wire call reaches the delegate after revocation');
+  assert.deepEqual(warnings, []);
 });
 
 // Real saved profile, real resolveConfig and real Node TLS transport, in a child process so the
@@ -316,4 +392,32 @@ test('saved-profile credential never reaches an FI_ATTACHMENTS_ENDPOINT origin d
   assert.ok(boot.length >= 1);
   assert.ok(boot.every(r => r.apiKey === 'synthetic-saved-api' && r.secretKey === 'synthetic-saved-secret'));
   assert.deepEqual(other.seen, []);
+});
+
+// Last in this file: the legacy warning is once per process.
+test('a four-method caller transport still captures, and fi-core flags it once as legacy', async t => {
+  const legacyCalls = []; let body;
+  const d = v1();
+  const transport = {
+    bootstrap: async r => { legacyCalls.push('bootstrap'); return d.transport.bootstrap(r); },
+    initialize: async (s, r) => { legacyCalls.push('initialize'); return d.transport.initialize(s, JSON.stringify(r)); },
+    upload: async (_s, _u, data) => { legacyCalls.push('upload'); body = Buffer.from(data); },
+    complete: async () => { legacyCalls.push('complete'); },
+  };
+  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
+    credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p',
+    hideInputs: false, hideOutputs: false, hideErrorDetails: false };
+  const runtime = agentAttachmentRuntime(config, { enabled: true, transport });
+  assert.equal(runtime.transport.putContent, undefined, 'a legacy delegate is not silently upgraded');
+  const manager = new AttachmentManager({ ...runtime, environment: () => ({}) });
+  t.after(() => manager.shutdown());
+  assert.equal(await manager.ready(), true);
+  const [h] = captureAgentImages(manager, identity, [image()], input);
+  assert.equal(h.admission, 'queued');
+  await manager.flush();
+  assert.equal((await h.completion).status, 'validating');
+  assert.deepEqual(body, Buffer.from(image().data, 'base64'));
+  assert.deepEqual(legacyCalls, ['bootstrap', 'initialize', 'upload', 'complete']);
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(warnings, ['FI_ATTACHMENTS_LEGACY_TRANSPORT']);
 });

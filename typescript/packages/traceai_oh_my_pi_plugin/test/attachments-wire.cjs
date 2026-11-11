@@ -9,6 +9,9 @@ const https = require("node:https");
 const { randomUUID } = require("node:crypto");
 const plugin = require("../dist/index.js").default;
 const { fake } = require("../../fi-core/test/attachments-fixtures.cjs");
+// F01 status bodies carry `reason`, and the plugin's runtime is V1: no FI_ATTACHMENTS_* process warning may fire.
+const warnings = [];
+process.on("warning", (w) => { if (String(w.code).startsWith("FI_ATTACHMENTS_")) warnings.push(w.code); });
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
 const TOOL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2NgYPj/HwADAgH/o1FYqQAAAABJRU5ErkJggg==";
@@ -51,8 +54,8 @@ async function main() {
         // Content/complete use only the narrow write capability, never the FI keys.
         assert.equal(req.headers.authorization, `Bearer ${upload.write_capability}`);
         assert.equal(req.headers["x-api-key"], undefined);
-        if (req.url.endsWith("/content")) { bytes.push(data); res.end(JSON.stringify({ upload_id: id, state: "pending_upload" })); }
-        else { completed.push(id); res.writeHead(202); res.end(JSON.stringify({ upload_id: id, state: "validating" })); }
+        if (req.url.endsWith("/content")) { bytes.push(data); res.end(JSON.stringify({ upload_id: id, state: "pending_upload", reason: "queued" })); }
+        else { completed.push(id); res.writeHead(202); res.end(JSON.stringify({ upload_id: id, state: "validating", reason: "binding_pending" })); }
         return;
       }
       if (req.url === "/tracer/v1/traces") { batches.push(JSON.parse(data)); res.end("{}"); return; }
@@ -125,6 +128,7 @@ async function main() {
         assert.ok(String(attrs(tool)["fi.attachment.refs"]).includes(result.occurrence_id));
       }
       if (name === "hide-outputs") assert.equal(caseUploads[0].purpose, "model_input");
+      assert.deepEqual(warnings, [], name + ": no attachment warning");
       console.log(JSON.stringify({ host: "oh-my-pi", harness: "plugin-api", scenario: name, uploads: caseUploads.length, status: "PASS" }));
       await fs.rm(home, { recursive: true, force: true });
     }

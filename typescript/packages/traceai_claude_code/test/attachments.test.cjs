@@ -7,7 +7,12 @@ const path = require("node:path");
 const http = require("node:http");
 const core = require("@traceai/agent-core");
 const adapter = require("../dist/index.js");
-const { fake } = require("../../fi-core/test/attachments-fixtures.cjs");
+const { v1 } = require("../../fi-core/test/attachments-v1.cjs");
+// The V1 runtime path must not emit any FI_ATTACHMENTS_* process warning (legacy transport, rejected wire shape).
+const warnings = [];
+process.on("warning", (w) => {
+  if (String(w.code).startsWith("FI_ATTACHMENTS_")) warnings.push(w.code);
+});
 
 const session = "8a472dc2-ce2f-48ef-ade3-07ec9791f6d3",
   prompt = "0bb7337e-58a1-48f0-806d-492fca3487db";
@@ -98,18 +103,20 @@ async function fixture(t, overrides = {}, rowOptions = {}) {
     compactions: [],
     completed: [],
   });
-  const broker = fake();
+  const double = v1();
+  const broker = { get calls() { return double.ops(); } };
   const uploads = [];
+  // An in-memory AttachmentTransportV1 (fi-core test double) that records each upload request and body.
   const transport = {
-    ...broker.transport,
-    async initialize(s, request, signal) {
-      uploads.push({ request });
-      return broker.transport.initialize(s, request, signal);
+    ...double.transport,
+    async initialize(s, body, key, signal) {
+      uploads.push({ request: JSON.parse(body) });
+      return double.transport.initialize(s, body, key, signal);
     },
-    async upload(s, upload, data) {
+    async putContent(s, upload, source, signal, pacer) {
+      await double.transport.putContent(s, upload, source, signal, pacer);
       // Two transfer workers run concurrently; match the body to its own upload.
-      uploads.find((u) => u.request.attachment_id === upload.attachment_id).bytes =
-        Buffer.from(data instanceof Uint8Array ? data : new Uint8Array(await data.arrayBuffer()));
+      uploads.find((u) => u.request.attachment_id === upload.attachment_id).bytes = double.contents.get(upload.occurrence_id);
     },
   };
   return { home, config, transcript, state, received, broker, uploads, transport };
@@ -143,8 +150,9 @@ test("prompt and tool-result images upload byte-exact on their own spans without
   assert.ok(attrs(root)["fi.attachment.refs"].includes(forRoot.request.occurrence_id));
   assert.ok(attrs(tool)["fi.attachment.refs"].includes(forTool.request.occurrence_id));
   const otlp = JSON.stringify(f.received);
-  for (const secret of [PROMPT_PNG, TOOL_PNG, "signed-secret", "synthetic-write-capability"])
+  for (const secret of [PROMPT_PNG, TOOL_PNG, "signed-secret", "synthetic-capability"])
     assert.equal(otlp.includes(secret), false, `${secret} absent from OTLP`);
+  assert.deepEqual(warnings, [], "no FI_ATTACHMENTS_* warning on the V1 path");
 });
 
 test("a deferred non-final export leaves prompt media to the final root export", async (t) => {

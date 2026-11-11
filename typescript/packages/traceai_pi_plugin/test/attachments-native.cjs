@@ -38,8 +38,8 @@ async function main() {
         const id = req.url.split('/').at(-2), upload = active.get(id); assert.ok(upload);
         assert.equal(req.headers.authorization, `Bearer ${upload.write_capability}`);
         assert.equal(req.headers['x-api-key'], undefined);
-        if (req.url.endsWith('/content')) { bytes.push(data); res.end(JSON.stringify({ upload_id: id, state: 'pending_upload' })); }
-        else { completed.push(id); res.writeHead(202); res.end(JSON.stringify({ upload_id: id, state: 'validating' })); }
+        if (req.url.endsWith('/content')) { bytes.push(data); res.end(JSON.stringify({ upload_id: id, state: 'pending_upload', reason: 'queued' })); }
+        else { completed.push(id); res.writeHead(202); res.end(JSON.stringify({ upload_id: id, state: 'validating', reason: 'binding_pending' })); }
         return;
       }
       if (req.url === '/tracer/v1/traces') { batches.push(JSON.parse(data)); res.end('{}'); return; }
@@ -96,6 +96,8 @@ async function main() {
       task.child.stdin.end();
       const result = await task;
       assert.ok(result.stdout.includes('tool_execution_end'), name + ': real tool callback');
+      // F01 status bodies carry `reason`; the plugin's runtime is V1, so fi-core prints no FI_ATTACHMENTS_* warning.
+      assert.equal(String(result.stderr).includes('FI_ATTACHMENTS_'), false, name + ': no attachment warning');
       assert.equal(requests.length - requestStart, 2, name + ': real provider loop');
       assert.equal(uploads.length - start, name === 'enabled' ? 1 : 0, name + ': attachment admission');
       const spans = batches.slice(traceStart).flatMap(b => b.resourceSpans.flatMap(r => r.scopeSpans.flatMap(s => s.spans)));
