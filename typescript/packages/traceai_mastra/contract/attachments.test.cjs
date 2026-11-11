@@ -20,7 +20,9 @@ const wire = transformer('@opentelemetry/otlp-transformer/build/src/generated/ro
 const attrs = list => Object.fromEntries((list || []).map(a => [a.key, Object.values(a.value)[0]]));
 // A synthetic payload larger than common serializer string limits, so the test
 // records whether the exported span still holds the original bytes.
-const IMAGE = Buffer.alloc(6000, 7).toString('base64');
+// A valid 1x1 PNG followed by padding: runtimes that sniff the signature accept it.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5nQAAAAASUVORK5CYII=', 'base64');
+const IMAGE = Buffer.concat([PNG, Buffer.alloc(6000, 7)]).toString('base64');
 const URI = `data:image/png;base64,${IMAGE}`;
 let createFIObservability, obs, collectorPaths, providerBodies, spans, ended;
 const collector = http.createServer((request, response) => {
@@ -76,7 +78,7 @@ function setup() {
 }
 const forged = { 'fi.attachment.schema_version': 1, 'fi.attachment.refs': JSON.stringify([{ attachment_id: 'forged', occurrence_id: 'forged',
   direction: 'input', modality: 'image', mime_type: 'image/png' }]), 'fi.attachment.capture_session_id': 'forged', 'fi.attachment.correlation_nonce': 'forged' };
-const message = [{ role: 'user', content: [{ type: 'text', text: 'SYNTHETIC_PROMPT' }, { type: 'image', image: URI, mimeType: 'image/png' }] }];
+const message = [{ role: 'user', content: [{ type: 'text', text: 'SYNTHETIC_PROMPT' }, { type: 'image', image: URI, mimeType: 'image/png', mediaType: 'image/png' }] }];
 
 for (const flag of [undefined, 'FI_HIDE_INPUT_IMAGES']) {
   test(`real image input exports no attachment traffic or unissued references (${flag ?? 'default'})`, async () => {
@@ -87,7 +89,7 @@ for (const flag of [undefined, 'FI_HIDE_INPUT_IMAGES']) {
     await obs.getDefaultInstance().flush();
     // The real provider request carried the image, so media did exist at runtime.
     assert.equal(providerBodies.length, 1);
-    assert.match(providerBodies[0], new RegExp(IMAGE.slice(0, 64)));
+    assert.ok(providerBodies[0].includes(IMAGE.slice(-64)), 'the provider request must carry the original image');
     assert.ok(spans.length > 0);
     // The exporter only ships OTLP; it never opens an attachment session or upload.
     assert.deepEqual([...new Set(collectorPaths)], ['/tracer/v1/traces']);

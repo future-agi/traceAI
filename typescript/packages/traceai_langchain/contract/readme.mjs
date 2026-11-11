@@ -43,6 +43,16 @@ if (phase === "install") {
   assert.equal((await readdir(consumer)).length, 0, "Install must start in an empty consumer");
   await mkdir(env.HOME);
   const tarballs = await readdir(tarballPath);
+  // Candidate @traceai packages that the documented ones depend on, but that the
+  // README does not name (for example an unpublished shared helper), come from
+  // the same candidate build. They are added only next to a documented @traceai
+  // dependency, never as an extra application dependency of their own.
+  const documented = new Set(dependencies.filter((dep) => dep.startsWith("@traceai/"))
+    .map((dep) => packageName(dep).slice(1).replace("/", "-") + "-"));
+  const transitive = tarballs.filter((name) => name.startsWith("traceai-") && name.endsWith(".tgz")
+    && ![...documented].some((prefix) => name.startsWith(prefix)))
+    .map((name) => resolve(tarballPath, name));
+  let transitiveAdded = false;
   for (const command of commands) {
     // Replace only documented Future AGI dependencies with the candidate release.
     // No preinstalled adapters, runner, peer bypasses or extra dependencies.
@@ -53,6 +63,10 @@ if (phase === "install") {
       assert.equal(matches.length, 1, `Expected exactly one tarball for ${dep}`);
       return resolve(tarballPath, matches[0]);
     });
+    if (!transitiveAdded && command.some((dep) => dep.startsWith("@traceai/"))) {
+      args.push(...transitive);
+      transitiveAdded = true;
+    }
     const result = spawnSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...args],
       { cwd: consumer, env, stdio: "inherit" });
     assert.equal(result.status, 0, `README install failed: ${result.error ?? result.signal ?? "npm"}`);
