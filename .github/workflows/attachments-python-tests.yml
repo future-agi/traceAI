@@ -1,0 +1,41 @@
+name: Python attachments
+
+on:
+  pull_request:
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/traceai/**'
+      - 'python/tests/attachments/**'
+      - '.github/workflows/attachments-python-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/traceai/**'
+      - 'python/tests/attachments/**'
+      - '.github/workflows/attachments-python-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  component:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python }}'
+      - name: Install component dependencies
+        run: python -m pip install -e python pytest==8.3.5 pytest-asyncio==0.26.0 pytest-mock==3.14.0 responses==0.25.7
+      - name: Run synthetic attachment and auto tests
+        env:
+          PYTHONPATH: python
+          FI_BASE_URL: http://127.0.0.1:9
+          FI_GRPC_URL: http://127.0.0.1:9
+        run: python -m pytest -q python/tests/attachments python/traceai/tests
