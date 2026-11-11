@@ -39,7 +39,7 @@ E means the adapter reads the original typed media value. R means the integratio
 | Genkit 1.42+ | `defineModel` implementation wrapped with `withGenkitModelAttachments` (request messages and response message) | E |
 | Genkit | Any model, including plugin models, through `use: [genkitAttachmentMiddleware(binding)]` on `generate` | E |
 | Genkit | `defineTool` implementation returning `Part[]`, wrapped with `withGenkitToolAttachments` | E |
-| Mastra (`@traceai/mastra`) | All exporter operations | N for raw capture. The exporter receives ended, serialized spans, has no manager and never uploads. It removes `fi.attachment.*` keys it did not issue. |
+| Mastra (`@traceai/mastra`) | All exporter operations | N for raw capture. The exporter sees spans only after they end, has no manager and never uploads. Newer runtimes keep inline images in span input, but the core has no API to add references to an ended span. The exporter removes `fi.attachment.*` keys it did not issue. |
 
 Streams are never read for media, remote URLs and file paths are never fetched, and creating new recordings is not supported.
 

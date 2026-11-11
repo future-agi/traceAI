@@ -97,7 +97,7 @@ If you already manage a Mastra `Observability` instance, add `createFIMastraExpo
 
 ## Attachments
 
-The Mastra exporter does not capture media. It receives ended, serialized Mastra spans after the run, has no attachment manager and never uploads. It also removes any `fi.attachment.*` attribute it did not issue, so application metadata cannot forge an attachment reference.
+The Mastra exporter does not capture media as attachments. It receives Mastra spans after they end, has no attachment manager and never uploads. It also removes any `fi.attachment.*` attribute it did not issue, so application metadata cannot forge an attachment reference. Newer Mastra runtimes keep inline image data in the span input, and the exporter sends that input as text in `input.value`. Set `FI_HIDE_INPUT_IMAGES=true` to keep image data out of exported spans.
 
 ## Mastra v0
 
