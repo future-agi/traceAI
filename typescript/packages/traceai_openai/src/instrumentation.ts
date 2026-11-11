@@ -231,34 +231,29 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           ...args: Parameters<ChatCompletionCreateType>
         ) {
           const originalBody = args[0];
-          const body = projectOpenAIMedia(originalBody, "chat", "input", !!instrumentation.attachments);
-          // Prediction text is input content, captured only in maskable payloads.
-          const { messages: _messages, prediction: _prediction, ...invocationParameters } = body;
-
           // diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
-          
-          // --- ADD LOGS FOR TRACER AND CONTEXT ---
-          // const activeContextForSuppressionCheck = context.active();
-          // const isSuppressed = isTracingSuppressed(activeContextForSuppressionCheck);
-          // diag.debug(`@traceai/openai: Is tracing suppressed? ${isSuppressed}`);
-          // diag.debug(`@traceai/openai: this.tracer type: ${instrumentation.tracer?.constructor?.name}`); // Accessing the base tracer
-          // diag.debug(`@traceai/openai: this.fiTracer type: ${instrumentation.fiTracer?.constructor?.name}`);
-          // --- END ADDED LOGS ---
 
-          const span = instrumentation.fiTracer.startSpan("OpenAI Chat Completions", { kind: SpanKind.INTERNAL });
-          captureOpenAIAttachments(instrumentation.attachments, span, originalBody, {
+          // Content attributes are set after capture so admitted media can be projected out first.
+          const span = instrumentation.fiTracer.startSpan("OpenAI Chat Completions", {
+            kind: SpanKind.INTERNAL,
+            attributes: {
+              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+              [SemanticConventions.LLM_MODEL_NAME]: originalBody.model,
+              [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
+            },
+          });
+          const captured = captureOpenAIAttachments(instrumentation.attachments, span, originalBody, {
             operation: "chat", direction: "input", traceConfig: instrumentation._traceConfig,
           });
+          const body = projectOpenAIMedia(originalBody, captured, "chat", "input") as typeof originalBody;
+          // Prediction text is input content, captured only in maskable payloads.
+          const { messages: _messages, prediction: _prediction, ...invocationParameters } = body;
           span.setAttributes({
-                [SemanticConventions.FI_SPAN_KIND]:
-                  FISpanKind.LLM,
-                [SemanticConventions.LLM_MODEL_NAME]: body.model,
                 [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
                 [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
-                [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -523,9 +518,22 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             const body = args[0] as ResponseCreateParamsBase & {
               prompt?: { id: string; version?: string; variables?: Record<string, unknown> };
             };
+            // Content attributes are set after capture so admitted media can be projected out first.
+            const span = instrumentation.fiTracer.startSpan("OpenAI Responses", {
+              kind: SpanKind.INTERNAL,
+              attributes: {
+                [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+                [SemanticConventions.LLM_MODEL_NAME]: body.model,
+                [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
+                [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
+              },
+            });
+            const captured = captureOpenAIAttachments(instrumentation.attachments, span, body, {
+              operation: "responses", direction: "input", traceConfig: instrumentation._traceConfig,
+            });
             // Telemetry-only copy: MCP credentials must never reach any exported
             // duplicate, but the original SDK request must remain untouched.
-            const projectedBody = projectOpenAIMedia(body, "responses", "input", !!instrumentation.attachments);
+            const projectedBody = projectOpenAIMedia(body, captured, "responses", "input") as typeof body;
             const telemetryBody = {
               ...projectedBody,
               ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }),
@@ -536,21 +544,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               ...parameters,
               ...(prompt && { prompt: { id: prompt.id, version: prompt.version } }),
             };
-            const span = instrumentation.fiTracer.startSpan("OpenAI Responses", { kind: SpanKind.INTERNAL });
-            captureOpenAIAttachments(instrumentation.attachments, span, body, {
-              operation: "responses", direction: "input", traceConfig: instrumentation._traceConfig,
-            });
             span.setAttributes({
-                  [SemanticConventions.FI_SPAN_KIND]:
-                    FISpanKind.LLM,
-                  [SemanticConventions.LLM_MODEL_NAME]: body.model,
                   [SemanticConventions.INPUT_VALUE]: JSON.stringify(telemetryBody),
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
                   [SemanticConventions.PROMPT_TEMPLATE_VARIABLES]: safelyJSONStringify(prompt?.variables) ?? undefined,
-                  [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
-                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(telemetryBody),
                   ...getLLMToolsJSONSchema(body),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(telemetryBody) ?? "",
@@ -586,10 +585,12 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   if (endSpan) span.end();
                   return;
                 }
-                captureOpenAIAttachments(instrumentation.attachments, span, result, {
+                // endSpan is false only on the streamed path. Streamed output media is unsupported
+                // until the core has a consumed-stream observation API.
+                const outputMedia = endSpan ? captureOpenAIAttachments(instrumentation.attachments, span, result, {
                   operation: "responses", direction: "output", traceConfig: instrumentation._traceConfig,
-                });
-                const projected = projectOpenAIMedia(result, "responses", "output");
+                }) : new Map();
+                const projected = projectOpenAIMedia(result, outputMedia, "responses", "output") as ResponseType;
                 const output = {
                   id: result.id, object: result.object, status: result.status,
                   model: result.model, output: projected.output, usage: result.usage,
@@ -637,28 +638,42 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
+    // images.generate: generated b64 outputs. Streamed partial images, edits and variations stay unsupported.
     if (typeof module.OpenAI.Images?.prototype?.generate === "function") {
-      this._wrap(module.OpenAI.Images.prototype, "generate", (original: typeof module.OpenAI.Images.prototype.generate): any => {
-        return function(this: unknown, ...args: Parameters<typeof original>) {
-          const span = instrumentation.fiTracer.startSpan("OpenAI Images", { kind: SpanKind.INTERNAL, attributes: {
-            [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-            [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
-            [SemanticConventions.GEN_AI_OPERATION_NAME]: "image_generation",
-          } });
-          try {
-            const execContext = trace.setSpan(context.active(), span);
-            const promise = context.with(execContext, () => original.apply(this, args));
-            return observeAPIPromise(promise, result => {
-              if (span.isRecording() && !isStream(result)) {
-                captureOpenAIAttachments(instrumentation.attachments, span, result, {
-                  operation: "images", direction: "output", traceConfig: instrumentation._traceConfig,
-                  imageFormat: (args[0] as { output_format?: "png" | "jpeg" | "webp" }).output_format,
-                });
-              }
-              span.end();
-              return result;
-            }, error => endSpanWithError(span, error), response => endRawResponseSpan(span, response));
-          } catch (error) { endSpanWithError(span, error); throw error; }
+      type ImagesGenerateType = typeof module.OpenAI.Images.prototype.generate;
+      this._wrap(module.OpenAI.Images.prototype, "generate", (original: ImagesGenerateType): any => {
+        return function patchedImagesGenerate(this: unknown, ...args: Parameters<ImagesGenerateType>) {
+          const request = (args[0] ?? {}) as { model?: string; output_format?: "png" | "jpeg" | "webp" };
+          const span = instrumentation.fiTracer.startSpan("OpenAI Images", {
+            kind: SpanKind.INTERNAL,
+            attributes: {
+              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+              [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "image_generation",
+              ...(typeof request.model === "string" ? { [SemanticConventions.LLM_MODEL_NAME]: request.model } : {}),
+              [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(args[0]) ?? "",
+              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+            },
+          });
+          const contextSpan = span.getContextSpan();
+          const execContext = getExecContext(contextSpan);
+          const execPromise = safeExecuteInTheMiddle<ReturnType<ImagesGenerateType>>(
+            () => context.with(trace.setSpan(execContext, contextSpan), () => original.apply(this, args)),
+            (error) => { if (error) endSpanWithError(span, error); },
+          );
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
+            if (!isStream(result)) {
+              captureOpenAIAttachments(instrumentation.attachments, span, result, {
+                operation: "images", direction: "output", traceConfig: instrumentation._traceConfig,
+                imageFormat: request.output_format,
+              });
+            }
+            span.setStatus({ code: SpanStatusCode.OK });
+            span.end();
+            return result;
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
+          return context.bind(execContext, wrappedPromise);
         };
       });
     }

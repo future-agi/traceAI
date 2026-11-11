@@ -140,21 +140,70 @@ test('OpenAI generated images obey output and PII restrictions', async () => {
   }
 });
 
-test('Telemetry projections strip typed bytes, filenames and signed source locations without mutating requests', () => {
-  for (const [body, project] of [[oaInput(), x => oa.projectOpenAIMedia(x, 'responses', 'input')], [anInput(), an.projectAnthropicMedia]]) {
-    const before = JSON.stringify(body), projected = JSON.stringify(project(body));
-    assert.equal(JSON.stringify(body), before);
-    for (const secret of [PNG, PDF, 'synthetic-private-filename']) assert.ok(!projected.includes(secret));
-  }
+test('Telemetry projections replace only admitted media with occurrence URIs and never mutate requests', async () => {
+  const f = await fixture(); try {
+    const cases = [
+      [oaInput(), (m, s, x) => oa.captureOpenAIAttachments(m, s, x, { operation: 'responses', direction: 'input' }), (x, c) => oa.projectOpenAIMedia(x, c, 'responses', 'input'), 3],
+      [anInput(), (m, s, x) => an.captureAnthropicAttachments(m, s, x), (x, c) => an.projectAnthropicMedia(x, c), 4],
+    ];
+    for (const [body, capture, project, count] of cases) {
+      const before = JSON.stringify(body);
+      // Nothing admitted: the exact same payload object is returned, so existing telemetry is unchanged.
+      assert.equal(project(body, new Map()), body);
+      const captured = capture(f.manager, identity(), body);
+      assert.equal(captured.size, count);
+      const projected = JSON.stringify(project(body, captured));
+      assert.equal(JSON.stringify(body), before);
+      for (const secret of [PNG, PDF]) assert.ok(!projected.includes(secret));
+      for (const { occurrenceId } of captured.values()) assert.ok(projected.includes(`fi-attachment:${occurrenceId}`));
+    }
+    await f.manager.flush();
+    assert.equal(f.uploaded.length, 7);
+  } finally { await f.close(); }
+});
+
+test('Denied media keeps the existing telemetry payload untouched', async () => {
+  const f = await fixture({ traceConfig: { hideInputImages: true } }); try {
+    const body = oaInput(), captured = oa.captureOpenAIAttachments(f.manager, identity(), body, { operation: 'responses', direction: 'input' });
+    // Only the PDF is admitted; both images stay exactly as the application sent them.
+    assert.deepEqual([...captured.values()].map(v => v.mimeType), ['application/pdf']);
+    const projected = oa.projectOpenAIMedia(body, captured, 'responses', 'input');
+    assert.equal(projected.input[0].content[0], body.input[0].content[0]);
+    assert.equal(projected.input[1], body.input[1]);
+    assert.ok(projected.input[0].content[1].file_data.startsWith('fi-attachment:'));
+  } finally { await f.close(); }
+});
+
+test('Hostile payloads fail capture without throwing into the application', async () => {
+  const f = await fixture(); try {
+    const hostile = new Proxy({}, { get() { throw Error('synthetic-secret'); }, has() { throw Error('synthetic-secret'); } });
+    for (const payload of [hostile, { input: [hostile] }, { messages: [hostile] }, { messages: [{ role: 'user', content: [hostile] }] }, null, 7, 'x']) {
+      assert.equal(oa.captureOpenAIAttachments(f.manager, identity(), payload, { operation: 'responses', direction: 'input' }).size, 0);
+      assert.equal(oa.captureOpenAIAttachments(f.manager, identity(), payload, { operation: 'chat', direction: 'input' }).size, 0);
+      assert.equal(an.captureAnthropicAttachments(f.manager, identity(), payload).size, 0);
+      assert.doesNotThrow(() => an.projectAnthropicMedia(payload, new Map([['input/0/0', { occurrenceId: 'x', mimeType: 'image/png' }]])));
+      assert.doesNotThrow(() => oa.projectOpenAIMedia(payload, new Map([['responses/input/0/0', { occurrenceId: 'x', mimeType: 'image/png' }]]), 'responses', 'input'));
+    }
+    await f.manager.flush(); assert.equal(f.initialized.length, 0);
+  } finally { await f.close(); }
+});
+
+test('Capability descriptors name every unsupported source explicitly', () => {
+  for (const name of ['remote_url', 'provider_file', 'streamed_output', 'partial_image', 'images.edit', 'speech']) assert.ok(oa.openAIAttachmentCapabilities.unsupported.includes(name));
+  for (const name of ['remote_url', 'provider_file', 'native_span_hookup', 'generated_image', 'streamed_output']) assert.ok(an.anthropicAttachmentCapabilities.unsupported.includes(name));
+  assert.ok(Object.isFrozen(oa.openAIAttachmentCapabilities) && Object.isFrozen(an.anthropicAttachmentCapabilities));
 });
 
 test('CJS/ESM observations share deduplication without creating a second capture', async () => {
   const f = await fixture(); try {
     const esm = await import(pathToFileURL(path.resolve(__dirname, '../dist/esm/attachments.js')));
-    const s = identity(); oa.captureOpenAIAttachments(f.manager, s, oaInput(), { operation: 'responses', direction: 'input' });
-    esm.captureOpenAIAttachments(f.manager, { ...s }, oaInput(), { operation: 'responses', direction: 'input' });
+    const s = identity(), first = oa.captureOpenAIAttachments(f.manager, s, oaInput(), { operation: 'responses', direction: 'input' });
+    const second = esm.captureOpenAIAttachments(f.manager, { ...s }, oaInput(), { operation: 'responses', direction: 'input' });
+    // The second observer reuses the first occurrence, so both projections point at one upload.
+    assert.deepEqual([...second.entries()], [...first.entries()]);
     const anthropicESM = await import(pathToFileURL(path.resolve(__dirname, '../../traceai_anthropic/dist/esm/attachments.js')));
-    const a = identity(); an.captureAnthropicAttachments(f.manager, a, anInput()); anthropicESM.captureAnthropicAttachments(f.manager, { ...a }, anInput());
+    const a = identity(), cjs = an.captureAnthropicAttachments(f.manager, a, anInput()), mjs = anthropicESM.captureAnthropicAttachments(f.manager, { ...a }, anInput());
+    assert.deepEqual([...mjs.entries()], [...cjs.entries()]);
     await f.manager.flush(); assert.equal(f.uploaded.length, 7);
   } finally { await f.close(); }
 });
@@ -195,6 +244,14 @@ async function providerServer() {
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = JSON.parse(Buffer.concat(chunks)); requests.push({ path: req.url, body });
+    if (req.url.endsWith('/responses') && body.stream) {
+      // A streamed Responses call whose completed response carries a generated image.
+      const response = { id: 'resp_stream', object: 'response', status: 'completed', model: body.model, output: [{ type: 'image_generation_call', id: 'img_stream', status: 'completed', result: PNG }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+      res.setHeader('content-type', 'text/event-stream');
+      res.write(`event: response.created\ndata: ${JSON.stringify({ type: 'response.created', sequence_number: 0, response: { ...response, status: 'in_progress', output: [] } })}\n\n`);
+      res.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', sequence_number: 1, response })}\n\n`);
+      return;
+    }
     res.setHeader('content-type', 'application/json');
     if (req.url.endsWith('/chat/completions')) res.end(JSON.stringify({ id: 'chat_fixture', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
     else if (req.url.endsWith('/responses')) res.end(JSON.stringify({ id: 'resp_fixture', object: 'response', status: 'completed', model: body.model, output: [{ type: 'computer_call', id: 'computer_fixture', call_id: 'call_computer', status: 'completed', action: { type: 'screenshot' } }, { type: 'image_generation_call', id: 'img_fixture', status: 'completed', result: PNG }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
@@ -239,6 +296,18 @@ test('Real SDKs preserve APIPromise/request/response behavior and upload only th
     assert.ok(p.requests.some(r => JSON.stringify(r.body).includes(PNG)));
     assert.ok(!JSON.stringify(exporter.getFinishedSpans().map(s => s.attributes)).includes(PNG));
     assert.ok(exporter.getFinishedSpans().some(s => s.attributes['fi.attachment.refs']));
+    // Each admitted reference appears as an occurrence URI in its own span's telemetry.
+    for (const span of exporter.getFinishedSpans()) {
+      const refs = JSON.parse(span.attributes['fi.attachment.refs'] ?? '[]'), text = JSON.stringify(span.attributes);
+      for (const ref of refs.filter(r => r.direction === 'input')) assert.ok(text.includes(`fi-attachment:${ref.occurrence_id}`), span.name);
+    }
+    if (client.responses) {
+      // Streamed output media is unsupported: the stream is delivered unchanged and nothing uploads.
+      const stream = await client.responses.create({ model: 'synthetic-model', input: 'synthetic', stream: true });
+      const events = []; for await (const event of stream) events.push(event.type);
+      assert.deepEqual(events, ['response.created', 'response.completed']);
+      await f.manager.flush(); assert.equal(f.uploaded.length, expected);
+    }
     // A raw-response caller owns the body; instrumentation must not parse for media.
     const raw = await client.images.generate({ prompt: 'synthetic', response_format: 'b64_json' }).asResponse();
     assert.equal(raw.bodyUsed, false); await raw.arrayBuffer();
@@ -253,4 +322,36 @@ test('Real SDKs preserve APIPromise/request/response behavior and upload only th
   } finally {
     oi.disable(); ai.disable(); await provider.shutdown(); await f.close(); await p.close();
   }
+});
+
+test('A configured but disabled manager leaves existing span telemetry byte-identical', async () => {
+  const sdkModule = require(process.env.SDK_OPENAI || 'openai');
+  const anthropicModule = require(process.env.SDK_ANTHROPIC || '../../traceai_anthropic/node_modules/@anthropic-ai/sdk');
+  const OpenAI = sdkModule.OpenAI || sdkModule.default || sdkModule;
+  const Anthropic = anthropicModule.Anthropic || anthropicModule.default || anthropicModule;
+  const native = 'openTelemetry' in Anthropic.prototype;
+  const p = await providerServer(), disabled = await fixture({ enabled: false });
+  const run = async attachments => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    const oi = new OpenAIInstrumentation({ instrumentationConfig: { enabled: false }, attachments });
+    const ai = new AnthropicInstrumentation({ instrumentationConfig: { enabled: false }, attachments });
+    oi.setTracerProvider(provider); ai.setTracerProvider(provider);
+    oi.manuallyInstrument(sdkModule); ai.manuallyInstrument(anthropicModule);
+    try {
+      const client = new OpenAI({ apiKey: 'synthetic-provider-key', baseURL: p.url, maxRetries: 0 });
+      await client.chat.completions.create({ model: 'synthetic-model', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${PNG}` } }] }] });
+      if (client.responses) await client.responses.create({ model: 'synthetic-model', ...oaInput() });
+      if (!native) await new Anthropic({ apiKey: 'synthetic-provider-key', baseURL: p.url, maxRetries: 0 }).messages.create({ model: 'synthetic-model', max_tokens: 10, ...anInput() });
+      await provider.forceFlush();
+      const strip = ({ name, attributes }) => ({ name, attributes: Object.fromEntries(Object.entries(attributes).filter(([k]) => !/latency|duration|time/i.test(k))) });
+      return exporter.getFinishedSpans().map(strip);
+    } finally { oi.disable(); ai.disable(); await provider.shutdown(); }
+  };
+  try {
+    const baseline = await run(undefined), off = await run(disabled.manager);
+    assert.ok(baseline.length >= 1);
+    assert.deepEqual(off, baseline);
+    assert.equal(disabled.calls.length, 0);
+  } finally { await disabled.close(); await p.close(); }
 });

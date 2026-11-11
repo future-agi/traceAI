@@ -413,16 +413,21 @@ export class AnthropicInstrumentation extends InstrumentationBase{
         // and lazy body parsing callers (including messages.stream()) depend on.
         return function patchedMessagesCreate(this: Anthropic.Messages, ...args: Parameters<Anthropic.Messages['create']>) {
           const originalParams = args[0] as Anthropic.MessageCreateParams;
-          const params = projectAnthropicMedia(originalParams) as Anthropic.MessageCreateParams;
-          const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = params;
+          const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = originalParams;
 
-          const span = instrumentation.fiTracer.startSpan("Anthropic Messages Create", { kind: SpanKind.INTERNAL });
-          captureAnthropicAttachments(instrumentation.attachments, span, originalParams, { traceConfig: instrumentation._traceConfig });
-          span.setAttributes({
+          // Content attributes are set after capture so admitted media can be projected out first.
+          const span = instrumentation.fiTracer.startSpan("Anthropic Messages Create", {
+            kind: SpanKind.INTERNAL,
+            attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-              [SemanticConventions.LLM_MODEL_NAME]: params.model,
+              [SemanticConventions.LLM_MODEL_NAME]: originalParams.model,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.ANTHROPIC,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
+            },
+          });
+          const captured = captureAnthropicAttachments(instrumentation.attachments, span, originalParams, { traceConfig: instrumentation._traceConfig });
+          const params = projectAnthropicMedia(originalParams, captured) as Anthropic.MessageCreateParams;
+          span.setAttributes({
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(invocationParameters) ?? "",
               ...getAnthropicInputMessagesAttributes(params),
               ...getAnthropicToolsAttributes(params),
