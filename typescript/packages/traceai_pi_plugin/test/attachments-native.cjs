@@ -45,7 +45,8 @@ async function main() {
       if (req.url === '/tracer/v1/traces') { batches.push(JSON.parse(data)); res.end('{}'); return; }
       if (req.url === '/v1/chat/completions') {
         const body = JSON.parse(data); requests.push(body);
-        const call = body.messages.at(-1).role !== 'tool';
+        // Pi forwards tool-result images as a follow-up user message, so the last role is not 'tool'.
+        const call = !body.messages.some(m => m.role === 'tool');
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         const send = choice => res.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', created: 1, model: 'test', choices: [choice] })}\n\n`);
         send({ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null });
@@ -90,7 +91,7 @@ async function main() {
       scopeDenied = name === 'scope-denied';
       const task = exec(binary, ['--offline', '--no-approve', '--mode', 'json', '-p', '--provider', 'mock', '--model', 'test',
         '--session-id', randomUUID(), '-e', path.resolve(__dirname, '../extension.mjs'), '-e', extension, 'Use fixture_image then answer Done.'],
-        { cwd: root, env, timeout: 60000, maxBuffer: 4e6 });
+        { cwd: root, env, timeout: 60000, maxBuffer: 64e6 });
       // Print mode also reads piped stdin; close it or the CLI waits for input.
       task.child.stdin.end();
       const result = await task;
