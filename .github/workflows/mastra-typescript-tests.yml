@@ -19,6 +19,7 @@ on:
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/mastra-typescript-tests.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

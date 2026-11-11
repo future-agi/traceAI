@@ -10,6 +10,7 @@ on:
       - 'typescript/packages/fi-core/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/vercel-ai-sdk-tests.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

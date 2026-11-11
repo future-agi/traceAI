@@ -71,7 +71,9 @@ jobs:
           done
       - name: Existing framework suites
         run: |
-          for package in langchain llamaindex vercel genkit; do
+          # LangChain's own workflow runs its runtime suites against a packed
+          # consumer per core version; it is dispatched for this branch instead.
+          for package in llamaindex vercel genkit; do
             echo "::group::$package"
             NODE_OPTIONS=--experimental-vm-modules pnpm --filter "@traceai/$package" exec jest --runInBand --passWithNoTests --testPathIgnorePatterns e2e.test.ts
             echo "::endgroup::"
