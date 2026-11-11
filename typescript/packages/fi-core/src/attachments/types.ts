@@ -19,7 +19,7 @@ export interface AttachmentHandle {
   readonly attachmentId: string;
   readonly occurrenceId: string;
   readonly admission: AttachmentAdmission;
-  /** Always resolves; validating means transferred, NOT ready or readable. */
+  /** Never rejects; validating is transferred, NOT readable. Use flush/shutdown for process-exit grace. */
   readonly completion: Promise<AttachmentCompletion>;
 }
 /** Semantic ancestry can only add restrictions, never remove a directional restriction. */

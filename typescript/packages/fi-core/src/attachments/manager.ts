@@ -257,7 +257,8 @@ export class AttachmentManager {
   private notify(): void { for (const notify of this.listeners) notify(); }
   private deadline<T>(promise: Promise<T>, timeout: number, fallback: T): Promise<T> {
     return new Promise(resolve => {
-      const timer = setTimeout(() => resolve(fallback), timeout); unref(timer);
+      // An explicit lifecycle wait owns a bounded grace period; background work stays unref'd.
+      const timer = setTimeout(() => resolve(fallback), timeout);
       void promise.then(value => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(fallback); });
     });
   }
@@ -267,7 +268,7 @@ export class AttachmentManager {
       await new Promise<void>(resolve => {
         const done = () => { clearTimeout(timer); this.listeners.delete(changed); resolve(); };
         const changed = () => { if (!this.queue.length && !this.active.size) done(); };
-        const timer = setTimeout(done, bounded(timeoutMs, this.shutdownTimeout, 30000)); unref(timer);
+        const timer = setTimeout(done, bounded(timeoutMs, this.shutdownTimeout, 30000));
         this.listeners.add(changed); changed();
       });
     }

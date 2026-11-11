@@ -32,13 +32,14 @@ test('Node TLS transfer uses upload capability, bounds readers and does not keep
       const { createNodeAttachmentManager } = require(${JSON.stringify(modulePath)});
       const manager = createNodeAttachmentManager({ enabled: true, projectName: 'fixture', projectType: 'observe',
         endpoint: 'https://127.0.0.1:${server.address().port}', headers: { authorization: 'Bearer synthetic-bootstrap', 'x-api-key': 'synthetic-initial-only' } });
-      const live = setTimeout(() => {}, ${stall ? 500 : 10000});
+      const live = ${stall} ? setTimeout(() => {}, 500) : undefined;
       (async () => {
         if (!await manager.ready()) throw Error('ready');
         const handle = manager.attach({ traceId: '0123456789abcdef0123456789abcdef', spanId: '0123456789abcdef', traceFlags: 1 },
           { kind: 'Blob', data: new Blob([new Uint8Array(700000).fill(7)]) }, { direction: 'mixed', mimeType: 'audio/wav' });
         if (${stall}) { console.log('TRANSFER_STARTED'); return; }
-        console.log(JSON.stringify(await handle.completion)); await manager.shutdown(); clearTimeout(live);
+        await manager.flush(); console.log(JSON.stringify(await handle.completion)); await manager.shutdown();
+        if (live) clearTimeout(live);
       })().catch(() => process.exitCode = 1);
     `;
     const processChild = spawn(process.execPath, ['-e', script], { env: { ...process.env, NODE_EXTRA_CA_CERTS: cert }, stdio: ['ignore', 'pipe', 'pipe'] });
