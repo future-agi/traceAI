@@ -28,6 +28,10 @@ import { redact } from "./privacy.js";
 import { contentHash } from "./files.js";
 import { VERSION } from "./version.js";
 import type { DeliveryResult } from "./validation.js";
+import type { NodeAttachmentManagerOptions } from "@traceai/fi-core/attachments/node";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { captureAgentImages, type AgentImageOptions } from "./attachments.js";
+import { agentAttachmentRuntime } from "./attachment-runtime.js";
 
 export type TurnOutcome = "success" | "error" | "interrupted" | "incomplete";
 export type EventTiming =
@@ -94,6 +98,8 @@ export interface ChildInput {
   fidelity?: Fidelity;
 }
 export interface ChildHandle {
+  /** Original typed Pi/OMP images only, before end(); no history replay or file retrieval. */
+  images?(blocks: unknown, options: AgentImageOptions): void;
   end(value?: EndInput): void;
   context?: SpanContext;
 }
@@ -108,6 +114,7 @@ export interface TurnHandle extends ChildHandle {
   child(value: ChildInput): ChildHandle;
 }
 export interface TurnTracer {
+  readonly attachments?: Pick<AttachmentManager, "ready" | "status">;
   startTurn(value: TurnInput): TurnHandle;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
@@ -144,6 +151,7 @@ function content(
 /** A private FI provider: no global tracer/context registration, host/process detectors or model gateway. */
 export function createTurnTracer(options: {
   config: ResolvedConfig;
+  attachments?: NodeAttachmentManagerOptions;
   identityKey?: Uint8Array;
   onDelivery?: (result: DeliveryResult) => void;
   /** Revalidate a durable snapshot's privacy/routing policy immediately before each HTTP batch. */
@@ -191,6 +199,7 @@ export function createTurnTracer(options: {
       project_type: ProjectType.OBSERVE,
     }),
     spanProcessors: [processor],
+    attachments: agentAttachmentRuntime(config, options.attachments),
     verbose: false,
     idGenerator: {
       generateTraceId: () => nextTrace,
@@ -412,6 +421,10 @@ export function createTurnTracer(options: {
         eventCount = 0;
       const turn: TurnHandle = {
         context: root.spanContext(),
+        images(blocks, options) {
+          if (!ended && canCollect() && config.captureContent)
+            captureAgentImages(provider.attachments, root, blocks, options);
+        },
         gap(reason): void {
           if (!ended && canCollect() && /^[A-Z_]{1,80}$/.test(reason))
             root.setAttribute(SC.FI_AGENT_GAP, reason);
@@ -551,6 +564,10 @@ export function createTurnTracer(options: {
             children.set(child.id, state);
             return {
               context: span.spanContext(),
+              images(blocks, options) {
+                if (!state.done && !state.skipped && !ended && canCollect() && config.captureContent)
+                  captureAgentImages(provider.attachments, span, blocks, options);
+              },
               end(end = {}) {
                 if (state.done) return;
                 state.done = true;
@@ -685,6 +702,7 @@ export function createTurnTracer(options: {
   }
   return {
     startTurn,
+    attachments: provider.attachments,
     state: processor.state,
     async flush() {
       try {
@@ -695,6 +713,7 @@ export function createTurnTracer(options: {
     },
     async discard() {
       closed = true;
+      provider.attachments.invalidate("policy_denied");
       active.clear();
       processor.discard();
       try {

@@ -584,7 +584,10 @@ export interface DeliveryState {
   activatedAt?: string;
   binding?: string;
 }
+import { agentAttachmentStatus } from "./attachment-status.js";
+
 export interface AgentStatus {
+  attachments: ReturnType<typeof agentAttachmentStatus>;
   agent: string;
   pendingTurns?: number;
   registrationDetail?: string;
@@ -682,6 +685,7 @@ export async function inspectStatus(
     destination: config.endpoint,
     projectName: config.projectName,
     privacy: config.captureContent ? "content-on-by-default" : "structure-only",
+    attachments: agentAttachmentStatus(config, options.env),
     provenance: config.provenance,
     credentials: config.credentials ? "present" : "missing",
     credentialCheck: check,
