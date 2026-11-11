@@ -784,8 +784,13 @@ test('legacy four-method transports keep working through the adapter (stacked la
   assert.equal(await m.ready(), true); assert.equal(m.status().state, 'ready');
   assert.equal((await m.attach(identity, source(), { mimeType: 'audio/wav', direction: 'mixed' }).completion).status, 'validating');
   assert.deepEqual(f.calls, ['bootstrap', 'initialize', 'upload', 'complete']);
-  const w = m.startRecording(identity, mono(8000)); w.tryWrite(pcm(800)); const r = await w.finish(2000);
-  assert.equal(r.state, 'unpublished', 'legacy transports cannot PUT manifests: fail closed');
+  // Legacy transports cannot PUT manifests: the recording is denied at start (loud), not buffered and uploaded unbindable.
+  const w = m.startRecording(identity, mono(8000));
+  assert.equal(w.reason, 'unsupported_version'); assert.equal(w.tryWrite(pcm(800)), false);
+  const r = await w.finish(2000);
+  assert.equal(r.state, 'denied'); assert.equal(r.segmentsPublished, 0);
+  assert.deepEqual(f.calls, ['bootstrap', 'initialize', 'upload', 'complete'], 'no segment was uploaded');
+  assert.equal(m.status().ownedBytes, 0);
   await m.shutdown();
 });
 test('T-ST-16 BR-7 fallback: capability rejected after complete -> init, content, manifest, complete for the remaining segments', async () => {

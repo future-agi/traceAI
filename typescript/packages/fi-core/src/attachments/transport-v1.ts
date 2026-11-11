@@ -1,6 +1,7 @@
 import { context } from "@opentelemetry/api";
 import { suppressTracing } from "@opentelemetry/core";
 import { validAttachmentUuid } from "./correlation";
+import { attachmentWarnLegacyTransport, attachmentWireRejected } from "./warn";
 import type {
   AttachmentAdmission, AttachmentBootstrap, AttachmentCompletionStatus, AttachmentContentSource, AttachmentImportJob, AttachmentPacer,
   AttachmentSession, AttachmentTransport, AttachmentTransportV1, AttachmentUpload, AttachmentUploadRequest,
@@ -154,7 +155,7 @@ export const attachmentFetchClient: AttachmentHttpClient = async request => {
     const ok = response.status >= 200 && response.status < 300;
     const data = await readBounded(response, ok ? SUCCESS_BODY : ERROR_BODY);
     if (!data) {
-      if (ok) throw new AttachmentTransportError("unsupported_version");
+      if (ok) throw attachmentWireRejected("response size", new AttachmentTransportError("unsupported_version"));
       return { status: response.status, body: new Uint8Array(), retryAfter: response.headers.get("retry-after") ?? undefined };
     }
     return { status: response.status, body: data, retryAfter: response.headers.get("retry-after") ?? undefined };
@@ -235,13 +236,13 @@ export function createAttachmentHttpTransportV1(options: AttachmentHttpTransport
       throw new AttachmentTransportError("incomplete", !signal.aborted);
     }
     if (response.status !== expected) {
-      if (response.status >= 200 && response.status < 300) throw new AttachmentTransportError("unsupported_version");
+      if (response.status >= 200 && response.status < 300) throw attachmentWireRejected("HTTP success status", new AttachmentTransportError("unsupported_version"));
       throw attachmentHttpError(response.status, response.body, response.retryAfter);
     }
-    if (response.body.byteLength > SUCCESS_BODY) throw new AttachmentTransportError("unsupported_version");
+    if (response.body.byteLength > SUCCESS_BODY) throw attachmentWireRejected("response size", new AttachmentTransportError("unsupported_version"));
     if (expected === 204) return undefined;
     try { return attachmentStrictJson(new TextDecoder("utf-8", { fatal: true }).decode(response.body)); }
-    catch { throw new AttachmentTransportError("unsupported_version"); }
+    catch { throw attachmentWireRejected("strict JSON body", new AttachmentTransportError("unsupported_version")); }
   }
   const base = (session: AttachmentSession) => {
     if (!validAttachmentUuid(session.scope.project_id)) throw new AttachmentTransportError("scope_unresolved");
@@ -258,7 +259,7 @@ export function createAttachmentHttpTransportV1(options: AttachmentHttpTransport
   const v1: AttachmentTransportV1 = {
     async bootstrap(body, key, signal) {
       const result = await send("POST", "/tracer/v1/attachment-sessions", JSON.stringify(body), signal, 200, { key });
-      if (!validAttachmentSession(result, body.capture_session_id)) throw new AttachmentTransportError("unsupported_version");
+      if (!validAttachmentSession(result, body.capture_session_id)) throw attachmentWireRejected("AttachmentSession", new AttachmentTransportError("unsupported_version"));
       bootstraps.set(body.capture_session_id, { ...body });
       return result;
     },
@@ -268,20 +269,20 @@ export function createAttachmentHttpTransportV1(options: AttachmentHttpTransport
       if (!body) throw new AttachmentTransportError("unsupported_version");
       const result = await send("POST", "/tracer/v1/attachment-sessions", JSON.stringify(body), signal, 200,
         { key: attachmentIdempotencyKey("bootstrap", current.capture_session_id, sequence) });
-      if (!validAttachmentSession(result, body.capture_session_id)) throw new AttachmentTransportError("unsupported_version");
+      if (!validAttachmentSession(result, body.capture_session_id)) throw attachmentWireRejected("AttachmentSession", new AttachmentTransportError("unsupported_version"));
       return result;
     },
     async initialize(session, body, key, signal) {
       const request = parseUploadBody(body);
       const result = await send("POST", `${base(session)}/uploads`, body, signal, 201, { key });
-      if (!validAttachmentUpload(result, request)) throw new AttachmentTransportError("unsupported_version");
+      if (!validAttachmentUpload(result, request)) throw attachmentWireRejected("UploadResponse", new AttachmentTransportError("unsupported_version"));
       return result;
     },
     async renewUpload(session, upload, body, signal) {
       // Replay the byte-identical initialize under the same key with the ORIGINAL identity (BR-1).
       const request = parseUploadBody(body);
       const result = await send("POST", `${base(session)}/uploads`, body, signal, 201, { key: attachmentIdempotencyKey("upload", request.occurrence_id) });
-      if (!validAttachmentUpload(result, request)) throw new AttachmentTransportError("unsupported_version");
+      if (!validAttachmentUpload(result, request)) throw attachmentWireRejected("UploadResponse", new AttachmentTransportError("unsupported_version"));
       if (result.upload_id !== upload.upload_id || result.write_capability === upload.write_capability ||
         Date.parse(result.expires_at) <= Date.parse(upload.expires_at)) throw new AttachmentTransportError("expired");
       return result;
@@ -290,21 +291,21 @@ export function createAttachmentHttpTransportV1(options: AttachmentHttpTransport
       const size = source instanceof Uint8Array ? source.byteLength : (source as { size: number }).size;
       if (size !== upload.reserved_bytes) throw new AttachmentTransportError("too_large");
       const result = await send("PUT", `${uploadPath(session, upload)}/content`, source, signal, 200, { capability: upload.write_capability, binary: true, pacer });
-      if (!validStatus(result, upload.upload_id, "upload_id", "pending_upload")) throw new AttachmentTransportError("unsupported_version");
+      if (!validStatus(result, upload.upload_id, "upload_id", "pending_upload")) throw attachmentWireRejected("UploadStatus", new AttachmentTransportError("unsupported_version"));
     },
     async complete(session, upload, key, signal) {
       const result = await send("POST", `${uploadPath(session, upload)}/complete`, completeBody(session), signal, 202, { key, capability: upload.write_capability });
       // validating, never ready: late-root and root-first orders both still need validation (F01 lifecycle fixtures).
-      if (!validStatus(result, upload.upload_id, "upload_id", "validating")) throw new AttachmentTransportError("unsupported_version");
+      if (!validStatus(result, upload.upload_id, "upload_id", "validating")) throw attachmentWireRejected("UploadStatus", new AttachmentTransportError("unsupported_version"));
       return "validating";
     },
     async abort(session, upload, key, signal) {
       const result = await send("POST", `${uploadPath(session, upload)}/abort`, completeBody(session), signal, 200, { key, capability: upload.write_capability });
-      if (!validStatus(result, upload.upload_id, "upload_id")) throw new AttachmentTransportError("unsupported_version");
+      if (!validStatus(result, upload.upload_id, "upload_id")) throw attachmentWireRejected("UploadStatus", new AttachmentTransportError("unsupported_version"));
     },
     async uploadStatus(session, upload, signal) {
       const result = await send("GET", `${uploadPath(session, upload)}/status`, undefined, signal, 200, { capability: upload.write_capability });
-      if (!validStatus(result, upload.upload_id, "upload_id")) throw new AttachmentTransportError("unsupported_version");
+      if (!validStatus(result, upload.upload_id, "upload_id")) throw attachmentWireRejected("UploadStatus", new AttachmentTransportError("unsupported_version"));
       return { state: result.state, reason: result.reason };
     },
     async putManifest(session, capability, recordingId, body, key, signal) {
@@ -318,13 +319,13 @@ export function createAttachmentHttpTransportV1(options: AttachmentHttpTransport
       catch { throw new AttachmentTransportError("unsupported_version"); }
       const result = await send("POST", `${base(session)}/imports`, body, signal, 202, { key });
       if (!object(result) || Object.keys(result).length !== 4 || result.mode !== "completed_recording" || result.recording_id !== recordingId ||
-        result.state !== "importing" || !validAttachmentUuid(result.job_id)) throw new AttachmentTransportError("unsupported_version");
+        result.state !== "importing" || !validAttachmentUuid(result.job_id)) throw attachmentWireRejected("RecordingImportResponse", new AttachmentTransportError("unsupported_version"));
       return { jobId: result.job_id, recordingId, state: "importing" } as AttachmentImportJob;
     },
     async importStatus(session, jobId, signal) {
       if (!validAttachmentUuid(jobId)) throw new AttachmentTransportError("unsupported_version");
       const result = await send("GET", `${base(session)}/imports/${jobId}/status`, undefined, signal, 200);
-      if (!validStatus(result, jobId, "job_id")) throw new AttachmentTransportError("unsupported_version");
+      if (!validStatus(result, jobId, "job_id")) throw attachmentWireRejected("ImportStatus", new AttachmentTransportError("unsupported_version"));
       return { state: result.state, reason: result.reason };
     },
   };
@@ -384,11 +385,17 @@ export function attachmentLegacyTransport(transport: AttachmentTransport): Attac
     importStatus: unsupported,
   };
 }
-/** Pick the versioned surface of whatever transport shape the caller provided. */
+const LEGACY_WIRES = new WeakSet<object>();
+/** @internal True for the adapter around a four-method transport, which cannot renew, manifest or import. */
+export function attachmentIsLegacyWire(wire: AttachmentTransportV1 | undefined): boolean { return !!wire && LEGACY_WIRES.has(wire); }
+/** Pick the versioned surface of whatever transport shape the caller provided. A four-method shape warns once (loudly). */
 export function attachmentWireTransport(transport: AttachmentTransport | AttachmentTransportV1 | undefined): AttachmentTransportV1 | undefined {
   if (!transport) return undefined;
   const carried = (transport as { [ATTACHMENT_TRANSPORT_V1]?: AttachmentTransportV1 })[ATTACHMENT_TRANSPORT_V1];
   if (carried && typeof carried.putContent === "function") return carried;
   if (typeof (transport as AttachmentTransportV1).putContent === "function") return transport as AttachmentTransportV1;
-  return attachmentLegacyTransport(transport as AttachmentTransport);
+  attachmentWarnLegacyTransport();
+  const legacy = attachmentLegacyTransport(transport as AttachmentTransport);
+  LEGACY_WIRES.add(legacy);
+  return legacy;
 }

@@ -18,8 +18,11 @@ export type AttachmentAdmission = "queued" | "disabled" | "bootstrap_pending" | 
 /** Terminal transfer outcomes (design 0.3). `validating` means transferred, NOT readable. `importing` is an accepted import job. */
 export type AttachmentCompletionStatus = "validating" | "importing" | "incomplete" | "expired" | "deleted" | "policy_denied" | "too_large" | "throttled" |
   "conflict" | "not_found" | "credential_scope_unsupported" | "validation_failed" | "unsupported_version" | "source_unavailable" | "redaction_unavailable";
-/** `failed` is retired (design 0.3): it is never produced and stays in the type only for source compatibility. */
-export type AttachmentCompletion = Readonly<{ status: AttachmentAdmission | AttachmentCompletionStatus | "failed" }>;
+/**
+ * `failed` is retired (design 0.3) and is no longer a member, so a leftover `status === "failed"` check is a compile error
+ * (TS2367) instead of a branch that silently never runs. Failures are `incomplete` or `unsupported_version`.
+ */
+export type AttachmentCompletion = Readonly<{ status: AttachmentAdmission | AttachmentCompletionStatus }>;
 export interface AttachmentHandle {
   readonly attachmentId: string;
   readonly occurrenceId: string;
@@ -179,7 +182,10 @@ export type AttachmentSpan = Span | SpanContext;
 // Design sections 0-9 (sdk-streaming-design.md). Additive; earlier names are unchanged.
 // ---------------------------------------------------------------------------
 export interface AttachmentClock { now(): number; wall(): number }
-/** Runtime state (design 0.2). `deleted` and `policy_denied` remain only for an explicit `invalidate()`. */
+/**
+ * Runtime state (design 0.2). `deleted` and `policy_denied` remain only for an explicit `invalidate()`.
+ * The old ready value `"queued"` is retired for `"ready"`; it is deliberately absent, so `state !== "queued"` is a compile error (TS2367).
+ */
 export type AttachmentRuntimeState = "disabled" | "endpoint_unconfigured" | "credential_scope_unsupported" | "scope_unresolved" | "bootstrap_pending" |
   "ready" | "expired" | "unsupported_version" | "incomplete" | "deleted" | "policy_denied" | "source_unavailable";
 export interface AttachmentStatus {
