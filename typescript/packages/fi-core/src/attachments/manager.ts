@@ -13,7 +13,8 @@ import {
   type RecordingFileSegment,
 } from "./recording";
 import { AttachmentConsumedStream, type StreamHost, type StreamState } from "./stream";
-import { AttachmentTransportError, attachmentIdempotencyKey, attachmentWireTransport, validAttachmentSession, validAttachmentUpload } from "./transport-v1";
+import { AttachmentTransportError, attachmentIdempotencyKey, attachmentIsLegacyWire, attachmentWireTransport, validAttachmentSession, validAttachmentUpload } from "./transport-v1";
+import { attachmentWireRejected } from "./warn";
 import type {
   AttachmentAdmission, AttachmentAdmissionTicket, AttachmentClock, AttachmentCompletedRecordingRequest, AttachmentCompletion, AttachmentContentSource,
   AttachmentFields, AttachmentFlushResult, AttachmentHandle, AttachmentImportHandle, AttachmentImportOptions, AttachmentManagerOptions, AttachmentOptions,
@@ -108,6 +109,8 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   private readonly bootController?: AbortController;
   private readonly boot: Promise<boolean>;
   private readonly wire?: AttachmentTransportV1;
+  /** A four-method transport: no renewal, manifests or imports (warned once at construction). */
+  private readonly legacyWire: boolean = false;
   private readonly lanes = new Map<string, Lane>();
   private order: Lane[] = [];
   private cursor = 0;
@@ -164,6 +167,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     if (!this.enabled) { this.bootStatus = "disabled"; this.boot = Promise.resolve(false); return; }
     this.bootController = new AbortController();
     this.wire = attachmentWireTransport(options.transport);
+    this.legacyWire = attachmentIsLegacyWire(this.wire);
     this.boot = this.bootstrap();
   }
   private env(): Readonly<Record<string, string | undefined>> {
@@ -181,7 +185,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
         ...(this.config.workspaceId ? { workspace_id: this.config.workspaceId } : {}) };
       const key = attachmentIdempotencyKey("bootstrap", this.sessionId, 0);
       const session = await this.attempt(signal => this.wire!.bootstrap(request, key, signal), this.bootController!.signal);
-      if (!validAttachmentSession(session, this.sessionId, this.clock.wall())) throw new AttachmentTransportError("unsupported_version");
+      if (!validAttachmentSession(session, this.sessionId, this.clock.wall())) throw attachmentWireRejected("AttachmentSession", new AttachmentTransportError("unsupported_version"));
       if (this.config.workspaceId && session.scope.workspace_id !== this.config.workspaceId) throw new AttachmentTransportError("scope_unresolved");
       if (this.closed) return false;
       // Detached bounded wire object: a caller/transport cannot later loosen policy through mutation.
@@ -302,7 +306,8 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   }
   private maybeRenew(): void {
     const session = this.session;
-    if (!session || this.renewing || this.closed || this.stoppingFlag || this.bootStatus !== "ready" || !this.wire) return;
+    // A legacy wire has no renewal route: retrying it would only spin; the session runs to `expired` (warned at construction).
+    if (!session || this.renewing || this.closed || this.stoppingFlag || this.bootStatus !== "ready" || !this.wire || this.legacyWire) return;
     const now = this.clock.wall(); const expires = Date.parse(session.expires_at);
     if (expires - now > Math.max(60000, 0.2 * this.sessionLifetime)) return;
     if (this.clock.now() < this.nextRenewalAt) return;
@@ -311,7 +316,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     void (async () => {
       try {
         const next = await this.attempt(signal => this.wire!.renewSession(session, sequence, signal), this.bootController!.signal, () => undefined, 3);
-        if (!validAttachmentSession(next, this.sessionId, this.clock.wall())) throw new AttachmentTransportError("unsupported_version");
+        if (!validAttachmentSession(next, this.sessionId, this.clock.wall())) throw attachmentWireRejected("AttachmentSession", new AttachmentTransportError("unsupported_version"));
         const scope = (s: AttachmentSession) => `${s.scope.organization_id}/${s.scope.workspace_id}/${s.scope.project_id}`;
         if (scope(next) !== scope(session)) { this.invalidate("scope_unresolved" as "deleted"); return; }
         if (this.session !== session || this.closed) return;
@@ -642,6 +647,8 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
         if (evaluated.reason) return inert(evaluated.reason);
         trackDenials = evaluated.tracks;
       }
+      // Fail at start, not at the manifest: a legacy wire cannot publish, so no bytes are retained or uploaded.
+      if (this.legacyWire) return inert("unsupported_version");
       const correlation = this.resolveCorrelation(target);
       const identity = correlation?.snapshot();
       if (!correlation || !identity) return inert("correlation_unavailable");
@@ -689,6 +696,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       if (!Number.isInteger(size) || size <= 0 || (!wav && size > singleCap)) return denied("too_large");
       if (this.descriptors() >= this.maxDescriptors || this.bytes + CHUNK > this.maxBytes) return denied("queue_full");
       if (wav && options.wavTracks && !this.validWavTracks(options.wavTracks)) return denied("policy_denied");
+      if (wav && this.legacyWire) return denied("unsupported_version");
       this.bytes += CHUNK;
       return this.ownedTransfer(record, facts, correlation!, identity!, options, wav, singleCap);
     } catch { return denied("source_unavailable"); }
@@ -854,6 +862,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       const { reason, correlation, identity } = this.admitTarget(target, facts);
       // Denied preflight never calls the resolver.
       if (reason) return finished(reason);
+      if (this.legacyWire) return finished("unsupported_version");
       if (!validAttachmentImportRequest(request) || !options?.resolver || typeof options.resolver.resolve !== "function") return finished("policy_denied");
       if (this.descriptors() >= this.maxDescriptors || this.bytes + 1 > this.maxBytes) return finished("queue_full");
       const id = ++this.nextReservation; this.bytes += 1; this.reservations.set(id, { bytes: 1, expiresAt: Infinity });
@@ -891,7 +900,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       const done = handle("queued");
       this.reservations.delete(id); // the descriptor becomes the job
       this.enqueue({ lane: recordingId, bytes: 1, controller: new AbortController(), denied: () => this.recheck(finalFacts),
-        fail: reason => { state = reason === "failed" ? "incomplete" : reason; done.finish(state); },
+        fail: reason => { state = reason; done.finish(state); },
         run: async signal => {
           try {
             const job = await this.attempt(s => this.wire!.submitImport(this.session!, body, attachmentIdempotencyKey("import", recordingId), s), signal,

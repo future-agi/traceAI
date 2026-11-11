@@ -7,6 +7,7 @@ export { AttachmentConsumedStream } from "./stream";
 export { AttachmentRecording, attachmentBoundaryStep, attachmentSegmentFrames, attachmentFramesToMs, attachmentWavHeader, validAttachmentManifest } from "./recording";
 export { AttachmentUnavailableResolver } from "./imports";
 export { validAttachmentWire, ATTACHMENT_WIRE_SHAPES } from "./wire";
+export { ATTACHMENT_WARNING_LEGACY_TRANSPORT, ATTACHMENT_WARNING_WIRE_REJECTED } from "./warn";
 export { AttachmentCorrelation, canonicalAttachmentTraceId, attachmentTraceUuid, attachmentMessageUri } from "./correlation";
 export { evaluateAttachmentPolicy, attachmentModality } from "./policy";
 export {
