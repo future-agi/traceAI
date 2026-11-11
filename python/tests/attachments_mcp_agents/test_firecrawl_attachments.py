@@ -17,7 +17,7 @@ from traceai_firecrawl import FirecrawlInstrumentor  # noqa: E402
 from _harness import data_uri, flush, png, refs, span_named  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "frameworks" / "firecrawl" / "tests"))
-from _firecrawl_fake import FakeFirecrawl  # noqa: E402
+from _firecrawl_fake import JOB_ID, FakeFirecrawl, crawl_status  # noqa: E402
 
 SHOT = png(seed=61)
 ACTION_SHOT = png(seed=62)
@@ -80,7 +80,7 @@ def test_hosted_only_screenshot_uploads_nothing(f01, instrument, fake):
     manager.shutdown(5)
 
 
-def test_async_client_and_crawl_documents(f01, instrument, fake):
+def test_async_client_scrape(f01, instrument, fake):
     manager = f01.manager()
     instrument(manager)
     fake.routes[("POST", "/v2/scrape")] = (200, page(data_uri("image/png", SHOT)))
@@ -92,6 +92,20 @@ def test_async_client_and_crawl_documents(f01, instrument, fake):
     asyncio.run(go())
     flush(manager)
     assert f01.payloads == [SHOT]
+    manager.shutdown(5)
+
+
+def test_crawl_status_documents_upload_on_the_status_span(f01, instrument, fake):
+    manager = f01.manager()
+    exporter = instrument(manager)
+    body = crawl_status("completed", pages=2)
+    body["data"] = [dict(page, screenshot=data_uri("image/png", png(seed=63 + n))) for n, page in enumerate(body["data"])]
+    fake.routes[("GET", "/v2/crawl/" + JOB_ID)] = (200, body)
+    job = Firecrawl(api_key=KEY, api_url=fake.origin, max_retries=1).get_crawl_status(JOB_ID)
+    flush(manager)
+    assert len(job.data) == 2
+    assert sorted(f01.payloads) == sorted([png(seed=63), png(seed=64)])
+    assert len(refs(span_named(exporter, "firecrawl.get_crawl_status"))) == 2
     manager.shutdown(5)
 
 
