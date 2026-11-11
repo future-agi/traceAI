@@ -298,10 +298,13 @@ describe("privacy negative controls", () => {
   test("unknown host, non-audio MIME and error bodies do not upload", async () => {
     install(); await inNative(async () => {
       await (await speech("unknown.invalid/v1/audio/speech")).arrayBuffer();
+      // A lookalike host or port under a native span: only the media allowlist stands between it and capture.
+      await (await speech("api.openai.com.evil.invalid/v1/audio/speech")).arrayBuffer();
+      await (await speech("api.openai.com:8443/v1/audio/speech")).arrayBuffer();
       responseType = "application/octet-stream"; await (await speech()).arrayBuffer();
       responseType = "audio/wav"; responseStatus = 403; await (await speech()).arrayBuffer();
     });
-    await (await speech("api.openai.com.evil.invalid/v1/audio/speech")).arrayBuffer();
+    responseStatus = 200; await (await speech("api.openai.com.evil.invalid/v1/audio/speech")).arrayBuffer();
     await settle(); expect(uploads).toHaveLength(0);
   });
   test("oversized media, raw multipart, and ended/unrelated native contexts fail closed", async () => {
