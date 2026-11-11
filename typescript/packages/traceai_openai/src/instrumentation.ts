@@ -1,5 +1,5 @@
 import { patchSpeech, unpatchSpeech } from "./speech";
-import { ProviderMediaCapture, compatibleMediaRoute, type ProviderMediaOptions } from "@traceai/provider-media";
+import type { ProviderMediaOptions } from "@traceai/provider-media";
 import openai from "openai";
 import {
   InstrumentationBase,
@@ -267,7 +267,6 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           // --- ADD LOG ---
           // diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
 
-          if (compatibleMediaRoute(this)) new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig }).compatibleMessages(body.messages);
           const contextSpan = span.getContextSpan();
           const execContext = getExecContext(contextSpan);
           const requestStartedAt = performance.now();
@@ -635,6 +634,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
+    // Audio calls gain spans only while an explicitly supplied manager is active (checked per call,
+    // because the base constructor can patch before this.attachments is assigned).
     patchSpeech(sdk, this, () => this.fiTracer, () => ({ attachments: this.attachments, traceConfig: this._traceConfig }), () => this.isEnabled());
 
     // Keep the legacy diagnostic property, but never use it as the guard.

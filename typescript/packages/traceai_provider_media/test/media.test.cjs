@@ -119,3 +119,59 @@ test('malformed and oversized base64 fail closed without changing provider input
     await f.manager.flush(); assert.equal(f.uploads.length, 0);
   } finally { await f.close(); }
 });
+
+test('data URI MIME descriptors consume one part budget and capture JPEG/WebP once with the exact type', async () => {
+  const f = await fixture();
+  try {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xd9]);
+    const parts = Array.from({ length: 70 }, () => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${jpeg.toString('base64')}` } }));
+    new ProviderMediaCapture(identity, { attachments: f.manager }).compatibleMessages([{ content: parts }]);
+    await f.manager.flush();
+    assert.equal(f.uploads.length, 64);
+    assert.equal(new Set(f.uploads.map(u => u.request.mime_type)).size, 1); assert.equal(f.uploads[0].request.mime_type, 'image/jpeg');
+    assert.deepEqual(f.uploads[0].data, jpeg); assert.equal(f.uploads[63].request.part_index, 63);
+  } finally { await f.close(); }
+});
+
+test('non-image data URIs, PDFs in image_url and unknown audio formats are not captured', async () => {
+  const f = await fixture();
+  try {
+    new ProviderMediaCapture(identity, { attachments: f.manager }).compatibleMessages([{ content: [
+      { type: 'image_url', image_url: { url: `data:application/pdf;base64,${png.toString('base64')}` } },
+      { type: 'image_url', image_url: { url: `data:image/svg+xml;base64,${png.toString('base64')}` } },
+      { type: 'input_audio', input_audio: { format: 'flac', data: wav().toString('base64') } },
+    ] }]);
+    await f.manager.flush(); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+test('Bedrock typed tool-result screenshots keep tool identity; S3 locations and unsupported formats stay uncaptured', async () => {
+  const f = await fixture();
+  try {
+    new ProviderMediaCapture(identity, { attachments: f.manager }).bedrockConverse({ modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0', messages: [
+      { role: 'user', content: [{ toolResult: { toolUseId: 'tooluse_screen-1', content: [{ text: 'ok' }, { image: { format: 'png', source: { bytes: png } } }] } }] },
+      { role: 'user', content: [{ image: { format: 'png', source: { s3Location: { uri: 's3://private/secret.png' } } } }, { image: { format: 'gif', source: { bytes: png } } },
+        { document: { format: 'docx', name: 'private-name', source: { bytes: png } } }, { document: { format: 'pdf', name: 'private-name', source: { bytes: png } } }] },
+    ] });
+    await f.manager.flush();
+    assert.equal(f.uploads.length, 2);
+    const tool = f.uploads.find(u => u.request.purpose === 'tool_result');
+    assert.equal(tool.request.tool_call_id, 'tooluse_screen-1'); assert.equal(tool.request.message_index, 0); assert.deepEqual(tool.data, png);
+    const pdf = f.uploads.find(u => u.request.mime_type === 'application/pdf');
+    assert.equal(pdf.request.message_index, 1); assert.equal(pdf.request.part_index, 3);
+    assert.equal(JSON.stringify(f.uploads.map(u => u.request)).includes('private'), false);
+  } finally { await f.close(); }
+});
+
+test('speech routes, manager activity and capability descriptors are explicit', async () => {
+  const { speechMediaRoute, attachmentsActive, PROVIDER_MEDIA_CAPABILITIES } = require('../dist/src');
+  for (const [baseURL, allowed] of [['https://api.openai.com/v1', true], ['https://api.groq.com/openai/v1', true], ['https://api.fireworks.ai/inference/v1', false], ['http://api.openai.com/v1', false], ['https://api.openai.com.evil.invalid/v1', false]]) assert.equal(speechMediaRoute({ _client: { baseURL } }), allowed, baseURL);
+  assert.equal(attachmentsActive(undefined), false);
+  const off = await fixture({ enabled: false }); const on = await fixture();
+  try { assert.equal(attachmentsActive(off.manager), false); assert.equal(attachmentsActive(on.manager), true); } finally { await off.close(); await on.close(); }
+  assert.ok(Object.isFrozen(PROVIDER_MEDIA_CAPABILITIES));
+  for (const operations of Object.values(PROVIDER_MEDIA_CAPABILITIES)) for (const entry of operations) {
+    assert.equal(entry.sources.some(s => /url|file|stream|provider/i.test(s)), false);
+  }
+  assert.equal(PROVIDER_MEDIA_CAPABILITIES['@traceai/openai'].some(e => e.operation.startsWith('chat')), false);
+});

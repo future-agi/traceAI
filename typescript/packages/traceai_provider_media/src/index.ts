@@ -39,8 +39,9 @@ export class ProviderMediaCapture {
     }
   }
 
-  private submit(key: string, source: AttachmentSource, options: AttachmentOptions): void {
-    if (!this.manager || !this.correlation || this.attempted++ >= MAX_PARTS || this.seen.has(key)) return;
+  private submit(key: string, source: AttachmentSource, options: AttachmentOptions, counted = true): void {
+    // One budget slot per typed part, even when a lazily typed data URI tries several MIME descriptors.
+    if (!this.manager || !this.correlation || (counted && this.attempted++ >= MAX_PARTS) || this.seen.has(key)) return;
     try {
       const config = generateTraceConfig(this.local);
       const input = options.direction !== "output";
@@ -54,7 +55,7 @@ export class ProviderMediaCapture {
     } catch { /* Never leak provider payloads or replace application behavior. */ }
   }
 
-  private base64(key: string, read: () => unknown, options: AttachmentOptions): void {
+  private base64(key: string, read: () => unknown, options: AttachmentOptions, counted = true): void {
     this.submit(key, { kind: "Bytes", get data() {
       // AttachmentManager does not access this getter until all policy, identity,
       // sampling and descriptor gates have passed. Never decode during extraction.
@@ -64,18 +65,20 @@ export class ProviderMediaCapture {
       const decoded = Buffer.from(value, "base64");
       if (decoded.byteLength > MAX_DECODED_BYTES) throw new Error("source_unavailable");
       return decoded;
-    } }, options);
+    } }, options, counted);
   }
 
   private dataUri(key: string, read: () => unknown, options: Omit<AttachmentOptions, "mimeType">): void {
     // MIME is a typed descriptor; payload slicing/decoding occurs only inside the
     // admitted getter. Do not retain a remote/signed URL as fallback metadata.
+    if (this.attempted >= MAX_PARTS) return;
+    this.attempted++;
     for (const mimeType of ["image/png", "image/jpeg", "image/webp"]) {
       this.base64(`${key}:${mimeType}`, () => {
         const value = read();
         const prefix = `data:${mimeType};base64,`;
         return typeof value === "string" && value.startsWith(prefix) ? value.slice(prefix.length) : undefined;
-      }, { ...options, mimeType });
+      }, { ...options, mimeType }, false);
     }
   }
 
@@ -141,16 +144,29 @@ export class ProviderMediaCapture {
         const parts = list(record(messages[m]).content);
         for (let p = 0; p < Math.min(parts.length, MAX_PARTS); p++) {
           const part = record(parts[p]);
-          const media = record(part.image ?? part.document);
-          const mimeType = part.image ? ({ png: "image/png", jpeg: "image/jpeg", webp: "image/webp" } as Record<string, string>)[String(media.format)]
-            : media.format === "pdf" ? "application/pdf" : undefined;
-          if (!mimeType) continue;
-          this.submit(`bedrock:${m}:${p}`, { kind: "Bytes", get data() { return record(media.source).bytes as Uint8Array; } }, {
-            mimeType, direction: "input", purpose: "model_input", messageIndex: m, partIndex: p,
-          });
+          this.bedrockBlock(`bedrock:${m}:${p}`, part, { direction: "input", purpose: "model_input", messageIndex: m, partIndex: p });
+          // Typed tool results (for example computer-use screenshots) carry their own
+          // image/document blocks. Only these named blocks are read; no generic walk.
+          const tool = record(part.toolResult);
+          const toolCallId = typeof tool.toolUseId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(tool.toolUseId) ? tool.toolUseId : undefined;
+          const results = list(tool.content);
+          for (let q = 0; q < Math.min(results.length, MAX_PARTS); q++) {
+            this.bedrockBlock(`bedrock:${m}:${p}:${q}`, record(results[q]), {
+              direction: "input", purpose: "tool_result", role: "tool", messageIndex: m, partIndex: p, ...(toolCallId ? { toolCallId } : {}),
+            });
+          }
         }
       }
     });
+  }
+
+  private bedrockBlock(key: string, part: RecordValue, options: Omit<AttachmentOptions, "mimeType">): void {
+    // Bedrock serializes Uint8Array bytes itself; S3 locations and other sources stay unsupported.
+    const media = record(part.image ?? part.document);
+    const mimeType = part.image ? ({ png: "image/png", jpeg: "image/jpeg", webp: "image/webp" } as Record<string, string>)[String(media.format)]
+      : part.document && media.format === "pdf" ? "application/pdf" : undefined;
+    if (!mimeType) return;
+    this.submit(key, { kind: "Bytes", get data() { return record(media.source).bytes as Uint8Array; } }, { ...options, mimeType });
   }
 
   /** Immutable File/Blob input only; never advance fs.ReadStream or fetch Response inputs. */
@@ -194,12 +210,60 @@ export class ProviderMediaCapture {
   private safely(fn: () => void): void { if (this.manager) { try { fn(); } catch { /* Content-free fail-open. */ } } }
 }
 
-/** Explicit compatible host admission; unknown/text-only routes do not acquire media capture. */
-export function compatibleMediaRoute(resource: unknown): boolean {
+function routeHost(resource: unknown, hosts: readonly string[]): boolean {
   try {
     const r = record(resource);
     const client = record(r._client ?? r.client);
     const url = new URL(String(client.baseURL));
-    return url.protocol === "https:" && ["api.openai.com", "api.fireworks.ai", "api.together.ai", "api.x.ai", "openrouter.ai", "api.groq.com", "api.mistral.ai"].includes(url.hostname);
+    return url.protocol === "https:" && hosts.includes(url.hostname);
   } catch { return false; }
 }
+
+/**
+ * Explicit compatible chat host admission for OpenAI-SDK resources; unknown and
+ * text-only routes do not acquire media capture. The OpenAI chat hook itself is
+ * owned by the OpenAI adapter, which may consult this allowlist.
+ */
+export function compatibleMediaRoute(resource: unknown): boolean {
+  return routeHost(resource, ["api.openai.com", "api.fireworks.ai", "api.together.ai", "api.x.ai", "openrouter.ai", "api.groq.com", "api.mistral.ai"]);
+}
+
+/** OpenAI-SDK audio resources: only hosts whose speech/transcription routes were qualified. */
+export function speechMediaRoute(resource: unknown): boolean {
+  return routeHost(resource, ["api.openai.com", "api.groq.com"]);
+}
+
+/** True only while a configured manager has not been switched off. Tightening still wins later. */
+export function attachmentsActive(manager: AttachmentManager | undefined): manager is AttachmentManager {
+  try { return !!manager && manager.status().state !== "disabled"; } catch { return false; }
+}
+
+export type ProviderMediaOperation = Readonly<{
+  operation: string;
+  sources: readonly ("inline_base64" | "data_uri" | "bytes" | "blob" | "consumed_response")[];
+  modalities: readonly ("image" | "audio" | "document")[];
+  directions: readonly ("input" | "output")[];
+}>;
+
+/**
+ * Typed per-package capability descriptors. Anything not listed (streams, URLs,
+ * provider file IDs, async operations, InvokeModel bodies, native OCR/speech
+ * routes) is unsupported and never captured.
+ */
+export const PROVIDER_MEDIA_CAPABILITIES: Readonly<Record<string, readonly ProviderMediaOperation[]>> = Object.freeze({
+  "@traceai/google-genai-sdk": [{ operation: "models.generateContent", sources: ["inline_base64"], modalities: ["image", "audio", "document"], directions: ["input", "output"] },
+    { operation: "models.generateContentStream", sources: ["inline_base64"], modalities: ["image", "audio", "document"], directions: ["input"] }],
+  "@traceai/google-genai": [{ operation: "GenerativeModel.generateContent", sources: ["inline_base64"], modalities: ["image", "audio", "document"], directions: ["input", "output"] }],
+  "@traceai/fi-instrumentation-vertexai": [{ operation: "GenerativeModel.generateContent", sources: ["inline_base64"], modalities: ["image", "audio", "document"], directions: ["input", "output"] }],
+  "@traceai/bedrock": [{ operation: "ConverseCommand", sources: ["bytes"], modalities: ["image", "document"], directions: ["input"] }],
+  "@traceai/groq": [{ operation: "chat.completions.create", sources: ["data_uri"], modalities: ["image"], directions: ["input"] },
+    { operation: "audio.transcriptions.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
+    { operation: "audio.translations.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
+    { operation: "audio.speech.create", sources: ["consumed_response"], modalities: ["audio"], directions: ["output"] }],
+  "@traceai/mistral": [{ operation: "chat.complete", sources: ["data_uri"], modalities: ["image"], directions: ["input"] }],
+  "@traceai/portkey": [{ operation: "chat.completions.create", sources: ["data_uri", "inline_base64"], modalities: ["image", "audio"], directions: ["input"] }],
+  "@traceai/vllm": [{ operation: "chat.completions.create", sources: ["data_uri", "inline_base64"], modalities: ["image", "audio"], directions: ["input"] }],
+  "@traceai/openai": [{ operation: "audio.transcriptions.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
+    { operation: "audio.translations.create", sources: ["blob"], modalities: ["audio"], directions: ["input"] },
+    { operation: "audio.speech.create", sources: ["consumed_response"], modalities: ["audio"], directions: ["output"] }],
+});

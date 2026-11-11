@@ -5,6 +5,7 @@ on:
     paths:
       - 'typescript/packages/traceai_google_genai_sdk/**'
       - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/traceai_provider_media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - '.github/workflows/google-genai-sdk-compat.yml'
       - '.github/scripts/loopback-network-diagnostics.cjs'
@@ -39,11 +40,13 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global pnpm@10.30.1
-          pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/provider-media... install --frozen-lockfile --ignore-scripts
           pnpm --filter @traceai/fi-semantic-conventions run build
           pnpm --filter @traceai/fi-core run build
+          pnpm --filter @traceai/provider-media run build
           pnpm --dir packages/fi-semantic-conventions pack --out "$RUNNER_TEMP/semconv.tgz"
           pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
+          pnpm --dir packages/traceai_provider_media pack --out "$RUNNER_TEMP/provider-media.tgz"
       - name: Build adapter against published shared dependencies
         shell: bash
         run: |
@@ -51,6 +54,8 @@ jobs:
           source="$GITHUB_WORKSPACE/typescript/packages/traceai_google_genai_sdk"
           cp -R "$source" "$RUNNER_TEMP/build"
           cd "$RUNNER_TEMP/build"
+          # Workspace-only shared packages are staged from this PR's tarballs.
+          npm pkg set "dependencies.@traceai/fi-core=file:$RUNNER_TEMP/core.tgz" "dependencies.@traceai/provider-media=file:$RUNNER_TEMP/provider-media.tgz"
           npm install --ignore-scripts
           sandbox-exec -f "$source/test/network.sb" npm run build
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
@@ -63,9 +68,9 @@ jobs:
           npm init -y
           # Exercise this PR's core fix, including the legacy coexistence adapter,
           # rather than silently resolving the already-published broken core.
-          npm pkg set 'overrides.@traceai/fi-core=$@traceai/fi-core' 'overrides.@traceai/fi-semantic-conventions=$@traceai/fi-semantic-conventions'
+          npm pkg set 'overrides.@traceai/fi-core=$@traceai/fi-core' 'overrides.@traceai/fi-semantic-conventions=$@traceai/fi-semantic-conventions' 'overrides.@traceai/provider-media=$@traceai/provider-media'
           tarball=$(find "$RUNNER_TEMP" -maxdepth 1 -name 'traceai-google-genai-sdk-*.tgz' -print)
-          npm install --ignore-scripts "$tarball" "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/semconv.tgz" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
+          npm install --ignore-scripts "$tarball" "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/semconv.tgz" "$RUNNER_TEMP/provider-media.tgz" '@google/genai@${{ matrix.sdk }}' '@opentelemetry/sdk-trace-node@2.0.1' 'typescript@5.9.3' '@types/node@22' '@traceai/google-genai@0.1.0' '@google/generative-ai@0.24.1'
           npm ls @traceai/fi-core @traceai/fi-semantic-conventions
       - name: Real SDK, OTLP, privacy and exact customer snippet without internet
         shell: bash

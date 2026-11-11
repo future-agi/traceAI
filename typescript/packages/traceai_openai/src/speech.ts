@@ -1,7 +1,7 @@
 import { context, trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { type FITracer } from "@traceai/fi-core";
-import { ProviderMediaCapture, compatibleMediaRoute, type ProviderMediaOptions } from "@traceai/provider-media";
+import { ProviderMediaCapture, attachmentsActive, speechMediaRoute, type ProviderMediaOptions } from "@traceai/provider-media";
 import { observeAPIPromise } from "./apiPromise";
 
 type Create = (this: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -19,13 +19,15 @@ export function patchSpeech(sdk: object, owner: object, tracer: () => FITracer, 
     if (!resource || typeof resource.create !== "function" || owners.has(resource)) continue;
     const original = resource.create;
     const wrapped: Create = function (...args) {
-      if (!enabled() || isTracingSuppressed(context.active())) return original.apply(this, args);
+      const mediaOptions = options();
+      // Attachments OFF (the default) leaves audio calls exactly as before: no span, no wrapper work.
+      if (!enabled() || isTracingSuppressed(context.active()) || !attachmentsActive(mediaOptions.attachments)) return original.apply(this, args);
       const span = tracer().startSpan(`OpenAI Audio ${operation}`, { kind: SpanKind.CLIENT, attributes: {
         "fi.span.kind": "LLM", "gen_ai.operation.name": operation,
       } });
       // Provider bytes and filenames are not span attributes. The existing provider
       // manager supplies policy, transport credentials and lifecycle to this hook.
-      const media = new ProviderMediaCapture(span, compatibleMediaRoute(this) ? options() : {});
+      const media = new ProviderMediaCapture(span, speechMediaRoute(this) ? mediaOptions : {});
       if (operation !== "speech") {
         try { media.speechInput((args[0] as { file?: unknown } | undefined)?.file); } catch { /* No payload diagnostics. */ }
       }

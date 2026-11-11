@@ -6,6 +6,7 @@ on:
     paths:
       - 'typescript/packages/traceai_mistral/**'
       - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/traceai_provider_media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/tsconfig*.json'
       - 'typescript/pnpm-lock.yaml'
