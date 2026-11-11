@@ -212,6 +212,28 @@ def test_context_keys_match_the_shared_helper():
     assert traceai._OWNER_KEY == media_capture.OWNER_KEY
 
 
+def test_context_keys_use_the_typescript_names():
+    # The TypeScript auto module names its keys createContextKey("traceai.auto.attachment_policy.v1")
+    # and createContextKey("traceai.auto.attachment_owner.v1"); the Python names are the same strings.
+    assert traceai._CAPTURE_POLICY_KEY == "traceai.auto.attachment_policy.v1"
+    assert traceai._OWNER_KEY == "traceai.auto.attachment_owner.v1"
+    assert media_capture.CAPTURE_POLICY_KEY == "traceai.auto.attachment_policy.v1"
+    assert media_capture.OWNER_KEY == "traceai.auto.attachment_owner.v1"
+
+
+def test_policy_set_under_the_shared_name_is_honoured():
+    # An adapter that sets the per-call policy by the shared NAME (no traceai import) restricts capture.
+    ctx = otel_context.set_value("traceai.auto.attachment_policy.v1", CapturePolicy(capture_content=False))
+    token = otel_context.attach(ctx)
+    try:
+        assert media_capture.local_capture_policy(TraceConfig(), direction="input").capture_content is False
+    finally:
+        otel_context.detach(token)
+    assert media_capture.local_capture_policy(TraceConfig(), direction="input").capture_content is True
+    assert otel_context.get_value("traceai.auto.attachment_policy.v1",
+                                  traceai.with_attachment_capture_policy(CapturePolicy(muted=True))).muted is True
+
+
 def test_capture_policy_helper_only_restricts():
     denied = traceai.with_attachment_capture_policy(CapturePolicy(capture_content=False, muted=True))
     # A later, permissive policy in the same context cannot relax the earlier denial.

@@ -45,8 +45,9 @@ except ImportError:  # pragma: no cover - exercised in a subprocess test
 
 # Context keys read by the shared provider-media helper (and any adapter) BY NAME, so
 # setting them never needs the attachments package. They match
-# fi_instrumentation.attachments.media_capture.CAPTURE_POLICY_KEY / OWNER_KEY.
-_CAPTURE_POLICY_KEY = "traceai.auto.attachment_capture_policy.v1"
+# fi_instrumentation.attachments.media_capture.CAPTURE_POLICY_KEY / OWNER_KEY and the
+# TypeScript `traceai_auto` keys (`createContextKey` names) exactly.
+_CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 _OWNER_KEY = "traceai.auto.attachment_owner.v1"
 
 _CORE_TOO_OLD = ("attachment_config, attachment_manager and trace_config need a fi-instrumentation-otel "

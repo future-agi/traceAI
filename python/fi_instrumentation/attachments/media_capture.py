@@ -59,7 +59,7 @@ SPEECH_FORMATS = {"mp3": "audio/mpeg", "opus": "audio/ogg", "ogg": "audio/ogg", 
                   "wav": "audio/wav"}
 # Context keys shared BY NAME with the auto module (``traceai``) and any adapter, like the
 # TypeScript ``Symbol.for`` keys: plain strings, so no package has to import another.
-CAPTURE_POLICY_KEY = "traceai.auto.attachment_capture_policy.v1"
+CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 OWNER_KEY = "traceai.auto.attachment_owner.v1"
 # CapturePolicy facts that grant capture; every other fact only restricts.
 _PERMISSIONS = frozenset(("capture_content", "record_inputs", "record_outputs", "requested"))
