@@ -171,7 +171,11 @@ you may also supply `attachments` explicitly when using a custom provider.
 
 Only typed inline base64 image/PDF sources are observed, with at most 64 parts
 and 256 KiB of decoded bytes per content list. URLs, file IDs, arbitrary tool
-objects and local paths are not retrieved. Input hide rules apply to tool media
+objects and local paths are not retrieved. Each block is checked with the
+manager's `preflight` (every privacy, sampling and budget rule) before its base64
+is read or decoded, so denied media is never touched. SDK messages arrive complete,
+not as byte streams, so there is no streaming capture to configure.
+Input hide rules apply to tool media
 that is sent back to the model; output hide rules also apply to tool results.
 Required PII redaction without a qualified media sanitizer denies raw capture.
 Original media may contain embedded metadata.

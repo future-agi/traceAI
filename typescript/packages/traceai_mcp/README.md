@@ -55,7 +55,10 @@ appears in a tool response. Required PII redaction without a qualified media
 sanitizer denies raw media capture. Original media may contain embedded metadata.
 
 Capture inspects only typed inline base64, at most 64 parts and 256 KiB of decoded
-bytes per response. Larger parts are not uploaded. Resource links, URLs, local
+bytes per response. Larger parts are not uploaded. Each part is checked with the
+manager's `preflight` (every privacy, sampling and budget rule) before its base64
+is read or decoded, so denied media is never touched. MCP results arrive as fully
+parsed objects, not byte streams, so there is no streaming capture to configure. Resource links, URLs, local
 paths and arbitrary `structuredContent` are not fetched or scraped. Capture
 never creates recordings or advances streams. The original SDK promise,
 response, error and cancellation signal are preserved.
@@ -63,5 +66,6 @@ response, error and cancellation signal are preserved.
 Call the provider's `forceFlush()` or the shared manager's `flush()` before a
 short process exits. Upload completion means transferred for validation, not
 permission to play the content. Playback requires an authorized live occurrence
-through the media gateway. Do not wrap the same underlying client multiple
-times or enable overlapping media observers for the same operation.
+through the media gateway. Wrapping the same client again returns the same
+traced client, so it never creates nested spans or uploads the same media twice.
+Do not enable a second, separate media observer for the same operation.

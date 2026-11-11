@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { wrapQuery } = require('../dist/src');
-const { harness, PNG, PDF } = require('../../traceai_mcp/test/attachment-harness.cjs');
+const { harness, PNG, PDF, warnings } = require('../../traceai_mcp/test/attachment-harness.cjs');
 const image = () => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG.toString('base64') } });
 function messages(content, isError = false) {
   return [
@@ -101,4 +101,49 @@ test('the same original block re-yielded in user frames is one occurrence per qu
     await run(h, [frame, frame, { type: 'user', message: { content: [block] } }]);
     assert.equal(h.uploads.length, 1); assert.equal(h.records.length, 1);
   } finally { await h.close(); }
+});
+
+function spyPreflight(manager) {
+  const original = manager.preflight.bind(manager), state = { calls: 0, reasons: [] };
+  manager.preflight = (target, options) => { const ticket = original(target, options); state.calls++; state.reasons.push(ticket.reason); return ticket; };
+  return state;
+}
+
+test('each original block is preflighted before its base64 is read, and read at most once', async () => {
+  const h = await harness();
+  try {
+    const spy = spyPreflight(h.manager); const reads = [];
+    const tracked = (mime, bytes) => ({ type: mime === 'application/pdf' ? 'document' : 'image',
+      source: Object.defineProperty({ type: 'base64', media_type: mime }, 'data', { enumerable: true, get() { reads.push(spy.calls); return bytes.toString('base64'); } }) });
+    await run(h, messages([tracked('image/png', PNG), tracked('application/pdf', PDF)]));
+    assert.deepEqual(reads, [1, 2]);
+    assert.deepEqual(spy.reasons, ['queued', 'queued']);
+    assert.equal(h.uploads.length, 2);
+  } finally { await h.close(); }
+});
+
+test('a nearly used owned-byte budget still admits a small tool screenshot at its exact size', async () => {
+  const h = await harness({ manager: { maxOwnedBytes: 200 * 1024 } });
+  try {
+    const spy = spyPreflight(h.manager);
+    const pdf = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: Buffer.concat([PDF, Buffer.alloc(100 * 1024)]).toString('base64') } };
+    await run(h, messages([pdf, image()]));
+    assert.deepEqual(spy.reasons, ['too_large', 'queued', 'queue_full', 'queued']);
+    assert.equal(h.uploads.length, 2);
+  } finally { await h.close(); }
+});
+
+test('an admitted block with malformed base64 returns its reservation and uploads nothing', async () => {
+  const h = await harness();
+  try {
+    await run(h, messages([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '!!!!' } }]));
+    const status = h.manager.status();
+    assert.equal(status.openTickets, 0); assert.equal(status.ownedBytes, 0);
+    assert.equal(h.uploads.length, 0); assert.equal(h.records.length, 0);
+  } finally { await h.close(); }
+});
+
+test('the loopback service is accepted as a V1 F01 peer: no FI_ATTACHMENTS_* warning in this process', async () => {
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(warnings, []);
 });
