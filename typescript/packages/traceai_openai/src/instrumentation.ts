@@ -533,7 +533,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             });
             // Telemetry-only copy: MCP credentials must never reach any exported
             // duplicate, but the original SDK request must remain untouched.
-            const projectedBody = projectOpenAIMedia(body, captured, "responses", "input") as typeof body;
+            const projectedBody = projectOpenAIMedia(body, captured, "responses", "input");
             const telemetryBody = {
               ...projectedBody,
               ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }),
