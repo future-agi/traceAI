@@ -14,6 +14,7 @@ import { VERSION } from "./version";
 import { diag, Tracer, TracerProvider } from "@opentelemetry/api";
 import { addTracerToHandlers } from "./instrumentationUtils";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import type { FrameworkAttachmentOptions } from "@traceai/framework-attachments";
 
 const MODULE_NAME = "@langchain/core/callbacks";
 
@@ -57,6 +58,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
   private fiTracer: FITracer;
   private tracerProvider?: TracerProvider;
   private traceConfig?: TraceConfigOptions;
+  private readonly media: FrameworkAttachmentOptions;
   private manualModule?: CallbackManagerModule;
   private modelModules?: Set<typeof ChatModelModule>;
   private runnableModules?: Set<typeof RunnableModule>;
@@ -65,11 +67,15 @@ export class LangChainInstrumentation extends InstrumentationBase {
     instrumentationConfig,
     traceConfig,
     tracerProvider,
+    attachments,
+    capture,
   }: {
     /**
      * The config for the instrumentation
      * @see {@link InstrumentationConfig}
      */
+    attachments?: FrameworkAttachmentOptions["attachments"];
+    capture?: FrameworkAttachmentOptions["capture"];
     instrumentationConfig?: InstrumentationConfig;
     /**
      * @see {@link TraceConfigOptions}
@@ -90,6 +96,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
     );
     this.tracerProvider = tracerProvider;
     this.traceConfig = traceConfig;
+    this.media = { attachments, traceConfig, capture };
     this.fiTracer = new FITracer({
       tracer:
         this.tracerProvider?.getTracer(INSTRUMENTATION_NAME, VERSION) ??
@@ -265,6 +272,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
           const newInheritableHandlers = addTracerToHandlers(
             instrumentation.fiTracer,
             inheritableHandlers,
+            instrumentation.media,
           );
           args[0] = newInheritableHandlers;
 
@@ -277,7 +285,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
           this: typeof CallbackManagerModuleV02,
           ...args: Parameters<typeof CallbackManagerModuleV02.CallbackManager.configure>
         ) {
-          args[0] = addTracerToHandlers(instrumentation.fiTracer, args[0]);
+          args[0] = addTracerToHandlers(instrumentation.fiTracer, args[0], instrumentation.media);
           return original.apply(this, args);
         };
       });

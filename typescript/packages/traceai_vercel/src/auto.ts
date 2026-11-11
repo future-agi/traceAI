@@ -7,6 +7,8 @@ import { safelyGetFIAttributes } from "./utils";
 import { VERSION } from "./version";
 import { createTelemetryIntegration, TelemetryIntegration } from "./telemetry";
 import { observeStreamResult } from "./streams";
+import type { FrameworkAttachmentOptions } from "@traceai/framework-attachments";
+import { captureVercelInput } from "./media";
 
 const METHODS = ["generateText", "streamText", "generateObject", "streamObject", "embed", "embedMany"] as const;
 const WRAPPED = Symbol.for("@traceai/vercel.wrapped");
@@ -82,13 +84,17 @@ function nativeSpan(span: Span, initial: Attributes, pending: Set<Span>): Span {
 }
 
 /** Adapts SDK-native v5/v6 spans while leaving the public return object intact. */
-function nativeTracer(tracer: Tracer, pending: Set<Span>): Tracer {
+function nativeTracer(tracer: Tracer, pending: Set<Span>, media: FrameworkAttachmentOptions, input: unknown): Tracer {
   const noop = () => trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
+  const capture = (name: string, span: Span): Span => {
+    if (/^ai\.(generateText|streamText|generateObject|streamObject)$/.test(name)) captureVercelInput(media, span, input);
+    return span;
+  };
   return {
     startSpan(name, options, ctx) {
-      return safely(() => nativeSpan(tracer.startSpan(name, {
+      return safely(() => capture(name, nativeSpan(tracer.startSpan(name, {
         ...options, attributes: nativeAttributes(options?.attributes ?? {}),
-      }, ctx), options?.attributes ?? {}, pending)) ?? noop();
+      }, ctx), options?.attributes ?? {}, pending))) ?? noop();
     },
     startActiveSpan(name: string, ...args: any[]): any {
       const fn = args[args.length - 1];
@@ -97,7 +103,7 @@ function nativeTracer(tracer: Tracer, pending: Set<Span>): Tracer {
       let entered = false;
       const callback = (span: Span) => {
         entered = true;
-        return fn(nativeSpan(span, attributes, pending));
+        return fn(capture(name, nativeSpan(span, attributes, pending)));
       };
       const callArgs = args.length === 1 ? [callback] : [
         { ...options, attributes: nativeAttributes(attributes) },
@@ -116,6 +122,7 @@ function nativeTracer(tracer: Tracer, pending: Set<Span>): Tracer {
 export class VercelAIInstrumentation extends InstrumentationBase {
   readonly integration: TelemetryIntegration;
   private readonly traceConfig?: TraceConfigOptions;
+  private readonly media: FrameworkAttachmentOptions;
   private readonly tracers = new WeakMap<Tracer, Tracer>();
 
   private fiTracer(tracer: Tracer = this.tracer): Tracer {
@@ -127,13 +134,16 @@ export class VercelAIInstrumentation extends InstrumentationBase {
     return wrapped;
   }
 
-  constructor({ instrumentationConfig = {}, traceConfig }: {
+  constructor({ instrumentationConfig = {}, traceConfig, attachments, capture }: {
     instrumentationConfig?: { enabled?: boolean };
     traceConfig?: TraceConfigOptions;
+    attachments?: FrameworkAttachmentOptions["attachments"];
+    capture?: FrameworkAttachmentOptions["capture"];
   } = {}) {
     super("@traceai/vercel", VERSION, { ...instrumentationConfig, enabled: false });
     this.traceConfig = traceConfig;
-    this.integration = createTelemetryIntegration(() => this.fiTracer());
+    this.media = { attachments, traceConfig, capture };
+    this.integration = createTelemetryIntegration(() => this.fiTracer(), undefined, this.media);
     if (instrumentationConfig.enabled !== false) this.enable();
   }
 
@@ -184,7 +194,7 @@ export class VercelAIInstrumentation extends InstrumentationBase {
                   // Preserve the SDK's local-over-global precedence and callback receivers.
                   const configured = telemetry?.integrations ?? (globalThis as Globals).AI_SDK_TELEMETRY_INTEGRATIONS ?? [];
                   const integrations = Array.isArray(configured) ? configured : [configured];
-                  const integration = createTelemetryIntegration(() => instrumentation.fiTracer(), `ai.${name}`);
+                  const integration = createTelemetryIntegration(() => instrumentation.fiTracer(), `ai.${name}`, instrumentation.media);
                   dispatcher = integration;
                   return { ...options, telemetry: { ...telemetry,
                     integrations: [...integrations.filter(item => item !== instrumentation.integration), integration],
@@ -193,7 +203,10 @@ export class VercelAIInstrumentation extends InstrumentationBase {
                 pending = new Set<Span>();
                 return { ...options, experimental_telemetry: {
                   ...telemetry, isEnabled: true,
-                  tracer: nativeTracer(instrumentation.fiTracer(telemetry?.tracer ?? instrumentation.tracer), pending),
+                  tracer: nativeTracer(instrumentation.fiTracer(telemetry?.tracer ?? instrumentation.tracer), pending, { ...instrumentation.media, capture: { ...instrumentation.media.capture,
+                    recordInputs: telemetry?.recordInputs !== false && instrumentation.media.capture?.recordInputs !== false,
+                    recordOutputs: telemetry?.recordOutputs !== false && instrumentation.media.capture?.recordOutputs !== false,
+                  } }, options),
                 } };
               }) ?? args[0];
             }

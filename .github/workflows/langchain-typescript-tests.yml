@@ -58,9 +58,10 @@ jobs:
           corepack enable
           corepack pnpm --filter '@traceai/langchain...' install --frozen-lockfile --ignore-scripts
           corepack pnpm run build:deps
+          corepack pnpm --filter @traceai/framework-attachments run build
           corepack pnpm --filter @traceai/langchain run build
           mkdir -p "$RUNNER_TEMP/langchain-tarballs"
-          for package in fi-semantic-conventions fi-core traceai_langchain; do
+          for package in fi-semantic-conventions fi-core traceai_framework_attachments traceai_langchain; do
             corepack pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/langchain-tarballs"
           done
           git diff --exit-code -- pnpm-lock.yaml
@@ -209,9 +210,10 @@ jobs:
           corepack enable
           corepack pnpm --filter '@traceai/langchain...' install --frozen-lockfile --ignore-scripts
           corepack pnpm run build:deps
+          corepack pnpm --filter @traceai/framework-attachments run build
           corepack pnpm --filter @traceai/langchain run build
           mkdir -p "$RUNNER_TEMP/remote-tarballs"
-          for package in fi-semantic-conventions fi-core traceai_langchain; do
+          for package in fi-semantic-conventions fi-core traceai_framework_attachments traceai_langchain; do
             corepack pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/remote-tarballs"
           done
           git diff --exit-code -- pnpm-lock.yaml

@@ -50,3 +50,5 @@ export {
   type ContentPolicy,
   type ScrubContext,
 } from "./privacy";
+
+export { withGenkitModelAttachments, withGenkitToolAttachments } from "./media";

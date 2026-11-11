@@ -1,6 +1,7 @@
 import type * as CallbackManagerModuleV02 from "@langchain/core/callbacks/manager";
 import { LangChainTracer } from "./tracer";
 import { FITracer } from "@traceai/fi-core";
+import type { FrameworkAttachmentOptions } from "@traceai/framework-attachments";
 
 /**
  * Adds the {@link LangChainTracer} to the callback handlers if it is not already present
@@ -13,16 +14,18 @@ import { FITracer } from "@traceai/fi-core";
 export function addTracerToHandlers(
   tracer: FITracer,
   handlers?: CallbackManagerModuleV02.Callbacks,
+  media?: FrameworkAttachmentOptions,
 ): CallbackManagerModuleV02.Callbacks;
 export function addTracerToHandlers(
   tracer: FITracer,
   handlers?: CallbackManagerModuleV02.Callbacks,
+  media?: FrameworkAttachmentOptions,
 ): CallbackManagerModuleV02.Callbacks {
   // The injected tracer has no persistence I/O. Await its callbacks so stream
   // return/cancellation cannot race a background span start or end. Leave user
   // handlers (including subclasses with async persistence) unchanged.
   if (handlers == null) {
-    return [new LangChainTracer(tracer, true)];
+    return [new LangChainTracer(tracer, true, media)];
   }
   if (Array.isArray(handlers)) {
     const tracerAlreadyRegistered = handlers.some(
@@ -30,7 +33,7 @@ export function addTracerToHandlers(
     );
     if (!tracerAlreadyRegistered) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      handlers.push(new LangChainTracer(tracer, true) as any);
+      handlers.push(new LangChainTracer(tracer, true, media) as any);
     }
     return handlers;
   }
@@ -43,6 +46,6 @@ export function addTracerToHandlers(
     return handlers;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handlers.addHandler(new LangChainTracer(tracer, true) as any, true);
+  handlers.addHandler(new LangChainTracer(tracer, true, media) as any, true);
   return handlers;
 }

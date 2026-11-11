@@ -41,7 +41,8 @@
     "@opentelemetry/instrumentation": "^0.202.0",
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^",
-    "lodash": "^4.17.21"
+    "lodash": "^4.17.21",
+    "@traceai/framework-attachments": "workspace:^"
   },
   "peerDependencies": {
     "llamaindex": ">=0.1.0",

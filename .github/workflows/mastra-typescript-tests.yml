@@ -68,7 +68,7 @@ jobs:
       - name: Pack and install in a clean consumer
         run: |
           mkdir -p "$RUNNER_TEMP/mastra-package" "$RUNNER_TEMP/mastra-consumer"
-          for package in fi-semantic-conventions fi-core traceai_vercel traceai_mastra; do
+          for package in fi-semantic-conventions fi-core traceai_framework_attachments traceai_vercel traceai_mastra; do
             pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/mastra-package"
           done
           npm install --prefix "$RUNNER_TEMP/mastra-consumer" --ignore-scripts --no-audit --no-fund \

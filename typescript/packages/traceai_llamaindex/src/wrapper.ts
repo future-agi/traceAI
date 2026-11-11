@@ -13,6 +13,7 @@ import { safeExecuteInTheMiddle } from "@opentelemetry/instrumentation";
 
 import { SemanticConventions, FISpanKind } from "@traceai/fi-semantic-conventions";
 import { safelyJSONStringify } from "@traceai/fi-core";
+import { captureMediaMessages } from "@traceai/framework-attachments";
 
 import { LlamaIndexInstrumentationConfig } from "./types";
 import { shouldSendPrompts, llmGeneratorWrapper, generatorWrapper } from "./utils";
@@ -42,6 +43,7 @@ function handleResponse<T extends ResponseType>(
     try {
       if ((result as llamaindex.ChatResponse).message) {
         const chatResult = result as llamaindex.ChatResponse;
+        captureMediaMessages(config, span, [chatResult.message], "llamaindex", "output");
         const outputContent = typeof chatResult.message.content === "string"
           ? chatResult.message.content
           : chatResult.message.content[0]?.type === "text"
@@ -111,6 +113,7 @@ export function chatWrapper({ className }: { className: string },
             this.metadata.model,
           );
           if (shouldSendPrompts() && messages) {
+            captureMediaMessages(config, span, messages, "llamaindex", "input");
             const serialized = messages.map((msg: any) => {
               const content = msg.content;
               const textContent = typeof content === "string"

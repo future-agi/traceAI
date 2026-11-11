@@ -48,7 +48,8 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@traceai/fi-core": "workspace:^",
-    "@traceai/fi-semantic-conventions": "workspace:^"
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@traceai/framework-attachments": "workspace:^"
   },
   "devDependencies": {
     "@opentelemetry/resources": "^2.0.1",

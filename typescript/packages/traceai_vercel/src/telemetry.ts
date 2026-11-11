@@ -1,6 +1,8 @@
 import { Attributes, Context, Span, SpanKind, SpanStatusCode, Tracer, context, diag, trace, INVALID_SPAN_CONTEXT } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { getAttributesFromContext } from "@traceai/fi-core";
+import type { FrameworkAttachmentOptions } from "@traceai/framework-attachments";
+import { captureVercelInput, captureVercelOutput, captureVercelToolOutput } from "./media";
 
 // Structural types deliberately avoid a runtime dependency on a particular AI SDK major.
 type Event = Record<string, any>;
@@ -120,8 +122,11 @@ function run<T>(ctx: Context | undefined, execute: () => T): T {
 }
 
 /** v7 dispatcher callbacks, shared by the global registry and isolated per-call adapters. */
-export function createTelemetryIntegration(getTracer: () => Tracer, operation?: string): TelemetryIntegration {
+export function createTelemetryIntegration(getTracer: () => Tracer, operation?: string, media: FrameworkAttachmentOptions = {}): TelemetryIntegration {
   const calls = new Map<string, Call>();
+  const binding = (call: Call): FrameworkAttachmentOptions => ({ ...media, capture: { ...media.capture,
+    recordInputs: call.inputs && media.capture?.recordInputs !== false,
+    recordOutputs: call.outputs && media.capture?.recordOutputs !== false } });
   let operationParent: Context | undefined;
   let operationSpan: Span | undefined;
   const modelKey = (event: Event) => typeof event.embedCallId === "string" ? event.embedCallId : "model";
@@ -164,6 +169,7 @@ export function createTelemetryIntegration(getTracer: () => Tracer, operation?: 
     const call = calls.get(event.callId);
     if (!call) return;
     if (rootKind(call.operation) !== "CHAIN") {
+      captureVercelInput(binding(call), call.span, event);
       call.span.setAttributes(attributes(event, call));
       return;
     }
@@ -174,11 +180,13 @@ export function createTelemetryIntegration(getTracer: () => Tracer, operation?: 
     const span = getTracer().startSpan(name, { kind: SpanKind.CLIENT, attributes: {
       ...getAttributesFromContext(call.ctx), ...attributes(event, call), "gen_ai.span.kind": "LLM", "fi.span.kind": "LLM", "traceai.capture.layer": "library",
     } }, call.ctx);
+    captureVercelInput(binding(call), span, event);
     call.models.set(key, span);
   };
   const endModel = (event: Event) => {
     const call = calls.get(event.callId);
     if (call && rootKind(call.operation) !== "CHAIN") {
+      captureVercelOutput(binding(call), call.span, event);
       call.span.setAttributes(attributes(event, call));
       return;
     }
@@ -187,6 +195,7 @@ export function createTelemetryIntegration(getTracer: () => Tracer, operation?: 
     call.models.delete(modelKey(event));
     // Capture the end before normalization/attribute serialization work in this adapter.
     const end = Date.now();
+    captureVercelOutput(binding(call), span, event);
     span.setAttributes(attributes(event, call));
     span.end(end);
   };
@@ -222,7 +231,10 @@ export function createTelemetryIntegration(getTracer: () => Tracer, operation?: 
       const end = Date.now();
       const output = event.toolOutput;
       if (output?.type === "tool-error" || event.success === false) fail(span, output?.error ?? event.error);
-      else if (call.outputs) span.setAttributes({ "output.value": json(output?.output ?? event.output), "output.mime_type": "application/json" });
+      else if (call.outputs) {
+        captureVercelToolOutput(binding(call), span, output?.output ?? event.output);
+        span.setAttributes({ "output.value": json(output?.output ?? event.output), "output.mime_type": "application/json" });
+      }
       span.end(end);
     }); },
     onEnd(event) { guard(() => finish(event.callId, event)); },
