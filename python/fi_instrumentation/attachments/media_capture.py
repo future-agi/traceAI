@@ -59,6 +59,7 @@ MAX_FRAMEWORK_PARTS = 64
 # content dedup: a short window keeps the referenced occurrence live.
 CLAIM_TTL = 300.0
 MAX_CLAIMS = 4096
+_clock = time.monotonic  # the claim table's own clock (tests replace it, never the global one)
 TOOL_ID = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 _DATA_URI = re.compile(r"data:([a-z]+/[a-z0-9.+-]+);base64")
 _BASE64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
@@ -194,7 +195,7 @@ class _Claims:
         entry = claims.get(key) if claims is not None else None
         if entry is None:
             return None
-        if entry[1] <= time.monotonic():
+        if entry[1] <= _clock():
             del claims[key]
             return None
         return entry[0]
@@ -206,7 +207,7 @@ class _Claims:
         claims.pop(key, None)
         while len(claims) >= MAX_CLAIMS:
             claims.popitem(last=False)
-        claims[key] = (occurrence, time.monotonic() + CLAIM_TTL)
+        claims[key] = (occurrence, _clock() + CLAIM_TTL)
 
 
 CLAIMS = _Claims()

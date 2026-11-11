@@ -69,8 +69,8 @@ def test_another_manager_or_an_expired_claim_uploads_again(f01, spans, monkeypat
     with tracer.start_as_current_span("s") as span:
         a = _inline(first, span)
         b = _inline(second, span)
-    now = mc.time.monotonic()
-    monkeypatch.setattr(mc.time, "monotonic", lambda: now + mc.CLAIM_TTL + 1)
+    now = mc._clock()
+    monkeypatch.setattr(mc, "_clock", lambda: now + mc.CLAIM_TTL + 1)
     with tracer.start_as_current_span("later") as span:
         c = _inline(first, span)
     flush(first)
