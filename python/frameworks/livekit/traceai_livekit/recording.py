@@ -225,3 +225,67 @@ def wrap_egress_client(
         client, parent=parent, room_name=room_name, conversation_id=conversation_id,
         tracer=selected, trace_config=config,
     )
+
+
+def import_completed_egress(egress_info, *, session_context, egress_id, room_name,
+                            manager, existing_source_authorized=False, capture_policy=None):
+    """Offer an explicitly authorized completed job to the shared private importer.
+
+    This does NOT start/stop Egress, poll, inspect output locations, or select a
+    server connection. Pass an actual EgressInfo and its independently bound
+    egress/room IDs, not IDs copied out of an untrusted callback. The SDK cannot
+    authenticate a webhook; that is the durable backend observer's job.
+
+    The current core has no qualified LiveKit ProviderFile resolver, so completed
+    jobs return ``source_unavailable`` (or a stricter policy denial), never ready.
+    Start/stop snapshots alone do not establish completion. Metadata-only
+    record_egress()/wrap_egress_client() keep their existing behavior.
+    """
+    # Lazy imports keep metadata-only installs compatible with released cores.
+    from fi_instrumentation.attachments import (
+        AttachmentHandle, CapturePolicy, CorrelationHandle, ProviderFile,
+    )
+    if existing_source_authorized is not True:
+        return AttachmentHandle("disabled")
+    try:
+        capture = capture_policy if capture_policy is not None else CapturePolicy()
+        if not isinstance(capture, CapturePolicy) or capture.new_recording:
+            return AttachmentHandle("policy_denied")
+        session = manager._session
+        reason = manager.policy.evaluate(
+            session.policy if session else None, capture, direction="mixed",
+            mime_type="audio/ogg", source_kind="ProviderFile",
+        )
+        if reason:
+            return AttachmentHandle(reason)
+        if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return AttachmentHandle("policy_denied")
+        if manager.status != "ready":
+            return AttachmentHandle(manager.status)
+        if session_context is None:
+            return AttachmentHandle("correlation_unavailable")
+        parent = CorrelationHandle.from_span(session_context)
+        if not parent.sampled:
+            return AttachmentHandle("unsampled")
+        from importlib.metadata import version
+        if version("livekit-agents") not in ("1.8.10", "1.8.11"):
+            return AttachmentHandle("unsupported_version")
+        from livekit import api
+        if not isinstance(egress_info, api.EgressInfo):
+            return AttachmentHandle("unsupported_version")
+        if (type(egress_id) is not str or not 0 < len(egress_id) <= 256
+                or type(room_name) is not str or not 0 < len(room_name) <= 256
+                or egress_info.egress_id != egress_id or egress_info.room_name != room_name):
+            return AttachmentHandle("source_unavailable")
+        if egress_info.status in (api.EGRESS_STARTING, api.EGRESS_ACTIVE, api.EGRESS_ENDING):
+            return AttachmentHandle("waiting_for_completion")
+        if egress_info.status != api.EGRESS_COMPLETE or egress_info.ended_at <= 0:
+            return AttachmentHandle("source_unavailable")
+        # No URL, filename, credentials or output metadata crosses this seam.
+        # Fail closed until the core has a version-qualified fixed-ID resolver
+        # AND explicitly delegated private source authority from the broker.
+        return manager.attach(parent, ProviderFile(provider="livekit", file_id=egress_id),
+                              mime_type="audio/ogg", direction="mixed",
+                              purpose="conversation_recording", capture_policy=capture)
+    except Exception:
+        return AttachmentHandle("source_unavailable")
