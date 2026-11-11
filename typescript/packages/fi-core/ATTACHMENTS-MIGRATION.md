@@ -14,3 +14,11 @@ The streaming, recording and import work changed a few behaviours that integrati
 ## Warnings
 
 Both warning codes are exported as `ATTACHMENT_WARNING_LEGACY_TRANSPORT` and `ATTACHMENT_WARNING_WIRE_REJECTED`. On Node they go through `process.emitWarning`, so `--no-deprecation` and `--no-warnings` apply. In browsers they go to `console.warn`. Each is emitted at most once per process, per code and shape.
+
+## Additions (non-breaking)
+
+| Addition | Behaviour |
+|---|---|
+| `manager.deferredCorrelation({ bindTimeoutMs })` returns an `AttachmentDeferredCorrelation` | A capture target for a span that does not exist yet, such as a wire span emitted only after the response body completes. `preflight`, `attach` and `startAttachmentStream` admit `Bytes`, `Blob` and consumed-stream captures against it using the full deny-wins check. Committed bytes stay in the owned budget, capped at half of it, and nothing is sent. `target.bind(span)` checks policy and sampling again, then uploads against that span and projects the references onto it. If the bind timeout passes (default 60 s, max 300 s, checked lazily without a timer), `target.cancel()` is called or the manager shuts down, pending captures end `correlation_unavailable` and upload nothing. Owned files, recordings and imports never defer. If a span already has a correlation, the bound target forwards to it, so the span keeps one reference list. |
+| `startAttachmentStream` reservation | The reservation is `min(maxBytes, negotiated single-upload cap)`. A server whose `max_upload_bytes` is below an adapter's default (for example 4 MiB) still admits the stream, and a body larger than the effective cap is discarded whole (`too_large`). `preflight` keeps its exact semantics: a `maxBytes` over the cap is `too_large`. |
+| `shutdown()` after `invalidate(reason)` | The state stays `reason` (`policy_denied`, `deleted`, `expired`); before this change, `shutdown()` overwrote it with `incomplete`. |
