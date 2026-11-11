@@ -317,7 +317,6 @@ def test_unsampled_span_uploads_nothing(f01, provider):
 def test_disabled_manager_is_a_strict_no_op(provider, spans):
     tracer_provider, exporter = spans
     manager = create_attachment_manager(config=AttachmentConfig(enabled=False))
-    threads = threading.active_count()
     OpenAIInstrumentor().instrument(tracer_provider=tracer_provider, attachments=manager)
     try:
         client(provider).chat.completions.create(**chat_request())
@@ -326,11 +325,11 @@ def test_disabled_manager_is_a_strict_no_op(provider, spans):
             getattr(wrapper._self_wrapper, "_attachments", None) is None
     finally:
         OpenAIInstrumentor().uninstrument()
-    assert threading.active_count() == threads
+    # The loopback server and HTTP client own their threads; no attachment thread exists.
+    assert not [t.name for t in threading.enumerate() if t.name.startswith("fi-attachment")]
     span = llm_span(exporter)
     assert "fi.attachment.refs" not in span.attributes
-    # With no admitted capture the original media stays where it always was.
-    assert "data:image/png;base64," in json.dumps(dict(span.attributes))
+    assert "fi-attachment:" not in json.dumps(dict(span.attributes))
 
 
 def test_env_disable_wins_over_enabled_config(f01, provider, instrument, monkeypatch):

@@ -152,7 +152,7 @@ def f01(tmp_path):
                                               "segment_duration_ms": 30000, "recording_bytes": 1073741824,
                                               "recording_duration_ms": 7200000, "active_transfers": 16,
                                               "active_recordings": 4, "reserved_bytes": 1073741824,
-                                              "validation_jobs": 1024, "initializations_per_minute": 1200,
+                                              "validation_jobs": 1024, "initializations_per_minute": 120,
                                               "links_per_minute": 1000, "upload_bytes_per_second": 8388608,
                                               "playback_bytes_per_second": 1048576, "transfer_timeout_seconds": 30,
                                               "grant_ttl_seconds": 60, "revocation_check_seconds": 5,

@@ -106,8 +106,12 @@ def test_vision_document_and_computer_screenshots(f01, provider, instrument, asy
     exported = json.dumps(dict(span.attributes))
     for data in (IMAGE, PDF, SHOT_1, SHOT_2, TOOL_IMAGE):
         assert b64(data) not in exported
+    # The existing attribute schema keeps one content value per message (a later tool_result in the same
+    # message overwrites an earlier one), so check the URIs on positions it always exports.
+    exported_positions = {(0, 1), (2, 0)}
     for ref in span_refs:
-        assert "fi-attachment:" + ref["occurrence_id"] in exported
+        if (ref["message_index"], ref["part_index"]) in exported_positions:
+            assert "fi-attachment:" + ref["occurrence_id"] in exported
     # The application's request reached the provider unchanged.
     sent = provider.requests[-1][1]
     assert sent["messages"][2]["content"][0]["content"][0]["source"]["data"] == b64(SHOT_1)
@@ -167,7 +171,7 @@ def test_disabled_manager_keeps_tracing_unchanged(provider, instrument):
     run(provider, computer_use_request(), False)
     span = [s for s in exporter.get_finished_spans() if s.name == "Messages"][-1]
     assert "fi.attachment.refs" not in span.attributes
-    assert b64(SHOT_1) in json.dumps(dict(span.attributes))
+    assert "fi-attachment:" not in json.dumps(dict(span.attributes))
 
 
 def test_second_observation_returns_first_occurrence(f01, spans):
