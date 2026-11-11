@@ -84,7 +84,7 @@
   "typescript/packages/traceai_cursor_sdk": "0.1.1",
   "typescript/packages/traceai_deepseek": "0.1.2",
   "typescript/packages/traceai_fireworks": "0.1.2",
-  "typescript/packages/traceai_framework_attachments": "0.1.0",
+  "typescript/packages/framework_attachments": "0.1.0",
   "typescript/packages/traceai_genkit": "0.1.1",
   "typescript/packages/traceai_google_adk": "0.1.2",
   "typescript/packages/traceai_google_genai": "0.1.1",

@@ -2,7 +2,7 @@ name: TypeScript framework attachments
 on:
   pull_request:
     paths:
-      - 'typescript/packages/traceai_framework_attachments/**'
+      - 'typescript/packages/framework_attachments/**'
       - 'typescript/packages/traceai_langchain/**'
       - 'typescript/packages/traceai_llamaindex/**'
       - 'typescript/packages/traceai_vercel/**'
@@ -65,7 +65,7 @@ jobs:
           for framework in langchain llamaindex ai genkit; do
             for version in floor latest; do
               echo "::group::$framework $version"
-              timeout 180 node packages/traceai_framework_attachments/test/integration.cjs "$framework" "$version"
+              timeout 180 node packages/framework_attachments/test/integration.cjs "$framework" "$version"
               echo "::endgroup::"
             done
           done
@@ -82,7 +82,7 @@ jobs:
       - name: Mastra exporter attachment disposition (packed, real Agent over loopback)
         run: |
           mkdir -p "$RUNNER_TEMP/mastra-package" "$RUNNER_TEMP/mastra-consumer"
-          for package in fi-semantic-conventions fi-core traceai_framework_attachments traceai_vercel traceai_mastra; do
+          for package in fi-semantic-conventions fi-core framework_attachments traceai_vercel traceai_mastra; do
             pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/mastra-package"
           done
           npm install --prefix "$RUNNER_TEMP/mastra-consumer" --ignore-scripts --no-audit --no-fund \

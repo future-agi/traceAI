@@ -25,7 +25,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/future-agi/traceAI.git",
-    "directory": "typescript/packages/traceai_framework_attachments"
+    "directory": "typescript/packages/framework_attachments"
   },
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"

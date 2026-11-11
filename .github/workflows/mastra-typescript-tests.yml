@@ -8,7 +8,7 @@ on:
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/packages/traceai_vercel/**'
-      - 'typescript/packages/traceai_framework_attachments/**'
+      - 'typescript/packages/framework_attachments/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/mastra-typescript-tests.yml'
   push:
@@ -70,7 +70,7 @@ jobs:
       - name: Pack and install in a clean consumer
         run: |
           mkdir -p "$RUNNER_TEMP/mastra-package" "$RUNNER_TEMP/mastra-consumer"
-          for package in fi-semantic-conventions fi-core traceai_framework_attachments traceai_vercel traceai_mastra; do
+          for package in fi-semantic-conventions fi-core framework_attachments traceai_vercel traceai_mastra; do
             pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/mastra-package"
           done
           npm install --prefix "$RUNNER_TEMP/mastra-consumer" --ignore-scripts --no-audit --no-fund \

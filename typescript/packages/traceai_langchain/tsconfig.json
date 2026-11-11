@@ -7,5 +7,5 @@
   "files": [],
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
-  "references": [{ "path": "../traceai_framework_attachments" }]
+  "references": [{ "path": "../framework_attachments" }]
 }

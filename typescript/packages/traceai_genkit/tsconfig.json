@@ -10,6 +10,6 @@
   "references": [
     { "path": "../fi-core" },
     { "path": "../fi-semantic-conventions" },
-    { "path": "../traceai_framework_attachments" }
+    { "path": "../framework_attachments" }
   ]
 }
