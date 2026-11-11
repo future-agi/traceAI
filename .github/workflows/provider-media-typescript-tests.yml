@@ -69,7 +69,7 @@ jobs:
           # One SDK tier per process: some instrumentations keep process-wide patch state.
           sudo --preserve-env=MEDIA_SDK_ROOT unshare --net bash -c '
             ip link set lo up
-            "$1" --test packages/provider-media/test/media.test.cjs packages/provider-media/test/preflight.test.cjs packages/provider-media/test/speech-stream.test.cjs &&
+            "$1" --test packages/provider-media/test/media.test.cjs packages/provider-media/test/preflight.test.cjs packages/provider-media/test/speech-stream.test.cjs packages/provider-media/test/owner.test.cjs &&
             MEDIA_SDK_TIER=floor "$1" --test packages/provider-media/test/sdk.test.cjs &&
             MEDIA_SDK_TIER=latest "$1" --test packages/provider-media/test/sdk.test.cjs
           ' _ "$(command -v node)"

@@ -242,10 +242,14 @@ export class GroqInstrumentation extends InstrumentationBase {
           },
         },
       );
-      const media = new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig });
+      const parent = context.active();
+      const media = new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig, parentContext: parent });
       if (operation === "chat") media.compatibleMessages(body.messages, "groq");
       if (operation === "transcription" || operation === "translation") media.speechInput(body.file);
-      const execContext = trace.setSpan(context.active(), span);
+      // Audio calls whose media this capture owns carry the shared owner marker, so wire-level
+      // capture (auto) never uploads a second copy. Chat media ownership is unchanged.
+      const spanContext = trace.setSpan(parent, span);
+      const execContext = operation === "chat" ? spanContext : media.claim(spanContext);
       const execPromise = safeExecuteInTheMiddle(
         () => context.with(execContext, () => original.apply(this, args)),
         error => {

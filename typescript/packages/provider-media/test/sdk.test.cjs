@@ -10,6 +10,8 @@ const { fixture, png, wav } = require('./fixtures.cjs');
 const coreLoad = createRequire(path.resolve(__dirname, '../../fi-core/package.json'));
 const { NodeTracerProvider } = coreLoad('@opentelemetry/sdk-trace-node');
 const { SimpleSpanProcessor, InMemorySpanExporter } = coreLoad('@opentelemetry/sdk-trace-base');
+const api = coreLoad('@opentelemetry/api');
+const OWNER = Symbol.for('traceai.auto.attachment_owner.v1');
 const exporter = new InMemorySpanExporter();
 const provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
 provider.register();
@@ -95,6 +97,83 @@ for (const tier of tiers) {
         await client.audio.transcriptions.create({ model: 'whisper-1', file: new File([wav()], 'a.wav', { type: 'audio/wav' }) }); await f.manager.flush();
         assert.equal(f.uploads.length - before, baseURL.includes('api.groq.com') ? 1 : 0, baseURL);
       }
+    } finally { inst.disable(); await f.close(); exporter.reset(); }
+  });
+
+  // The context the SDK's own fetch runs in is the one wire-level capture (the auto module) inspects.
+  const marking = seen => (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    seen.push([url.pathname.replace(/^.*\/(chat|audio)\//, '$1/'), api.context.active().getValue(OWNER)]);
+    return redirect(input, init);
+  };
+  const ownerRows = async (client, model, voice, f, seen) => {
+    // Claimed: audio calls whose media this capture owns carry the marker; chat (owned by the OpenAI chat adapter) does not.
+    await client.chat.completions.create({ model: 'fixture', messages });
+    if (client.audio?.speech) await (await client.audio.speech.create({ model: 'fixture', input: 'fixture', voice, response_format: 'wav' })).arrayBuffer();
+    for (const operation of ['transcriptions', 'translations']) if (client.audio?.[operation]) await client.audio[operation].create({ model, file: new File([wav()], 'synthetic.wav', { type: 'audio/wav' }) });
+    await f.manager.flush();
+    const claimed = f.uploads.length;
+    // Honoured: an application or adapter that already owns the call's media keeps it; this capture uploads nothing.
+    await api.context.with(api.context.active().setValue(OWNER, true), async () => {
+      if (client.audio?.speech) assert.deepEqual(Buffer.from(await (await client.audio.speech.create({ model: 'fixture', input: 'fixture', voice, response_format: 'wav' })).arrayBuffer()), wav());
+      for (const operation of ['transcriptions', 'translations']) if (client.audio?.[operation]) await client.audio[operation].create({ model, file: new File([wav()], 'synthetic.wav', { type: 'audio/wav' }) });
+    });
+    await f.manager.flush();
+    return { claimed, honoured: f.uploads.length - claimed };
+  };
+
+  for (const mode of ['enabled', 'disabled']) test(`OpenAI ${tier}: audio calls carry the shared owner marker (${mode}); an owned call uploads nothing`, async () => {
+    const sdk = sdkLoad(`sdk-openai-${tier}`);
+    const { OpenAIInstrumentation } = require('../../traceai_openai/dist/src');
+    const f = await fixture(mode === 'disabled' ? { enabled: false } : {});
+    const inst = new OpenAIInstrumentation({ attachments: f.manager, instrumentationConfig: { enabled: false } });
+    inst.setTracerProvider(provider); inst.enable(); inst.manuallyInstrument(sdk);
+    try {
+      const seen = [];
+      const result = await ownerRows(new sdk.OpenAI({ apiKey: 'synthetic', fetch: marking(seen) }), 'whisper-1', 'alloy', f, seen);
+      assert.deepEqual(seen[0], ['chat/completions', undefined]);
+      const audio = seen.filter(([route]) => route.startsWith('audio/'));
+      const claimed = audio.slice(0, audio.length / 2);
+      assert.ok(claimed.length >= 2, JSON.stringify(seen));
+      // Attachments OFF: audio calls are untouched, exactly as before (no span, no marker, no upload).
+      for (const [, value] of claimed) assert.equal(value, mode === 'enabled' ? true : undefined, JSON.stringify(seen));
+      assert.deepEqual(result, { claimed: mode === 'enabled' ? claimed.length : 0, honoured: 0 });
+    } finally { inst.disable(); await f.close(); exporter.reset(); }
+  });
+
+  test(`OpenAI ${tier}: unqualified audio hosts are not claimed`, async () => {
+    const sdk = sdkLoad(`sdk-openai-${tier}`);
+    const { OpenAIInstrumentation } = require('../../traceai_openai/dist/src');
+    const f = await fixture(); const inst = new OpenAIInstrumentation({ attachments: f.manager, instrumentationConfig: { enabled: false } });
+    inst.setTracerProvider(provider); inst.enable(); inst.manuallyInstrument(sdk);
+    try {
+      const seen = [];
+      await new sdk.OpenAI({ apiKey: 'synthetic', baseURL: 'https://unknown.invalid/v1', fetch: marking(seen) }).audio.transcriptions.create({ model: 'whisper-1', file: new File([wav()], 'a.wav', { type: 'audio/wav' }) });
+      await f.manager.flush();
+      assert.deepEqual(seen, [['audio/transcriptions', undefined]]); assert.equal(f.uploads.length, 0);
+    } finally { inst.disable(); await f.close(); exporter.reset(); }
+  });
+
+  test(`Groq ${tier}: audio calls carry the shared owner marker; an owned call uploads nothing`, async () => {
+    const sdk = sdkLoad(`sdk-groq-${tier}`);
+    const { GroqInstrumentation } = require('../../traceai_groq/dist/src');
+    const f = await fixture();
+    const inst = new GroqInstrumentation({ attachments: f.manager, instrumentationConfig: { enabled: false } });
+    inst.setTracerProvider(provider); inst.enable(); inst.manuallyInstrument(sdk);
+    try {
+      const Groq = sdk.Groq ?? sdk.default ?? sdk;
+      const seen = [];
+      const client = new Groq({ apiKey: 'synthetic', fetch: marking(seen) });
+      const plain = [{ role: 'user', content: 'fixture' }];
+      await client.chat.completions.create({ model: 'fixture', messages: plain });
+      const result = await ownerRows(client, 'whisper-large-v3', 'fixture', f, seen);
+      const chat = seen.filter(([route]) => route === 'chat/completions');
+      const audio = seen.filter(([route]) => route.startsWith('audio/'));
+      assert.equal(chat.length, 2); for (const [, value] of chat) assert.equal(value, undefined);
+      const owned = audio.length / 2;
+      for (const [, value] of audio.slice(0, owned)) assert.equal(value, true, JSON.stringify(seen));
+      // Chat media (one typed image) is still captured; audio uploads once per claimed call and never under an owner.
+      assert.deepEqual(result, { claimed: 1 + owned, honoured: 0 });
     } finally { inst.disable(); await f.close(); exporter.reset(); }
   });
 

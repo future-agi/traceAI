@@ -1,10 +1,33 @@
 import { generateTraceConfig, type TraceConfigOptions } from "@traceai/fi-core";
 import { attachmentModality, type AttachmentManager, type AttachmentSpan, type AttachmentOptions, type AttachmentSource, type AttachmentCorrelation, type AttachmentAdmission, type AttachmentAdmissionTicket } from "@traceai/fi-core/attachments";
 
+/**
+ * Shared media-owner context marker. `createContextKey` in `@opentelemetry/api` is `Symbol.for`, so the
+ * auto wire layer, the ElevenLabs instrumentation and this helper read and write the same key without
+ * importing one another. A truthy value means one adapter already captures this call's media.
+ */
+export const ATTACHMENT_OWNER_KEY: symbol = Symbol.for("traceai.auto.attachment_owner.v1");
+
+/** The two methods of an OpenTelemetry `Context` this helper uses (structural, so no runtime OTel import). */
+export interface AttachmentOwnerContext {
+  getValue(key: symbol): unknown;
+  setValue(key: symbol, value: unknown): AttachmentOwnerContext;
+}
+
+/** True when another adapter already owns the media of the call made under `parent`. */
+export function attachmentOwnedElsewhere(parent: AttachmentOwnerContext | undefined): boolean {
+  try { return !!parent && typeof parent.getValue === "function" && !!parent.getValue(ATTACHMENT_OWNER_KEY); } catch { return false; }
+}
+
 export interface ProviderMediaOptions {
   /** The provider-owned manager returned by register(). Never create an uploader per integration. */
   attachments?: AttachmentManager;
   traceConfig?: TraceConfigOptions;
+  /**
+   * The context active when the application made the call. When it carries the shared owner marker
+   * (`ATTACHMENT_OWNER_KEY`), another adapter captures this call's media and this capture is inert.
+   */
+  parentContext?: AttachmentOwnerContext;
 }
 
 type RecordValue = Record<string, unknown>;
@@ -15,7 +38,9 @@ const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const MAX_DECODED_BYTES = 1024 * 1024;
 const MAX_ENCODED_CHARS = Math.ceil(MAX_DECODED_BYTES / 3) * 4;
 const MAX_PARTS = 64;
-// Consumed speech streams have no length up front; the whole cap is reserved while they are read.
+// Consumed speech streams have no length up front. The core reserves min(this, the negotiated
+// single-upload cap) while they are read, so servers whose max_upload_bytes is below 4 MiB still
+// admit the stream; a body over the reservation is discarded whole.
 const MAX_SPEECH_STREAM_BYTES = 4 * 1024 * 1024;
 const DATA_URI_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 // Steps 11-12 of the core's preflight order run only after every privacy, identity and
@@ -54,7 +79,8 @@ export class ProviderMediaCapture {
   private attempted = 0;
 
   constructor(span: AttachmentSpan, options: ProviderMediaOptions = {}) {
-    this.manager = options.attachments;
+    // Honour an existing owner: exactly one adapter uploads a call's media.
+    this.manager = attachmentOwnedElsewhere(options.parentContext) ? undefined : options.attachments;
     this.local = { ...options.traceConfig };
     this.seen = new Set();
     if (this.manager) {
@@ -347,6 +373,17 @@ export class ProviderMediaCapture {
     });
     if (typeof releaseLock === "function") define("releaseLock", function (this: unknown) { if (this === target) end(false); return releaseLock.apply(this); });
     if (typeof cancel === "function") define("cancel", function (this: unknown, ...args: unknown[]) { if (this === target) end(false); return cancel.apply(this, args); });
+  }
+
+  /**
+   * Mark the context the provider SDK runs in, so wire-level capture (the auto module) and any nested
+   * adapter skip this call's media and only this capture uploads it. Called only for calls whose media
+   * this capture owns. An inert capture (no manager, or owned elsewhere) returns `ctx` unchanged.
+   * A local hide or PII restriction still claims the call: the restriction then holds for every layer.
+   */
+  claim<C extends AttachmentOwnerContext>(ctx: C): C {
+    if (!this.manager) return ctx;
+    try { return ctx.setValue(ATTACHMENT_OWNER_KEY, true) as C; } catch { return ctx; }
   }
 
   private safely(fn: () => void): void { if (this.manager) { try { fn(); } catch { /* Content-free fail-open. */ } } }

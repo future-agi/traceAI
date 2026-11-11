@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({type:'module'}))\"",
-    "test": "node --test test/layout.test.cjs test/media.test.cjs test/preflight.test.cjs test/speech-stream.test.cjs",
+    "test": "node --test test/layout.test.cjs test/media.test.cjs test/preflight.test.cjs test/speech-stream.test.cjs test/owner.test.cjs",
     "test:sdk": "node --test test/sdk.test.cjs"
   },
   "dependencies": {

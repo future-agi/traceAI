@@ -123,3 +123,35 @@ test('S-08 a second reader after releaseLock sees only the rest of the body, so 
     assert.equal(f.uploads.length, 0);
   } finally { await f.close(); }
 });
+
+/* The core reserves min(4 MiB, the negotiated max_upload_bytes) for a consumed stream (ts-core 01b3327a). */
+const SERVER_CAP = 32 * 1024;
+const pcm = size => { const out = Buffer.alloc(size); wav().copy(out); out.writeUInt32LE(size - 8, 4); out.writeUInt32LE(size - 44, 40); return out; };
+
+test('S-09 a server max_upload_bytes below 4 MiB still admits the reader stream, reserving only the server cap', async () => {
+  const f = await fixture({ sessionLimits: { max_upload_bytes: SERVER_CAP } });
+  try {
+    const body = pcm(20 * 1024);
+    const { response } = audio(body, 4096);
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    assert.equal(f.manager.status().openStreams, 1);
+    assert.equal(f.manager.status().ownedBytes, SERVER_CAP, 'reservation = min(4 MiB, max_upload_bytes)');
+    const rest = await drain(reader);
+    assert.deepEqual(Buffer.concat([first.value, rest]), body);
+    await f.manager.flush(); await idle(f);
+    assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, body);
+  } finally { await f.close(); }
+});
+
+test('S-10 a body over the server cap (but under 4 MiB) is discarded whole; the application still reads every byte', async () => {
+  const f = await fixture({ sessionLimits: { max_upload_bytes: SERVER_CAP } });
+  try {
+    const body = pcm(SERVER_CAP + 4096);
+    const { response } = audio(body, 4096);
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    assert.deepEqual(await drain(response.body.getReader()), body);
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});

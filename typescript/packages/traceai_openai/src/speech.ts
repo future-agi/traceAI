@@ -20,14 +20,17 @@ export function patchSpeech(sdk: object, owner: object, tracer: () => FITracer, 
     const original = resource.create;
     const wrapped: Create = function (...args) {
       const mediaOptions = options();
+      const parent = context.active();
       // Attachments OFF (the default) leaves audio calls exactly as before: no span, no wrapper work.
-      if (!enabled() || isTracingSuppressed(context.active()) || !attachmentsActive(mediaOptions.attachments)) return original.apply(this, args);
+      if (!enabled() || isTracingSuppressed(parent) || !attachmentsActive(mediaOptions.attachments)) return original.apply(this, args);
       const span = tracer().startSpan(`OpenAI Audio ${operation}`, { kind: SpanKind.CLIENT, attributes: {
         "fi.span.kind": "LLM", "gen_ai.operation.name": operation,
       } });
       // Provider bytes and filenames are not span attributes. The existing provider
       // manager supplies policy, transport credentials and lifecycle to this hook.
-      const media = new ProviderMediaCapture(span, speechMediaRoute(this) ? mediaOptions : {});
+      // An adapter that already owns this call's media (shared owner marker) keeps it; otherwise this
+      // capture claims the call, so wire-level capture (auto) never uploads a second copy.
+      const media = new ProviderMediaCapture(span, speechMediaRoute(this) ? { ...mediaOptions, parentContext: parent } : {});
       if (operation !== "speech") {
         try { media.speechInput((args[0] as { file?: unknown } | undefined)?.file); } catch { /* No payload diagnostics. */ }
       }
@@ -45,7 +48,7 @@ export function patchSpeech(sdk: object, owner: object, tracer: () => FITracer, 
         return result;
       };
       try {
-        const result = context.with(trace.setSpan(context.active(), span), () => original.apply(this, args));
+        const result = context.with(media.claim(trace.setSpan(parent, span)), () => original.apply(this, args));
         return observeAPIPromise(result, observe, () => finish(true), response => {
           if (response.status < 400) observe(response);
           else finish(true);
