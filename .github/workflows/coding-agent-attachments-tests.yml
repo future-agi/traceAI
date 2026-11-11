@@ -25,9 +25,6 @@ jobs:
     defaults:
       run:
         working-directory: typescript
-    env:
-      FI_BASE_URL: http://127.0.0.1:9
-      FI_GRPC_URL: http://127.0.0.1:9
     steps:
       - uses: actions/checkout@v4
         with:
