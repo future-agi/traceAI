@@ -180,5 +180,11 @@ Parameters, hooks, message objects, iterator cancellation and control methods
 remain owned by the application. The wrapper neither awaits uploads during
 inference nor keeps spans open for uploads. Flush the provider before process
 exit; if an explicitly supplied manager differs from the provider's manager,
-flush that manager as well. Do not enable overlapping media capture at both the
-agent and provider boundary: cross-adapter duplicate suppression is not provided.
+flush that manager as well.
+
+Each original media block is offered to the manager at most once per query,
+so a replayed or re-yielded frame does not create a second occurrence. The SDK
+runs model calls inside the spawned Claude Code executable, so an in-process
+Anthropic provider instrumentation does not see the same media. If you also
+capture the same bytes yourself through another adapter, the manager does not
+deduplicate across adapters.

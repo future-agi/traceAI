@@ -510,7 +510,8 @@ describe("wrapQuery", () => {
       expect(conversation.attributes["claude_agent.error.type"]).toBe("error_max_turns");
       // The result's error strings are raw error text: hidden with hideOutputs.
       expect(conversation.attributes["claude_agent.error.message"]).toBeUndefined();
-      expect(conversation.status.message).toBe("error_max_turns");
+      // fi-core hides the status description with hidden outputs/error details.
+      expect(conversation.status.message).toBeUndefined();
       expect(conversation.attributes["gen_ai.cost.total"]).toBe(0.002);
     });
 

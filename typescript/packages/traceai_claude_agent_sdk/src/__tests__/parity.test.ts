@@ -60,7 +60,8 @@ describe("Python parity", () => {
     const block = source.slice(source.indexOf("BUILTIN_TOOLS = frozenset(["));
     const list = block.slice(0, block.indexOf("])"));
     const python = [...list.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1]);
-    expect(python.length).toBe(13);
+    // Python now lists "Agent" too (the 0.3.x subagent tool name TS already had).
+    expect(python.length).toBe(14);
     for (const name of python) expect(BUILTIN_TOOLS.has(name)).toBe(true);
   });
 
