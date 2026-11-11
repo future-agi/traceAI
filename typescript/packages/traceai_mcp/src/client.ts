@@ -12,7 +12,8 @@ export interface MCPClientTracingConfig {
   attachmentCapture?: AttachmentCapturePolicy;
 }
 
-const WRAPPED = new WeakSet<object>();
+const PROXIES = new WeakSet<object>();
+const BY_CLIENT = new WeakMap<object, object>();
 
 /**
  * Trace the actual client callTool/readResource boundaries (not transport refs).
@@ -20,7 +21,10 @@ const WRAPPED = new WeakSet<object>();
  * Only successfully returned typed bytes are observed. Network work is never awaited.
  */
 export function wrapMCPClient<C extends object>(client: C, config: MCPClientTracingConfig = {}): C {
-  if (WRAPPED.has(client)) return client;
+  if (PROXIES.has(client)) return client;
+  // One proxy per raw client: wrapping twice must not create nested spans or duplicate capture.
+  const existing = BY_CLIENT.get(client);
+  if (existing) return existing as C;
   const methods = new Map<PropertyKey, unknown>();
   const proxy = new Proxy(client, {
     get(target, key) {
@@ -54,15 +58,20 @@ export function wrapMCPClient<C extends object>(client: C, config: MCPClientTrac
             ? context.with(trace.setSpan(context.active(), span), () => value.apply(target, args))
             : value.apply(target, args);
         } catch (error) { finish(true); throw error; }
-        // Observe a side branch, but return the exact SDK promise to the caller.
-        try { result.then((response: unknown) => finish(false, response), () => finish(true)); }
-        catch { finish(true); }
+        // Observe a side branch, but return the exact SDK promise (or value) to the caller.
+        try {
+          const thenable = result !== null && (typeof result === "object" || typeof result === "function") &&
+            typeof (result as { then?: unknown }).then === "function";
+          if (thenable) (result as PromiseLike<unknown>).then((response: unknown) => finish(false, response), () => finish(true));
+          else finish(false, result);
+        } catch { finish(true); }
         return result;
       };
       methods.set(key, wrapped);
       return wrapped;
     },
   });
-  WRAPPED.add(proxy);
+  PROXIES.add(proxy);
+  BY_CLIENT.set(client, proxy);
   return proxy;
 }

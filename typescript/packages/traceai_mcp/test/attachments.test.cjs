@@ -12,6 +12,7 @@ test('typed image/audio/nested resource bytes use the shared TLS uploader and ex
     const client = { callTool(...received) { assert.equal(this, client); assert.deepEqual(received, args); return promise; } };
     const wrapped = wrapMCPClient(client, { tracerProvider: h.provider });
     assert.equal(wrapMCPClient(wrapped), wrapped);
+    assert.equal(wrapMCPClient(client, { tracerProvider: h.provider }), wrapped, 'one proxy per raw client');
     assert.equal(wrapped.callTool(...args), promise);
     assert.equal(await promise, response);
     await h.manager.flush();
@@ -108,5 +109,18 @@ test('policy tightening after enqueue discards decoded bytes before upload', asy
     const [handle] = captureMCPResult(h.manager, identity, { content: [image()] });
     h.manager.updatePolicy({ enabled: false });
     await h.manager.flush(); assert.equal(h.uploads.length, 0); assert.notEqual((await handle.completion).status, 'validating');
+  } finally { await h.close(); }
+});
+
+test('synchronous non-thenable result is returned unchanged and recorded as success', async () => {
+  const h = await harness();
+  try {
+    const response = { content: [image()] };
+    const wrapped = wrapMCPClient({ callTool: () => response }, { tracerProvider: h.provider });
+    assert.equal(wrapped.callTool({ name: 'sync' }), response);
+    await h.manager.flush();
+    const [span] = h.exporter.getFinishedSpans();
+    assert.equal(span.status.code, 1);
+    assert.equal(h.uploads.length, 1);
   } finally { await h.close(); }
 });

@@ -92,3 +92,13 @@ test('iterator cancellation and control method receivers are unchanged', async (
     assert.equal(closed, 1); assert.equal(h.uploads.length, 0);
   } finally { await h.close(); }
 });
+
+test('the same original block re-yielded in user frames is one occurrence per query', async () => {
+  const h = await harness();
+  try {
+    const block = image();
+    const frame = { type: 'user', message: { content: [block] } };
+    await run(h, [frame, frame, { type: 'user', message: { content: [block] } }]);
+    assert.equal(h.uploads.length, 1); assert.equal(h.records.length, 1);
+  } finally { await h.close(); }
+});

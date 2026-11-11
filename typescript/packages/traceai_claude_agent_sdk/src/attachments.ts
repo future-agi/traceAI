@@ -21,6 +21,7 @@ export function captureAgentMedia(
   span: Span,
   content: unknown,
   options: { toolCallId?: string; messageIndex: number; isError?: boolean; toolResult: boolean },
+  observed?: WeakSet<object>,
 ): void {
   const manager = config.attachments;
   if (!manager || !Array.isArray(content)) return;
@@ -34,6 +35,9 @@ export function captureAgentMedia(
       const mimeType = source.media_type;
       // Do not let a misleading MIME relabel an image to bypass hideInputImages.
       if (block.type === "image" ? !mimeType.startsWith("image/") : mimeType !== "application/pdf") continue;
+      // One occurrence per original block object per query: a replayed/re-yielded frame is not new media.
+      // Identity only; the encoded data is never read for deduplication.
+      if (observed) { if (observed.has(source)) continue; observed.add(source); }
       const f = config.attachmentTraceConfig ?? {};
       const c = config.attachmentCapture ?? {};
       const errorDetail = options.isError === true || c.errorDetail === true;

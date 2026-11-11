@@ -290,6 +290,8 @@ export class QueryTracer {
   private readonly tracer: Tracer;
   private readonly media: AgentAttachmentContext;
   private messageIndex = 0;
+  /** Original media source objects already offered to the manager during this query. */
+  private readonly observedMedia = new WeakSet<object>();
   private readonly policy: ContentPolicy;
   private readonly params: QueryParamsLike;
   private readonly options: OptionsLike | undefined;
@@ -606,7 +608,7 @@ export class QueryTracer {
     const affectedTurns = new Set<TurnState>();
     captureAgentMedia({ ...this.media, attachmentCapture: { ...this.media.attachmentCapture,
       recordInputs: this.policy.hideInputMessages ? false : this.media.attachmentCapture?.recordInputs } },
-    this.conversation!, message.message?.content, { messageIndex: this.messageIndex, toolResult: false });
+    this.conversation!, message.message?.content, { messageIndex: this.messageIndex, toolResult: false }, this.observedMedia);
     for (const block of contentBlocks(message.message?.content)) {
       if (block && block.type === "tool_result" && typeof block.tool_use_id === "string") {
         const turn = this.endTool(block.tool_use_id, block.content, block.is_error === true);
@@ -903,7 +905,7 @@ export class QueryTracer {
     captureAgentMedia({ ...this.media, attachmentCapture: { ...this.media.attachmentCapture,
       recordInputs: this.policy.hideInputMessages ? false : this.media.attachmentCapture?.recordInputs,
       recordOutputs: this.policy.hideOutputMessages ? false : this.media.attachmentCapture?.recordOutputs } },
-    span, content, { toolCallId: id, messageIndex: this.messageIndex, isError, toolResult: true });
+    span, content, { toolCallId: id, messageIndex: this.messageIndex, isError, toolResult: true }, this.observedMedia);
     const output = this.policy.hideOutputs ? "" : this.clean(flattenToolResult(content), CONTENT_MAX);
     if (!this.policy.hideOutputs) {
       const serialized = output;
