@@ -45,11 +45,14 @@ function run(withManager: boolean) {
       });
       await new Promise(r => server.listen(0, '127.0.0.1', r));
       const origin = 'http://127.0.0.1:' + server.address().port;
-      const client = req => new Promise((resolve, reject) => {
-        const out = http.request(origin + new URL(req.url).pathname, { method: req.method, headers: req.headers, signal: req.signal }, response => {
-          const c = []; response.on('data', d => c.push(d)); response.on('end', () => resolve({ status: response.statusCode, headers: {}, body: Buffer.concat(c) }));
-        }); out.on('error', reject); out.end(req.body);
-      });
+      const client = async req => {
+        const body = req.body instanceof Blob ? Buffer.from(await req.body.arrayBuffer()) : req.body;
+        return new Promise((resolve, reject) => {
+          const out = http.request(origin + new URL(req.url).pathname, { method: req.method, headers: req.headers, signal: req.signal }, response => {
+            const c = []; response.on('data', d => c.push(d)); response.on('end', () => resolve({ status: response.statusCode, headers: {}, body: Buffer.concat(c) }));
+          }); out.on('error', reject); out.end(body);
+        });
+      };
       const manager = new AttachmentManager({ enabled: true, projectName: 'synthetic', projectType: 'observe', environment: () => ({}),
         transport: createAttachmentHttpTransport({ endpoint: 'https://attachments.example', headers: { authorization: 'Bearer synthetic' }, client }) });
       assert.equal(await manager.ready(), true);
@@ -58,12 +61,12 @@ function run(withManager: boolean) {
       if (${withManager}) options.attachmentManager = manager;
       auto.init(options);
       assert.equal(auto.getAttachmentManager() === manager, ${withManager});
-      const openai = auto.report().integrations.find(row => row.name === 'openai');
-      assert.equal(openai.status, 'instrumented'); assert.equal(openai.media, 'provider_adapter');
       const OpenAI = require('openai').default ?? require('openai').OpenAI;
       const sdk = new OpenAI({ apiKey: 'synthetic-provider-key', baseURL: origin + '/v1' });
       await sdk.chat.completions.create({ model: 'gpt-4o', messages: [{ role: 'user', content: [{ type: 'text', text: 'synthetic' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,' + PNG } }] }] });
       await auto.forceFlush(); await manager.flush(2000);
+      const openai = auto.report().integrations.find(row => row.name === 'openai');
+      assert.equal(openai.status, 'instrumented'); assert.equal(openai.media, 'provider_adapter');
       const spans = exporter.getFinishedSpans().filter(s => s.attributes['gen_ai.span.kind'] === 'LLM' || s.attributes['fi.span.kind'] === 'LLM');
       process.stdout.write(JSON.stringify({ uploads: uploaded.map(b => b.toString('base64')), parents: initialized.map(r => r.association.parent.span_id),
         purposes: initialized.map(r => r.purpose), llmSpans: spans.map(s => s.spanContext().spanId) }));

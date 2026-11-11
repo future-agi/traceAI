@@ -3,6 +3,7 @@ import type {
   AttachmentCapturePolicy, AttachmentCorrelation, AttachmentManager, AttachmentPurpose, AttachmentStream,
 } from "@traceai/fi-core/attachments";
 import type { FetchMediaObserver, FetchMediaSink } from "./fetch-runtime";
+import { header } from "./core";
 
 const MEDIA_POLICY = createContextKey("traceai.auto.attachment_policy.v1");
 /** Supply the integration's capture restrictions; inherited denials always win. */
@@ -124,6 +125,12 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
     format = imageFormat((body as Record<string, unknown>).output_format);
     if (op === "chat" || op === "responses") captureOpenAIAttachments(manager, correlation, body, { operation: op, direction: "input", capture });
   };
+  const jsonOutput = (value: unknown) => {
+    if (outputObserved || !correlation || !value || typeof value !== "object" || !(op === "image_generation" || op === "image_edit" || op === "responses")) return;
+    outputObserved = true;
+    // Typed provider adapter only (#682): no recursive scraping, no URL retrieval, decode after admission.
+    captureOpenAIAttachments(manager, correlation, value, { operation: op === "responses" ? "responses" : "images", direction: "output", capture, imageFormat: format });
+  };
   const formData = (body: FormData) => {
     let entries = 0;
     for (const [name, value] of body.entries()) {
@@ -138,12 +145,15 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
     }
   };
   return {
-    bind(span, request) {
+    bind(span, request, response) {
       // The emitter supplies its actual identity before ending, never a later ambient span.
       if (correlation) return;
       correlation = manager.correlation(span);
-      // JSON input uses the wire path's own bounded copy; nothing was retained for media before this point.
+      // JSON uses the wire path's own bounded copies; nothing was retained for media before this point.
       if (op === "chat" || op === "responses" || op === "image_generation") captureJsonInput(parseJson(request?.body));
+      // Output JSON, however the application consumed it (json(), text(), arrayBuffer()); the same span and
+      // position captured again from json() below resolves to the first occurrence in the adapter's registry.
+      if (response && (response.status ?? 0) >= 200 && (response.status ?? 0) < 300 && !response.truncated && mediaType(header(response.headers, "content-type")) === "application/json") jsonOutput(parseJson(response.body));
     },
     request(body) {
       // Wire-only: the span does not exist yet, so FormData is not retained until a late span (fail closed).
@@ -178,11 +188,7 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
           // The view (and the core's synchronous copy) exists only after admission.
           attachExact(value.byteLength, type, "output", "model_output", () => ({ kind: "Bytes", data: new Uint8Array(value) }), "Bytes");
         }
-      } else if (methodName === "json" && type === "application/json" && (op === "image_generation" || op === "image_edit" || op === "responses")) {
-        outputObserved = true;
-        // Typed provider adapter only (#682): no recursive scraping, no URL retrieval, decode after admission.
-        captureOpenAIAttachments(manager, correlation, value, { operation: op === "responses" ? "responses" : "images", direction: "output", capture, imageFormat: format });
-      }
+      } else if (methodName === "json" && type === "application/json") jsonOutput(value);
     },
   };
 }

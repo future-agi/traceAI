@@ -48,11 +48,15 @@ function control(req: import("node:http").IncomingMessage, body: Buffer, res: im
     uploads.push(body); res.end(JSON.stringify({ upload_id: req.url!.split("/").at(-2), state: "pending_upload", reason: "queued" }));
   } else { res.statusCode = 202; res.end(JSON.stringify({ upload_id: req.url!.split("/").at(-2), state: "validating", reason: "binding_pending" })); }
 }
-const client: AttachmentHttpClient = req => new Promise((resolve, reject) => {
+const client: AttachmentHttpClient = async req => {
+  // Content PUTs may carry the application's own Blob; the double reads it only when the core sends it.
+  const body = req.body instanceof Blob ? Buffer.from(await req.body.arrayBuffer()) : req.body;
+  return new Promise((resolve, reject) => {
   const outgoing = httpRequest(`${origin}${new URL(req.url).pathname}`, { method: req.method, headers: { ...req.headers, "x-attachment-control": "1" }, signal: req.signal }, response => {
     const chunks: Buffer[] = []; response.on("data", c => chunks.push(c)); response.on("end", () => resolve({ status: response.statusCode!, headers: {}, body: Buffer.concat(chunks) } as any));
-  }); outgoing.on("error", reject); outgoing.end(req.body as any);
-});
+  }); outgoing.on("error", reject); outgoing.end(body as any);
+  });
+};
 async function createManager(options: AttachmentManagerOptions = {}, serverOverrides: Record<string, unknown> = {}) {
   policy = { ...serverPolicy, ...serverOverrides };
   const result = new AttachmentManager({ enabled: true, projectName: "attachment-test", projectType: "observe", environment: () => ({}),
@@ -138,15 +142,17 @@ describe("A04 speech output", () => {
     responseChunks = 5; install();
     const tee = jest.spyOn(ReadableStream.prototype, "tee"), clone = jest.spyOn(Response.prototype, "clone");
     const reads = jest.spyOn(ReadableStreamDefaultReader.prototype, "read");
-    let appReads = 0;
+    let appReads = 0, responseBody: unknown, appReader: unknown;
     await inNative(async () => {
-      const response = await speech(); const reader = response.body!.getReader(); const chunks: Buffer[] = [];
+      const response = await speech(); responseBody = response.body; const reader = response.body!.getReader(); appReader = reader; const chunks: Buffer[] = [];
       for (;;) { appReads++; const x = await reader.read(); if (x.done) break; chunks.push(Buffer.from(x.value)); }
       expect(Buffer.concat(chunks)).toEqual(audio);
     });
-    const underlying = reads.mock.calls.length;
+    // Only this reader's calls: undici reads its own request-body stream internally.
+    const underlying = reads.mock.contexts.filter(receiver => receiver === appReader).length;
     await settle();
-    expect(tee).not.toHaveBeenCalled(); expect(clone).not.toHaveBeenCalled(); tee.mockRestore(); clone.mockRestore(); reads.mockRestore();
+    // undici itself tees the REQUEST body (cloneRequest); the response body must never be teed or cloned.
+    expect(tee.mock.contexts).not.toContain(responseBody); expect(clone).not.toHaveBeenCalled(); tee.mockRestore(); clone.mockRestore(); reads.mockRestore();
     expect(appReads).toBeGreaterThan(2); expect(underlying).toBe(appReads); expect(uploads).toEqual([audio]);
   });
   test("native span: async-iterator consumption uploads once; a break before the end uploads nothing", async () => {
@@ -324,7 +330,7 @@ describe("privacy negative controls", () => {
   });
   test("a disabled manager installs no media observer: unchanged provider traffic, no control traffic", async () => {
     const disabled = new AttachmentManager({ enabled: false, environment: () => ({}) });
-    install(disabled); await inNative(async () => { await (await speech()).arrayBuffer(); });
+    transfers = []; install(disabled); await inNative(async () => { await (await speech()).arrayBuffer(); });
     await (await speech()).arrayBuffer();
     await settle(); expect(transfers).toEqual([]); expect(providerRequests).toBe(2);
   });
@@ -374,7 +380,9 @@ describe("real SDKs against loopback", () => {
     await settle(); expect(uploads).toEqual([png]);
   });
   test("OpenAI SDK transcription (wire-only) keeps the multipart request intact and captures nothing", async () => {
-    const mod = sdk(); const OpenAI = mod.default ?? mod.OpenAI; const toFile = mod.toFile;
+    const mod = sdk();
+    // openai 4.x sends multipart as a Node stream, which a WHATWG fetch rejects without `duplex` (SDK limitation, not auto).
+    if (Number(require(`${process.env.ATT_OPENAI_MODULE || "openai"}/package.json`).version.split(".")[0]) < 5) return; const OpenAI = mod.default ?? mod.OpenAI; const toFile = mod.toFile;
     responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}');
     install(); const client = new OpenAI({ apiKey: "synthetic-provider-key", fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
     const result = await client.audio.transcriptions.create({ model: "whisper-1", file: await toFile(audio, "synthetic.wav", { type: "audio/wav" }) });

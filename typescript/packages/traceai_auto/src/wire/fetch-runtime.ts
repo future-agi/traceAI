@@ -6,8 +6,8 @@ import type { Span } from "@opentelemetry/api";
 /** Receives only chunks the application already consumed; never pulls. */
 export interface FetchMediaSink { write(chunk: Uint8Array): boolean; end(): void; abort(): void }
 export interface FetchMediaObserver {
-  /** The wire span, before it ends, with the wire path's own bounded request copy. */
-  bind(span: Span, request?: RequestData): void;
+  /** The wire span, before it ends, with the wire path's own bounded request and response copies. */
+  bind(span: Span, request?: RequestData, response?: ResponseData): void;
   request(body: BodyInit | null | undefined): void;
   /** The application started incremental consumption of a response body (reader or async iterator). */
   consumed?(mimeType: string, successful: boolean, contentLength: number | undefined): FetchMediaSink | undefined;
@@ -238,7 +238,7 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         if (finished) return; finished = true;
         const complete = () => {
           if (audio) { response.audioOutputBytes = audio.bytes; response.body = undefined; }
-          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value, request) : undefined); } catch { /* Capture must not reach application code. */ }
+          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value, request, response) : undefined); } catch { /* Capture must not reach application code. */ }
           finally { resolve(); pending.delete(done); }
         };
         // Only completed responses awaiting bounded decoding are flushable, never unread streams.
