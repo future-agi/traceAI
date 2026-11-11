@@ -228,8 +228,10 @@ test('discard and async route revocation prevent binary delivery', async t => {
   // discard() invalidates (policy_denied) and then shuts the provider down; ts-core f0a56b37's shutdown()
   // overwrites the closed reason with `incomplete`. Either way the runtime is closed and nothing is admitted.
   assert.ok(['policy_denied', 'incomplete'].includes(f.tracer.attachments.status().state));
+  // A discarded tracer hands out an inert turn (no images()); either way nothing is uploaded.
   const turn2 = f.tracer.startTurn({ sessionId: 's', turnId: 't2' });
-  turn2.images([image()], input);
+  turn2.images?.([image()], input);
+  await f.tracer.flush();
   assert.equal(f.requests.filter(r => r.path === '/upload').length, 0);
 });
 
