@@ -51,10 +51,29 @@ def owned_session(tmp_path, *, recording=True):
 
 
 def make_ogg(path):
-    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
-                    "sine=frequency=440:duration=0.1:sample_rate=48000", "-ac", "2",
-                    "-c:a", "libopus", "-y", str(path)], check=True, capture_output=True)
+    """0.1 s stereo 440 Hz Opus in Ogg, encoded with PyAV's bundled codecs (no system ffmpeg)."""
+    import math
+    import struct
+    rate, count = 48000, 4800
+    pcm = b"".join(struct.pack("<hh", value, value) for value in
+                   (int(8000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(count)))
+    with av.open(str(path), "w", format="ogg") as container:
+        stream = container.add_stream("libopus", rate=rate)
+        stream.layout = "stereo"
+        frame = av.AudioFrame(format="s16", layout="stereo", samples=count)
+        frame.planes[0].update(pcm)
+        frame.sample_rate, frame.pts = rate, 0
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
     return path.read_bytes()
+
+
+def decoded(data):
+    with av.open(io.BytesIO(data)) as media:
+        frames = list(media.decode(audio=0))
+    return sum(frame.samples for frame in frames), len(frames[0].layout.channels)
 
 
 @pytest.mark.asyncio
@@ -84,10 +103,8 @@ async def test_real_report_tls_upload_survives_span_end_before_cleanup(server, t
         assert "audio.ogg" not in str(state["requests"])
         assert calls == ["original"]
         # Independent codec decode verifies actual bytes and channel count.
-        with av.open(io.BytesIO(state["payloads"][0])) as media:
-            frames = list(media.decode(audio=0))
-            assert sum(frame.samples for frame in frames) == 4800
-            assert len(frames[0].layout.channels) == 2
+        samples, channels = decoded(state["payloads"][0])
+        assert channels == 2 and samples == decoded(raw)[0] and 4800 <= samples <= 4800 + 960
         os.unlink(tmp_path / "audio.ogg")
         assert await binding.finalize() == "validating"
         assert binding._session is None and binding._job is None
