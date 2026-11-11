@@ -44,7 +44,8 @@ const attributes = (span) =>
     ]),
   );
 
-async function fixture(SDK, options = {}) {
+async function fixture(SDK, options = {}, media = {}) {
+  const speech = { ...timestamp, audio_base64: media.base64 ?? BASE64 };
   const requests = [],
     wire = [];
   const attempts = new Map();
@@ -122,14 +123,14 @@ async function fixture(SDK, options = {}) {
       if (req.url.includes("with-timestamps")) {
         res.setHeader("content-type", "application/json");
         if (req.url.includes("/stream/")) {
-          res.write(JSON.stringify(timestamp) + "\n");
+          res.write(JSON.stringify(speech) + "\n");
           await delay(15);
           res.end(
             mode === "bad-stream"
               ? "{bad-json}\n"
-              : JSON.stringify(timestamp) + "\n",
+              : JSON.stringify(speech) + "\n",
           );
-        } else res.end(JSON.stringify(timestamp));
+        } else res.end(JSON.stringify(speech));
         return;
       }
       res.setHeader("content-type", "audio/mpeg");

@@ -1,6 +1,7 @@
 import { diag, Span, SpanStatusCode } from "@opentelemetry/api";
 import { SemanticConventions as S } from "@traceai/fi-semantic-conventions";
 import { TraceConfig } from "@traceai/fi-core";
+import type { SpeechAttachments } from "./attachments.js";
 
 let diagnosed = false;
 
@@ -58,6 +59,7 @@ export class Operation {
     private readonly policy: TraceConfig,
     timeoutMs: number,
     private readonly remove: (operation: Operation) => void,
+    private attachments?: SpeechAttachments,
   ) {
     this.span = span;
     this.timer = setTimeout(() => this.end("incomplete"), timeoutMs);
@@ -74,9 +76,14 @@ export class Operation {
     }
   }
 
+  timestampedAttachment(value: unknown): void {
+    if (this.span) this.attachments?.timestamped(value);
+  }
+
   audio(value: unknown, timestamps = false): void {
     safely(() => {
-      if (!this.span) return;
+      if (!this.span || this.policy.hideOutputs || this.policy.hideOutputMessages ||
+          this.policy.hideOutputText || this.policy.piiRedaction) return;
       const size = timestamps
         ? typeof record(value).audioBase64 === "string"
           ? (record(value).audioBase64 as string).length
@@ -152,6 +159,7 @@ export class Operation {
     const span = this.span;
     if (!span) return;
     this.span = undefined;
+    this.attachments = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     safely(() => this.detachAbort?.());

@@ -45,6 +45,16 @@ If you already have an OpenTelemetry provider, reuse it instead of creating anot
 
 In Future AGI, open your configured project and look for `Pipecat Client Event: connected`, `botReady` and `disconnected`. `transportStateChanged`, `error` and `messageError` also produce client event spans. Each span describes a notification, not a server operation's duration. An optional `parentContext` associates events with an application-owned span without modifying transport headers or bot messages.
 
+## Reference an existing server recording
+
+Pass `serverRecording` to `observePipecatClient` when your authenticated application server already provides the current conversation's recording occurrence. The function is reevaluated for each event; return `undefined` when the server session ends or changes, including during reconnect.
+
+Its return type, `PipecatServerRecording`, contains `schemaVersion: 1`, `parent: { traceId, spanId }`, `occurrenceId` and `conversationId`. Use the **original server trace/span** and UUID occurrence/conversation identifiers. Do not populate it from bot messages, participant names, media URLs or provider tokens.
+
+Valid identities add an OpenTelemetry span link to the server parent with the occurrence and conversation identifiers. The event's `pipecat.server_recording.status` is `reference_only`; missing, malformed or unsupported identities report `source_unavailable`. The observer does not copy the occurrence onto the client span, grant media access or resolve a playback URL. Server-side authorization is still required to view the original occurrence.
+
+This is correlation only: it does not record the microphone, camera or browser RTC stream, and requires no Future AGI credential in the browser.
+
 ## Existing Node instrumentation
 
 `PipecatInstrumentation`, `manuallyInstrument()` and `isPatched()` remain available from the root entry point. Register the instrumentation with your existing Node tracer provider **before requiring** `@pipecat-ai/client-js`. For already loaded modules or ESM, pass the actual imported module to `manuallyInstrument()`.

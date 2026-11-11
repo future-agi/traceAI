@@ -8,6 +8,8 @@ import {
   Tracer,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
+import { pipecatRecordingLink, PipecatServerRecording } from "./recording";
+export type { PipecatServerRecording } from "./recording";
 
 const EVENTS = [
   "connected", "disconnected", "botReady", "transportStateChanged",
@@ -26,6 +28,11 @@ export interface PipecatClientTracingOptions {
   tracer?: Tracer;
   /** Optional application-owned parent; never sent to the bot or transport. */
   parentContext?: Context;
+  /** Resolve only the current authenticated server session; reevaluated per event.
+   * Returning undefined on disconnect/reconnect prevents stale session linkage.
+   * Identity is a reference, never authorization to upload, relink or play media.
+   */
+  serverRecording?: () => PipecatServerRecording | undefined;
 }
 
 const observers = new WeakMap<PipecatEventSource, () => void>();
@@ -47,13 +54,19 @@ export function observePipecatClient(
     const listener = (state: unknown) => {
       // Telemetry must not interrupt application callbacks. Do not log their data.
       try {
+        let recording;
+        try { recording = pipecatRecordingLink(options.serverRecording?.()); } catch { /* unavailable */ }
         const span = tracer.startSpan(`Pipecat Client Event: ${event}`, {
           kind: SpanKind.CLIENT,
           attributes: {
             "fi.span.kind": "CHAIN",
             "pipecat.telemetry_source": "client",
             "pipecat.event": event,
+            ...(options.serverRecording ? {
+              "pipecat.server_recording.status": recording ? "reference_only" : "source_unavailable",
+            } : {}),
           },
+          links: recording ? [recording] : [],
         }, options.parentContext ?? context.active());
         // Only inspect the fixed SDK error state; never serialize or coerce event data.
         const isError = event === "error" || event === "messageError" ||

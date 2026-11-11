@@ -191,7 +191,10 @@ export function observeResponse(
           data = timestampStream(data as AsyncIterable<unknown>, operation);
         } else {
           if (method === "speechToText.convert") operation.output(data);
-          else operation.audio(data, true);
+          else {
+            operation.timestampedAttachment(data);
+            operation.audio(data, true);
+          }
           operation.end("complete");
         }
       });
