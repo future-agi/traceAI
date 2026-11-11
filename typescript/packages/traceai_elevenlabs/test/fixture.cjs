@@ -137,11 +137,13 @@ async function fixture(SDK, options = {}, media = {}) {
       res.flushHeaders();
       await delay(mode === "slow" ? 120 : 10);
       if (res.destroyed) return;
-      res.write(AUDIO.subarray(0, 4));
+      const audio = media.audio ?? AUDIO;
+      const split = Math.min(4, audio.length);
+      res.write(audio.subarray(0, split));
       await delay(mode === "slow" ? 120 : 10);
       if (res.destroyed) return;
       if (mode === "broken") res.destroy();
-      else res.end(AUDIO.subarray(4));
+      else res.end(audio.subarray(split));
     } catch {
       res.destroy();
     }

@@ -55,6 +55,8 @@ function audioStream(
           reader.value.releaseLock();
         } else {
           operation.audio(next.value);
+          // Copy before the view goes back to the consumer (BYOB) or downstream.
+          operation.audioChunk(next.value);
           if (request) request.respondWithNewView(next.value);
           else controller.enqueue(next.value);
         }
@@ -94,11 +96,11 @@ function observeIterator<T>(
       try {
         const next = await iterator.next(...args);
         if (next.done) operation.end("complete");
-        else
-          operation.audio(
-            metadata ? record(next.value).data : next.value,
-            true,
-          );
+        else {
+          const value = metadata ? record(next.value).data : next.value;
+          operation.audio(value, true);
+          operation.timestampChunk(value);
+        }
         return next;
       } catch (error) {
         operation.error(error);

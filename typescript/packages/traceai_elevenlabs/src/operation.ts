@@ -80,10 +80,19 @@ export class Operation {
     if (this.span) this.attachments?.timestamped(value);
   }
 
+  /** A chunk the application consumed from an instrumentation-owned stream. */
+  audioChunk(value: Uint8Array): void {
+    if (this.span) this.attachments?.chunk(value);
+  }
+
+  /** A timestamp chunk the application consumed; audio is decoded only after admission. */
+  timestampChunk(value: unknown): void {
+    if (this.span) this.attachments?.timestampChunk(value);
+  }
+
   audio(value: unknown, timestamps = false): void {
     safely(() => {
-      if (!this.span || this.policy.hideOutputs || this.policy.hideOutputMessages ||
-          this.policy.hideOutputText || this.policy.piiRedaction) return;
+      if (!this.span) return;
       const size = timestamps
         ? typeof record(value).audioBase64 === "string"
           ? (record(value).audioBase64 as string).length
@@ -158,8 +167,12 @@ export class Operation {
   end(completion: Completion): void {
     const span = this.span;
     if (!span) return;
-    this.span = undefined;
+    // Finish or abort a consumed stream while the span still records, so a complete
+    // object projects its reference and anything else uploads nothing.
+    const attachments = this.attachments;
     this.attachments = undefined;
+    safely(() => attachments?.close(completion === "complete" ? "complete" : "incomplete"));
+    this.span = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     safely(() => this.detachAbort?.());

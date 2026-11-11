@@ -1,6 +1,7 @@
 import {
   Attributes,
   context,
+  createContextKey,
   SpanKind,
   trace,
   TracerProvider,
@@ -30,6 +31,9 @@ import {
 } from "./operation.js";
 import type { AttachmentManager } from "@traceai/fi-core/attachments";
 import { SpeechAttachments, ElevenLabsInputAudioMimeType } from "./attachments.js";
+
+/** Context marker read by `@traceai/auto` wire capture; `createContextKey` is `Symbol.for`. */
+const ATTACHMENT_OWNER = createContextKey("traceai.auto.attachment_owner.v1");
 import { observeResponse } from "./responses.js";
 import { VERSION } from "./version.js";
 
@@ -317,6 +321,9 @@ export class ElevenLabsInstrumentation extends InstrumentationBase {
         this.active.add(operation);
         operation.watchAbort(record(args[stt ? 1 : 2]).abortSignal);
         callContext = trace.setSpan(callContext, span);
+        // This adapter owns the call's media, so wire-level auto capture must not upload the
+        // same bytes again (shared key; no dependency on the auto package).
+        if (attachments) callContext = callContext.setValue(ATTACHMENT_OWNER, true);
       }
     } catch {
       diagnose();

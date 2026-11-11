@@ -3,7 +3,8 @@ const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { AttachmentManager, createAttachmentHttpTransport } = require('@traceai/fi-core/attachments');
 const ids = [1, 2, 3].map(n => `10000000-0000-4000-8000-00000000000${n}`);
-const expiry = () => new Date(Date.now() + 60000).toISOString();
+// Sessions of at least 1 h, so the core's near-expiry renewal never adds a bootstrap here.
+const expiry = () => new Date(Date.now() + 3600000).toISOString();
 
 async function attachmentFixture(config = {}, serverPolicy = {}) {
   const calls = [], uploaded = [], requests = [], uploads = new Map();
