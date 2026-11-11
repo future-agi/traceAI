@@ -48,6 +48,8 @@ class FixtureReceiver(BaseHTTPRequestHandler):
                 value = contract.strict_json(self.rfile.read(length).decode("utf-8"))
                 contract.validate_wire(incoming, value)
                 response = OBJECTS[outgoing]
+                if incoming == "ImportRequest" and value.get("mode") == "completed_recording":
+                    response = OBJECTS["RecordingImportResponse"]
             except (ValueError, ValidationError):
                 code = 400
         body = json.dumps(response).encode()
@@ -99,6 +101,24 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertNotIn(b"SYNTHETIC_SECRET", raw)
             contract.validate_wire("Error", json.loads(raw))
+
+    def test_completed_recording_handoff_does_not_create_large_upload(self):
+        request = OBJECTS["RecordingImportRequest"]
+        status, headers, raw = self.post(BASE + "/imports", request)
+        self.assertEqual(status, 202)
+        self.assertEqual(headers["Cache-Control"], "private, no-store")
+        response = json.loads(raw)
+        contract.validate_wire("RecordingImportResponse", response)
+        self.assertEqual(response["recording_id"], request["recording"]["recording_id"])
+        for forbidden in ("upload_id", "write_capability", "occurrence_id", "gateway_path"):
+            self.assertNotIn(forbidden, response)
+        oversized = {**OBJECTS["UploadRequest"], "declared_bytes": request["recording"]["declared_bytes"]}
+        self.assertEqual(self.post(BASE + "/uploads", oversized)[0], 400)
+        for field in ("source_url", "provider_credential", "filename"):
+            denied = {**request, "source": {**request["source"], field: "SYNTHETIC_SECRET"}}
+            status, _, raw = self.post(BASE + "/imports", denied)
+            self.assertEqual(status, 400)
+            self.assertNotIn(b"SYNTHETIC_SECRET", raw)
 
     def test_unknown_version_and_foreign_route_fail(self):
         value = {**OBJECTS["UploadRequest"], "schema_version": 99}

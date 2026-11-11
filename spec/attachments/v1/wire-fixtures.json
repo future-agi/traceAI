@@ -3313,6 +3313,854 @@
         }
       ],
       "valid": false
+    },
+    {
+      "id": "completed-provider-recording-over-50-mib",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-RecordingImportRequest",
+      "schema": "RecordingImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-CompletedRecordingImport",
+      "schema": "CompletedRecordingImport",
+      "value": {
+        "schema_version": 1,
+        "association": {
+          "capture_session_id": "00000004-0000-0000-0000-000000000001",
+          "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+          "parent": {
+            "trace_id": "0123456789abcdef0123456789abcdef",
+            "span_id": "0123456789abcdef"
+          }
+        },
+        "policy_version": "policy_v1",
+        "deletion_generation": 0,
+        "mime_type": "audio/wav",
+        "direction": "mixed",
+        "source_kind": "ProviderFile",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "modality": "audio",
+        "declared_bytes": 172800044,
+        "declared_duration_ms": 3600000
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-RecordingImportResponse",
+      "schema": "RecordingImportResponse",
+      "value": {
+        "mode": "completed_recording",
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-recording-import-response",
+      "schema": "ImportResponse",
+      "value": {
+        "mode": "completed_recording",
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "recording_id": "00000009-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
+    },
+    {
+      "id": "valid-ImportStatusResponse",
+      "schema": "ImportStatusResponse",
+      "value": {
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "state": "validating",
+        "reason": "binding_pending"
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-five-minute-recording-over-8-mib",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 14400044,
+          "declared_duration_ms": 300000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "completed-private-envelope-recording",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "RemoteUrl",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "RemoteUrlEnvelope",
+          "envelope_id": "00000009-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "reject-completed-declared_bytes-1073741825",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 1073741825,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_duration_ms-7200001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 7200001
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_bytes-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 0,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-declared_duration_ms-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-segment_index-0",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "segment_index": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-attachment_id-00000006-0000-0000-0000-000000000001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "attachment_id": "00000006-0000-0000-0000-000000000001"
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-occurrence_id-00000007-0000-0000-0000-000000000001",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000,
+          "occurrence_id": "00000007-0000-0000-0000-000000000001"
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-modality-video",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "video",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source_kind-LocalFile",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "LocalFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-mime_type-image/png",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "image/png",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-source_url",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "source_url": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-provider_credential",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "provider_credential": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-filename",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001",
+          "filename": "SYNTHETIC_CANARY"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-ambiguous-import-mode",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        },
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-completed-source-kind-mismatch",
+      "schema": "ImportRequest",
+      "value": {
+        "mode": "completed_recording",
+        "recording": {
+          "schema_version": 1,
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "modality": "audio",
+          "declared_bytes": 172800044,
+          "declared_duration_ms": 3600000
+        },
+        "source": {
+          "kind": "RemoteUrlEnvelope",
+          "envelope_id": "00000009-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-8388609",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 8388609,
+          "recording_id": "00000009-0000-0000-0000-000000000001",
+          "segment_index": 0
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-52428801",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 52428801
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "reject-single-import-unchanged-ceiling-172800044",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 172800044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "single-attachment-import-still-supported",
+      "schema": "ImportRequest",
+      "value": {
+        "upload": {
+          "schema_version": 1,
+          "attachment_id": "00000006-0000-0000-0000-000000000001",
+          "occurrence_id": "00000007-0000-0000-0000-000000000001",
+          "association": {
+            "capture_session_id": "00000004-0000-0000-0000-000000000001",
+            "correlation_nonce": "00000005-0000-0000-0000-000000000001",
+            "parent": {
+              "trace_id": "0123456789abcdef0123456789abcdef",
+              "span_id": "0123456789abcdef"
+            }
+          },
+          "policy_version": "policy_v1",
+          "deletion_generation": 0,
+          "mime_type": "audio/wav",
+          "modality": "audio",
+          "direction": "mixed",
+          "source_kind": "ProviderFile",
+          "declared_bytes": 48044
+        },
+        "source": {
+          "kind": "ProviderFile",
+          "connection_id": "0000000b-0000-0000-0000-000000000001",
+          "registered_output_id": "0000000c-0000-0000-0000-000000000001"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "single-attachment-import-response-still-supported",
+      "schema": "ImportResponse",
+      "value": {
+        "job_id": "0000000d-0000-0000-0000-000000000001",
+        "upload_id": "00000008-0000-0000-0000-000000000001",
+        "state": "importing"
+      },
+      "valid": true
     }
   ]
 }

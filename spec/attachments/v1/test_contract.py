@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import hashlib
+import io
 import json
+import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -170,6 +174,126 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(objects["ResolveRequest"]["items"][0]["occurrence_id"], occurrence_id)
         self.assertIn('/' + occurrence_id + '/', objects["ResolveResponse"]["items"][0]["gateway_path"])
         self.assertNotEqual(occurrence_id, objects["UploadRequest"]["attachment_id"])
+
+    def test_completed_import_has_separate_admission_without_relaxing_uploads(self):
+        scenario = contract.load("recording-import-fixtures.json")["base"]
+        recording = scenario["request"]["recording"]
+        self.assertEqual(recording["declared_bytes"], 172800044)
+        contract.validate_wire("ImportRequest", scenario["request"])
+        contract.validate_import_admission(scenario)
+        old = next(c["value"] for c in contract.load("wire-fixtures.json")["cases"] if c["id"] == "valid-ImportRequest")
+        for size, linked in ((172800044, False), (172800044, True), (14400044, True)):
+            candidate = copy.deepcopy(old)
+            candidate["upload"]["declared_bytes"] = size
+            if linked:
+                candidate["upload"].update(recording_id=recording["recording_id"], segment_index=0)
+            with self.subTest(size=size, linked=linked), self.assertRaises((ValidationError, ValueError)):
+                contract.validate_wire("ImportRequest", candidate)
+        contract.validate_wire("ImportRequest", old)  # small import compatibility
+
+    def test_import_budgets_deny_before_any_source_effect(self):
+        table = contract.load("recording-import-fixtures.json")
+        attempted = []
+        for case in table["cases"]:
+            if case["stage"] != "admission":
+                continue
+            scenario = contract.fixture_override(table["base"], case["overrides"])
+            before = len(attempted)
+            try:
+                contract.validate_import_admission(scenario)
+                attempted.append(case["id"])  # synthetic source read boundary
+            except (ValueError, ValidationError):
+                pass
+            self.assertEqual(len(attempted) - before, int(case["valid"]), case["id"])
+        self.assertGreater(len(attempted), 0)
+
+    def test_import_length_and_segment_negative_controls(self):
+        table = contract.load("recording-import-fixtures.json")
+        for case in table["cases"]:
+            if case["stage"] != "completion":
+                continue
+            scenario = contract.fixture_override(table["base"], case["overrides"])
+            with self.subTest(case=case["id"]):
+                if case["valid"]:
+                    contract.validate_import_completion(scenario)
+                else:
+                    with self.assertRaises((ValidationError, ValueError)):
+                        contract.validate_import_completion(scenario)
+
+    def test_import_requires_all_reservation_scopes_and_known_resources(self):
+        base = contract.load("recording-import-fixtures.json")["base"]
+        for scope in ("project", "organization", "global"):
+            scenario = copy.deepcopy(base)
+            del scenario["headroom"][scope]
+            with self.subTest(scope=scope), self.assertRaises(ValueError):
+                contract.validate_import_admission(scenario)
+        for resource in base["headroom"]["project"]:
+            scenario = copy.deepcopy(base)
+            del scenario["headroom"]["project"][resource]
+            with self.subTest(resource=resource), self.assertRaises(ValueError):
+                contract.validate_import_admission(scenario)
+
+    def test_one_hour_wav_produces_independently_playable_bounded_segments(self):
+        # A real synthetic PCM file exercises the contract's byte/duration math.
+        # This stdlib test double does NOT qualify the production codec/importer.
+        scenario = contract.load("recording-import-fixtures.json")["base"]
+        contract.validate_import_admission(scenario)
+        expected_hash = hashlib.sha256()
+        actual_hash = hashlib.sha256()
+        one_second = b"\x01\x00" * 24000
+        with tempfile.TemporaryFile() as source:
+            with wave.open(source, "wb") as output:
+                output.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+                for _ in range(3600):
+                    output.writeframesraw(one_second)
+                    expected_hash.update(one_second)
+            scenario["observation"]["source_bytes"] = source.tell()
+            source.seek(0)
+            # Read the admitted source as <=8 MiB ranges and <=256 KiB buffers.
+            reads = []
+            total = scenario["observation"]["source_bytes"]
+            offset = 0
+            while offset < total:
+                count = min(contract.import_window(scenario["limits"]), total - offset)
+                remaining = count
+                while remaining:
+                    chunk = source.read(min(262144, remaining))
+                    self.assertTrue(chunk)
+                    remaining -= len(chunk)
+                reads.append({"offset": offset, "bytes": count, "total_bytes": total})
+                offset += count
+            self.assertEqual(source.read(1), b"")
+            scenario["observation"]["reads"] = reads
+            source.seek(0)
+            sizes = []
+            with wave.open(source, "rb") as decoder:
+                self.assertEqual((decoder.getnchannels(), decoder.getsampwidth(), decoder.getframerate()), (1, 2, 24000))
+                scenario["observation"]["source_duration_ms"] = (decoder.getnframes() * 1000 + 23999) // 24000
+                for segment in scenario["observation"]["manifest"]["segments"]:
+                    frames = segment["duration_ms"] * 24
+                    buffer = io.BytesIO()
+                    with wave.open(buffer, "wb") as encoder:
+                        encoder.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+                        remaining = frames
+                        while remaining:
+                            chunk = decoder.readframes(min(131072, remaining))
+                            self.assertTrue(chunk)
+                            self.assertLessEqual(len(chunk), 262144)
+                            encoder.writeframesraw(chunk)
+                            remaining -= len(chunk) // 2
+                    sizes.append(buffer.tell())
+                    buffer.seek(0)
+                    with wave.open(buffer, "rb") as independent:
+                        self.assertEqual(independent.getnframes(), frames)
+                        while chunk := independent.readframes(131072):
+                            actual_hash.update(chunk)
+                self.assertEqual(decoder.readframes(1), b"")
+            scenario["observation"]["segment_bytes"] = sizes
+        contract.validate_import_completion(scenario)
+        self.assertEqual(actual_hash.digest(), expected_hash.digest())
+        self.assertEqual(len(sizes), 120)
+        self.assertEqual(set(sizes), {1440044})
+        print("PCM_IMPORT " + json.dumps({"source_bytes": total, "segments": len(sizes), "segment_bytes": sizes[0], "output_bytes": sum(sizes), "pcm_sha256": actual_hash.hexdigest()}, sort_keys=True))
 
     def test_security_fixture_covers_every_request_path(self):
         cases = contract.load("security-fixtures.json")["cases"]

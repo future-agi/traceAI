@@ -197,6 +197,119 @@ Server/global admission also reserves decoded resources, parts, objects and link
 Unknown budgets fail readiness. Numeric schema ceilings are safety envelopes,
 not billing/edition limits or promised achievable recording lengths.
 
+Completed-recording import
+--------------------------
+
+``ImportRequest`` has two disjoint forms. The existing ``{upload, source}`` form
+imports one attachment or one already-segmented recording part; its 50 MiB upload
+and 8 MiB recording-segment limits are unchanged. A completed whole audio output
+uses ``{mode: "completed_recording", recording, source}`` instead. The
+``CompletedRecordingImport`` descriptor supplies a new ``recording_id``, exact
+``declared_bytes`` and ``declared_duration_ms``, association, policy/generation,
+MIME, modality, direction and source kind. It has no upload, attachment, occurrence
+or segment ID: the server allocates segment identities under that exact binding.
+The descriptor is not an ``UploadRequest`` and never authorizes a larger PUT.
+
+Admission and handoff
+~~~~~~~~~~~~~~~~~~~~
+
+* Use an authorized registered terminal-completed provider output or a private
+  source envelope referencing a completed output. The trusted resolver verifies
+  completion, exact encoded length, immutable version and bounded-range support
+  before accepting the job. Unknown length, mutable/growing output, unsupported
+  range semantics or an uncompleted Egress job fails closed. No recorder or
+  billable Egress is started. Partial-output import is not this mode.
+* Require both explicit attachment/source permission and the ordinary scoped
+  import identity, including separate provider-connection authority. Apply the
+  same deny-wins privacy/PII/hide rules before source retrieval and on every retry;
+  the new-recording switch is not an import permission. Client-supplied direction
+  cannot override trusted source ancestry. A write-only upload capability cannot
+  submit this job or select a connection.
+* The source is bounded by negotiated ``recording_bytes`` (ceiling 1 GiB) AND
+  ``recording_duration_ms`` (ceiling 120 minutes). Duration is the decoded duration
+  rounded UP to the next whole millisecond. These are admission declarations,
+  independently verified after reading. Over-limit completed sources are rejected,
+  never silently truncated to an apparently complete recording.
+* Allocate a new recording under the exact tenant/project/actor/session/parent,
+  policy and deletion generation. An already occupied recording ID conflicts
+  unless it is an identical scoped idempotent replay. Retries reuse the job and
+  its allocations; they cannot append to or replace another recording.
+* Before fetching, atomically reserve the entire declared immutable-source size
+  PLUS one output segment window of ``min(max_upload_bytes, segment_bytes)``. This
+  staging reservation is distinct from the recording's lifetime byte accounting.
+  Check project, organization AND global remaining capacity, active transfer and
+  recording slots, validation jobs, initialization rate, objects, links and decoded
+  memory/disk/CPU budgets. Unknown capacity denies. The initial byte reservation
+  must fit ``reserved_bytes``; project 1 GiB and organization 2 GiB defaults do not
+  increase for imports. Exhaustion returns 429 with Retry-After, without a fetch.
+  A source at the maximum envelope therefore needs a smaller encoding to leave
+  staging headroom under the v1 reservation ceiling; the envelope is not a guarantee.
+* Return ``RecordingImportResponse`` with mode, ``job_id``, ``recording_id`` and
+  ``state=importing``. No upload capability or whole-source occurrence is issued.
+  ``GET /imports/{job_id}/status`` is content-free and restricted to the original
+  scoped importer. Keep only opaque source references in durable jobs/history.
+  The job deadline is at most three hours and also capped by source retention and
+  deletion. An expired envelope is renewed only by its authorized fixed-ID resolver;
+  otherwise fail ``source_unavailable``. No indefinite URL retention or polling.
+
+Bounded source transfers and segment production
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Read the exact registered immutable version through sequential bounded ranges,
+   each at most ``min(max_upload_bytes, segment_bytes)`` (at most 8 MiB), with at most
+   256 KiB owned stream buffers. Verify each offset, response length, total encoded
+   length and generation; a server ignoring a Range and returning the whole body
+   is rejected, not buffered. Apply the negotiated per-transfer timeout, egress
+   token bucket and transfer slots to every range. All safe-retrieval/DNS/TLS/
+   redirect rules still apply. Bytes are streamed to private reserved quarantine,
+   not through an expanded SDK upload. A connector without these guarantees is
+   unsupported, not a full-download fallback.
+2. Count actual bytes, not just headers. Short reads, excess bytes, a changed total
+   length/generation or actual decoded duration differing from the declaration
+   reject the job. A reader may consume at most one bounded overrun-detection byte
+   without retaining it, then must abort; it cannot drain an oversized response.
+   Retries are bounded to three attempts, reuse the range/reservation and recheck
+   policy/generation. No policy or validation retries.
+3. A credential-free, network-disabled isolated worker probes the fixed snapshot
+   and emits independently valid playable segments, each within BOTH the negotiated
+   segment duration (at most 30 seconds) and byte ceiling (at most 8 MiB, further
+   bounded by ``max_upload_bytes``). Splitting encoded bytes arbitrarily is not
+   segmentation. Container overhead counts. If a frame/format cannot fit, reject
+   rather than emit an oversized segment. Source encoded bytes and total playable
+   segment bytes must EACH fit ``recording_bytes``; decoding/transcoding expansion
+   never gets a free pass. Channel derivatives/peaks have separately reserved
+   finite budgets and follow the same private immutable promotion boundary.
+4. Maintain a moving output window, not a reservation for an unbounded manifest.
+   Before every new segment/derivative, atomically acquire its byte/object/link/
+   job/decoder budget under all three scopes. Settle verified bytes once, release
+   failed reservations once, and do not release the source snapshot's reservation
+   while its staged bytes still exist. Retrying a segment does not allocate a new
+   occurrence. Loss of window capacity pauses within the finite job deadline or
+   fails; it never overruns capacity. At all times actual uncommitted bytes must
+   be covered by live reservations, including simultaneous source/output copies.
+5. Produce ``RecordingManifest`` with actual codec/channel/track mappings and
+   contiguous ordered segment occurrences bound to this job's parent. Preserve
+   mixed-direction ancestry; unknown speaker or playout evidence stays unknown.
+   A successful completed import has full per-track duration coverage, no gaps,
+   and ``capture_complete=true``. Enforce the existing 1 MiB manifest bound and
+   segment/object counts. Reject over-budget output instead of silently omitting it.
+6. Only after exact source validation, all bounded segment validation and a live
+   authorized source binding may the server publish the segment occurrences and
+   manifest atomically under the current policy/deletion generation. Whole-source
+   quarantine is never playable. Before that, staged segments are not readable.
+   Failure, expiry, deletion or policy tightening fences late workers and sweeps
+   staged snapshots, segments, derivatives and reservations idempotently. Playback
+   still uses occurrence authorization and the authenticated media gateway.
+
+``recording-import-fixtures.json`` supplies language-neutral admission headroom
+and verified-worker observations for this protocol. They are conformance inputs,
+not wire fields clients can assert as authority. The one-hour 24-kHz mono s16 WAV
+example declares 172,800,044 source bytes and produces 120 thirty-second WAV parts
+of 1,440,044 bytes each; the output total includes 120 container headers. It exceeds
+both old import ceilings without changing either per-transfer ceiling. Consumers
+must additionally run these cases against their real importer, decoder, reservation
+ledger and authenticated provider connector before claiming support.
+
 Nine mandatory security boundaries
 ----------------------------------
 

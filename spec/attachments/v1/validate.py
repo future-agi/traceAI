@@ -103,10 +103,12 @@ def validate_wire(name: str, value: Any) -> None:
         for item in value["items"]:
             if item["status"] == "ready" and item["gateway_path"].split("/")[4] != item["occurrence_id"]:
                 raise ValueError("gateway occurrence mismatch")
-    if name == "ImportRequest":
-        validate_wire("UploadRequest", value["upload"])
+    if name in {"ImportRequest", "SingleAttachmentImportRequest", "RecordingImportRequest"}:
+        recording = value.get("mode") == "completed_recording"
+        descriptor = value["recording" if recording else "upload"]
+        validate_wire("CompletedRecordingImport" if recording else "UploadRequest", descriptor)
         expected = "RemoteUrl" if value["source"]["kind"] == "RemoteUrlEnvelope" else "ProviderFile"
-        if value["upload"]["source_kind"] != expected:
+        if descriptor["source_kind"] != expected:
             raise ValueError("import source mismatch")
     if name == "RecordingManifest":
         if len(json.dumps(value, separators=(",", ":")).encode("utf-8")) > 1048576:
@@ -147,6 +149,95 @@ def validate_wire(name: str, value: Any) -> None:
         for interval in value["segments"] + value["gaps"] + value["playout"]:
             if interval["start_ms"] + interval["duration_ms"] > value["duration_ms"]:
                 raise ValueError("interval exceeds recording")
+
+
+def fixture_override(base: Any, overrides: Any) -> Any:
+    """Recursive object overrides; arrays/scalars replace. Fixture data only."""
+    if isinstance(base, dict) and isinstance(overrides, dict):
+        result = copy.deepcopy(base)
+        for key, value in overrides.items():
+            result[key] = fixture_override(result.get(key), value)
+        return result
+    return copy.deepcopy(overrides)
+
+
+def import_window(limits: dict[str, Any]) -> int:
+    return min(limits["max_upload_bytes"], limits["segment_bytes"])
+
+
+def validate_import_admission(scenario: dict[str, Any]) -> None:
+    """Test-only size/reservation oracle, not authorization or a source reader.
+
+    The source facts and headroom are trusted server observations in fixtures,
+    never client assertions. Privacy/security conformance remains independently
+    required. Byte reservations cover the complete immutable snapshot PLUS one
+    output window; completed sources do not get an unreserved streaming bypass.
+    """
+    validate_wire("RecordingImportRequest", scenario["request"])
+    limits = scenario["limits"]
+    validate_wire("Limits", limits)
+    recording = scenario["request"]["recording"]
+    if (recording["declared_bytes"] > limits["recording_bytes"] or
+            recording["declared_duration_ms"] > limits["recording_duration_ms"]):
+        raise ValueError("recording budget")
+    if scenario["source"] != {"terminal_completed": True, "immutable": True, "bounded_ranges": True}:
+        raise ValueError("unsupported completed source")
+    reservation = recording["declared_bytes"] + import_window(limits)
+    if reservation > limits["reserved_bytes"]:
+        raise ValueError("project reservation budget")
+    required = {"bytes": reservation, "transfers": 1, "recordings": 1,
+                "validation_jobs": 1, "objects": 2, "links": 1}
+    if set(scenario["headroom"]) != {"project", "organization", "global"}:
+        raise ValueError("unknown admission capacity")
+    for available in scenario["headroom"].values():
+        if set(available) != set(required):
+            raise ValueError("unknown resource capacity")
+        for resource, minimum in required.items():
+            if type(available[resource]) is not int or available[resource] < minimum:
+                raise ValueError("aggregate reservation budget")
+
+
+def validate_import_completion(scenario: dict[str, Any]) -> None:
+    """Validate synthetic worker observations; never decode or retrieve media."""
+    validate_wire("RecordingImportRequest", scenario["request"])
+    limits = scenario["limits"]
+    validate_wire("Limits", limits)
+    recording = scenario["request"]["recording"]
+    observed = scenario["observation"]
+    if (observed["source_bytes"] != recording["declared_bytes"] or
+            observed["source_bytes"] > limits["recording_bytes"] or
+            observed["source_duration_ms"] != recording["declared_duration_ms"] or
+            observed["source_duration_ms"] > limits["recording_duration_ms"] or
+            observed["generation_matches"] is not True):
+        raise ValueError("source length, duration or generation mismatch")
+    end = 0
+    window = import_window(limits)
+    for part in observed["reads"]:
+        if (part["offset"] != end or type(part["bytes"]) is not int or
+                not 0 < part["bytes"] <= window or
+                part["total_bytes"] != recording["declared_bytes"]):
+            raise ValueError("source range mismatch")
+        end += part["bytes"]
+    if end != recording["declared_bytes"]:
+        raise ValueError("incomplete or excess source ranges")
+    manifest = observed["manifest"]
+    validate_wire("RecordingManifest", manifest)
+    if (manifest["recording_id"] != recording["recording_id"] or
+            manifest["duration_ms"] != recording["declared_duration_ms"] or
+            not manifest["capture_complete"] or not manifest["segments"]):
+        raise ValueError("completed import manifest mismatch")
+    if recording["direction"] != "mixed" and any(
+            track["direction"] != recording["direction"] for track in manifest["tracks"]):
+        raise ValueError("import direction understates source ancestry")
+    sizes = observed["segment_bytes"]
+    if len(sizes) != len(manifest["segments"]):
+        raise ValueError("missing verified segment sizes")
+    if any(type(size) is not int or not 0 < size <= window for size in sizes):
+        raise ValueError("import segment byte limit")
+    if sum(sizes) > limits["recording_bytes"]:
+        raise ValueError("aggregate output recording byte limit")
+    if any(segment["duration_ms"] > limits["segment_duration_ms"] for segment in manifest["segments"]):
+        raise ValueError("import segment duration limit")
 
 
 def scoped_key(scope: dict[str, Any], fields: list[str]) -> tuple[Any, ...]:
@@ -216,6 +307,18 @@ def validate_all() -> dict[str, int]:
         if lifecycle_result(table, case["events"]) != (case["readable_after_each"], case["final"]):
             raise AssertionError("lifecycle: " + case["id"])
     counts["lifecycle"] = len(table["cases"])
+    table = load("recording-import-fixtures.json")
+    for case in table["cases"]:
+        scenario = fixture_override(table["base"], case["overrides"])
+        check = {"admission": validate_import_admission, "completion": validate_import_completion}[case["stage"]]
+        try:
+            check(scenario)
+            valid = True
+        except (ValueError, jsonschema_error):
+            valid = False
+        if valid != case["valid"]:
+            raise AssertionError("recording import: " + case["id"])
+    counts["recording_import"] = len(table["cases"])
     return counts
 
 

@@ -777,7 +777,7 @@
     "/tracer/v1/projects/{project_id}/attachments/imports": {
       "post": {
         "operationId": "importAttachment",
-        "description": "Private envelope reference or registered completed provider output only. Provider connection authority is separate; write-only upload capabilities cannot select a connection.",
+        "description": "Private envelope reference or registered completed provider output only. Provider connection authority is separate; write-only upload capabilities cannot select a connection. Single-attachment imports retain UploadRequest ceilings. mode=completed_recording uses RecordingImportRequest, reserves exact whole-source bytes plus a bounded output window, reads immutable source ranges no larger than min(max_upload_bytes, segment_bytes), and produces recording segments under both byte and duration limits. It requires a terminal completed source; it never starts a recorder or Egress. See README completed-recording protocol for length, reservation and publication invariants.",
         "security": [
           {
             "AttachmentCredential": []
@@ -2003,6 +2003,121 @@
             "schema": {
               "type": "string",
               "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/tracer/v1/projects/{project_id}/attachments/imports/{job_id}/status": {
+      "get": {
+        "operationId": "getAttachmentImportStatus",
+        "description": "Content-free status for the original scoped import identity and exact job. No upload capability, provider location or playback authority is returned. Foreign and absent jobs are indistinguishable.",
+        "security": [
+          {
+            "AttachmentCredential": []
+          },
+          {
+            "ApplicationSession": []
+          }
+        ],
+        "x-authority": "scoped_import_identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/ImportStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operation not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or unauthorized occurrence; indistinguishable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting request or stale generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission throttled; Retry-After required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "contract.schema.json#/$defs/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "contract.schema.json#/$defs/UUID"
             }
           }
         ]

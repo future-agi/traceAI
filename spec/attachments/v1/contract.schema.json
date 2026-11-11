@@ -1113,40 +1113,24 @@
       ]
     },
     "ImportRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "upload",
-        "source"
-      ],
-      "properties": {
-        "upload": {
-          "$ref": "#/$defs/UploadRequest"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SingleAttachmentImportRequest"
         },
-        "source": {
-          "$ref": "#/$defs/ImportSource"
+        {
+          "$ref": "#/$defs/RecordingImportRequest"
         }
-      }
+      ]
     },
     "ImportResponse": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "job_id",
-        "upload_id",
-        "state"
-      ],
-      "properties": {
-        "job_id": {
-          "$ref": "#/$defs/UUID"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SingleAttachmentImportResponse"
         },
-        "upload_id": {
-          "$ref": "#/$defs/UUID"
-        },
-        "state": {
-          "const": "importing"
+        {
+          "$ref": "#/$defs/RecordingImportResponse"
         }
-      }
+      ]
     },
     "LinkRequest": {
       "type": "object",
@@ -2056,6 +2040,174 @@
         },
         "parent": {
           "$ref": "#/$defs/CanonicalParent"
+        }
+      }
+    },
+    "SingleAttachmentImportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "upload",
+        "source"
+      ],
+      "properties": {
+        "upload": {
+          "$ref": "#/$defs/UploadRequest"
+        },
+        "source": {
+          "$ref": "#/$defs/ImportSource"
+        }
+      }
+    },
+    "SingleAttachmentImportResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "upload_id",
+        "state"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "upload_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "importing"
+        }
+      }
+    },
+    "CompletedRecordingImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "association",
+        "policy_version",
+        "deletion_generation",
+        "mime_type",
+        "direction",
+        "source_kind",
+        "recording_id",
+        "modality",
+        "declared_bytes",
+        "declared_duration_ms"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "association": {
+          "$ref": "#/$defs/Association"
+        },
+        "policy_version": {
+          "$ref": "#/$defs/Token"
+        },
+        "deletion_generation": {
+          "$ref": "#/$defs/SafeInteger"
+        },
+        "mime_type": {
+          "enum": [
+            "audio/wav",
+            "audio/ogg",
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/webm",
+            "audio/flac",
+            "audio/L16"
+          ]
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "source_kind": {
+          "enum": [
+            "ProviderFile",
+            "RemoteUrl"
+          ]
+        },
+        "recording_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "modality": {
+          "const": "audio"
+        },
+        "declared_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "declared_duration_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7200000
+        }
+      },
+      "description": "Admission for a new completed audio recording, not an upload or segment. Exact source length and ceil-to-millisecond duration are required. Server produces bounded segments; no whole-source occurrence is readable. Negotiated limits and atomic reservations also apply."
+    },
+    "RecordingImportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "recording",
+        "source"
+      ],
+      "properties": {
+        "mode": {
+          "const": "completed_recording"
+        },
+        "recording": {
+          "$ref": "#/$defs/CompletedRecordingImport"
+        },
+        "source": {
+          "$ref": "#/$defs/ImportSource"
+        }
+      }
+    },
+    "RecordingImportResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "job_id",
+        "recording_id",
+        "state"
+      ],
+      "properties": {
+        "mode": {
+          "const": "completed_recording"
+        },
+        "job_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "const": "importing"
+        }
+      }
+    },
+    "ImportStatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "state",
+        "reason"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "state": {
+          "$ref": "#/$defs/Status"
+        },
+        "reason": {
+          "$ref": "#/$defs/Reason"
         }
       }
     }
