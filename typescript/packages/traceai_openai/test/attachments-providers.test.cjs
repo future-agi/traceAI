@@ -1,0 +1,256 @@
+/* Cloud component qualification: real SDKs, synthetic media, loopback-only APIs. */
+const { test, after } = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const { once } = require('node:events');
+const { randomUUID } = require('node:crypto');
+const { pathToFileURL } = require('node:url');
+const path = require('node:path');
+const { AttachmentManager, createAttachmentHttpTransport } = require('@traceai/fi-core/attachments');
+const { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+const { OpenAIInstrumentation } = require('../dist/src/instrumentation.js');
+const { AnthropicInstrumentation } = require('../../traceai_anthropic/dist/src/instrumentation.js');
+const oa = require('../dist/src/attachments.js');
+const an = require('../../traceai_anthropic/dist/src/attachments.js');
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=';
+const PDF = Buffer.from('%PDF-1.7\n% synthetic document\n%%EOF').toString('base64');
+const image = () => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } });
+const document = () => ({ type: 'document', title: 'synthetic-private-filename', source: { type: 'base64', media_type: 'application/pdf', data: PDF } });
+const identity = () => ({ traceId: randomUUID().replace(/-/g, ''), spanId: randomUUID().replace(/-/g, '').slice(0, 16), traceFlags: 1 });
+const keepalive = setInterval(() => {}, 1000);
+after(() => clearInterval(keepalive));
+
+async function fixture(config = {}, serverPolicy = {}) {
+  const calls = [], initialized = [], uploaded = [];
+  const scope = { organization_id: randomUUID(), workspace_id: randomUUID(), project_id: randomUUID() };
+  const expiry = () => new Date(Date.now() + 60000).toISOString();
+  const server = http.createServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    const bytes = Buffer.concat(chunks); calls.push(req.url);
+    res.setHeader('content-type', 'application/json');
+    if (req.url.endsWith('attachment-sessions')) {
+      const body = JSON.parse(bytes);
+      res.end(JSON.stringify({ schema_version: 1, scope, capture_session_id: body.capture_session_id,
+        policy: { version: 'fixture-v1', enabled: true, allowed_sources: ['Bytes'], allowed_modalities: ['image', 'document', 'file'],
+          require_media_redaction: false, require_metadata_removal: false, allow_unredacted_media_with_text_pii: false,
+          record_audio: false, record_video: false, ...serverPolicy },
+        limits: { max_upload_bytes: 1024 * 1024, segment_bytes: 8388608, segment_duration_ms: 30000, recording_bytes: 1073741824,
+          recording_duration_ms: 7200000, active_transfers: 16, active_recordings: 4, reserved_bytes: 1073741824, validation_jobs: 1024,
+          initializations_per_minute: 120, links_per_minute: 1000, upload_bytes_per_second: 1073741824, playback_bytes_per_second: 1073741824,
+          transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5 }, expires_at: expiry(), transfer_modes: ['authenticated_stream'] }));
+    } else if (req.url.endsWith('/uploads')) {
+      const body = JSON.parse(bytes); initialized.push(body);
+      res.statusCode = 201;
+      res.end(JSON.stringify({ upload_id: body.attachment_id, attachment_id: body.attachment_id, occurrence_id: body.occurrence_id,
+        state: 'pending_upload', reserved_bytes: body.declared_bytes, expires_at: expiry(), transfer_mode: 'authenticated_stream', write_capability: 'synthetic-upload-only' }));
+    } else if (req.url.endsWith('/content')) {
+      assert.equal(req.headers.authorization, 'Bearer synthetic-upload-only'); uploaded.push(bytes);
+      res.end(JSON.stringify({ upload_id: req.url.split('/').at(-2), state: 'pending_upload', reason: 'queued' }));
+    } else {
+      res.statusCode = 202; res.end(JSON.stringify({ upload_id: req.url.split('/').at(-2), state: 'validating', reason: 'binding_pending' }));
+    }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const client = req => new Promise((resolve, reject) => {
+    const request = http.request(`http://127.0.0.1:${server.address().port}${new URL(req.url).pathname}`, { method: req.method, headers: req.headers, signal: req.signal }, response => {
+      const chunks = []; response.on('data', c => chunks.push(c)); response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks) }));
+    }); request.on('error', reject); request.end(req.body);
+  });
+  const manager = new AttachmentManager({ enabled: true, projectName: 'synthetic', projectType: 'observe',
+    transport: createAttachmentHttpTransport({ endpoint: 'https://attachments.example', headers: { authorization: 'Bearer synthetic' }, client }), ...config });
+  assert.equal(await manager.ready(), config.enabled !== false);
+  return { manager, calls, initialized, uploaded, async close() { await manager.shutdown(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
+}
+const oaInput = () => ({ input: [
+  { role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${PNG}` }, { type: 'input_file', filename: 'synthetic-private-filename', file_data: `data:application/pdf;base64,${PDF}` }] },
+  { type: 'computer_call_output', call_id: 'call_computer', output: { type: 'computer_screenshot', image_url: `data:image/png;base64,${PNG}` } },
+] });
+const anInput = () => ({ tools: [{ type: 'computer_20250124', name: 'computer', display_width_px: 800, display_height_px: 600 }], messages: [
+  { role: 'assistant', content: [{ type: 'tool_use', id: 'tool_computer', name: 'computer', input: { action: 'screenshot' } }] },
+  { role: 'user', content: [image(), document(), { type: 'tool_result', tool_use_id: 'tool_computer', content: [image(), image()] }] },
+] });
+
+for (const provider of ['openai', 'anthropic']) {
+  const capture = (m, s, p, extra = {}) => provider === 'openai'
+    ? oa.captureOpenAIAttachments(m, s, p, { operation: 'responses', direction: 'input', ...extra })
+    : an.captureAnthropicAttachments(m, s, p, extra);
+  const input = provider === 'openai' ? oaInput : anInput;
+  test(`${provider}: typed image/document/screenshots preserve bytes, causal positions and distinct repeated frames`, async () => {
+    const f = await fixture();
+    try {
+      const id = identity(), body = input(), saved = JSON.stringify(body);
+      capture(f.manager, id, body); capture(f.manager, { ...id }, body);
+      await f.manager.flush();
+      assert.equal(f.initialized.length, provider === 'openai' ? 3 : 4);
+      assert.equal(f.uploaded.length, f.initialized.length);
+      assert.deepEqual(f.uploaded.map(b => b.toString('base64')).sort(), (provider === 'openai' ? [PNG, PDF, PNG] : [PNG, PDF, PNG, PNG]).sort());
+      assert.equal(new Set(f.initialized.map(r => r.occurrence_id)).size, f.initialized.length);
+      assert.ok(f.initialized.every(r => r.direction === 'input' && r.association.parent.span_id === id.spanId));
+      assert.equal(f.initialized.filter(r => r.purpose === 'computer_screenshot').length, provider === 'openai' ? 1 : 2);
+      assert.ok(!JSON.stringify(f.initialized).includes('synthetic-private-filename'));
+      assert.equal(JSON.stringify(body), saved);
+    } finally { await f.close(); }
+  });
+  for (const key of ['disabled', 'hideInputs', 'hideInputMessages', 'hideInputText', 'piiRedaction', 'hideInputImages', 'serverRedaction', 'serverMetadata']) {
+    test(`${provider}: ${key} denies protected sources without reading or uploading`, async () => {
+      const f = await fixture(key === 'disabled' ? { enabled: false } : { traceConfig: { [key]: true } },
+        key === 'serverRedaction' ? { require_media_redaction: true } : key === 'serverMetadata' ? { require_metadata_removal: true } : {});
+      try {
+        let read = false;
+        const source = provider === 'openai' ? { input: [{ type: 'computer_call_output', call_id: 'call_computer', output: { type: 'computer_screenshot', get image_url() { read = true; throw Error('synthetic-secret'); } } }] }
+          : { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_computer', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', get data() { read = true; throw Error('synthetic-secret'); } } }] }] }] };
+        const before = f.calls.length; capture(f.manager, identity(), source);
+        await f.manager.flush(); assert.equal(read, false); assert.equal(f.calls.length, before);
+        if (key === 'disabled') assert.equal(f.calls.length, 0);
+      } finally { await f.close(); }
+    });
+  }
+  for (const capturePolicy of [{ captureContent: false }, { recordInputs: false }, { muted: true }, { temporaryChat: true }]) {
+    test(`${provider}: integration restriction ${Object.keys(capturePolicy)[0]} wins`, async () => {
+      const f = await fixture(); try { capture(f.manager, identity(), input(), { capture: capturePolicy }); await f.manager.flush(); assert.equal(f.initialized.length, 0); } finally { await f.close(); }
+    });
+  }
+  test(`${provider}: malformed and oversized inline data is bounded; foreign URLs/files are not retrieved`, async () => {
+    const f = await fixture();
+    try {
+      for (const data of ['!', 'a===', 'AB==', 'AAAA'.repeat(100000), 'https://127.0.0.1:1/?synthetic-secret']) {
+        const body = provider === 'openai' ? { input: [{ role: 'user', content: [{ type: 'input_image', image_url: data }] }] }
+          : { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }] };
+        capture(f.manager, identity(), body);
+      }
+      capture(f.manager, identity(), provider === 'openai' ? { input: [{ role: 'user', content: [{ type: 'input_file', file_id: 'file_secret' }] }] }
+        : { messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'file', file_id: 'file_secret' } }, null, { type: 'tool_result', tool_use_id: {}, content: [image()] }] }] });
+      await f.manager.flush(); assert.equal(f.initialized.length, 0);
+    } finally { await f.close(); }
+  });
+  test(`${provider}: unsampled identity and queued policy tightening cannot upload`, async () => {
+    const f = await fixture(); try {
+      capture(f.manager, { ...identity(), traceFlags: 0 }, input()); assert.equal(f.manager.status().ownedBytes, 0);
+      capture(f.manager, identity(), input()); f.manager.updatePolicy({ traceConfig: { hideInputs: true } }); await f.manager.flush(); assert.equal(f.initialized.length, 0);
+    } finally { await f.close(); }
+  });
+}
+
+test('OpenAI generated images obey output and PII restrictions', async () => {
+  for (const traceConfig of [{}, { hideOutputs: true }, { hideOutputMessages: true }, { hideOutputText: true }, { piiRedaction: true }]) {
+    const f = await fixture({ traceConfig }); try {
+      oa.captureOpenAIAttachments(f.manager, identity(), { data: [{ b64_json: PNG }] }, { operation: 'images', direction: 'output' });
+      await f.manager.flush(); assert.equal(f.uploaded.length, Object.keys(traceConfig).length ? 0 : 1);
+    } finally { await f.close(); }
+  }
+});
+
+test('Telemetry projections strip typed bytes, filenames and signed source locations without mutating requests', () => {
+  for (const [body, project] of [[oaInput(), x => oa.projectOpenAIMedia(x, 'responses', 'input')], [anInput(), an.projectAnthropicMedia]]) {
+    const before = JSON.stringify(body), projected = JSON.stringify(project(body));
+    assert.equal(JSON.stringify(body), before);
+    for (const secret of [PNG, PDF, 'synthetic-private-filename']) assert.ok(!projected.includes(secret));
+  }
+});
+
+test('CJS/ESM observations share deduplication without creating a second capture', async () => {
+  const f = await fixture(); try {
+    const esm = await import(pathToFileURL(path.resolve(__dirname, '../dist/esm/attachments.js')));
+    const s = identity(); oa.captureOpenAIAttachments(f.manager, s, oaInput(), { operation: 'responses', direction: 'input' });
+    esm.captureOpenAIAttachments(f.manager, { ...s }, oaInput(), { operation: 'responses', direction: 'input' });
+    const anthropicESM = await import(pathToFileURL(path.resolve(__dirname, '../../traceai_anthropic/dist/esm/attachments.js')));
+    const a = identity(); an.captureAnthropicAttachments(f.manager, a, anInput()); anthropicESM.captureAnthropicAttachments(f.manager, { ...a }, anInput());
+    await f.manager.flush(); assert.equal(f.uploaded.length, 7);
+  } finally { await f.close(); }
+});
+
+test('Anthropic tool-result images are not labelled computer screenshots without a typed computer tool', async () => {
+  const f = await fixture(); try {
+    an.captureAnthropicAttachments(f.manager, identity(), { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_photo', content: [image()] }] }] });
+    await f.manager.flush(); assert.equal(f.initialized[0].purpose, 'tool_result'); assert.equal(f.initialized[0].part_index, 0);
+  } finally { await f.close(); }
+});
+
+test('Anthropic error-tool media respects hideErrorDetails before source access', async () => {
+  const f = await fixture({ traceConfig: { hideErrorDetails: true } }); try {
+    let read = false;
+    an.captureAnthropicAttachments(f.manager, identity(), { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_error', is_error: true,
+      content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', get data() { read = true; return PNG; } } }] }] }] });
+    await f.manager.flush(); assert.equal(read, false); assert.equal(f.initialized.length, 0);
+  } finally { await f.close(); }
+});
+
+test('OpenAI image error bodies are not treated as generated media', async () => {
+  const f = await fixture(); try {
+    oa.captureOpenAIAttachments(f.manager, identity(), { error: { message: 'synthetic' }, data: [{ b64_json: PNG }] }, { operation: 'images', direction: 'output' });
+    await f.manager.flush(); assert.equal(f.initialized.length, 0);
+  } finally { await f.close(); }
+});
+
+test('Local instrumentor privacy restrictions cannot be loosened by a permissive shared manager', async () => {
+  const f = await fixture(); try {
+    oa.captureOpenAIAttachments(f.manager, identity(), oaInput(), { operation: 'responses', direction: 'input', traceConfig: { hideInputs: true } });
+    an.captureAnthropicAttachments(f.manager, identity(), anInput(), { traceConfig: { piiRedaction: true } });
+    await f.manager.flush(); assert.equal(f.initialized.length, 0);
+  } finally { await f.close(); }
+});
+
+async function providerServer() {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    const body = JSON.parse(Buffer.concat(chunks)); requests.push({ path: req.url, body });
+    res.setHeader('content-type', 'application/json');
+    if (req.url.endsWith('/chat/completions')) res.end(JSON.stringify({ id: 'chat_fixture', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+    else if (req.url.endsWith('/responses')) res.end(JSON.stringify({ id: 'resp_fixture', object: 'response', status: 'completed', model: body.model, output: [{ type: 'computer_call', id: 'computer_fixture', call_id: 'call_computer', status: 'completed', action: { type: 'screenshot' } }, { type: 'image_generation_call', id: 'img_fixture', status: 'completed', result: PNG }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    else if (req.url.endsWith('/images/generations')) res.end(JSON.stringify({ created: 1, data: [{ b64_json: PNG }] }));
+    else res.end(JSON.stringify({ id: 'msg_fixture', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  return { requests, url: `http://127.0.0.1:${server.address().port}/v1`, async close() { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } };
+}
+
+test('Real SDKs preserve APIPromise/request/response behavior and upload only through the shared manager', async () => {
+  const sdkModule = require(process.env.SDK_OPENAI || 'openai');
+  const anthropicModule = require(process.env.SDK_ANTHROPIC || '../../traceai_anthropic/node_modules/@anthropic-ai/sdk');
+  const OpenAI = sdkModule.OpenAI || sdkModule.default || sdkModule;
+  const Anthropic = anthropicModule.Anthropic || anthropicModule.default || anthropicModule;
+  const native = 'openTelemetry' in Anthropic.prototype;
+  const f = await fixture(), p = await providerServer();
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const oi = new OpenAIInstrumentation({ instrumentationConfig: { enabled: false }, attachments: f.manager });
+  const ai = new AnthropicInstrumentation({ instrumentationConfig: { enabled: false }, attachments: f.manager });
+  oi.setTracerProvider(provider); ai.setTracerProvider(provider);
+  oi.manuallyInstrument(sdkModule); ai.manuallyInstrument(anthropicModule);
+  try {
+    const client = new OpenAI({ apiKey: 'synthetic-provider-key', baseURL: p.url, maxRetries: 0 });
+    const body = { model: 'synthetic-model', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${PNG}` } }] }] };
+    const pending = client.chat.completions.create(body); assert.equal(typeof pending.withResponse, 'function');
+    assert.equal((await pending.withResponse()).data.choices[0].message.content, 'ok');
+    let expected = 1;
+    if (client.responses) {
+      const result = await client.responses.create({ model: 'synthetic-model', ...oaInput() });
+      assert.equal(result.output[0].call_id, 'call_computer'); expected += 4;
+    }
+    const generated = await client.images.generate({ prompt: 'synthetic', model: 'synthetic-model', response_format: 'b64_json' });
+    assert.equal(generated.data[0].b64_json, PNG); expected++;
+    const ac = new Anthropic({ apiKey: 'synthetic-provider-key', baseURL: p.url, maxRetries: 0 });
+    const request = ac.messages.create({ model: 'synthetic-model', max_tokens: 10, ...anInput() });
+    assert.equal(typeof request.withResponse, 'function'); assert.equal((await request.withResponse()).data.content[0].text, 'ok');
+    if (!native) expected += 4;
+    await f.manager.flush(); await provider.forceFlush();
+    assert.equal(f.uploaded.length, expected);
+    assert.ok(p.requests.some(r => JSON.stringify(r.body).includes(PNG)));
+    assert.ok(!JSON.stringify(exporter.getFinishedSpans().map(s => s.attributes)).includes(PNG));
+    assert.ok(exporter.getFinishedSpans().some(s => s.attributes['fi.attachment.refs']));
+    // A raw-response caller owns the body; instrumentation must not parse for media.
+    const raw = await client.images.generate({ prompt: 'synthetic', response_format: 'b64_json' }).asResponse();
+    assert.equal(raw.bodyUsed, false); await raw.arrayBuffer();
+    await f.manager.flush(); assert.equal(f.uploaded.length, expected);
+    // Requests still reach the provider unchanged after privacy tightening; media egress stops.
+    f.manager.updatePolicy({ traceConfig: { hideInputs: true, piiRedaction: true } });
+    await client.chat.completions.create(body);
+    await ac.messages.create({ model: 'synthetic-model', max_tokens: 10, ...anInput() });
+    await client.images.generate({ prompt: 'synthetic', response_format: 'b64_json' });
+    await f.manager.flush(); assert.equal(f.uploaded.length, expected);
+    console.log(JSON.stringify({ nativeAnthropic: native, responsesAvailable: !!client.responses, uploads: expected, spans: exporter.getFinishedSpans().length }));
+  } finally {
+    oi.disable(); ai.disable(); await provider.shutdown(); await f.close(); await p.close();
+  }
+});

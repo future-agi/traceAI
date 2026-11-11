@@ -1,4 +1,6 @@
 import openai from "openai";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { captureOpenAIAttachments, projectOpenAIMedia } from "./attachments";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -107,6 +109,7 @@ function getExecContext(span: Span) {
 export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: AttachmentManager;
   // Lazily initialized: InstrumentationBase can patch during super().
   // A Set is needed so disable() also undoes every manually patched ESM SDK.
   private patchedModules?: Set<typeof openai>;
@@ -114,6 +117,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   constructor({
     instrumentationConfig,
     traceConfig,
+    attachments,
   }: {
     /**
      * The config for the instrumentation
@@ -125,6 +129,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
      * @see {@link TraceConfigOptions}
      */
     traceConfig?: TraceConfigOptions;
+    /** The shared manager from register(...).attachments; never a per-adapter uploader. */
+    attachments?: AttachmentManager;
   } = {}) {
     super(
       "@traceai/fi-instrumentation-openai",
@@ -132,6 +138,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
     // The base constructor can call enable() before our trace options exist.
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
@@ -223,7 +230,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           this: unknown,
           ...args: Parameters<ChatCompletionCreateType>
         ) {
-          const body = args[0];
+          const originalBody = args[0];
+          const body = projectOpenAIMedia(originalBody, "chat", "input", !!instrumentation.attachments);
           // Prediction text is input content, captured only in maskable payloads.
           const { messages: _messages, prediction: _prediction, ...invocationParameters } = body;
 
@@ -237,11 +245,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           // diag.debug(`@traceai/openai: this.fiTracer type: ${instrumentation.fiTracer?.constructor?.name}`);
           // --- END ADDED LOGS ---
 
-          const span = instrumentation.fiTracer.startSpan(
-            `OpenAI Chat Completions`,
-            {
-              kind: SpanKind.INTERNAL,
-              attributes: {
+          const span = instrumentation.fiTracer.startSpan("OpenAI Chat Completions", { kind: SpanKind.INTERNAL });
+          captureOpenAIAttachments(instrumentation.attachments, span, originalBody, {
+            operation: "chat", direction: "input", traceConfig: instrumentation._traceConfig,
+          });
+          span.setAttributes({
                 [SemanticConventions.FI_SPAN_KIND]:
                   FISpanKind.LLM,
                 [SemanticConventions.LLM_MODEL_NAME]: body.model,
@@ -254,9 +262,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
-              },
-            },
-          );
+          });
 
           // --- ADD LOG ---
           // diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
@@ -519,21 +525,22 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             };
             // Telemetry-only copy: MCP credentials must never reach any exported
             // duplicate, but the original SDK request must remain untouched.
+            const projectedBody = projectOpenAIMedia(body, "responses", "input", !!instrumentation.attachments);
             const telemetryBody = {
-              ...body,
+              ...projectedBody,
               ...(body.tools && { tools: sanitizeToolDefinitions(body.tools) }),
-              ...(body.input && { input: sanitizeResponsesInput(body.input) }),
+              ...(projectedBody.input && { input: sanitizeResponsesInput(projectedBody.input) }),
             };
             const { input: _messages, instructions: _instructions, prompt, ...parameters } = telemetryBody;
             const invocationParameters = {
               ...parameters,
               ...(prompt && { prompt: { id: prompt.id, version: prompt.version } }),
             };
-            const span = instrumentation.fiTracer.startSpan(
-              `OpenAI Responses`,
-              {
-                kind: SpanKind.INTERNAL,
-                attributes: {
+            const span = instrumentation.fiTracer.startSpan("OpenAI Responses", { kind: SpanKind.INTERNAL });
+            captureOpenAIAttachments(instrumentation.attachments, span, body, {
+              operation: "responses", direction: "input", traceConfig: instrumentation._traceConfig,
+            });
+            span.setAttributes({
                   [SemanticConventions.FI_SPAN_KIND]:
                     FISpanKind.LLM,
                   [SemanticConventions.LLM_MODEL_NAME]: body.model,
@@ -544,12 +551,10 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.PROMPT_TEMPLATE_VARIABLES]: safelyJSONStringify(prompt?.variables) ?? undefined,
                   [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-                  ...getResponsesInputMessagesAttributes(body),
+                  ...getResponsesInputMessagesAttributes(telemetryBody),
                   ...getLLMToolsJSONSchema(body),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(telemetryBody) ?? "",
-                },
-              },
-            );
+            });
             const contextSpan = span.getContextSpan();
             const execContext = getExecContext(contextSpan);
             const requestStartedAt = performance.now();
@@ -581,16 +586,20 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   if (endSpan) span.end();
                   return;
                 }
+                captureOpenAIAttachments(instrumentation.attachments, span, result, {
+                  operation: "responses", direction: "output", traceConfig: instrumentation._traceConfig,
+                });
+                const projected = projectOpenAIMedia(result, "responses", "output");
                 const output = {
                   id: result.id, object: result.object, status: result.status,
-                  model: result.model, output: result.output, usage: result.usage,
+                  model: result.model, output: projected.output, usage: result.usage,
                 };
                 span.setAttributes({
                   [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(output),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
                   [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
-                  ...getResponsesOutputMessagesAttributes(result),
+                  ...getResponsesOutputMessagesAttributes(projected),
                   ...getResponsesUsageAttributes(result),
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(output) ?? "",
                 });
@@ -628,6 +637,32 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
+    if (typeof module.OpenAI.Images?.prototype?.generate === "function") {
+      this._wrap(module.OpenAI.Images.prototype, "generate", (original: typeof module.OpenAI.Images.prototype.generate): any => {
+        return function(this: unknown, ...args: Parameters<typeof original>) {
+          const span = instrumentation.fiTracer.startSpan("OpenAI Images", { kind: SpanKind.INTERNAL, attributes: {
+            [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
+            [SemanticConventions.LLM_PROVIDER]: providerForResource(this),
+            [SemanticConventions.GEN_AI_OPERATION_NAME]: "image_generation",
+          } });
+          try {
+            const execContext = trace.setSpan(context.active(), span);
+            const promise = context.with(execContext, () => original.apply(this, args));
+            return observeAPIPromise(promise, result => {
+              if (span.isRecording() && !isStream(result)) {
+                captureOpenAIAttachments(instrumentation.attachments, span, result, {
+                  operation: "images", direction: "output", traceConfig: instrumentation._traceConfig,
+                  imageFormat: (args[0] as { output_format?: "png" | "jpeg" | "webp" }).output_format,
+                });
+              }
+              span.end();
+              return result;
+            }, error => endSpanWithError(span, error), response => endRawResponseSpan(span, response));
+          } catch (error) { endSpanWithError(span, error); throw error; }
+        };
+      });
+    }
+
     // Keep the legacy diagnostic property, but never use it as the guard.
     // Immutable class exports still work via the identity map.
     try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = true; } catch { /* immutable SDK */ }
@@ -647,6 +682,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
     this._unwrap(sdk.Completions.prototype, "create");
     this._unwrap(sdk.Embeddings.prototype, "create");
     if (sdk.Responses) this._unwrap(sdk.Responses.prototype, "create");
+    if (sdk.Images) this._unwrap(sdk.Images.prototype, "generate");
     try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = false; } catch { /* immutable SDK */ }
     patchRegistry.owners.delete(sdk);
     // An automatic require hook may use a different namespace for this class.
@@ -983,7 +1019,7 @@ function serializeChatCompletionInputMessage(
       if (part.type === "text") {
         return { type: "text", text: part.text };
       } else if (part.type === "image_url") {
-        return { type: "image_url", image_url: { url: part.image_url.url } };
+        return part.image_url ? { type: "image_url", image_url: { url: part.image_url.url } } : { type: "image_url" };
       }
       return { type: part.type };
     });
