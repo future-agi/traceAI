@@ -1,0 +1,36 @@
+{
+  "contract": "fi.attachments.v1",
+  "schema_version": 1,
+  "span_attributes": {
+    "version": "fi.attachment.schema_version",
+    "references": "fi.attachment.refs",
+    "session": "fi.attachment.capture_session_id",
+    "correlation": "fi.attachment.correlation_nonce"
+  },
+  "uri_prefix": "fi-attachment:",
+  "projection": {
+    "max_entries": 64,
+    "max_utf8_bytes": 16384
+  },
+  "sdk": {
+    "descriptors": 128,
+    "owned_bytes": 33554432,
+    "workers": 2,
+    "stream_buffer_bytes": 262144,
+    "transfer_attempts": 3,
+    "shutdown_seconds": 5,
+    "finalization_seconds": 30
+  },
+  "source_envelope_ttl_seconds": 600,
+  "unbound_ttl_seconds": 86400,
+  "organization_limits": {
+    "active_transfers": 32,
+    "active_recordings": 8,
+    "reserved_bytes": 2147483648,
+    "validation_jobs": 2048,
+    "initializations_per_minute": 240
+  },
+  "manifest_max_utf8_bytes": 1048576,
+  "default_transfer_mode": "authenticated_stream",
+  "default_cache_control": "private, no-store"
+}

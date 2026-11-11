@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "input": "0123456789abcdef0123456789abcdef",
+      "canonical": "01234567-89ab-cdef-0123-456789abcdef",
+      "valid": true
+    },
+    {
+      "input": "01234567-89ab-cdef-0123-456789abcdef",
+      "canonical": "01234567-89ab-cdef-0123-456789abcdef",
+      "valid": true
+    },
+    {
+      "input": "ffffffffffffffffffffffffffffffff",
+      "canonical": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "valid": true
+    },
+    {
+      "input": "00000000000000000000000000000000",
+      "valid": false
+    },
+    {
+      "input": "00000000-0000-0000-0000-000000000000",
+      "valid": false
+    },
+    {
+      "input": "abc",
+      "valid": false
+    },
+    {
+      "input": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "valid": false
+    },
+    {
+      "input": "0123456789ABCDEF0123456789ABCDEF",
+      "valid": false
+    },
+    {
+      "input": "0123456789abcdef0123456789abcdef\n",
+      "valid": false
+    },
+    {
+      "input": "{01234567-89ab-cdef-0123-456789abcdef}",
+      "valid": false
+    },
+    {
+      "input": 42,
+      "valid": false
+    }
+  ]
+}
