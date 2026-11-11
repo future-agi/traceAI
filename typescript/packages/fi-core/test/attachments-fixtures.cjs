@@ -8,7 +8,8 @@ const limits = { max_upload_bytes: 52428800, segment_bytes: 8388608, segment_dur
   transfer_timeout_seconds: 600, grant_ttl_seconds: 300, revocation_check_seconds: 5 };
 const options = { mimeType: 'audio/wav', direction: 'mixed' };
 const source = () => ({ kind: 'Bytes', data: new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]) });
-const expiry = () => new Date(Date.now() + 60000).toISOString();
+// One hour: well outside the renewal window, so call-count assertions see no session renewal.
+const expiry = () => new Date(Date.now() + 3600000).toISOString();
 function fake(overrides = {}) {
   const calls = []; let body;
   const transport = {

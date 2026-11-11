@@ -31,14 +31,15 @@ export class AttachmentCorrelation {
       return true;
     } catch { return false; }
   }
-  /** Stamp only the non-secret writer carrier while the actual span is still recording. */
+  /** Stamp the four F01 carrier attributes while the actual span is still recording. Called only for an ADMITTED capture. */
   prepare(sessionId: string, nonce: string): void {
     try {
       if (this.prepared || !this.span?.isRecording()) return;
       this.span.setAttribute("fi.attachment.schema_version", 1);
       this.span.setAttribute("fi.attachment.capture_session_id", sessionId);
       this.span.setAttribute("fi.attachment.correlation_nonce", nonce);
-      this.span.setAttribute("fi.attachment.refs", "[]");
+      // The carrier always carries the span's CURRENT projection (design 0.8), never a reset to "[]".
+      this.span.setAttribute("fi.attachment.refs", JSON.stringify(this.refs));
       this.prepared = true;
     } catch { /* A foreign span must not break application code. */ }
   }

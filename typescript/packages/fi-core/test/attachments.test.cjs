@@ -177,7 +177,8 @@ test('HTTP v1 loopback upload: stable identity, bounded response, no source URLs
 test('transport blocks redirects and invalid origins', async () => {
   for (const endpoint of ['http://example.com', 'https://user:secret@example.com', 'https://example.com/path', 'https://example.com/?token=secret']) assert.throws(() => createAttachmentHttpTransport({ endpoint, headers: {} }), /endpoint_unconfigured/);
   const transport = createAttachmentHttpTransport({ endpoint: 'https://attachments.example', headers: {}, client: async () => ({ status: 302, body: Buffer.from('synthetic-secret') }) });
-  await assert.rejects(transport.bootstrap({}, new AbortController().signal), error => error.message === 'failed' && !error.retryable);
+  // Redirects are never followed; a 3xx is an unmapped status: incomplete, not retried (design 0.5).
+  await assert.rejects(transport.bootstrap({}, new AbortController().signal), error => error.message === 'incomplete' && !error.retryable);
 });
 
 test('CJS and ESM leaf export the public manager API', async () => {
@@ -197,7 +198,8 @@ test('late completion uses the stamped writer carrier and never mutates an ended
   const f = await manager(); const attributes = {}; let recording = true; let writes = 0;
   const span = { spanContext: () => identity, isRecording: () => recording, setAttribute(k, v) { attributes[k] = v; writes++; } };
   const correlation = f.value.correlation(span);
-  assert.match(attributes['fi.attachment.capture_session_id'], /^[0-9a-f-]{36}$/);
+  // Design 0.8: a correlation snapshot alone stamps nothing; only an admitted capture on a live span does.
+  assert.equal(writes, 0);
   recording = false; const before = writes;
   const h = f.value.attach(correlation, source(), { ...options, conversationId: 'conversation-1', turnId: 'turn-1', toolCallId: 'call-1' });
   assert.equal((await h.completion).status, 'validating'); assert.equal(writes, before); await f.value.shutdown();
@@ -216,14 +218,14 @@ test('untrusted metadata keys and malformed IDs are not retained or projected', 
 test('upload response binds exact IDs, reservation and capability', async () => {
   for (const field of ['attachment_id', 'occurrence_id', 'reserved_bytes', 'write_capability']) {
     const t = fake(); const f = await manager({}, { initialize: async (s, r) => ({ ...await t.transport.initialize(s, r), [field]: field === 'reserved_bytes' ? 999 : 'wrong' }) });
-    const h = f.value.attach(identity, source(), options); assert.equal((await h.completion).status, 'failed');
+    const h = f.value.attach(identity, source(), options); assert.equal((await h.completion).status, 'unsupported_version');
     assert.equal(f.calls.includes('upload'), false); await f.value.shutdown();
   }
 });
 
 test('successful response reader rejects oversized control data', async () => {
   const transport = createAttachmentHttpTransport({ endpoint: 'https://attachments.example', headers: {}, client: async () => ({ status: 200, body: new Uint8Array(65537) }) });
-  await assert.rejects(transport.bootstrap({}, new AbortController().signal), error => error.message === 'failed' && !error.retryable);
+  await assert.rejects(transport.bootstrap({}, new AbortController().signal), error => error.message === 'unsupported_version' && !error.retryable);
 });
 
 test('provider trace options cannot weaken attachment-level privacy restrictions', async () => {
