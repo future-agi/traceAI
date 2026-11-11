@@ -289,6 +289,11 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   private deferredOpen(target: AttachmentDeferredCorrelation): boolean {
     return target.host === this && target.pending && this.clock.now() < target.expiresAt;
   }
+  /** The bound identity (the canonical correlation when the span already had one) is sampled and was recording at bind. */
+  private static sampledTarget(correlation: AttachmentCorrelation): boolean {
+    const bound = correlation instanceof AttachmentDeferredCorrelation ? correlation.canonical ?? correlation : correlation;
+    return bound.snapshot()?.sampled === true;
+  }
   private static pendingTarget(correlation: AttachmentCorrelation | undefined): AttachmentDeferredCorrelation | undefined {
     return correlation instanceof AttachmentDeferredCorrelation && correlation.pending ? correlation : undefined;
   }
@@ -454,6 +459,10 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     if (target instanceof AttachmentDeferredCorrelation && !target.snapshot() && !this.deferredOpen(target)) {
       this.releaseReservation(ticket.reservation); return { reason: "correlation_unavailable" };
     }
+    // A ticket preflighted against a deferred target and committed after bind: the bound span must be sampled.
+    if (target instanceof AttachmentDeferredCorrelation && target.snapshot() && !AttachmentManager.sampledTarget(target)) {
+      this.releaseReservation(ticket.reservation); return { reason: "unsampled" };
+    }
     const reservation = this.reservations.get(ticket.reservation);
     if (!reservation || this.clock.now() >= ticket.expiresAt) { this.releaseReservation(ticket.reservation); return { reason: "expired" }; }
     // Commit re-check against the CURRENT policy epoch; tightening denies without reading the source.
@@ -548,6 +557,11 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       // Retained, bounded and not sent: the request (parent, policy version) is built only once the span is known.
       this.park(correlation as AttachmentDeferredCorrelation, facts, bytes, result,
         target => { this.enqueueUpload(facts, fields, target, size, content, bytes, owned, project, result); }, () => { content = undefined; });
+      return result.value;
+    }
+    if (!AttachmentManager.sampledTarget(bound)) {
+      // Backstop for captures admitted against a deferred target: an unsampled bound span never receives media.
+      content = undefined; this.releaseBytes(bytes); this.dropped++; result.finish("unsampled"); this.notify();
       return result.value;
     }
     correlation = bound;
@@ -680,12 +694,17 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
         () => { if (data) this.enqueueUploadWithIds(s, data, bytes, result, value); }, () => { data = undefined; });
       return value;
     }
+    const value = parked ?? Object.freeze({ attachmentId: ids.attachmentId, occurrenceId: ids.occurrenceId, admission: "queued" as AttachmentAdmission, completion: result.value.completion });
+    if (!AttachmentManager.sampledTarget(bound)) {
+      // Backstop: a stream opened against a deferred target that bound to an unsampled span uploads nothing.
+      this.releaseBytes(bytes); this.dropped++; result.finish("unsampled"); this.notify();
+      return value;
+    }
     s.correlation = bound;
     const identity = s.correlation.snapshot()!;
     const request = this.uploadRequest(s.facts, s.fields, identity, ids, bytes);
     const body = JSON.stringify(request);
     let data: AttachmentContentSource | undefined = content;
-    const value = parked ?? Object.freeze({ attachmentId: ids.attachmentId, occurrenceId: ids.occurrenceId, admission: "queued" as AttachmentAdmission, completion: result.value.completion });
     this.enqueue({ lane: ids.occurrenceId, bytes, controller: new AbortController(), denied: () => this.recheck(s.facts),
       fail: reason => { data = undefined; result.finish(reason); },
       run: async signal => {
@@ -700,7 +719,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     return value;
   }
   /** @internal */
-  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large" | "correlation_unavailable"): void {
+  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large" | "correlation_unavailable" | "unsampled"): void {
     if (!state.open) return;
     state.open = false; this.streams.delete(state as StreamState & StreamExtra);
     try { this.registry?.unregister(state); } catch { /* bounded */ }
@@ -1182,12 +1201,20 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       else this.correlations.set(spanOrContext, target);
     } catch { /* identity is still bound; projection falls back to the target itself */ }
     this.sweep(); // a capture past its deadline fails closed before anything else
-    const captures = [...this.deferredCaptures].filter(capture => capture.target === target);
-    if (!captures.length) return;
     const bound = target.canonical ?? target;
     const identity = bound.snapshot();
+    const late = this.closed || this.stoppingFlag || !!this.shutdownPromise || this.clock.now() >= target.expiresAt;
+    // Open streams and outstanding tickets on this target are refused now, not only captures already parked: once the
+    // identity is bound they are no longer `pending`, so no later sweep would see them.
+    const refused = late ? "correlation_unavailable" : identity?.sampled ? undefined : "unsampled";
+    if (refused) {
+      for (const state of [...this.streams]) if (state.correlation === target) this.streamAbort(state, refused);
+      for (const [id, reservation] of this.reservations) if (reservation.deferred === target) this.releaseReservation(id);
+    }
+    const captures = [...this.deferredCaptures].filter(capture => capture.target === target);
+    if (!captures.length) { if (refused) this.notify(); return; }
     for (const capture of captures) {
-      if (this.closed || this.stoppingFlag || this.shutdownPromise || this.clock.now() >= target.expiresAt) { capture.fail("correlation_unavailable"); continue; }
+      if (late) { capture.fail("correlation_unavailable"); continue; }
       // Policy is evaluated again at bind against the CURRENT epoch, environment and session.
       const reason = this.recheck(capture.facts);
       if (reason) { capture.fail(reason); continue; }
@@ -1195,6 +1222,10 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       capture.start(bound);
     }
     this.notify();
+  }
+  /** @internal Asked by `AttachmentDeferredCorrelation.bind` before it binds: the deadline uses this manager's clock. */
+  deferredExpired(target: AttachmentDeferredCorrelation): boolean {
+    return target.host === this && this.clock.now() >= target.expiresAt;
   }
   /** @internal Called once by `AttachmentDeferredCorrelation.cancel`. */
   deferredCancelled(target: AttachmentDeferredCorrelation): void {
