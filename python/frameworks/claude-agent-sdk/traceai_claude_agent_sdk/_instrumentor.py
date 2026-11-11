@@ -149,12 +149,16 @@ class ClaudeAgentInstrumentor(BaseInstrumentor):
         self._original_client_class = claude_agent_sdk.ClaudeSDKClient
 
         # Create wrapped class
+        attachments = getattr(self, "_attachments", None)
+        media = {} if attachments is None else dict(
+            attachments=attachments,
+            trace_config=getattr(self, "_trace_config", None),
+            attachment_capture=getattr(self, "_attachment_capture", None),
+        )
         wrapped_class = wrap_claude_sdk_client(
             self._original_client_class,
             self._tracer,
-            attachments=getattr(self, "_attachments", None),
-            trace_config=getattr(self, "_trace_config", None),
-            attachment_capture=getattr(self, "_attachment_capture", None),
+            **media,
         )
 
         # Replace in module

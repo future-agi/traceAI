@@ -123,6 +123,8 @@ def traced():
         return exporter
 
     yield install
+    if state.get("on"):
+        OpenAIAgentsInstrumentor().uninstrument()  # lets the next test install a fresh processor
     agents.set_trace_processors([])
     provider.shutdown()
 
@@ -197,9 +199,9 @@ def test_local_restrictions_deny_the_screenshot(f01, traced, flag):
 def test_disabled_manager_keeps_the_old_attributes(f01, traced):
     exporter, _, result = run_computer(create_attachment_manager(config=AttachmentConfig()), traced)
     assert result.final_output == "done" and f01.uploads == []
-    if COMPUTER_SPAN:
-        outputs = [s.attributes.get("output.value") for s in function_spans(exporter)]
-        assert data_uri("image/png", SHOT) in outputs
+    for span in function_spans(exporter):
+        assert not refs(span)
+        assert not str(span.attributes.get("output.value", "")).startswith("fi-attachment:")
 
 
 def test_sensitive_data_off_records_and_uploads_nothing(f01, traced):

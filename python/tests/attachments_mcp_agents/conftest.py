@@ -19,3 +19,9 @@ from _harness import harness  # noqa: E402
 clean_env = harness.clean_env
 f01 = harness.f01
 spans = harness.spans
+
+
+@pytest.fixture(autouse=True)
+def mock_all_http_requests():
+    """Overrides python/tests/conftest.py: these suites talk to real loopback servers through requests."""
+    yield None

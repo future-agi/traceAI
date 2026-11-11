@@ -41,6 +41,8 @@ def cli(tmp_path, monkeypatch):
         monkeypatch.setenv("FAKE_CLAUDE_RESULT", str(result))
         monkeypatch.setenv("FAKE_CLAUDE_ORDER", order)
         monkeypatch.setenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+        # Releases without ClaudeAgentOptions.cli_path find the CLI as "claude" on PATH.
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
         return str(launcher)
 
     return make
@@ -65,7 +67,8 @@ def instrument(spans):
 
 def converse(cli_path):
     async def go():
-        options = claude_agent_sdk.ClaudeAgentOptions(cli_path=cli_path)
+        fields = getattr(claude_agent_sdk.ClaudeAgentOptions, "__dataclass_fields__", {})
+        options = claude_agent_sdk.ClaudeAgentOptions(**({"cli_path": cli_path} if "cli_path" in fields else {}))
         messages = []
         async with claude_agent_sdk.ClaudeSDKClient(options=options) as client:
             await client.query("take a screenshot")

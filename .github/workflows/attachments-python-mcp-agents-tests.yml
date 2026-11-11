@@ -61,7 +61,7 @@ jobs:
           - {package: openai-agents, tier: floor, python: '3.11', path: openai-agents,
              suite: test_openai_agents_attachments.py, sdks: 'openai-agents==0.2.6'}
           - {package: openai-agents, tier: computer-span, python: '3.12', path: openai-agents,
-             suite: test_openai_agents_attachments.py, sdks: 'openai-agents==0.10.0'}
+             suite: test_openai_agents_attachments.py, sdks: 'openai-agents==0.10.0 openai==2.19.0'}
           - {package: openai-agents, tier: latest, python: '3.12', path: openai-agents,
              suite: test_openai_agents_attachments.py, sdks: 'openai-agents==0.24.0'}
           - {package: claude-agent-sdk, tier: floor, python: '3.11', path: claude-agent-sdk,
