@@ -183,3 +183,30 @@ Base class for mapped span exporters.
 3. **Data not being sent to FutureAGI**
    - Ensure that your you have set the `FI_API_KEY` and `FI_SECRET_KEY` environment variables
    - Ensure that the `set_global_tracer_provider`  in the `register` function is set to `True`
+
+## Call recordings as trace attachments (opt-in)
+
+Attachments are off by default. When they are enabled in `traceai.init(...)`, the adapter can upload the audio your own `AudioBufferProcessor` already produces. It does not start, stop or reconfigure the recorder. Requires `pipecat-ai==1.15.0` and the attachment-enabled `fi-instrumentation-otel`.
+
+```python
+import traceai
+from fi_instrumentation.attachments import AttachmentConfig
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from traceai_pipecat.attachments import AudioSessionContext
+
+traceai.init(project_name="voice-agent", attachment_config=AttachmentConfig(enabled=True))
+
+recorder = AudioBufferProcessor(num_channels=2, buffer_size=32 * 1024, auto_start_recording=True)
+worker = PipelineWorker(pipeline, enable_tracing=True, enable_turn_tracking=True)
+binding = traceai.bind_pipecat_audio_processor(recorder, AudioSessionContext.from_pipeline(worker))
+# ... run the worker ...
+await binding.finish()  # waits up to 30 s for the final segment and manifest
+```
+
+- The recording is attached to the `conversation` span that Pipecat's tracing starts. That span is marked as the conversation root (`fi.span.kind=CONVERSATION`) only when it has no parent.
+- Layouts: mono gives one mixed track. Stereo gives user (left, input) and bot (right, output) tracks in one file. `layout="separate_tracks"` uploads each side separately, so hiding inputs drops only the user side. With mono or stereo, any hide flag blocks the whole recording.
+- Audio is uploaded as WAV segments of up to 30 s, plus a manifest that records gaps. If uploads fall behind, the overflow becomes a `queue_full` gap rather than growing memory.
+- `buffer_size` must be between 1 and 131072 bytes. `buffer_size=0` and `enable_turn_audio=True` are refused (`unbounded_source`).
+- `binding.status` reports a short, content-free state such as `recording`, `published`, `partial`, `policy_denied` or `correlation_unavailable`.
+- `traceai_pipecat.create_audio_capture(...)` builds a new, unstarted recorder only when both `AttachmentConfig(record_audio=True)` and the server's `record_audio` allow it.

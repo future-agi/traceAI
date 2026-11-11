@@ -188,3 +188,29 @@ The pinned development lock contains LiveKit Agents 1.8.6, API 1.2.1, protocol 1
 Check the `examples/` directory for agent examples (validate recording SDK compatibility before deployment):
 *   `simple_agent.py`: A basic voice assistant agent.
 *   `egress_agent.py`: An agent with opt-in Egress metadata capture, an explicit session envelope and bounded stop/close cleanup. The modern `LiveKitAPI().egress` request shape and native-session linkage require the deployment's SDK/mode validation.
+
+## Call recordings as trace attachments (opt-in)
+
+Attachments are off by default. Both paths below need the attachment-enabled `fi-instrumentation-otel` and `livekit-agents` 1.8.10 or 1.8.11. Neither starts, stops or enables recording.
+
+**Local session recording.** If your session already records audio (`record=True`), bind it after `await session.start(...)`:
+
+```python
+binding = traceai.bind_livekit_session(session, ctx, owned_recording_files=True)
+```
+
+When the session ends, the SDK's `audio.ogg` is uploaded as one `mixed` file. This happens before LiveKit deletes its temporary directory, with a deadline of up to 30 s. Hard links, symlinks, foreign owners and replaced files are refused. LiveKit redaction, `LIVEKIT_TELEMETRY_ALLOW_PII` and FI hide flags all deny. The session span is marked `fi.span.kind=CONVERSATION` only if it has no parent. In a LiveKit worker, `agent_session` is a child of `job_entrypoint`, so it is not marked.
+
+**Completed Egress.** Pass a completed audio-only Egress that your app is authorized to use:
+
+```python
+handle = await traceai.import_livekit_completed_egress(
+    egress_info, session_context=session_span, egress_id=egress_info.egress_id,
+    room_name=room, connection_id=CONNECTION_ID, registry=registry, existing_source_authorized=True)
+```
+
+- `egress_info` is an object you already have. Alternatively, pass `egress_client=lkapi.egress`, which makes one read by that ID.
+- `connection_id` and `registry` identify the output that Future AGI has registered for your LiveKit connection.
+- Only `EGRESS_COMPLETE` jobs from audio-only room or track composites with exactly one file are accepted. Anything else returns `source_unavailable`.
+- No location, filename, URL or credential is ever sent.
+- `handle.reason == "queued"` means the server accepted the import. It does not mean the recording is playable yet.

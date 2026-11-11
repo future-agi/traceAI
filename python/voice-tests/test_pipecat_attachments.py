@@ -414,6 +414,31 @@ async def test_format_drift_keeps_clock_with_explicit_gap(manager, transport):
 
 
 @pytest.mark.asyncio
+async def test_each_start_stop_cycle_is_its_own_recording(manager, transport):
+    processor = AudioBufferProcessor(sample_rate=RATE, buffer_size=16000)
+    span, context = explicit_context()
+    binding = bind_audio_processor(processor, context, manager=manager)
+    await dispatch(processor, "on_audio_data", tone(440, 500), RATE, 1)
+    await dispatch(processor, "on_recording_stopped")
+    # The stop closes the cycle without the app calling finish(); its upload
+    # runs in the background and the binding is ready for the next start.
+    for _ in range(200):
+        if binding.results:
+            break
+        await asyncio.sleep(0.01)
+    assert [r.state for r in binding.results] == ["published"]
+    await dispatch(processor, "on_audio_data", tone(660, 700), RATE, 1)
+    await dispatch(processor, "on_recording_stopped")
+    await binding.finish(10)
+    span.end()
+    assert [r.state for r in binding.results] == ["published", "published"]
+    first, second = binding.results
+    assert first.recording_id != second.recording_id
+    durations = {m["recording_id"]: m["duration_ms"] for _, m, _, _ in transport.manifests}
+    assert durations == {first.recording_id: 500, second.recording_id: 700}
+
+
+@pytest.mark.asyncio
 async def test_handler_failure_is_isolated_and_content_free(manager, transport, caplog):
     class Exploding:
         @property
