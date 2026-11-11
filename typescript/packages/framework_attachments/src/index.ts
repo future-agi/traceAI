@@ -35,12 +35,13 @@ function encodedPayload(value: string): string {
 }
 /**
  * Exact decoded length from the source's shape only: no decode, copy or allocation.
- * 0 means unsupported (wrong type, empty, malformed length or over the per-part cap),
- * and the part is skipped before preflight.
+ * 0 means unsupported (wrong type, empty, malformed length, or base64 over the per-part
+ * decode cap), and the part is skipped before preflight.
  */
 function exactLength(value: unknown): number {
   // No implicit ArrayBuffer conversion, stream reads, paths or remote retrieval.
-  if (value instanceof Uint8Array) return value.byteLength <= MAX_DECODED ? value.byteLength : 0;
+  // Bytes are not decoded here, so only the manager bounds them (preflight: too_large / queue_full).
+  if (value instanceof Uint8Array) return value.byteLength;
   if (typeof value !== "string") return 0;
   const encoded = encodedPayload(value);
   if (!encoded.length || encoded.length > MAX_ENCODED || encoded.length % 4 !== 0) return 0;

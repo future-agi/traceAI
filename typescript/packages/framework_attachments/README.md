@@ -8,7 +8,7 @@ Shared typed-media normalization for traceAI's framework integrations. This pack
 
 Pass the existing provider's `attachments` manager in `binding`. Without that manager, these functions do nothing. The manager still requires explicit attachment enablement, a successful policy bootstrap and a sampled, recording span. Normal inference never waits for attachment network operations. Use the provider's existing flush/shutdown lifecycle to finish admitted transfers.
 
-The adapters accept inline base64/data URIs and `Uint8Array` sources at the documented typed boundaries. They do not fetch remote URLs, open local paths, read streams, reconstruct discarded media from exported text, or create new recordings. Base64 decoding is bounded to one MiB per part. A single span admits at most 64 positions through this helper; the core manager separately bounds bytes, queue length and reference projection.
+The adapters accept inline base64/data URIs and `Uint8Array` sources at the documented typed boundaries. They do not fetch remote URLs, open local paths, read streams, reconstruct discarded media from exported text, or create new recordings. Base64 decoding is bounded to one MiB per part. `Uint8Array` parts are not decoded, so only the shared manager bounds them (its upload cap and owned-byte budget, checked at preflight). A single span admits at most 64 positions through this helper; the core manager separately bounds bytes, queue length and reference projection.
 
 ## Privacy and identity
 

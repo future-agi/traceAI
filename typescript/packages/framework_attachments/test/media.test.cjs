@@ -143,3 +143,16 @@ test('the fixture speaks the v1 wire: no legacy-transport or wire-rejected warni
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(warnings, []);
 });
+test('Uint8Array parts are bounded by the manager, not the 1 MiB base64 decode cap', async () => {
+  const f = await fixture();
+  try {
+    const span = f.tracer.startSpan('large-bytes');
+    const large = new Uint8Array(1536 * 1024); large.set(PNG); large[large.length - 1] = 7;
+    captureMediaParts({ attachments: f.manager }, span, [{ type: 'image', image: large, mediaType: 'image/png' },
+      { type: 'image', image: Buffer.from(large).toString('base64'), mediaType: 'image/png' }], 'vercel', { direction: 'input' });
+    span.end(); await f.manager.flush(10000);
+    // The bytes part uploads byte-identical; the same media as base64 is over the decode cap and is skipped.
+    assert.equal(f.uploads.length, 1); assert.equal(f.uploads[0].part_index, 0);
+    assert.equal(f.bodies.length, 1); assert.ok(Buffer.from(large).equals(f.bodies[0]));
+  } finally { await f.close(); }
+});
