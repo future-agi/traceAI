@@ -1,0 +1,60 @@
+name: TypeScript attachment core
+on:
+  pull_request:
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - '.github/workflows/fi-core-attachments-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+      - name: Build core and run synthetic attachment boundaries
+        working-directory: typescript
+        run: |
+          pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/fi-semantic-conventions run build
+          pnpm --filter @traceai/fi-core run build
+          pnpm --filter @traceai/fi-core run test:attachments
+      - name: Test installed OTel floor and latest qualified release
+        if: matrix.node == '24'
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/attachment-packs"
+          pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/attachment-packs"
+          pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/attachment-packs"
+          for version in 2.0.1 2.12.1; do
+            node packages/fi-core/test/install-sdk-fixture.cjs "$version" "$RUNNER_TEMP/attachment-sdk-$version" "$RUNNER_TEMP"/attachment-packs/traceai-fi-core-*.tgz "$RUNNER_TEMP"/attachment-packs/traceai-fi-semantic-conventions-*.tgz
+            FI_CORE_PACKAGE_JSON="$RUNNER_TEMP/attachment-sdk-$version/node_modules/@traceai/fi-core/package.json" node --test packages/fi-core/test/attachments.test.cjs packages/fi-core/test/attachments-tls.test.cjs packages/fi-core/test/provider-lifecycle.test.cjs
+          done
+      - name: Fetch pinned feature-off contract fixtures
+        uses: actions/checkout@v4
+        with:
+          ref: aeed09f27d9d1f3649282dd94c885850af3ca27e
+          path: attachment-contract
+          persist-credentials: false
+      - name: Replay privacy and identity fixture safety
+        run: node typescript/packages/fi-core/test/attachments-contract.cjs attachment-contract/spec/attachments/v1
+      - name: Qualify browser-safe leaf
+        if: matrix.node == '24'
+        working-directory: typescript/packages/fi-core
+        run: |
+          npm install --prefix "$RUNNER_TEMP/attachment-tools" --no-audit --no-fund esbuild@0.25.12 playwright@1.56.1
+          "$RUNNER_TEMP/attachment-tools/node_modules/.bin/playwright" install --with-deps chromium
+          "$RUNNER_TEMP/attachment-tools/node_modules/.bin/esbuild" dist/esm/attachments/index.js --bundle --platform=browser --format=iife --global-name=Attachments --outfile="$RUNNER_TEMP/attachments-browser.js"
+          node test/attachments-browser.cjs "$RUNNER_TEMP/attachment-tools/node_modules/playwright" "$RUNNER_TEMP/attachments-browser.js"

@@ -32,6 +32,9 @@ import { seedSecrets } from "./secrets";
 import { DefaultBatchSpanProcessor, DefaultSimpleSpanProcessor, SpanProcessorRegistry } from "./spanProcessorRegistry";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 
+import { createNodeAttachmentManager, NodeAttachmentManagerOptions } from "./attachments/node";
+import { AttachmentManager } from "./attachments/manager";
+
 const privacyDestinations = new WeakSet<SpanExporter>();
 /** @internal True only for constructors in this core copy, never based on user properties. */
 export function hasExportPrivacyBoundary(exporter: SpanExporter): boolean { return privacyDestinations.has(exporter); }
@@ -456,6 +459,8 @@ export function createSpanExporter(options: ExportPrivacyOptions & {
 
 // --- TracerProvider ---
 export interface FITracerProviderOptions extends ExportPrivacyOptions {
+  /** Opt-in out-of-band media, separate from the trace collector destination. */
+  attachments?: NodeAttachmentManagerOptions;
   /** Default false selects SimpleSpanProcessor; true selects BatchSpanProcessor. */
   batch?: boolean;
   resource?: Resource;
@@ -469,6 +474,8 @@ export interface FITracerProviderOptions extends ExportPrivacyOptions {
 }
 
 class FITracerProvider extends BasicTracerProvider {
+  /** The single attachment runtime shared by explicit calls and integration adapters. */
+  readonly attachments: AttachmentManager;
   private readonly processorRegistry: SpanProcessorRegistry;
   private shutdownPromise?: Promise<void>;
   private defaultProcessorAttached: boolean = false;
@@ -521,6 +528,17 @@ class FITracerProvider extends BasicTracerProvider {
     this.endpoint = endpoint;
     this.headers = headers;
     this.transport = transport;
+    const attributes = config.resource?.attributes ?? {};
+    this.attachments = createNodeAttachmentManager({
+      ...config.attachments,
+      headers: config.attachments?.headers ?? headers,
+      projectName: config.attachments?.projectName ?? String(attributes[PROJECT_NAME] ?? ""),
+      projectType: config.attachments?.projectType ?? String(attributes[PROJECT_TYPE] ?? ""),
+      traceConfig: { ...config.attachments?.traceConfig, ...config.traceConfig,
+        ...Object.fromEntries(Object.entries(config.attachments?.traceConfig ?? {}).filter(([key, value]) =>
+          (key.startsWith("hide") || key === "piiRedaction") && value === true)),
+      },
+    });
 
     // Log to confirm processor and exporter details
     if (verbose) {
@@ -575,12 +593,15 @@ class FITracerProvider extends BasicTracerProvider {
       detailsMsg += "|  Using a default SpanProcessor. `addSpanProcessor` will overwrite this default.\n";
     }
   }
+  async forceFlush(): Promise<void> {
+    await Promise.all([super.forceFlush(), this.attachments.flush()]);
+  }
   shutdown(): Promise<void> {
     if (!this.shutdownPromise) {
       if (this.verbose) {
         diag.info("Shutting down FI TracerProvider...");
       }
-      this.shutdownPromise = super.shutdown();
+      this.shutdownPromise = Promise.all([super.shutdown(), this.attachments.shutdown()]).then(() => undefined);
     }
     return this.shutdownPromise;
   }
@@ -611,6 +632,7 @@ class BatchSpanProcessor extends OTelBatchSpanProcessor {
 }
 
 export interface RegisterOptions extends ExportPrivacyOptions {
+  attachments?: NodeAttachmentManagerOptions;
   /** Preserve application service identity; FI project routing is separate. */
   resource?: Resource;
   projectName?: string;
@@ -738,6 +760,7 @@ if (!projectName) {
     batch: options.batch ?? false,
     spanProcessors: options.spanProcessors,
     traceConfig: options.traceConfig,
+    attachments: options.attachments,
     resourceAttributes: options.resourceAttributes,
   });
 
