@@ -387,6 +387,7 @@ export class AttachmentRecording implements AttachmentRecordingWriter {
   }
   private writeFrames(t: Track, data: Uint8Array): boolean {
     if (this.mode === "terminal" || this.mode === "finishing") return false;
+    this.host.touch(); // deferred renewal check; tryWrite itself does no I/O (design 3.1)
     const whole = data.byteLength; const frames = whole / t.frameBytes;
     if (this.mode === "pending") {
       const state = this.host.runtimeState();

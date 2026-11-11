@@ -60,6 +60,8 @@ export interface AttachmentHost {
   renewUpload(outcome: UploadOutcome, signal: AbortSignal): Promise<boolean>;
   putManifest(capability: string, recordingId: string, body: string, key: string, signal: AbortSignal, replay: boolean): Promise<AttachmentCompletion["status"] | "ok">;
   recordingClosed(id: string): void;
+  /** Schedules a deferred session-renewal check (no I/O on the caller's stack); recording writes call it (design 3.1). */
+  touch(): void;
   countDrop(): void;
   notify(): void;
 }

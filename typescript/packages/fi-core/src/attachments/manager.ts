@@ -131,6 +131,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   private renewing = false;
   private nextRenewalAt = 0;
   private renewalFailures = 0;
+  private renewCheckPending = false;
   private registry?: Finalizer;
   private readonly pacer: TokenBucket;
   private readonly maxBytes: number;
@@ -327,6 +328,12 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     })();
   }
   private enter(): void { this.sweep(); this.maybeRenew(); }
+  /** @internal Deduped deferred renewal check for hot paths such as recording `tryWrite` (design 3.1). */
+  touch(): void {
+    if (this.renewCheckPending || !this.enabled) return;
+    this.renewCheckPending = true;
+    void Promise.resolve().then(() => { this.renewCheckPending = false; this.maybeRenew(); });
+  }
   private preflightFacts(options: AttachmentPreflightOptions, importSource = false): AdmissionFacts {
     return { mimeType: options.mimeType, direction: options.direction, purpose: options.purpose,
       capture: options.capture ? { ...options.capture } : undefined, operation: options.operation ?? "observe_consumed",
@@ -938,6 +945,8 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     job.settled = true; this.releaseBytes(job.bytes); job.bytes = 0;
   }
   private pump(): void {
+    // Worker wake is a renewal trigger (design 3.1): recording-only workloads never pass through preflight.
+    this.maybeRenew();
     while (this.active.size < this.workers) {
       const lane = this.nextLane();
       if (!lane) break;
@@ -1101,7 +1110,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   }
   async flush(timeoutMs = this.shutdownTimeout): Promise<AttachmentFlushResult> {
     if (!this.enabled) return Object.freeze({ unfinished: 0, dropped: 0 });
-    this.sweep();
+    this.enter();
     this.cancelDenied();
     if (this.queued || this.active.size) {
       await new Promise<void>(resolve => {
@@ -1141,7 +1150,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   }
   /** Aggregate diagnostics only; no per-source metadata, names, hashes, capabilities or exception text. */
   status(): AttachmentStatus {
-    if (this.enabled) this.sweep();
+    if (this.enabled) this.enter();
     return Object.freeze({ state: this.runtimeState(), queued: this.queued, active: this.active.size, openTickets: this.reservations.size,
       openStreams: this.streams.size, openRecordings: this.recordings.size, ownedBytes: this.bytes, dropped: this.dropped });
   }

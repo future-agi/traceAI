@@ -478,6 +478,63 @@ test('T-RN-08 the write capability never appears in status, handles, span attrib
   for (const cap of caps) assert.equal(haystack.includes(cap), false);
   await f.manager.shutdown();
 });
+test('T-RN-09 recording-only workload (tryWrite + flush, never preflight) renews before expiry and keeps its tail', async () => {
+  // Pipecat shape: one long recording, 20 ms writes, a flush every second, no other entry point (design 3.1).
+  const c = clock(Date.now());
+  const f = await managerV1({}, { clock: c, lifetimeMs: 120000, limits: { segment_duration_ms: 10000 } });
+  const w = f.manager.startRecording(identity, mono(8000));
+  assert.equal(w.reason, 'queued');
+  let rejectedAfter = 0; const stateAt = {};
+  for (let ms = 0; ms < 150000; ms += 20) {
+    const ok = w.tryWrite(pcm(160, 1, ms));
+    if (ms >= 120000 && !ok) rejectedAfter++;
+    c.advance(20);
+    if (ms % 1000 === 0) { await f.manager.flush(5000); for (let i = 0; i < 5; i++) await tick(); }
+    if (ms === 100000 || ms === 116000 || ms === 130000) stateAt[ms] = f.manager.status().state;
+  }
+  const result = await w.finish(10000);
+  const manifest = f.manifests.at(-1).body;
+  assert.ok(f.calls.filter(x => x.op === 'renewSession').length >= 1);
+  assert.deepEqual(stateAt, { 100000: 'ready', 116000: 'ready', 130000: 'ready' });
+  assert.equal(rejectedAfter, 0);
+  assert.equal(result.state, 'published'); assert.equal(result.captureComplete, true);
+  assert.equal(manifest.segments.length, 15); assert.deepEqual(manifest.gaps, []);
+  await f.manager.shutdown(1000);
+});
+test('T-RN-10 each non-admission entry point is a renewal trigger on its own: recording write, flush, status, worker wake', async () => {
+  const renewals = f => f.calls.filter(x => x.op === 'renewSession').length;
+  const settle = async f => { for (let i = 0; i < 20 && !renewals(f); i++) await tick(); };
+  const fresh = async (overrides = {}) => { const c = clock(Date.now()); return { c, f: await managerV1(overrides, { clock: c, lifetimeMs: 120000, limits: { segment_duration_ms: 10000 } }) }; };
+  // Recording write: a sub-segment write seals nothing and enqueues nothing; only the deferred host check can renew.
+  { const { c, f } = await fresh();
+    const w = f.manager.startRecording(identity, mono(8000));
+    assert.equal(w.tryWrite(pcm(160)), true);
+    for (let i = 0; i < 5; i++) await tick();
+    assert.equal(renewals(f), 0);
+    c.advance(70000);
+    const before = f.calls.length;
+    assert.equal(w.tryWrite(pcm(160, 1, 1)), true);
+    assert.equal(f.calls.length, before, 'tryWrite performs no transport call on the caller stack');
+    await settle(f); assert.equal(renewals(f), 1, 'recording write');
+    w.abort(); await f.manager.shutdown(100); }
+  // flush() and status() with no other work.
+  for (const [name, call] of [['flush', m => m.flush(100)], ['status', m => m.status()]]) {
+    const { c, f } = await fresh();
+    c.advance(70000); assert.equal(renewals(f), 0);
+    await call(f.manager); await settle(f);
+    assert.equal(renewals(f), 1, name);
+    await f.manager.shutdown(100);
+  }
+  // Worker wake: an upload admitted before the window finishes after it; its job end wakes the pump.
+  { let unblock; const block = new Promise(resolve => { unblock = resolve; });
+    const { c, f } = await fresh(base => ({ initialize: async (...a) => { await block; return base.initialize(...a); } }));
+    const h = f.manager.attach(identity, { kind: 'Bytes', data: new Uint8Array(4) }, options);
+    for (let i = 0; i < 5; i++) await tick();
+    c.advance(70000); assert.equal(renewals(f), 0);
+    unblock(); assert.equal((await h.completion).status, 'validating');
+    await settle(f); assert.equal(renewals(f), 1, 'worker wake');
+    await f.manager.shutdown(100); }
+});
 
 // ---- 10.5 Completed import -------------------------------------------------------------------------------
 const providerResolved = { source: { kind: 'ProviderFile', connectionId: '80000000-0000-4000-8000-000000000001', registeredOutputId: '80000000-0000-4000-8000-000000000002' },
