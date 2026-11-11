@@ -114,3 +114,26 @@ Direct `FirecrawlClient` and `AsyncFirecrawlClient` instances look methods up on
 ## Watchers
 
 `Firecrawl.watcher()` polls `get_crawl_status` from its own thread. Each poll produces a separate root span; a swallowed poll error still appears as ERROR. `AsyncFirecrawl.watcher()` polls in the iterating task, so its spans inherit that task's current parent.
+
+## Screenshots and media (attachments)
+
+Pass the shared manager: `FirecrawlInstrumentor().instrument(tracer_provider=..., attachments=manager)`.
+For `scrape`, `crawl`, `batch_scrape` and their status calls, a returned
+Document's `screenshot`, `actions.screenshots`, `audio` and `video` are
+uploaded on the operation span when they are inline `data:` URIs (up to 16
+documents and 8 MiB per result). Firecrawl Cloud returns hosted URLs for
+these: they are never fetched, so nothing is uploaded for them. No extra
+request, crawl or browser session is started.
+
+Attachments are off unless the provider's attachment manager is enabled
+(`fi_instrumentation.register(..., attachment_config=AttachmentConfig(enabled=True))`
+or `traceai.init(attachment_config=...)`). Tool media is tool output and
+potential model input, so every input and output hide flag
+(`hide_inputs`, `hide_outputs` and their message/text variants),
+`hide_input_images` for images, and `pii_redaction` deny the upload; they
+cannot be relaxed by the server or the core. Only typed inline bytes are
+read, and only after the manager admitted them; URLs, file IDs, resource URIs
+and local paths are never fetched or opened. Call the manager's `flush()`
+before a short process exits. Upload completion means "transferred for
+validation"; playback needs an authorized occurrence through the media
+gateway.

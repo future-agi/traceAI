@@ -45,3 +45,41 @@ enabled is attached only if the reader is enabled when it consumes the item.
 An already-running request retains the context under which it started. Native
 MCP SDK tracing remains independent and can continue when this instrumentor is
 off, particularly with MCP 2.x.
+
+## Tool and resource media (attachments)
+
+`MCPInstrumentor` propagates context only and never captures media. To upload
+the images, audio and inline resource blobs a server returns, wrap the client
+session:
+
+```python
+from traceai_mcp import wrap_mcp_client
+
+session = wrap_mcp_client(session, tracer_provider=trace_provider)
+result = await session.call_tool("screenshot", {})   # unchanged SDK result
+```
+
+Each `call_tool` / `read_resource` gets an `mcp.tools/call` /
+`mcp.resources/read` CLIENT span. `ImageContent.data`, `AudioContent.data`
+and `BlobResourceContents.blob` (in an `EmbeddedResource` or a
+`resources/read` result) are uploaded as `tool_result` occurrences: at most 64
+parts and 256 KiB of decoded bytes per result. `resource_link` blocks,
+resource URIs and `structuredContent` are never read. A MIME of another
+modality than the block type, or outside the attachment MIME list, uploads
+nothing. `attachments=` overrides the provider's manager; `trace_config=` and
+`attachment_capture=` only add restrictions. Wrapping a wrapped session
+returns it unchanged. `capture_mcp_result(manager, span, result, operation)`
+is the same capture for an existing span.
+
+Attachments are off unless the provider's attachment manager is enabled
+(`fi_instrumentation.register(..., attachment_config=AttachmentConfig(enabled=True))`
+or `traceai.init(attachment_config=...)`). Tool media is tool output and
+potential model input, so every input and output hide flag
+(`hide_inputs`, `hide_outputs` and their message/text variants),
+`hide_input_images` for images, and `pii_redaction` deny the upload; they
+cannot be relaxed by the server or the core. Only typed inline bytes are
+read, and only after the manager admitted them; URLs, file IDs, resource URIs
+and local paths are never fetched or opened. Call the manager's `flush()`
+before a short process exits. Upload completion means "transferred for
+validation"; playback needs an authorized occurrence through the media
+gateway.

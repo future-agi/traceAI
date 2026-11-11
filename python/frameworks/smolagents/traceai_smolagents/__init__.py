@@ -4,6 +4,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from traceai_smolagents._wrappers import (
+    _Media,
     _ModelWrapper,
     _RunWrapper,
     _StepWrapper,
@@ -14,6 +15,23 @@ from traceai_smolagents.version import __version__
 from wrapt import wrap_function_wrapper
 
 _instruments = ("smolagents >= 1.2.2",)
+
+
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
 
 
 class SmolagentsInstrumentor(BaseInstrumentor):
@@ -43,6 +61,9 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
+        # The provider-owned shared manager, passed as ``attachments`` (auto also passes
+        # ``attachment_manager``). Nothing is captured unless an enabled manager is supplied.
+        media = _Media(_attachment_manager(kwargs), config, kwargs.get("attachment_capture"))
 
         run_wrapper = _RunWrapper(tracer=self._tracer)
         self._original_run_method = getattr(MultiStepAgent, "run", None)
@@ -72,9 +93,10 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             if method not in vars(model_subclass):
                 continue
             self._original_model_call_methods[(model_subclass, method)] = vars(model_subclass)[method]
-            wrap_function_wrapper(model_subclass, method, _ModelWrapper(tracer=self._tracer, method_name=method))
+            wrap_function_wrapper(model_subclass, method,
+                                  _ModelWrapper(tracer=self._tracer, method_name=method, media=media))
 
-        tool_call_wrapper = _ToolCallWrapper(tracer=self._tracer)
+        tool_call_wrapper = _ToolCallWrapper(tracer=self._tracer, media=media)
         self._original_tool_call_method = getattr(Tool, "__call__", None)
         wrap_function_wrapper(
             module="smolagents",

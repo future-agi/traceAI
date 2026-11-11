@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
+from ._attachments import capture_tool_results, forget_ended_tools
 from ._attributes import ClaudeAgentAttributes, ClaudeAgentSpanKind
 from ._hooks import (
+    _active_tool_spans,
     create_pre_tool_use_hook,
     create_subagent_start_hook,
     create_post_tool_use_hook,
@@ -213,13 +215,20 @@ def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer) -> None:
 
 
 def wrap_claude_sdk_client(
-    original_class: Any, tracer: trace_api.Tracer
+    original_class: Any,
+    tracer: trace_api.Tracer,
+    attachments: Any = None,
+    trace_config: Any = None,
+    attachment_capture: Any = None,
 ) -> Any:
     """Wrap ClaudeSDKClient with tracing.
 
     Args:
         original_class: The original ClaudeSDKClient class
         tracer: OpenTelemetry tracer
+        attachments: the shared attachment manager for tool-result media (None: off)
+        trace_config: TraceConfig whose hide flags and PII redaction deny media capture
+        attachment_capture: CapturePolicy that can only add restrictions
 
     Returns:
         Wrapped class with tracing
@@ -277,10 +286,12 @@ def wrap_claude_sdk_client(
 
                 collected_messages: List[Dict[str, Any]] = []
                 result_usage: Optional[Dict[str, Any]] = None
+                message_index = 0
 
                 try:
                     async for msg in messages:
                         msg_type = type(msg).__name__
+                        message_index += 1
 
                         if msg_type == "AssistantMessage":
                             # Start new turn
@@ -295,6 +306,18 @@ def wrap_claude_sdk_client(
                                 })
 
                         elif msg_type == "UserMessage":
+                            # Tool-result media first, from the original typed blocks,
+                            # before any text flattening or truncation.
+                            if attachments is not None:
+                                capture_tool_results(
+                                    attachments,
+                                    msg,
+                                    conversation_span,
+                                    _active_tool_spans,
+                                    message_index=message_index,
+                                    trace_config=trace_config,
+                                    capture=attachment_capture,
+                                )
                             # End current turn, mark next start
                             turn_tracker.end_current_turn()
                             turn_tracker.mark_next_start()
@@ -350,6 +373,7 @@ def wrap_claude_sdk_client(
                     turn_tracker.end_current_turn()
                     clear_parent_span()
                     clear_active_tool_spans()
+                    forget_ended_tools()
 
         def _build_span_attributes(self) -> Dict[str, Any]:
             """Build span attributes from options and prompt."""
@@ -414,6 +438,15 @@ def wrap_claude_sdk_client(
                         parts.append(block.text)
                     elif type(block).__name__ == "ToolResultBlock":
                         result = getattr(block, "content", "")
+                        if isinstance(result, list):
+                            # Only text blocks: media bytes never become span text.
+                            result = " ".join(
+                                item.get("text", "")
+                                for item in result
+                                if isinstance(item, dict) and isinstance(item.get("text"), str)
+                            )
+                        elif not isinstance(result, str):
+                            result = ""
                         parts.append(f"[Tool Result: {result[:100]}...]")
                 return " ".join(parts) if parts else None
 

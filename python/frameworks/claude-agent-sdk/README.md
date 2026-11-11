@@ -183,3 +183,28 @@ pytest tests/ -v
 ## License
 
 MIT
+
+## Tool-result media (attachments)
+
+Pass the shared manager: `ClaudeAgentInstrumentor().instrument(tracer_provider=..., attachments=manager)`.
+The base64 `image` and PDF `document` blocks of a `ToolResultBlock` are
+uploaded from the original SDK message, before any text flattening or
+truncation, as `tool_result` occurrences with the `tool_use_id`. They belong
+to the tool's span: while it is open they are projected on it; once the
+PostToolUse hook ended it, they keep its exact span context as their parent.
+Media bytes never reach `tool.output` or the conversation output text. The
+SDK drops top-level user image blocks while parsing, so prompt images are not
+captured. URL and file sources are never read.
+
+Attachments are off unless the provider's attachment manager is enabled
+(`fi_instrumentation.register(..., attachment_config=AttachmentConfig(enabled=True))`
+or `traceai.init(attachment_config=...)`). Tool media is tool output and
+potential model input, so every input and output hide flag
+(`hide_inputs`, `hide_outputs` and their message/text variants),
+`hide_input_images` for images, and `pii_redaction` deny the upload; they
+cannot be relaxed by the server or the core. Only typed inline bytes are
+read, and only after the manager admitted them; URLs, file IDs, resource URIs
+and local paths are never fetched or opened. Call the manager's `flush()`
+before a short process exits. Upload completion means "transferred for
+validation"; playback needs an authorized occurrence through the media
+gateway.
