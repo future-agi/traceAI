@@ -277,7 +277,7 @@ def instrument(*libraries: str, verbose: bool = True) -> None:
 def attachment_status() -> dict:
     """Content-free setup status, never an integrated recording-ready claim."""
     manager = getattr(_tracer_provider, "attachment_manager", None)
-    return {"runtime": manager.status if manager is not None else "uninitialized",
+    return {"runtime": manager.status().state if manager is not None else "uninitialized",
             "adapters": dict(_adapter_status)}
 
 

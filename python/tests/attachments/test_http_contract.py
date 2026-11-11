@@ -27,7 +27,7 @@ def expiry(seconds=60):
 def server(tmp_path):
     key, cert = tmp_path / "synthetic.key", tmp_path / "synthetic.crt"
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"], check=True, capture_output=True)
-    state = {"requests": [], "payloads": [], "fail": None, "policy": {}, "expires": 60}
+    state = {"requests": [], "payloads": [], "fail": None, "policy": {}, "expires": 600}
     scope = {k: str(uuid.uuid4()) for k in ("organization_id", "workspace_id", "project_id")}
 
     class Handler(BaseHTTPRequestHandler):
@@ -45,7 +45,7 @@ def server(tmp_path):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            state["requests"].append((self.path, body, dict(self.headers)))
+            state["requests"].append((self.path, body, {k.lower(): v for k, v in self.headers.items()}))
             if self.path.endswith("attachment-sessions"):
                 self.respond(200, {"schema_version": 1, "scope": scope,
                     "capture_session_id": body["capture_session_id"], "expires_at": expiry(state["expires"]),
@@ -72,18 +72,18 @@ def server(tmp_path):
             elif self.path.endswith("/complete"):
                 self.respond(202, {"upload_id": state["upload_id"], "state": "validating", "reason": "binding_pending"})
             elif self.path.endswith("/abort"):
-                self.respond(200, {})
+                self.respond(200, {"upload_id": state["upload_id"], "state": "failed", "reason": "incomplete"})
             else:
                 self.respond(404, {})
 
         def do_PUT(self):
             payload = self.rfile.read(int(self.headers["Content-Length"]))
-            state["requests"].append((self.path, None, dict(self.headers)))
+            state["requests"].append((self.path, None, {k.lower(): v for k, v in self.headers.items()}))
             if state["fail"]:
                 self.respond(state["fail"], {"error": "CANARY_BODY_SIGNED_URL"}, {"Location": "https://never-follow.invalid/secret"})
                 return
             state["payloads"].append(payload)
-            self.respond(200, {})
+            self.respond(200, {"upload_id": state["upload_id"], "state": "pending_upload", "reason": "binding_pending"})
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -135,7 +135,17 @@ def test_real_wav_transfer_and_only_safe_projection(server, monkeypatch):
         init = state["requests"][1][1]
         assert init["association"]["parent"]["trace_id"] == CONTEXT.trace_uuid
         assert init["conversation_id"] == "session_1"
+        assert "role" not in init and "channel" not in init and init["deletion_generation"] == 0
         assert len(json.dumps(init)) < 2048
+        # T-TR-03: idempotency keys on every F01 route, never on content.
+        headers = {path.rsplit("/", 1)[-1]: hdrs for path, _, hdrs in state["requests"]}
+        sid = uuid.UUID(state["requests"][0][1]["capture_session_id"]).hex
+        assert headers["attachment-sessions"]["idempotency-key"] == "bs-" + sid + "-0"
+        assert headers["uploads"]["idempotency-key"] == "up-" + uuid.UUID(handle.occurrence_id).hex
+        assert headers["complete"]["idempotency-key"] == "cp-" + uuid.UUID(state["upload_id"]).hex
+        assert "idempotency-key" not in headers["content"]
+        assert all(h["cache-control"] == "no-store" for h in headers.values())
+        assert headers["content"]["content-length"] == str(len(raw))
         manager.shutdown(1)
 
 
@@ -167,7 +177,7 @@ def test_expired_bootstrap_has_no_capture(server):
     state["expires"] = -1
     manager = AttachmentManager(config=AttachmentConfig(enabled=True), project_name="synthetic", transport=transport)
     assert not manager.ready(2)
-    assert manager.status == "expired"
+    assert manager.status().state == "expired"
     assert manager.attach(CONTEXT, Bytes(b"secret"), mime_type="audio/wav", direction="mixed").admission == "expired"
     assert len(state["requests"]) == 1
     manager.shutdown(1)
@@ -177,3 +187,69 @@ def test_expired_bootstrap_has_no_capture(server):
 def test_control_endpoint_rejects_unsafe_shapes(endpoint):
     with pytest.raises(TransferError):
         HTTPTransport(endpoint, {"authorization": "synthetic"})
+
+
+@pytest.mark.parametrize("status,body,expected,retry", [
+    (400, None, "unsupported_version", False), (401, None, "credential_scope_unsupported", False),
+    (401, "expired", "expired", False), (403, "redaction_unavailable", "redaction_unavailable", False),
+    (403, "conflict", "policy_denied", False), (404, None, "not_found", False),
+    (404, "scope_unresolved", "scope_unresolved", False), (409, None, "conflict", False),
+    (409, "deleted", "deleted", False), (410, "deleted", "deleted", False), (413, None, "too_large", False),
+    (429, None, "throttled", True), (408, None, "incomplete", True), (503, "deleted", "incomplete", True),
+    (418, None, "incomplete", False),
+])
+def test_status_reason_table(status, body, expected, retry):
+    """T-TR-02: one table for every route; Error.code refines only within its class."""
+    from fi_instrumentation.attachments.protocol import map_status
+
+    raw = json.dumps({"code": body, "request_id": str(uuid.uuid4())}).encode() if body else b""
+    error = map_status(status, raw, "3" if status == 429 else None)
+    assert (error.reason, error.retryable) == (expected, retry)
+    if status == 429:
+        assert error.retry_after == 3
+
+
+def test_retry_after_caps():
+    from fi_instrumentation.attachments.protocol import map_status
+
+    assert map_status(429, b"", "60").retry_after == 5
+    assert map_status(429, b"", "Wed, 21 Oct 2015 07:28:00 GMT").retry_after == 1
+    assert map_status(429, b"", None).retry_after == 1
+
+
+def test_strict_json_rejects_duplicates_and_constants():
+    """T-TR-06."""
+    from fi_instrumentation.attachments.protocol import strict_json
+
+    with pytest.raises(TransferError):
+        strict_json(b'{"a":1,"a":2}')
+    with pytest.raises(TransferError):
+        strict_json(b'{"a":NaN}')
+
+
+
+def test_pacer_honours_rate_within_one_slice():
+    """T-TR-05: the token bucket paces content slices at upload_bytes_per_second (± one slice)."""
+    import time
+
+    from fi_instrumentation.attachments.protocol import Pacer
+
+    rate, slice_bytes, total = 512 * 1024, 128 * 1024, 3 * 512 * 1024
+    pacer = Pacer(rate)
+    start = time.monotonic()
+    for _ in range(total // slice_bytes):
+        pacer.acquire(slice_bytes, time.monotonic() + 30, lambda: None)
+    elapsed = time.monotonic() - start
+    expected = (total - rate) / rate               # the bucket starts full
+    assert expected - slice_bytes / rate <= elapsed <= expected + 1.0
+
+
+def test_pacer_respects_deadline():
+    import time
+
+    from fi_instrumentation.attachments.protocol import Pacer
+
+    pacer = Pacer(1024)
+    pacer.acquire(1024, time.monotonic() + 5, lambda: None)
+    with pytest.raises(TransferError):
+        pacer.acquire(1024, time.monotonic() + 0.1, lambda: None)

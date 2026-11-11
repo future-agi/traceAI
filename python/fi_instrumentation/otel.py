@@ -254,18 +254,19 @@ def register(
     # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
 
-    # Attachment control-plane configuration is independent of OTLP. OFF does
-    # not construct a transport, start workers, or make any bootstrap request.
-    from fi_instrumentation.attachments import AttachmentManager, AttachmentSpanProcessor
+    # Attachment control-plane configuration is independent of OTLP. OFF returns
+    # the null object: no transport, thread, timer, fork hook or bootstrap request.
+    from fi_instrumentation.attachments import AttachmentConfig, AttachmentSpanProcessor, create_attachment_manager
     from fi_instrumentation.instrumentation.config import TraceConfig
 
     tracer_provider.trace_config = trace_config or TraceConfig()
-    tracer_provider.attachment_manager = AttachmentManager(
+    attachment_config = attachment_config or AttachmentConfig()
+    tracer_provider.attachment_manager = create_attachment_manager(
         config=attachment_config, trace_config=tracer_provider.trace_config,
         project_name=project_name, project_type=project_type.value,
-        headers=_with_fi_auth_headers(headers),
+        headers=_with_fi_auth_headers(headers) if attachment_config.enabled else None,
     )
-    if tracer_provider.attachment_manager.config.enabled:
+    if tracer_provider.attachment_manager.status().state != "disabled":
         tracer_provider.add_span_processor(AttachmentSpanProcessor(tracer_provider.attachment_manager))
 
     if set_global_tracer_provider:
