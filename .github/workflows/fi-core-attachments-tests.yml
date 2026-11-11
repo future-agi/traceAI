@@ -24,8 +24,16 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10.30.1
+      - name: Fetch pinned F01 contract fixtures
+        uses: actions/checkout@v4
+        with:
+          ref: f3b0923c62d43b3a52bf4c16a2226c39c22b690d
+          path: attachment-contract
+          persist-credentials: false
       - name: Build core and run synthetic attachment boundaries
         working-directory: typescript
+        env:
+          FI_ATTACHMENTS_SPEC_DIR: ${{ github.workspace }}/attachment-contract/spec/attachments/v1
         run: |
           pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
           pnpm --filter @traceai/fi-semantic-conventions run build
@@ -40,14 +48,8 @@ jobs:
           pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/attachment-packs"
           for version in 2.0.1 2.12.1; do
             node packages/fi-core/test/install-sdk-fixture.cjs "$version" "$RUNNER_TEMP/attachment-sdk-$version" "$RUNNER_TEMP"/attachment-packs/traceai-fi-core-*.tgz "$RUNNER_TEMP"/attachment-packs/traceai-fi-semantic-conventions-*.tgz
-            FI_CORE_PACKAGE_JSON="$RUNNER_TEMP/attachment-sdk-$version/node_modules/@traceai/fi-core/package.json" node --test packages/fi-core/test/attachments.test.cjs packages/fi-core/test/attachments-tls.test.cjs packages/fi-core/test/provider-lifecycle.test.cjs
+            FI_CORE_PACKAGE_JSON="$RUNNER_TEMP/attachment-sdk-$version/node_modules/@traceai/fi-core/package.json" FI_ATTACHMENTS_SPEC_DIR="$GITHUB_WORKSPACE/attachment-contract/spec/attachments/v1" node --test packages/fi-core/test/attachments.test.cjs packages/fi-core/test/attachments-tls.test.cjs packages/fi-core/test/attachments-design.test.cjs packages/fi-core/test/attachments-files.test.cjs packages/fi-core/test/attachments-exit.test.cjs packages/fi-core/test/attachments-wire.test.cjs packages/fi-core/test/provider-lifecycle.test.cjs
           done
-      - name: Fetch pinned feature-off contract fixtures
-        uses: actions/checkout@v4
-        with:
-          ref: aeed09f27d9d1f3649282dd94c885850af3ca27e
-          path: attachment-contract
-          persist-credentials: false
       - name: Replay privacy and identity fixture safety
         run: node typescript/packages/fi-core/test/attachments-contract.cjs attachment-contract/spec/attachments/v1
       - name: Qualify browser-safe leaf

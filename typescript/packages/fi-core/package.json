@@ -35,7 +35,7 @@
     "postbuild": "node scripts/postbuild.cjs",
     "test": "jest",
     "test:provider": "node --test test/provider-lifecycle.test.cjs",
-    "test:attachments": "node --test test/attachments.test.cjs test/attachments-tls.test.cjs",
+    "test:attachments": "node --test test/attachments.test.cjs test/attachments-tls.test.cjs test/attachments-design.test.cjs test/attachments-files.test.cjs test/attachments-exit.test.cjs test/attachments-wire.test.cjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
