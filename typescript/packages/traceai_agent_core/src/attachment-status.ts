@@ -35,6 +35,23 @@ export const AGENT_ATTACHMENT_SOURCES: Readonly<Record<string, AgentAttachmentSo
   muse: "source_unavailable",
 });
 
+/**
+ * The attachment control-plane endpoint, only when its origin is the approved OTLP
+ * destination's origin. Destination approval binds a saved credential to that origin, so an
+ * endpoint from elsewhere (env, flags or options) never receives the credential.
+ */
+export function approvedAttachmentEndpoint(
+  config: Pick<ResolvedConfig, "endpoint">,
+  candidate: string | undefined,
+): string | undefined {
+  if (!candidate || !config.endpoint) return undefined;
+  try {
+    return new URL(candidate).origin === new URL(config.endpoint).origin ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Local inspection does not mint a capability or confuse OTLP acceptance with attachment scope. */
 export function agentAttachmentStatus(config: ResolvedConfig, env: NodeJS.ProcessEnv = process.env) {
   const source: AgentAttachmentSource = Object.prototype.hasOwnProperty.call(AGENT_ATTACHMENT_SOURCES, config.agent)
@@ -45,7 +62,7 @@ export function agentAttachmentStatus(config: ResolvedConfig, env: NodeJS.Proces
     state: !requested ? "disabled" :
       !config.enabled || !config.captureContent || (config.hideInputs && config.hideOutputs) ? "policy_denied" :
       source === "source_unavailable" ? "source_unavailable" :
-      !env.FI_ATTACHMENTS_ENDPOINT ? "endpoint_unconfigured" : "scope_unverified",
+      !approvedAttachmentEndpoint(config, env.FI_ATTACHMENTS_ENDPOINT) ? "endpoint_unconfigured" : "scope_unverified",
     source,
     credentialScope: "unverified-runtime-bootstrap-required",
     productPlayback: "unverified",

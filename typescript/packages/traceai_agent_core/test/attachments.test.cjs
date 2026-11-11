@@ -1,11 +1,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const https = require('node:https');
+const { execFileSync, spawn } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { AttachmentManager, AttachmentTransportError } = require('@traceai/fi-core/attachments');
 const { captureAgentImages, MAX_AGENT_IMAGE_BYTES, createTurnTracer, agentAttachmentStatus } = require('../dist/src/index.js');
+const { agentAttachmentRuntime } = require('../dist/src/attachment-runtime.js');
 const { identity, fake } = require('../../fi-core/test/attachments-fixtures.cjs');
 const image = () => ({ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' });
 const input = { direction: 'input', purpose: 'model_input', role: 'user' };
@@ -172,11 +176,15 @@ test('discard and async route revocation prevent binary delivery', async t => {
 });
 
 test('status distinguishes requested capture, unsupported sources and unverified scope', () => {
-  const config = { agent: 'pi', enabled: true, captureContent: true };
+  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://example.invalid/tracer/v1/traces' };
   assert.equal(agentAttachmentStatus(config, {}).state, 'disabled');
   assert.equal(agentAttachmentStatus(config, { FI_ATTACHMENTS_ENABLED: 'true' }).state, 'endpoint_unconfigured');
   const enabled = { FI_ATTACHMENTS_ENABLED: 'true', FI_ATTACHMENTS_ENDPOINT: 'https://example.invalid' };
   assert.equal(agentAttachmentStatus(config, enabled).state, 'scope_unverified');
+  // An endpoint on any origin other than the approved OTLP destination is not configured.
+  for (const other of ['https://other.invalid', 'https://example.invalid:8443', 'http://example.invalid', 'not a url'])
+    assert.equal(agentAttachmentStatus(config, { ...enabled, FI_ATTACHMENTS_ENDPOINT: other }).state, 'endpoint_unconfigured', other);
+  assert.equal(agentAttachmentStatus({ ...config, endpoint: undefined }, enabled).state, 'endpoint_unconfigured');
   for (const agent of ['pi', 'oh-my-pi', 'claude']) {
     assert.equal(agentAttachmentStatus({ ...config, agent }, enabled).source, 'typed-image-blocks');
   }
@@ -210,4 +218,102 @@ test('Anthropic/Claude Code base64 source blocks share the same lazy boundary; U
   const secret = { type: 'image', source: { type: 'base64', media_type: 'image/png', get data() { reads++; return data; } } };
   assert.equal(captureAgentImages(hidden.manager, identity, [secret], input)[0].admission, 'policy_denied');
   assert.equal(reads, 0);
+});
+
+test('runtime binds the credential to the approved destination origin', () => {
+  const config = { agent: 'pi', enabled: true, captureContent: true, endpoint: 'https://approved.invalid/tracer/v1/traces',
+    credentials: { apiKey: 'synthetic-key', secretKey: 'synthetic-secret' }, destinationApproved: true, projectName: 'p',
+    hideInputs: false, hideOutputs: false, hideErrorDetails: false };
+  const same = agentAttachmentRuntime(config, { endpoint: 'https://approved.invalid' });
+  assert.equal(same.endpoint, 'https://approved.invalid');
+  assert.equal(same.headers['x-api-key'], 'synthetic-key');
+  for (const endpoint of ['https://other.invalid', 'https://approved.invalid:8443', 'http://approved.invalid']) {
+    const other = agentAttachmentRuntime(config, { endpoint });
+    assert.equal(other.endpoint, undefined, endpoint);
+    assert.deepEqual(other.headers, {}, endpoint);
+    // A transport is always supplied, so fi-core never builds its own from FI_ATTACHMENTS_ENDPOINT.
+    assert.equal(typeof other.transport?.bootstrap, 'function', endpoint);
+  }
+});
+
+// Real saved profile, real resolveConfig and real Node TLS transport, in a child process so the
+// self-signed test CA is trusted through NODE_EXTRA_CA_CERTS (read only at process start).
+test('saved-profile credential never reaches an FI_ATTACHMENTS_ENDPOINT origin destination approval did not approve', async t => {
+  let tls;
+  try {
+    tls = await fs.mkdtemp(path.join(os.tmpdir(), 'fi-att-origin-'));
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(tls, 'key.pem'),
+      '-out', path.join(tls, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1'], { stdio: 'ignore' });
+  } catch { t.skip('openssl unavailable'); return; }
+  t.after(() => fs.rm(tls, { recursive: true, force: true }));
+  const tlsOptions = { key: await fs.readFile(path.join(tls, 'key.pem')), cert: await fs.readFile(path.join(tls, 'cert.pem')) };
+  async function server() {
+    const seen = [];
+    const s = https.createServer(tlsOptions, (req, res) => {
+      req.resume();
+      req.on('end', () => {
+        seen.push({ url: req.url, apiKey: req.headers['x-api-key'], secretKey: req.headers['x-secret-key'] });
+        if (req.url.startsWith('/tracer/v1/traces')) { res.setHeader('content-type', 'application/json'); res.end('{}'); }
+        else res.writeHead(503).end();
+      });
+    });
+    await new Promise(r => s.listen(0, '127.0.0.1', r));
+    t.after(async () => { s.closeAllConnections(); await new Promise(r => s.close(r)); });
+    return { origin: `https://127.0.0.1:${s.address().port}`, seen };
+  }
+  const approved = await server();
+  const other = await server();
+  const dist = path.resolve(__dirname, '../dist/src/index.js');
+  const script = `
+    const c = require(${JSON.stringify(dist)});
+    (async () => {
+      const options = { agent: 'pi', home: process.env.HOME, env: {} };
+      const setup = await c.setup({ ...options, credentials: { apiKey: 'synthetic-saved-api', secretKey: 'synthetic-saved-secret' },
+        projectName: 'unit-project', otlpEndpoint: process.env.APPROVED + '/tracer/v1/traces', configureOnly: true });
+      const config = await c.resolveConfig(options);
+      const redirected = await c.resolveConfig({ ...options, env: { FI_BASE_URL: process.env.OTHER } });
+      const tracer = c.createTurnTracer({ config });
+      await tracer.attachments.ready(3000);
+      const state = tracer.attachments.status().state;
+      await tracer.shutdown();
+      console.log('RESULT ' + JSON.stringify({ setup: setup.code, approved: config.destinationApproved, enabled: config.enabled,
+        redirectedApproved: redirected.destinationApproved, redirectedIssues: redirected.issues, state,
+        status: c.agentAttachmentStatus(config).state }));
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  async function child(attachmentsEndpoint) {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'fi-att-home-'));
+    t.after(() => fs.rm(home, { recursive: true, force: true }));
+    const proc = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'], env: {
+      PATH: process.env.PATH, HOME: home, NODE_EXTRA_CA_CERTS: path.join(tls, 'cert.pem'),
+      APPROVED: approved.origin, OTHER: other.origin + '/',
+      FI_ATTACHMENTS_ENABLED: 'true', FI_ATTACHMENTS_ENDPOINT: attachmentsEndpoint } });
+    let out = '', err = '';
+    proc.stdout.on('data', d => { out += d; }); proc.stderr.on('data', d => { err += d; });
+    const [code] = await once(proc, 'exit');
+    assert.equal(code, 0, err);
+    const line = out.split('\n').find(l => l.startsWith('RESULT '));
+    assert.ok(line, out + err);
+    return JSON.parse(line.slice(7));
+  }
+  const attachmentPaths = seen => seen.filter(r => r.url.includes('attachment'));
+
+  // Unapproved origin: the same origin the OTLP route itself refuses (control) is refused here too.
+  const denied = await child(other.origin + '/');
+  assert.equal(denied.setup, 'CONFIGURED_NOT_REGISTERED');
+  assert.equal(denied.approved, true);
+  assert.equal(denied.redirectedApproved, false);
+  assert.ok(denied.redirectedIssues.includes('DESTINATION_NOT_APPROVED'));
+  assert.equal(denied.state, 'endpoint_unconfigured');
+  assert.equal(denied.status, 'endpoint_unconfigured');
+  assert.deepEqual(other.seen, []);
+  assert.deepEqual(attachmentPaths(approved.seen), []);
+
+  // Positive control: the approved origin does receive the bootstrap, with the saved credential.
+  const allowed = await child(approved.origin + '/');
+  assert.equal(allowed.status, 'scope_unverified');
+  const boot = attachmentPaths(approved.seen);
+  assert.ok(boot.length >= 1);
+  assert.ok(boot.every(r => r.apiKey === 'synthetic-saved-api' && r.secretKey === 'synthetic-saved-secret'));
+  assert.deepEqual(other.seen, []);
 });

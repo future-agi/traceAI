@@ -17,6 +17,7 @@
  * callbacks observe available steps even when the application only waits.
  */
 import { Context, Tracer, context as otelContext, diag } from "@opentelemetry/api";
+import type { TraceConfigOptions } from "@traceai/fi-core";
 import type { AttachmentManager } from "@traceai/fi-core/attachments";
 import { SpanNames } from "./attributes";
 import { deltaEvent, record, stepEvent } from "./events";
@@ -38,6 +39,8 @@ export interface TracingContext {
   policy: ContentPolicy;
   /** Provider-owned attachment manager; absent means no media capture. */
   attachments?: AttachmentManager;
+  /** Resolved instrumentation trace config, applied as a restriction to media capture. */
+  traceConfig?: TraceConfigOptions;
   /**
    * How long a run whose end was signalled without a `RunResult` (stream ended
    * before the status flipped, or the run finished before anyone streamed)
@@ -247,6 +250,7 @@ function traceAgentRun(
       tracer: ctx.tracer,
       policy: ctx.policy,
       attachments: ctx.attachments,
+      traceConfig: ctx.traceConfig,
       parentContext: otelContext.active(),
       agent: receiver ?? target,
       operation,

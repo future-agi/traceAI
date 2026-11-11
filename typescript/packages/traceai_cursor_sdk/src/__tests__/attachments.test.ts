@@ -12,7 +12,10 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwA
 const { provider, exporter } = memoryProvider();
 const cleanup: Array<() => unknown> = [];
 
-async function setup(options: { hideInputs?: boolean; packageDefault?: boolean; enabled?: boolean; manager?: false; bootstrapError?: boolean } = {}) {
+async function setup(options: {
+  hideInputs?: boolean; packageDefault?: boolean; enabled?: boolean; manager?: false; bootstrapError?: boolean;
+  traceConfig?: Record<string, boolean>;
+} = {}) {
   const broker = fake(options.bootstrapError ? {
     bootstrap: async () => { throw new AttachmentTransportError("credential_scope_unsupported"); },
   } : {});
@@ -35,7 +38,7 @@ async function setup(options: { hideInputs?: boolean; packageDefault?: boolean; 
   const instrumentation = new CursorSDKInstrumentation({
     tracerProvider: provider,
     // The package hides inputs by default; tests opt in unless checking that default.
-    traceConfig: options.packageDefault ? undefined : { hideInputs: options.hideInputs ?? false },
+    traceConfig: options.packageDefault ? undefined : { hideInputs: options.hideInputs ?? false, ...options.traceConfig },
     attachments: options.manager === false ? undefined : manager,
     runEndGraceMs: 30,
   });
@@ -89,6 +92,11 @@ describe("Cursor SDK inline image attachments", () => {
     ["attachments disabled", { enabled: false }],
     ["no manager passed", { manager: false as const }],
     ["unsupported credential scope", { bootstrapError: true }],
+    // Deny-wins: the instrumentation's own flags restrict a provider manager that has none of them.
+    ["instrumentation hideInputImages", { traceConfig: { hideInputImages: true } }],
+    ["instrumentation piiRedaction", { traceConfig: { piiRedaction: true } }],
+    ["instrumentation hideInputText", { traceConfig: { hideInputText: true } }],
+    ["instrumentation hideInputMessages", { traceConfig: { hideInputMessages: true } }],
   ])("%s: no image bytes read and no upload", async (_name, options) => {
     const { sdk, manager, uploads, broker } = await setup(options);
     let reads = 0;
@@ -98,6 +106,22 @@ describe("Cursor SDK inline image attachments", () => {
     expect(uploads).toHaveLength(0);
     expect(broker.calls.filter((c: string) => c !== "bootstrap")).toEqual([]);
   });
+
+  it.each(["FI_HIDE_INPUT_IMAGES", "FI_PII_REDACTION", "FI_HIDE_INPUT_TEXT", "FI_HIDE_INPUT_MESSAGES"])(
+    "%s=true in the environment denies prompt images", async (key) => {
+      const saved = process.env[key];
+      process.env[key] = "true";
+      try {
+        const { sdk, manager, uploads } = await setup();
+        let reads = 0;
+        await send(sdk, { text: "describe", images: [{ get data() { reads++; return PNG; }, mimeType: "image/png" }] });
+        await manager.flush();
+        expect(reads).toBe(0);
+        expect(uploads).toHaveLength(0);
+      } finally {
+        if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+      }
+    });
 
   it("malformed or oversized inline data fails closed without affecting the run", async () => {
     const { sdk, manager, uploads } = await setup();

@@ -230,7 +230,7 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
     const traceConfig = generateTraceConfig({ ...this.traceConfig, ...policy });
     policy.hideErrorDetails = traceConfig.hideErrorDetails;
     const tracer = new FITracer({ tracer: this.tracer, traceConfig });
-    return { tracer, policy, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry, attachments: this.attachments };
+    return { tracer, policy, traceConfig, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry, attachments: this.attachments };
   }
 }
 
