@@ -148,6 +148,20 @@ for (const provider of ['openai', 'anthropic']) {
       await assertNoOpenTickets(f.manager);
     } finally { await f.close(); }
   });
+  test(`${provider}: a nearly used owned-byte budget still admits small media at its exact size`, async () => {
+    const f = await fixture({ maxOwnedBytes: 300 * 1024 });
+    try {
+      const big = Buffer.alloc(200 * 1024, 7).toString('base64');
+      const one = data => provider === 'openai' ? { input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${data}` }] }] }
+        : { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }] };
+      // Same tick: the 200 KiB part still owns its bytes, so a cap-sized reservation would not fit.
+      const first = capture(f.manager, identity(), one(big)), second = capture(f.manager, identity(), one(PNG));
+      assert.equal(first.size, 1); assert.equal(second.size, 1);
+      await f.manager.flush();
+      assert.deepEqual(f.uploaded.map(b => b.length).sort((a, b) => a - b), [Buffer.from(PNG, 'base64').length, 200 * 1024]);
+      await assertNoOpenTickets(f.manager);
+    } finally { await f.close(); }
+  });
   test(`${provider}: unsampled identity and queued policy tightening cannot upload`, async () => {
     const f = await fixture(); try {
       capture(f.manager, { ...identity(), traceFlags: 0 }, input()); assert.equal(f.manager.status().ownedBytes, 0);

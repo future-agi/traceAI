@@ -121,8 +121,9 @@ export function captureOpenAIAttachments(manager: AttachmentManager | undefined,
           ...(options.direction === "input" && mimeType.startsWith("image/") && options.traceConfig?.hideInputImages ? { captureContent: false } : {}),
         } };
         let ticket = manager.preflight(correlation, { ...request, maxBytes: openAIAttachmentCapabilities.maxInlineBytes });
-        // too_large is evaluated after every privacy, correlation and sampling step, so sizing the source exactly is safe here.
-        if (ticket.reason === "too_large") {
+        // too_large (negotiated limit below the cap) and queue_full (owned budget nearly used) are evaluated after every
+        // privacy, correlation and sampling step, so sizing the source exactly and retrying once is safe here.
+        if (ticket.reason === "too_large" || ticket.reason === "queue_full") {
           const bound = parsed()?.bound ?? 0;
           if (bound > 0) ticket = manager.preflight(correlation, { ...request, maxBytes: bound });
         }

@@ -106,8 +106,9 @@ export function captureAnthropicAttachments(manager: AttachmentManager | undefin
         let data: unknown, dataRead = false;
         const read = () => { if (!dataRead) { dataRead = true; data = source.data; } return data; };
         let ticket = manager.preflight(correlation, { ...request, maxBytes: anthropicAttachmentCapabilities.maxInlineBytes });
-        // too_large is evaluated after every privacy, correlation and sampling step, so sizing the source exactly is safe here.
-        if (ticket.reason === "too_large") {
+        // too_large (negotiated limit below the cap) and queue_full (owned budget nearly used) are evaluated after every
+        // privacy, correlation and sampling step, so sizing the source exactly and retrying once is safe here.
+        if (ticket.reason === "too_large" || ticket.reason === "queue_full") {
           const exact = bound(read());
           if (exact > 0) ticket = manager.preflight(correlation, { ...request, maxBytes: exact });
         }
