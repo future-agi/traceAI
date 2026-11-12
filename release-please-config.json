@@ -1337,6 +1337,11 @@
       "extra-files": [
         "src/instrumentation.ts"
       ]
+    },
+    "typescript/packages/traceai_apollo_graphql": {
+      "release-type": "node",
+      "component": "npm-traceai-apollo-graphql",
+      "package-name": "@traceai/apollo-graphql"
     }
   }
 }
