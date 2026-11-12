@@ -209,6 +209,11 @@ export interface AttachmentPreflightOptions {
   capture?: AttachmentCapturePolicy;
   ttlMs?: number;
 }
+/** `manager.deferredCorrelation(options)`: how long pre-bind captures may wait for their span. */
+export interface AttachmentDeferredCorrelationOptions {
+  /** Default 60 000 ms, max 300 000 ms. Enforced lazily at manager entry points and at bind; no timer is armed. */
+  bindTimeoutMs?: number;
+}
 export interface AttachmentFields {
   messageIndex?: number; partIndex?: number; role?: AttachmentRole; channel?: number;
   conversationId?: string; turnId?: string; toolCallId?: string;

@@ -61,6 +61,52 @@ export class AttachmentCorrelation {
   }
   references(): readonly AttachmentReference[] { return this.refs.map(ref => Object.freeze({ ...ref })); }
 }
+/** @internal The manager side of a deferred target: told once when the target binds or is cancelled. */
+export interface AttachmentDeferredHost {
+  deferredBound(target: AttachmentDeferredCorrelation, spanOrContext: AttachmentSpan): void;
+  deferredCancelled(target: AttachmentDeferredCorrelation): void;
+  /** True once the target's bind deadline has passed on the host's clock. Asked BEFORE the identity is bound. */
+  deferredExpired?(target: AttachmentDeferredCorrelation): boolean;
+}
+/**
+ * A capture target whose span does not exist yet (late-bound wire spans). Captures admitted against it keep bounded
+ * bytes until `bind(span)`, where policy is evaluated again; on timeout, `cancel()` or manager shutdown they end
+ * `correlation_unavailable` and upload nothing. Create it with `manager.deferredCorrelation()`.
+ */
+export class AttachmentDeferredCorrelation extends AttachmentCorrelation {
+  /** @internal */ canonical?: AttachmentCorrelation;
+  /** @internal */ cancelled = false;
+  /** @internal */
+  constructor(/** @internal */ readonly host: AttachmentDeferredHost | undefined, /** @internal */ readonly expiresAt: number) { super(); }
+  /** True while the target is unbound and still accepts captures (no timeout check; the manager checks that). */
+  get pending(): boolean { return !this.cancelled && !this.snapshot(); }
+  /**
+   * Bind the emitted span. Pending captures are re-evaluated now and upload against it, or end with a reason. A bind
+   * after `bindTimeoutMs` binds nothing: the target is cancelled (captures end `correlation_unavailable`) and this
+   * returns false. Never throws.
+   */
+  bind(spanOrContext: AttachmentSpan): boolean {
+    if (this.cancelled) return false;
+    // The deadline is enforced BEFORE the identity exists, so no ticket or open stream can outlive it through a late bind.
+    let expired = false;
+    try { expired = !this.snapshot() && this.host?.deferredExpired?.(this) === true; } catch { expired = true; }
+    if (expired) { this.cancel(); return false; }
+    const bound = super.bind(spanOrContext);
+    if (bound) { try { this.host?.deferredBound(this, spanOrContext); } catch { /* host failures never reach the caller */ } }
+    return bound;
+  }
+  /** No span will come: pending captures end `correlation_unavailable`, and later captures are refused. Never throws. */
+  cancel(): void {
+    if (this.cancelled || this.snapshot()) return;
+    this.cancelled = true;
+    try { this.host?.deferredCancelled(this); } catch { /* bounded */ }
+  }
+  prepare(sessionId: string, nonce: string): void { if (this.canonical) this.canonical.prepare(sessionId, nonce); else super.prepare(sessionId, nonce); }
+  project(reference: AttachmentReference, sessionId: string, nonce: string): void {
+    if (this.canonical) this.canonical.project(reference, sessionId, nonce); else super.project(reference, sessionId, nonce);
+  }
+  references(): readonly AttachmentReference[] { return this.canonical ? this.canonical.references() : super.references(); }
+}
 export function attachmentMessageUri(reference: AttachmentReference): Readonly<{ type: "uri"; modality: AttachmentReference["modality"]; mime_type: string; uri: string }> {
   return Object.freeze({ type: "uri", modality: reference.modality, mime_type: reference.mime_type, uri: `fi-attachment:${reference.occurrence_id}` });
 }
