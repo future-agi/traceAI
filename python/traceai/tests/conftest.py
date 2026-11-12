@@ -9,3 +9,4 @@ def isolated_auto_state(monkeypatch):
     monkeypatch.setattr(traceai, "_init_options", None)
     monkeypatch.setattr(traceai, "_instrumented", set())
     monkeypatch.setattr(traceai, "_adapter_status", {})
+    monkeypatch.setattr(traceai, "_attachment_manager_borrowed", False)

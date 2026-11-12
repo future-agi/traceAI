@@ -39,6 +39,56 @@ The helper does not install instrumentors or supply provider credentials. See
 [OpenAI setup](https://docs.futureagi.com/docs/integrations/traceai/openai) for a
 provider-specific example.
 
+## Attachments (images, files, audio)
+
+Attachments are **off** by default; upgrading captures no new media. They need a
+`fi-instrumentation-otel` release that includes `fi_instrumentation.attachments`.
+
+| Setting | Behavior |
+|---|---|
+| `attachment_config=AttachmentConfig(enabled=True)` or `FI_ATTACHMENTS_ENABLED=true` | The provider creates one attachment manager |
+| `FI_ATTACHMENTS_ENABLED=false` | Kill switch: wins over code and denies every capture, even for a manager that is already running |
+| `attachment_manager=` | Borrow your own manager instead. `traceai` never shuts it down and only adds the hide and PII flags of `trace_config` to it |
+| `trace_config=TraceConfig(...)` | Hide flags and PII redaction also turn media capture off; nothing can relax them |
+
+`traceai` passes the same manager to every instrumentor it enables (as `attachments=`),
+and `traceai.get_attachment_manager()` returns it. Use `with_attachment_capture_policy(policy)`
+to add a `CapturePolicy` restriction for some calls, and `with_attachment_ownership()` to
+mark calls whose media your own code captures, so instrumentors do not upload it again.
+Both return an OpenTelemetry context to attach around those calls.
+
+MCP and agent tool media (screenshots, images, audio, files) uses the same manager:
+
+| Integration | How to enable it |
+|---|---|
+| `openai_agents`, `claude_agent_sdk`, `smolagents`, `firecrawl` | `auto_instrument=[...]` with the name |
+| `mcp` | `session = traceai.wrap_mcp_client(session)` on your `mcp.ClientSession` (the `mcp` instrumentor only propagates context) |
+| `mcp_use` | `MCPAgent(..., callbacks=[traceai.mcp_use_callback()])` (mcp-use has a callback, not an instrumentor) |
+
+Both helpers use the provider and hide flags from `traceai.init`, and pass the shared
+manager only while capture is on.
+
+`traceai.report()` shows the attachment state and, per integration, `media`:
+`provider_adapter` when the installed instrumentor version captures media, with its
+`media_operations`; `session_binding` for voice integrations that capture only through an
+explicit `bind_*` call; otherwise `unqualified`. It contains no endpoint or credential and
+is not a playback claim. A row can be `provider_adapter` for:
+
+| Kind | Packages |
+|---|---|
+| Providers | `openai`, `anthropic`, `groq`, `google_genai`, `vertexai`, `bedrock`, `litellm`, `fireworks`, `xai`, `mistralai`, `openrouter`, `portkey`, `ollama`, `vllm`, `minimax` |
+| Frameworks | `langchain`, `llamaindex`, `agno`, `pydantic_ai` |
+| MCP and agents | the six packages above |
+
+An installed version without the adapter reports `unqualified`. `together`, `deepseek` and
+`cerebras` capture no media.
+
+Agno reads `pii_redaction` and `hide_error_details` only from `FI_PII_REDACTION` and
+`FI_HIDE_ERROR_DETAILS`. When `trace_config` sets either one in code and the environment does
+not, `traceai` still traces Agno but captures no Agno media, and its status is
+`config_unsupported`. Agno span text then does not follow that flag; set the environment
+variable to apply it.
+
 ## License
 
 Apache-2.0.
