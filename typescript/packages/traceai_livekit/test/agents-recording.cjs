@@ -283,3 +283,20 @@ test('invalid options throw synchronously and never touch the session', () => {
   assert.throws(() => bindLiveKitSessionRecording({}, {}, { manager: {}, agents: sdk.agents, ownedRecordingFiles: true, finalizationTimeoutMs: 30001 }), RangeError);
   assert.throws(() => bindLiveKitSessionRecording({}, {}, { manager: {}, agents: sdk.agents, ownedRecordingFiles: true, capture: { newRecording: true } }), TypeError);
 });
+
+test('a recording whose owner is not the worker uid is rejected (any uid; worker uid reported differently)', async t => {
+  // Runs without root too: the file keeps its real owner and the worker reports another uid.
+  const a = await attachmentFixture(); t.after(() => a.close());
+  const s = await startedSession(sdk, tracer); t.after(() => s.cleanup());
+  const binding = bindLiveKitSessionRecording(s.session, s.ctx, { manager: a.manager, agents: sdk.agents, ownedRecordingFiles: true });
+  assert.equal(binding.status, 'session_bound');
+  await s.recorder.close(); s.span.end();
+  const real = process.getuid;
+  process.getuid = () => real.call(process) + 1;
+  let status;
+  try { status = await binding.finalize(); } finally { process.getuid = real; }
+  assert.equal(status, 'source_unavailable');
+  await a.manager.flush(); assert.equal(a.requests.length, 0); assert.equal(a.uploaded.length, 0);
+  assert.ok(fs.existsSync(s.file), 'the binding never deletes the recording');
+  await s.ctx._onSessionEnd();
+});
