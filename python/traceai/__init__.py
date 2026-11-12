@@ -389,7 +389,8 @@ def _agno_kwargs(provider) -> Dict[str, Any]:
 
     It takes OpenInference's TraceConfig (not fi's) and no ``attachment_*`` alias. Auto's
     hide flags are carried over, and only when one is set, so an unrestricted setup keeps
-    Agno's own default and environment policy. ``attachments`` is passed only while capturing.
+    Agno's own default and environment policy. ``attachments`` is passed only while capturing
+    and only to a version that has the media adapter.
     """
     kwargs: Dict[str, Any] = {"tracer_provider": provider}
     trace_config = getattr(provider, "trace_config", None)
@@ -402,7 +403,9 @@ def _agno_kwargs(provider) -> Dict[str, Any]:
         kwargs["config"] = OpenInferenceTraceConfig(**{name: True for name in hidden if name in names})
     if _ATTACHMENTS_SUPPORTED:
         manager = get_attachment_manager()
-        if _capturing(manager):
+        # Only a traceai-agno version with the media adapter (it declares the descriptor) accepts
+        # ``attachments``; an older one keeps tracing with the OFF arguments.
+        if _capturing(manager) and _media_support("traceai_agno")["media"] == "provider_adapter":
             kwargs["attachments"] = manager
     return kwargs
 

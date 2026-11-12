@@ -624,6 +624,7 @@ def _agno_init(monkeypatch, manager, config):
 
 def test_agno_gets_its_own_keyword_arguments_on_and_off(monkeypatch):
     monkeypatch.delenv("FI_ATTACHMENTS_ENABLED", raising=False)
+    monkeypatch.setattr(traceai, "_media_support", lambda module: {"media": "provider_adapter"})
     manager = _enabled_like_manager()
     provider, call = _agno_init(monkeypatch, manager, TraceConfig())
     # No fi TraceConfig and no attachment_* alias: Agno's wrapper accepts neither.
@@ -665,3 +666,12 @@ def test_a_dependency_conflict_is_never_reported_registered(monkeypatch):
     assert "traceai_pydantic_ai" not in traceai._instrumented
     rows = {row["name"]: row for row in traceai.report()["integrations"]}
     assert rows["pydantic_ai"]["status"] == "dependency_unavailable"
+
+
+def test_agno_without_the_media_adapter_keeps_the_off_arguments(monkeypatch):
+    """A traceai-agno release before the adapter has no ``attachments`` parameter at all."""
+    monkeypatch.delenv("FI_ATTACHMENTS_ENABLED", raising=False)
+    monkeypatch.setattr(traceai, "_media_support", lambda module: {"media": "unqualified"})
+    provider, call = _agno_init(monkeypatch, _enabled_like_manager(), TraceConfig())
+    assert call.kwargs == {"tracer_provider": provider}
+    assert traceai.attachment_status()["adapters"]["agno"] == "registered"
