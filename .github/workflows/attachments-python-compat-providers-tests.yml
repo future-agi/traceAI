@@ -81,12 +81,12 @@ jobs:
           - {package: together, tier: latest, python: '3.12', sdks: 'together==3.1.1', tests: compat, min: 3}
           - {package: fireworks, tier: floor, python: '3.10', sdks: 'openai==1.69.0 httpx<0.28', tests: compat, min: 3}
           - {package: fireworks, tier: latest, python: '3.12', sdks: 'openai==3.49.0', tests: compat, min: 3}
-          - {package: xai, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 12}
-          - {package: xai, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 12}
+          - {package: xai, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 15}
+          - {package: xai, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 15}
           - {package: vllm, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 4}
           - {package: vllm, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 4}
-          - {package: minimax, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 13}
-          - {package: minimax, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 13}
+          - {package: minimax, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 16}
+          - {package: minimax, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 16}
           - {package: deepseek, tier: floor, python: '3.10', sdks: 'openai==1.69.0 httpx<0.28', tests: compat, min: 3}
           - {package: deepseek, tier: latest, python: '3.12', sdks: 'openai==3.49.0', tests: compat, min: 3}
           - {package: cerebras, tier: floor, python: '3.10', sdks: 'cerebras-cloud-sdk==1.0.0 httpx<0.28', tests: compat, min: 3}

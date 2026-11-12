@@ -77,6 +77,7 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
         # The provider-owned shared manager (register(...).attachment_manager). Auto passes
         # it as attachment_manager; nothing is captured unless an enabled manager is supplied.
         attachments = _attachment_manager(kwargs)
+        self._attachments = attachments
         openai = import_module(_MODULE)
         self._original_request = openai.OpenAI.request
         self._original_async_request = openai.AsyncOpenAI.request
@@ -110,7 +111,16 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
         else:
             self._original_protect = None
 
+    def captures_attachments(self) -> bool:
+        """True while this instrumentor is enabled with an active shared attachment manager.
+
+        Bindings that ride on the OpenAI SDK (xAI, MiniMax) hand a call over to this
+        instrumentor only then; otherwise they keep tracing and capturing it themselves.
+        """
+        return bool(self.is_instrumented_by_opentelemetry and getattr(self, "_attachments", None) is not None)
+
     def _uninstrument(self, **kwargs: Any) -> None:
+        self._attachments = None
         openai = import_module(_MODULE)
         openai.OpenAI.request = self._original_request
         openai.AsyncOpenAI.request = self._original_async_request

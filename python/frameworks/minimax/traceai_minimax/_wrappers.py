@@ -27,16 +27,20 @@ logger.addHandler(logging.NullHandler())
 _CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 
 
-def _shared_instrumentor_enabled() -> bool:
-    """True while traceai_openai's OpenAIInstrumentor is enabled.
+def _shared_instrumentor_captures() -> bool:
+    """True while traceai_openai's OpenAIInstrumentor is enabled WITH an active attachment manager.
 
-    With attachments on, the request-level OpenAI instrumentor then owns the call (span
-    and media), whatever the setup order. Do not import the optional package; inspect
-    live state on each call.
+    The request-level OpenAI instrumentor then owns the call (span and media), whatever
+    the setup order. Enabled without a manager, or an older traceai_openai without the
+    accessor, means it would capture nothing, so this binding keeps the call. Do not
+    import the optional package; inspect live state on each call.
     """
     module = sys.modules.get("traceai_openai")
     instrumentor = getattr(module, "OpenAIInstrumentor", None)
-    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
+    if instrumentor is None:
+        return False
+    captures = getattr(instrumentor(), "captures_attachments", None)
+    return bool(callable(captures) and captures())
 
 
 class _WithTracer(ABC):
@@ -64,11 +68,13 @@ class _WithTracer(ABC):
             logger.debug("Attachment capture unavailable", exc_info=True)
 
     def _defers(self) -> bool:
-        """Hand the whole call to an enabled traceai_openai, only while attachments are on.
+        """Hand the whole call to traceai_openai only while both sides capture attachments.
 
-        With attachments off this binding traces exactly as before (its own span too).
+        With attachments off here this binding traces exactly as before (its own span too).
+        With traceai_openai enabled but without a manager, this binding keeps the call and
+        captures its media itself.
         """
-        return self._attachments is not None and _shared_instrumentor_enabled()
+        return self._attachments is not None and _shared_instrumentor_captures()
 
     @contextmanager
     def _deferred(self) -> Iterator[None]:

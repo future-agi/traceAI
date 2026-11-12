@@ -100,8 +100,7 @@ def test_openai_sdk_routes_capture_images(f01, media_provider, instrumented, mon
         from traceai_xai import XAIInstrumentor as Instrumentor
         from traceai_xai import _wrappers
         monkeypatch.setattr(_wrappers, "_is_xai_client", lambda instance: True)
-        if hasattr(_wrappers, "_shared_instrumentor_enabled"):
-            monkeypatch.setattr(_wrappers, "_shared_instrumentor_enabled", lambda: False)
+        monkeypatch.setattr(_wrappers, "_shared_instrumentor_captures", lambda: False)
 
     manager = f01.manager()
     exporter = instrumented(Instrumentor(), manager)
@@ -190,6 +189,57 @@ def test_binding_without_attachments_keeps_its_span(media_provider, instrumented
     asyncio.run(async_client.chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}]))
     names = sorted(span.name for span in exporter.get_finished_spans())
     assert names == sorted([span_name, "ChatCompletion"] * 2), names
+
+
+@pytest.mark.parametrize("order", ["openai_first", "binding_first"])
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_binding_keeps_call_when_openai_has_no_manager(f01, media_provider, instrumented, monkeypatch, package,
+                                                        order):
+    """Mixed setup: binding WITH a manager, traceai_openai enabled WITHOUT one. The binding keeps the call."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from traceai_openai import OpenAIInstrumentor
+
+    manager = f01.manager()
+    binding, span_name = _compat_binding(package, monkeypatch)
+    pair = [(OpenAIInstrumentor(), None), (binding, manager)]
+    if order == "binding_first":
+        pair.reverse()
+    for instrumentor, attachments in pair:
+        exporter = instrumented(instrumentor, attachments)
+    assert not OpenAIInstrumentor().captures_attachments()
+    client, async_client = _openai_clients(openai, media_provider)
+    client.chat.completions.create(model="m", messages=image_messages())
+    asyncio.run(async_client.chat.completions.create(model="m", messages=image_messages()))
+    flush(manager)
+    assert f01.payloads == [IMAGE, IMAGE]
+    assert media_owners(exporter) == [(span_name, "model_input")] * 2
+    names = sorted(span.name for span in exporter.get_finished_spans())
+    assert names == sorted([span_name, "ChatCompletion"] * 2), names
+    manager.shutdown(5)
+
+
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_older_openai_without_accessor_never_takes_the_call(monkeypatch, package):
+    """An enabled traceai_openai that predates captures_attachments() cannot capture: do not defer to it."""
+    import sys
+    import types
+
+    pytest.importorskip("traceai_" + package)
+    if package == "xai":
+        from traceai_xai import _wrappers
+    else:
+        from traceai_minimax import _wrappers
+
+    class LegacyOpenAIInstrumentor:
+        is_instrumented_by_opentelemetry = True
+
+    monkeypatch.setitem(sys.modules, "traceai_openai",
+                        types.SimpleNamespace(OpenAIInstrumentor=LegacyOpenAIInstrumentor))
+    assert _wrappers._shared_instrumentor_captures() is False
+    monkeypatch.delitem(sys.modules, "traceai_openai")
+    assert _wrappers._shared_instrumentor_captures() is False
 
 
 @pytest.mark.parametrize("flag", [None, "hide_input_images", "hide_inputs", "pii_redaction"])
