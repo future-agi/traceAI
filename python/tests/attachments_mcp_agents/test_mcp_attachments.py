@@ -223,3 +223,22 @@ def test_capture_mcp_result_is_preflight_first_and_never_raises(f01, spans):
     assert traceai_mcp.capture_mcp_result(manager, span, object()) == {}
     assert traceai_mcp.capture_mcp_result(None, span, {"content": []}) == {}
     manager.shutdown(5)
+
+
+def test_error_results_follow_hide_error_details(f01, spans):
+    """An isError result's media is error detail: hide_error_details denies it, a success result still uploads."""
+    manager = f01.manager()
+    provider, _ = spans
+    shot, ok = server.png(31), server.png(32)
+
+    def result(data, error):
+        return {"isError": error, "content": [{"type": "image", "data": server.b64(data), "mimeType": "image/png"}]}
+
+    config = TraceConfig(hide_error_details=True)
+    with provider.get_tracer("t").start_as_current_span("failed") as span:
+        assert traceai_mcp.capture_mcp_result(manager, span, result(shot, True), trace_config=config) == {}
+    with provider.get_tracer("t").start_as_current_span("succeeded") as span:
+        assert len(traceai_mcp.capture_mcp_result(manager, span, result(ok, False), trace_config=config)) == 1
+    flush(manager)
+    assert f01.payloads == [ok]
+    manager.shutdown(5)
