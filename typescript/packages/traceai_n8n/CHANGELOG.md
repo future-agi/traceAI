@@ -3,6 +3,7 @@
 ## [0.1.1] - pending release
 
 ### Fixed
+
 - The README shows how to install the package from npm instead of building it from source.
 
 ## [0.1.0] - 2026-11-09
