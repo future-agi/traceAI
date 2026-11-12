@@ -1,6 +1,6 @@
 
 
-## [Unreleased]
+## [0.2.2] - pending release
 
 ### Changed
 - traceai-instructor now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.

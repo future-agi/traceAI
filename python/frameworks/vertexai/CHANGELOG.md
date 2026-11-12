@@ -1,9 +1,12 @@
 
 
-## [Unreleased]
+## [0.1.12] - pending release
 
 ### Changed
 - traceai-vertexai now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- Tracing no longer fails on blocked responses that have no candidates or parts, and tool-call-only and image-only responses record their response data instead of empty text.
 
 ## [0.1.11] - 2026-10-31
 ### Fixed

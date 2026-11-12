@@ -1,3 +1,11 @@
+## [1.3.2] - pending release
+
+### Fixed
+- using_session, using_user and the other context helpers keep the session and user on spans inside async functions and async generators when used as decorators.
+- Generator functions traced with tracer.chain, tracer.agent or tracer.tool, sync or async, keep their span open until the generator finishes or is closed, so spans created inside them nest under it and the span's output defaults to the last yielded value.
+- Eval tags for custom evaluations with no model set no longer make register fail.
+- The get_session_attributes and get_context_attributes helpers set session.id alongside gen_ai.conversation.id.
+
 ## [1.3.1] - 2026-11-10
 ### Fixed
 - PII redaction (`pii_redaction` / `FI_PII_REDACTION`) no longer corrupts correlation identifiers (#195):
