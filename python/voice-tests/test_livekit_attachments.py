@@ -447,12 +447,17 @@ async def test_child_session_span_is_never_marked_root(manager, tmp_path):
     from opentelemetry import trace
     session, job, _, span, provider, _ = owned_session(tmp_path)
     span.end()
-    parent = provider.get_tracer("synthetic").start_span("job_entrypoint")
+    # The real worker shape: LiveKit's own root carries lk.job_id; the session is its child.
+    parent = provider.get_tracer("synthetic").start_span("job_entrypoint", attributes={"lk.job_id": "synthetic-job"})
     child = provider.get_tracer("synthetic").start_span("agent_session", context=trace.set_span_in_context(parent))
     session._session_span = child
     binding = bind_session(session, job, manager=manager, owned_recording_files=True)
     assert binding.status == "session_bound" and not binding.root_marked
-    assert "fi.span.kind" not in child.attributes
+    # No fake root: the SDK marks neither span. Ingest (I04) lists the call
+    # from the untyped job_entrypoint root that carries lk.job_id.
+    for span in (child, parent):
+        assert "fi.span.kind" not in span.attributes and "gen_ai.span.kind" not in span.attributes
+    assert dict(parent.attributes) == {"lk.job_id": "synthetic-job"}
     binding.close()
     child.end()
     parent.end()

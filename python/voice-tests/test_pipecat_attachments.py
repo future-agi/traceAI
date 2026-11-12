@@ -8,8 +8,10 @@ real SFU call or a product-playback claim (Q02).
 
 import asyncio
 import io
+import json
 import math
 import struct
+import threading
 import wave
 from dataclasses import replace
 
@@ -23,13 +25,16 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from conftest import TransportDouble, make_manager
 from fi_instrumentation.attachments import AttachmentConfig, AttachmentManager, CorrelationHandle
 from fi_instrumentation.attachments._disabled import DisabledAttachmentManager
-from pipecat.frames.frames import EndFrame, InputAudioRawFrame, OutputAudioRawFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame, BotStoppedSpeakingFrame, EndFrame, InputAudioRawFrame, OutputAudioRawFrame,
+    UserStartedSpeakingFrame, UserStoppedSpeakingFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor, TurnAudioData
 from pipecat.workers.runner import WorkerRunner
 from traceai_pipecat import bind_audio_processor, create_audio_capture
-from traceai_pipecat.attachments import AudioSessionContext, mark_conversation_root
+from traceai_pipecat.attachments import AudioSessionContext, TurnAudioCaps, mark_conversation_root
 
 # Pipecat's TurnTraceObserver uses the GLOBAL tracer provider.
 EXPORTER = InMemorySpanExporter()
@@ -499,3 +504,329 @@ def test_no_private_manager_internals_in_voice_adapters():
         source = inspect.getsource(module)
         for private in ("manager._session", "manager.policy", "._fd", "manager._", "_manager._"):
             assert private not in source, (module.__name__, private)
+
+
+# ------------------------------------------------------------- short calls
+@pytest.mark.asyncio
+async def test_short_call_binds_to_snapshot_after_worker_ended_conversation(manager, transport):
+    """Pipecat runs on_audio_data as a task: a call shorter than buffer_size
+    delivers its only chunk on stop, which can run after the worker's cleanup
+    has ended and cleared the conversation span."""
+    processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=128 * 1024)
+    worker = await run_pipeline(processor, None)
+    binding = bind_audio_processor(processor, AudioSessionContext.from_pipeline(worker), manager=manager)
+    observer = worker.turn_trace_observer
+    observer.start_conversation_tracing("conv-short")
+    await dispatch(processor, "on_recording_started")
+    live_id = format(observer._conversation_span.get_span_context().span_id, "016x")
+    observer.end_conversation_tracing()
+    assert observer._conversation_span is None
+    await dispatch(processor, "on_audio_data", tone(440, 300), RATE, 1)
+    await dispatch(processor, "on_recording_stopped")
+    result = await binding.finish(10)
+    assert result is not None and result.state == "published", (binding.status, result)
+    uploads = [r for r in transport.requests if "recording_id" in r]
+    assert uploads and all(r["association"]["parent"]["span_id"] == live_id for r in uploads)
+    assert all(r["conversation_id"] == "conv-short" for r in uploads)
+    root = conversation_span()
+    assert format(root.context.span_id, "016x") == live_id
+    # Marked while it was still live, because the audio came after it ended.
+    assert binding.root_marked and root.attributes["fi.span.kind"] == "CONVERSATION"
+    assert pcm(transport.payloads[0])[2] == tone(440, 300)
+
+
+@pytest.mark.asyncio
+async def test_no_snapshot_and_no_span_stays_correlation_unavailable(manager, transport):
+    processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=16000)
+    worker = await run_pipeline(processor, None)
+    binding = bind_audio_processor(processor, AudioSessionContext.from_pipeline(worker), manager=manager)
+    ambient = TRACER.start_span("ambient")
+    with trace.use_span(ambient, end_on_exit=True):
+        await dispatch(processor, "on_audio_data", tone(440, 300), RATE, 1)
+    assert binding.status == "correlation_unavailable"
+    assert not transport.requests and manager.owned_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_real_pipeline_short_call_under_buffer_size_is_recorded(manager, transport):
+    processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=128 * 1024,
+                                     auto_start_recording=True)
+    worker = await run_pipeline(processor, None)
+    binding = bind_audio_processor(processor, AudioSessionContext.from_pipeline(worker), manager=manager)
+    await drive(worker, call_frames(turns=1, ms=200))
+    result = await binding.finish(10)
+    assert result is not None and result.state == "published", (binding.status, result)
+    root = conversation_span()
+    parent = transport.requests[0]["association"]["parent"]
+    assert parent["span_id"] == format(root.context.span_id, "016x")
+    assert binding.root_marked and root.attributes["fi.span.kind"] == "CONVERSATION"
+
+
+# ------------------------------------------------------------ per-turn audio
+CAPS = TurnAudioCaps(max_turns=100, max_bytes=8 * 1024 * 1024, max_duration_ms=600000)
+
+
+def turn_frames(turns=3, ms=200):
+    frames = []
+    for i in range(turns):
+        frames.append(UserStartedSpeakingFrame())
+        frames += [InputAudioRawFrame(audio=tone(300 + i, 20), sample_rate=RATE, num_channels=1)
+                   for _ in range(ms // 20)]
+        frames.append(UserStoppedSpeakingFrame())
+        frames.append(BotStartedSpeakingFrame())
+        frames += [OutputAudioRawFrame(audio=tone(900 + i, 20), sample_rate=RATE, num_channels=1)
+                   for _ in range(ms // 20)]
+        frames.append(BotStoppedSpeakingFrame())
+    return frames
+
+
+def pair_uploads(transport):
+    """Record (UploadRequest, payload) per upload, paired on the worker thread that ran both.
+
+    The core runs two upload workers, so the double's flat request and payload
+    lists can interleave; one job's initialize and content PUT share a thread.
+    """
+    pairs, local = [], threading.local()
+    initialize = transport.initialize
+
+    def paired_initialize(session, body, **kwargs):
+        upload = initialize(session, body, **kwargs)
+        local.request = json.loads(body)
+        return upload
+
+    class Payloads(list):
+        def append(self, data):
+            super().append(data)
+            pairs.append((getattr(local, "request", None), data))
+
+    transport.initialize = paired_initialize
+    transport.payloads = Payloads(transport.payloads)
+    return pairs
+
+
+def turn_pairs(pairs):
+    return [(r, p) for r, p in pairs if r is not None and r.get("purpose") == "turn_recording"]
+
+
+@pytest.mark.asyncio
+async def test_turn_audio_is_off_by_default_and_needs_explicit_caps(manager):
+    span, context = explicit_context()
+    turns = AudioBufferProcessor(sample_rate=RATE, buffer_size=16000, enable_turn_audio=True)
+    before = handler_counts(turns)
+    assert bind_audio_processor(turns, context, manager=manager).status == "unbounded_source"
+    assert handler_counts(turns) == before
+    plain = AudioBufferProcessor(sample_rate=RATE, buffer_size=16000)
+    with pytest.raises(ValueError, match="enable_turn_audio"):
+        bind_audio_processor(plain, context, manager=manager, turn_audio=CAPS)
+    with pytest.raises(ValueError):
+        bind_audio_processor(turns, context, manager=manager, turn_audio={"max_turns": 1})
+    for bad in ((0, 1, 1), (1, 0, 1), (1, 1, 0), (1001, 1, 1), (1, 64 * 1024 * 1024 + 1, 1),
+                (1, 1, 2 * 60 * 60 * 1000 + 1), (1.0, 1, 1), (True, 1, 1)):
+        with pytest.raises(ValueError):
+            TurnAudioCaps(*bad)
+    binding = bind_audio_processor(plain, context, manager=manager)
+    assert binding.turn_status == "off" and "on_user_turn_audio" not in [e for e, _ in binding._handlers]
+    binding.close()
+    span.end()
+
+
+@pytest.mark.asyncio
+async def test_real_pipeline_uploads_each_turn_bound_to_its_turn_span(manager, transport):
+    processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=16000,
+                                     auto_start_recording=True, enable_turn_audio=True)
+    emitted = []
+    processor.add_event_handler("on_user_turn_audio", lambda _p, d: emitted.append(("input", d.turn_number, d.audio)))
+    processor.add_event_handler("on_bot_turn_audio", lambda _p, d: emitted.append(("output", d.turn_number, d.audio)))
+    worker = await run_pipeline(processor, None)
+    binding = bind_audio_processor(processor, AudioSessionContext.from_pipeline(worker), manager=manager,
+                                   turn_audio=CAPS)
+    assert binding.turn_status == "session_bound"
+    pairs = pair_uploads(transport)
+    await drive(worker, turn_frames(turns=3))
+    result = await binding.finish(10)
+    assert result is not None and result.state == "published"
+    assert emitted, "Pipecat emitted no turn audio"
+    turn_spans = {s.attributes["turn.number"]: s for s in EXPORTER.get_finished_spans() if s.name == "turn"}
+    uploads = turn_pairs(pairs)
+    assert len(uploads) == len(emitted) == len(binding.turn_handles)
+    got = {}
+    for request, payload in uploads:
+        number = int(request["turn_id"])
+        assert request["association"]["parent"]["span_id"] == format(turn_spans[number].context.span_id, "016x")
+        assert request["conversation_id"] == "conv-synthetic" and request["mime_type"] == "audio/wav"
+        nch, rate, frames = pcm(payload)
+        assert (nch, rate) == (1, RATE)
+        got[(request["direction"], number)] = frames
+    assert got == {(direction, number): audio for direction, number, audio in emitted}
+    # Queued synthetic frames: Bot/User*SpeakingFrame are system frames and can
+    # overtake queued audio, so which turns Pipecat emits here depends on its
+    # scheduling. Every emitted turn must upload, byte-identical, on its own
+    # turn span; the bot side is covered by the dispatch tests below.
+    assert all(direction in ("input", "output") for direction, _ in got)
+    assert all(h.result(0).status != "unfinished" for _, _, h in binding.turn_handles)
+    # The whole-call recording is unchanged and still binds to the conversation.
+    root = conversation_span()
+    recording = [r for r in transport.requests if "recording_id" in r]
+    assert recording and recording[0]["association"]["parent"]["span_id"] == format(root.context.span_id, "016x")
+    assert manager.owned_bytes == 0
+
+
+async def turn_binding(manager, caps=CAPS, *, context=None, layout="auto"):
+    processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=16000, enable_turn_audio=True)
+    worker = await run_pipeline(processor, None)
+    observer = worker.turn_trace_observer
+    observer.start_conversation_tracing("conv-turns")
+    binding = bind_audio_processor(processor, context or AudioSessionContext.from_pipeline(worker),
+                                   manager=manager, turn_audio=caps, layout=layout)
+    return processor, observer, binding
+
+
+async def run_turn(processor, observer, number, user_ms=500, bot_ms=500):
+    await observer._turn_tracker._call_event_handler("on_turn_started", number)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await observer._turn_tracker._call_event_handler("on_turn_ended", number, 1.0, False)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    if user_ms:
+        await dispatch(processor, "on_user_turn_audio", TurnAudioData(number, tone(300, user_ms), RATE, 1))
+    if bot_ms:
+        await dispatch(processor, "on_bot_turn_audio", TurnAudioData(number, tone(900, bot_ms), RATE, 1))
+
+
+@pytest.mark.asyncio
+async def test_turn_count_cap_skips_whole_turns(manager, transport):
+    processor, observer, binding = await turn_binding(
+        manager, TurnAudioCaps(max_turns=2, max_bytes=8 * 1024 * 1024, max_duration_ms=600000))
+    for number in (1, 2, 3):
+        await run_turn(processor, observer, number)
+    await binding.finish(10)
+    observer.end_conversation_tracing()
+    uploads = [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+    assert sorted((r["turn_id"], r["direction"]) for r in uploads) == [("1", "input"), ("1", "output")]
+    assert binding.turn_denials == {"queue_full": 4} and binding.turn_status == "queue_full"
+    assert len(binding.turn_handles) == 2
+
+
+@pytest.mark.asyncio
+async def test_turn_byte_and_duration_caps_never_truncate(manager, transport):
+    one_turn = 44 + len(tone(300, 500))
+    pairs = pair_uploads(transport)
+    processor, observer, binding = await turn_binding(
+        manager, TurnAudioCaps(max_turns=100, max_bytes=one_turn + 10, max_duration_ms=600000))
+    await run_turn(processor, observer, 1)
+    await binding.finish(10)
+    uploads = turn_pairs(pairs)
+    assert [(r["direction"], r["declared_bytes"]) for r, _ in uploads] == [("input", one_turn)]
+    assert pcm(uploads[0][1])[2] == tone(300, 500)
+    assert binding.turn_denials == {"too_large": 1}
+    binding.close()
+    observer.end_conversation_tracing()
+    # Duration cap: 500 ms fits under 700 ms, the bot's 500 ms more does not.
+    processor, observer, binding = await turn_binding(
+        manager, TurnAudioCaps(max_turns=100, max_bytes=8 * 1024 * 1024, max_duration_ms=700))
+    await run_turn(processor, observer, 1)
+    await binding.finish(10)
+    uploads = turn_pairs(pairs)[1:]
+    assert [r["direction"] for r, _ in uploads] == ["input"]
+    assert binding.turn_denials == {"too_large": 1}
+    observer.end_conversation_tracing()
+
+
+@pytest.mark.asyncio
+async def test_hidden_side_turns_are_denied_other_side_uploads(manager, transport, monkeypatch):
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    # A mono mixed recording is denied whole under a hide flag; per-side tracks are not.
+    processor, observer, binding = await turn_binding(manager, layout="separate_tracks")
+    assert binding.status == "session_bound" and binding.turn_status == "session_bound"
+    await run_turn(processor, observer, 1)
+    await binding.finish(10)
+    observer.end_conversation_tracing()
+    uploads = [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+    assert [r["direction"] for r in uploads] == ["output"]
+    assert binding.turn_denials == {"policy_denied": 1}
+
+
+@pytest.mark.asyncio
+async def test_turn_never_falls_back_to_conversation_or_explicit_span(manager, transport):
+    span, context = explicit_context()
+    processor, observer, binding = await turn_binding(manager, context=context)
+    await run_turn(processor, observer, 1)
+    assert binding.turn_denials == {"correlation_unavailable": 2}
+    # Pipeline context, but a turn number Pipecat never traced.
+    binding.close()
+    observer.end_conversation_tracing()
+    processor, observer, binding = await turn_binding(manager)
+    await dispatch(processor, "on_user_turn_audio", TurnAudioData(7, tone(300, 200), RATE, 1))
+    assert binding.turn_status == "correlation_unavailable"
+    observer.end_conversation_tracing()
+    span.end()
+    assert not [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+    assert manager.owned_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_unsampled_turn_retains_nothing(manager, transport):
+    processor, observer, binding = await turn_binding(manager)
+    unsampled = trace.SpanContext(int("3" * 32, 16), int("4" * 16, 16), False, trace.TraceFlags(0))
+    observer._trace_context_map[1] = unsampled
+    await dispatch(processor, "on_user_turn_audio", TurnAudioData(1, tone(300, 200), RATE, 1))
+    observer.end_conversation_tracing()
+    assert binding.turn_status == "unsampled" and manager.owned_bytes == 0
+    assert not [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+
+
+def test_turns_denied_on_both_sides_register_no_turn_handler(transport):
+    # The server allows only mixed recordings: the call records, turns cannot.
+    transport.policy = replace(transport.policy, allowed_directions=frozenset(("mixed",)))
+    manager = make_manager(transport)
+    span, context = explicit_context()
+    try:
+        processor = AudioBufferProcessor(sample_rate=RATE, buffer_size=16000, enable_turn_audio=True)
+        binding = bind_audio_processor(processor, context, manager=manager, turn_audio=CAPS)
+        assert binding.status == "session_bound" and binding.turn_status == "policy_denied"
+        events = {e for e, _ in binding._handlers}
+        assert "on_audio_data" in events and not events & {"on_user_turn_audio", "on_bot_turn_audio"}
+        binding.close()
+    finally:
+        manager.shutdown(1)
+        span.end()
+
+
+def test_turn_caps_are_part_of_binding_identity(manager):
+    processor = AudioBufferProcessor(sample_rate=RATE, buffer_size=16000, enable_turn_audio=True)
+    span, context = explicit_context()
+    binding = bind_audio_processor(processor, context, manager=manager, turn_audio=CAPS)
+    assert bind_audio_processor(processor, context, manager=manager, turn_audio=CAPS) is binding
+    with pytest.raises(ValueError, match="conflicting"):
+        bind_audio_processor(processor, context, manager=manager,
+                             turn_audio=TurnAudioCaps(max_turns=1, max_bytes=1000, max_duration_ms=1000))
+    binding.close()
+    span.end()
+
+
+def test_disabled_turn_audio_touches_nothing():
+    class Poison:
+        def __getattribute__(self, name):
+            raise AssertionError("disabled adapter touched its arguments")
+    manager = DisabledAttachmentManager()
+    assert bind_audio_processor(Poison(), Poison(), manager=manager, turn_audio=CAPS).status == "disabled"
+    assert create_audio_capture(Poison(), manager=manager, turn_audio=CAPS).status == "disabled"
+
+
+def test_create_capture_with_turn_audio_enables_pipecat_turns(transport):
+    span, context = explicit_context()
+    transport.policy = replace(transport.policy, record_audio=True)
+    manager = make_manager(transport, record_audio=True)
+    try:
+        binding = create_audio_capture(context, manager=manager, turn_audio=CAPS)
+        assert binding.status == "session_bound" and binding.turn_status == "session_bound"
+        assert binding.processor._enable_turn_audio is True
+        assert {"on_user_turn_audio", "on_bot_turn_audio"} <= {e for e, _ in binding._handlers}
+        binding.close()
+        plain = create_audio_capture(context, manager=manager)
+        assert plain.processor._enable_turn_audio is False and plain.turn_status == "off"
+        plain.close()
+    finally:
+        manager.shutdown(1)
+    span.end()

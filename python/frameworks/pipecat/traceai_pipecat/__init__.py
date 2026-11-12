@@ -34,6 +34,14 @@ def create_audio_capture(session_context, *, manager, **options):
     return create(session_context, manager=manager, **options)
 
 
+def __getattr__(name):
+    # Lazy, so importing the package never needs the attachment-enabled core.
+    if name in ("TurnAudioCaps", "AudioSessionContext"):
+        from . import attachments
+        return getattr(attachments, name)
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+
 __version__ = "0.1.2"  # x-release-please-version
 
 __all__ = [

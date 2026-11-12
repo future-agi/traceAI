@@ -201,6 +201,12 @@ binding = traceai.bind_livekit_session(session, ctx, owned_recording_files=True)
 
 When the session ends, the SDK's `audio.ogg` is uploaded as one `mixed` file. This happens before LiveKit deletes its temporary directory, with a deadline of up to 30 s. Hard links, symlinks, foreign owners and replaced files are refused. LiveKit redaction, `LIVEKIT_TELEMETRY_ALLOW_PII` and FI hide flags all deny. The session span is marked `fi.span.kind=CONVERSATION` only if it has no parent. In a LiveKit worker, `agent_session` is a child of `job_entrypoint`, so it is not marked.
 
+**How Future AGI Voice finds a LiveKit call.** The SDK never invents a conversation root. In a real worker the trace's true root is LiveKit's own `job_entrypoint` span, which carries `lk.job_id`, and the recording is attached to `agent_session`, its child. When attachments are enabled on the Future AGI server, ingest treats an untyped, parentless `job_entrypoint` span with a non-empty `lk.job_id` as the call's conversation root, so the call is listed in Voice and its recording is found on the child span.
+
+- This needs tracing set up before the job starts (for example at worker start-up, see "Flushing at the end of a job"). With set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, the trace is rooted at `job_shutdown` instead, and the call is not listed in Voice.
+- Traces ingested before attachments were enabled on the server are not re-classified.
+- Do not set `fi.span.kind` on `job_entrypoint` or `agent_session` yourself to force a root; that changes how the whole trace is classified.
+
 **Completed Egress.** Pass a completed audio-only Egress that your app is authorized to use:
 
 ```python

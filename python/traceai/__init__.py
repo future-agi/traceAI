@@ -335,7 +335,8 @@ def bind_pipecat_audio_processor(processor, session_context, **options):
     ``session_context`` is a ``traceai_pipecat.attachments.AudioSessionContext``
     (``from_pipeline(worker)`` or ``from_span(span)``). Options are passed to
     ``traceai_pipecat.bind_audio_processor`` (``layout``, ``finalization_timeout``,
-    ``capture_policy``).
+    ``capture_policy``, and the opt-in per-turn caps
+    ``turn_audio=traceai_pipecat.TurnAudioCaps(max_turns=, max_bytes=, max_duration_ms=)``).
     """
     return _bind("pipecat", "bind_audio_processor", processor, session_context, **options)
 

@@ -205,8 +205,31 @@ await binding.finish()  # waits up to 30 s for the final segment and manifest
 ```
 
 - The recording is attached to the `conversation` span that Pipecat's tracing starts. That span is marked as the conversation root (`fi.span.kind=CONVERSATION`) only when it has no parent.
+- Short calls are kept. Pipecat delivers a call shorter than `buffer_size` in one chunk when recording stops, and it can run after the worker has ended the conversation span. The adapter remembers the conversation's identity while the span is live (at bind, when recording starts, and on every chunk), so that chunk still attaches to the same conversation. The root marker is set while the span is live.
 - Layouts: mono gives one mixed track. Stereo gives user (left, input) and bot (right, output) tracks in one file. `layout="separate_tracks"` uploads each side separately, so hiding inputs drops only the user side. With mono or stereo, any hide flag blocks the whole recording.
 - Audio is uploaded as WAV segments of up to 30 s, plus a manifest that records gaps. If uploads fall behind, the overflow becomes a `queue_full` gap rather than growing memory.
-- `buffer_size` must be between 1 and 131072 bytes. `buffer_size=0` and `enable_turn_audio=True` are refused (`unbounded_source`).
+- `buffer_size` must be between 1 and 131072 bytes. `buffer_size=0` is refused (`unbounded_source`), and so is `enable_turn_audio=True` unless you opt in to per-turn audio (below).
 - `binding.status` reports a short, content-free state such as `recording`, `published`, `partial`, `policy_denied` or `correlation_unavailable`.
 - `traceai_pipecat.create_audio_capture(...)` builds a new, unstarted recorder only when both `AttachmentConfig(record_audio=True)` and the server's `record_audio` allow it.
+
+### Per-turn audio (separate opt-in)
+
+Per-turn uploads are off unless you pass explicit caps for the whole call. There are no defaults:
+
+```python
+from traceai_pipecat import TurnAudioCaps
+
+recorder = AudioBufferProcessor(num_channels=1, buffer_size=32 * 1024, auto_start_recording=True,
+                                enable_turn_audio=True)
+binding = traceai.bind_pipecat_audio_processor(
+    recorder, AudioSessionContext.from_pipeline(worker),
+    turn_audio=TurnAudioCaps(max_turns=50, max_bytes=16 * 1024 * 1024, max_duration_ms=20 * 60 * 1000))
+```
+
+- Each finished turn uploads once per side: `on_user_turn_audio` as `input` and `on_bot_turn_audio` as `output`, as a mono WAV with purpose `turn_recording`, `turn_id` = Pipecat's turn number and the call's `conversation_id`.
+- Each upload is bound to that turn's own span, from Pipecat's `TurnTraceObserver.get_turn_context(turn_number)`. It never falls back to the conversation span or an ambient span. With `AudioSessionContext.from_span(...)` there are no turn spans, so turns end `correlation_unavailable`.
+- Caps apply to the whole call: `max_turns` uploads (at most 1000), `max_bytes` of WAV (at most 64 MiB) and `max_duration_ms` of audio (at most 2 h). A turn that would cross a cap is skipped whole, never truncated: `queue_full` for the count, `too_large` for bytes or duration. Caps are checked on the length before any copy.
+- Privacy is checked per turn, per side. `FI_HIDE_INPUTS` drops the user's turns and keeps the bot's. Unsampled turn spans upload nothing.
+- `enable_turn_audio=True` makes Pipecat keep each turn's audio in its own memory until the turn ends. The caps bound what the adapter copies and uploads, not Pipecat's own buffer.
+- `binding.turn_status` is the last turn's admission (`queued` or a reason), `binding.turn_denials` counts skipped turns by reason, and `await binding.finish()` also waits for turn uploads within the same deadline.
+- `create_audio_capture(..., turn_audio=TurnAudioCaps(...))` builds the recorder with `enable_turn_audio=True`.
