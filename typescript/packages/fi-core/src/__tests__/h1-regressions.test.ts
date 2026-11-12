@@ -2,7 +2,7 @@ import { ROOT_CONTEXT, trace, type Attributes } from "@opentelemetry/api";
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { privacyFilter } from "../export-privacy";
 import { registerSecret } from "../secrets";
-import { discoverSecrets, isCredentialName, mediaReplacement, scrubProviderResponse, scrubValue } from "../privacy-runtime";
+import { discoverSecrets, isCredentialName, isSessionIdentity, mediaReplacement, scrubProviderResponse, scrubValue } from "../privacy-runtime";
 import { DROPPED_CONTENT_COUNT, projectAttributes } from "../attribute-projection";
 import { setSession } from "../trace/contextAttributes";
 import { FITracer } from "../trace/trace-config/FITracer";
@@ -118,13 +118,15 @@ test.each(["ordinary", "credential-shaped"])("H1 typed FI session retains only s
     }
     if (kind === "credential-shaped") expect(JSON.stringify([first, second])).not.toContain(id);
     expect(JSON.stringify(native.attributes)).toBe(before);
+    // A session id is a grouping key: unbound, rewritten and copied ids export
+    // as set, while other session-named values stay masked.
     const unbound = privacyFilter().span(snapshot({ "session.id": "h1-unbound-session", "session.cookie": "h1-cookie-credential" }));
     for (const clean of [unbound, privacyFilter().span(unbound)]) {
-      expect(clean.attributes).toMatchObject({ "session.id": "<redacted>", "session.cookie": "<redacted>" });
+      expect(clean.attributes).toMatchObject({ "session.id": "h1-unbound-session", "session.cookie": "<redacted>" });
     }
     const changed = { ...snapshot({ "session.id": "h1-rewritten-session" }), _spanContext: native.spanContext() };
     const changedFirst = privacyFilter().span(changed);
-    for (const clean of [changedFirst, privacyFilter().span(changedFirst)]) expect(clean.attributes["session.id"]).toBe("<redacted>");
+    for (const clean of [changedFirst, privacyFilter().span(changedFirst)]) expect(clean.attributes["session.id"]).toBe("h1-rewritten-session");
     const surfaces = snapshot({});
     surfaces._spanContext = native.spanContext();
     surfaces.resource.attributes = { "session.id": "h1-resource-session" };
@@ -132,9 +134,9 @@ test.each(["ordinary", "credential-shaped"])("H1 typed FI session retains only s
     surfaces.links = [{ context: native.spanContext(), attributes: { "session.id": "h1-link-session" } }];
     const surfaceFirst = privacyFilter().span(surfaces);
     for (const clean of [surfaceFirst, privacyFilter().span(surfaceFirst)]) {
-      expect(clean.resource.attributes["session.id"]).toBe("<redacted>");
-      expect(clean.events[0].attributes?.["session.id"]).toBe("<redacted>");
-      expect(clean.links[0].attributes?.["session.id"]).toBe("<redacted>");
+      expect(clean.resource.attributes["session.id"]).toBe("h1-resource-session");
+      expect(clean.events[0].attributes?.["session.id"]).toBe("h1-event-session");
+      expect(clean.links[0].attributes?.["session.id"]).toBe("h1-link-session");
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
   } finally { await provider.shutdown(); }
@@ -154,11 +156,12 @@ test.each(["native", "fi-wrapper"])("H1 raw setAttribute does not establish type
     const native = exporter.getFinishedSpans()[0];
     const before = JSON.stringify(native.attributes);
     expect(native.attributes["session.id"]).toBe(id);
+    // Not a typed handoff, but a session id is a grouping key and exports as set.
+    expect(isSessionIdentity(native.spanContext(), id)).toBe(false);
     const first = privacyFilter().span(native);
     for (const clean of [first, privacyFilter().span(first)]) {
-      expect(clean.attributes["session.id"]).toBe("<redacted>");
+      expect(clean.attributes["session.id"]).toBe(id);
       expect(clean.attributes["control.label"]).toBe("h1-public-control");
-      expect(JSON.stringify(clean)).not.toContain(id);
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
   } finally { await provider.shutdown(); }
@@ -185,17 +188,18 @@ test.each(["cloned-context", "different-span"])("H1 typed session requires the b
       target.end();
     }
     expect(other._spanContext).not.toBe(native.spanContext());
+    // The typed binding still needs the bound context; the id itself exports as set.
+    expect(isSessionIdentity(other._spanContext, id)).toBe(false);
     const first = privacyFilter().span(other);
     for (const clean of [first, privacyFilter().span(first)]) {
-      expect(clean.attributes["session.id"]).toBe("<redacted>");
+      expect(clean.attributes["session.id"]).toBe(id);
       expect(clean.attributes["control.label"]).toBe("h1-public-control");
-      expect(JSON.stringify(clean)).not.toContain(id);
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
   } finally { await provider.shutdown(); }
 });
 
-test.each(["resource", "event", "link"])("H1 typed session binding never exempts the same bytes on a %s", async surface => {
+test.each(["resource", "event", "link"])("typed session bytes copied to a %s export as set", async surface => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
   try {
@@ -214,13 +218,12 @@ test.each(["resource", "event", "link"])("H1 typed session binding never exempts
     if (surface === "link") copied.links = [{ context: native.spanContext(), attributes: { "session.id": id } }];
     const first = privacyFilter().span(copied);
     for (const clean of [first, privacyFilter().span(first)]) {
-      if (surface === "resource") expect(clean.resource.attributes["session.id"]).toBe("<redacted>");
-      if (surface === "event") expect(clean.events[0].attributes?.["session.id"]).toBe("<redacted>");
-      if (surface === "link") expect(clean.links[0].attributes?.["session.id"]).toBe("<redacted>");
-      // Nonspan credential discovery still wins over the span's name exception.
-      expect(clean.attributes["session.id"]).toBe("<redacted>");
+      if (surface === "resource") expect(clean.resource.attributes["session.id"]).toBe(id);
+      if (surface === "event") expect(clean.events[0].attributes?.["session.id"]).toBe(id);
+      if (surface === "link") expect(clean.links[0].attributes?.["session.id"]).toBe(id);
+      // A copy on another surface never registers the id as a credential.
+      expect(clean.attributes["session.id"]).toBe(id);
       expect(clean.attributes["control.label"]).toBe("h1-public-control");
-      expect(JSON.stringify(clean)).not.toContain(id);
     }
     expect(JSON.stringify(native.attributes)).toBe(before);
   } finally { await provider.shutdown(); }
@@ -266,7 +269,7 @@ test("H1 single-pass admission retains media ancestry even when host credential 
   expect(privacyFilter().admissionAttributes(attrs)).toEqual({
     "session.audio.data": "<omitted: 4 base64 chars>", "session.id": "h1-host-only-correlation",
   });
-  expect(privacyFilter().attributes(attrs)["session.id"]).toBe("<redacted>");
+  expect(privacyFilter().attributes(attrs)["session.id"]).toBe("h1-host-only-correlation");
 });
 
 test("H1 S1 short media guard preserves S6 exact signatures and ordinary text", () => {
@@ -299,7 +302,10 @@ test.each(["registered", "shape", "media", "truncated", "override"])("H1 typed s
     const before = JSON.stringify(native.attributes);
     const first = privacyFilter().span(native);
     for (const clean of [first, privacyFilter().span(first)]) {
-      expect(clean.attributes["session.id"]).toBe("<redacted>");
+      // A caller override wins and exports as set; an admitted media marker is kept.
+      if (kind === "override") expect(clean.attributes["session.id"]).toBe("h1-caller-override");
+      else if (kind === "media") expect(clean.attributes["session.id"]).not.toBe(id);
+      else expect(clean.attributes["session.id"]).toBe("<redacted>");
       expect(JSON.stringify(clean)).not.toContain(id);
     }
     expect(JSON.stringify(native.attributes)).toBe(before);

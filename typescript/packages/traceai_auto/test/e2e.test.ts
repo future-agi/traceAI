@@ -126,8 +126,8 @@ test("CHAIN spans parent wire calls, including context attributes and explicit t
   await child("context.cjs");
   const parent = allSpans().find(s => s.name === "framework parent"), wire = wireSpans()[0];
   expect(wire.parentSpanId).toBe(parent.spanId); expect(wire.traceId).toBe(parent.traceId);
-  // S6 treats session identifiers as credential fields, without losing ancestry or timing.
-  expect(attrs(wire)).toMatchObject({ "session.id": "<redacted>", "user.id": "user-test" });
+  // Session and user ids from the context are exported as set, without losing ancestry or timing.
+  expect(attrs(wire)).toMatchObject({ "session.id": "session-test", "user.id": "user-test" });
   expect(BigInt(wire.startTimeUnixNano)).toBeLessThan(BigInt(wire.endTimeUnixNano));
 });
 test("OTel suppression prevents wire capture", async () => { await child("context.cjs", undefined, { SUPPRESS: "true" }); expect(wireSpans()).toHaveLength(0); });

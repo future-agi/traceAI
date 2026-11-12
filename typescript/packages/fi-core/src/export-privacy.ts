@@ -12,7 +12,7 @@ import { DROPPED_CONTENT_COUNT, isProjectionMetadata, PROJECTION_METADATA } from
 import { getRegisteredSecrets, registerSecret } from "./secrets";
 import { types } from "node:util";
 import type { PrivacyHints } from "./privacy-runtime";
-import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialName, mediaReplacement, scrubAttribute, scrubValue, providerResponseBinding, scrubProviderResponse, discoverProviderResponseSecrets, rememberProviderResponse, rememberSessionIdentity, isSessionIdentity, s1MediaPrefixReplacement } from "./privacy-runtime";
+import { completeNonMediaMime, discoverSecrets, indexPrivacyHints, isCredentialName, mediaReplacement, scrubAttribute, scrubValue, providerResponseBinding, scrubProviderResponse, discoverProviderResponseSecrets, rememberProviderResponse, rememberSessionIdentity, isSessionIdentity, s1MediaPrefixReplacement, MAX_DISCOVERY_BODY_BYTES } from "./privacy-runtime";
 
 // Compatibility name for integration tests/packages migrating this round; the agent never reads or propagates it.
 export const LIBRARY_SECRETS = createContextKey("traceai.auto.library.credentials");
@@ -163,6 +163,45 @@ function truncatedValue(value: unknown, limit: number, budget = activeInspection
 }
 // Q8b: no prefix, length, hash, digest or other content-dependent marker choice.
 function withheldMarker(key: string): string { return key === "session.id" ? "<redacted>" : HOST_TRUNCATED; }
+// Session, user and session-name grouping keys are correlation metadata, not
+// transport credentials. They are exempt from the credential NAME rule only:
+// registered secrets, credential-shaped values and media rules still apply to
+// their values, and SDK data loss still withholds them. Discovery reads their
+// values without their names, so an id never becomes a registered credential.
+const GROUPING_KEYS: ReadonlySet<string> = new Set(["session.id", "user.id", "session_name", "metadata.session_id", "metadata.user_id"]);
+// Integrations that also record a session id under their own attribute name (the
+// current session id, or a resumed or forked-from one) get the same name-only exemption. Exact
+// keys only: other session-named attributes, such as session tokens and
+// cookies, keep the credential name rule.
+const INTEGRATION_SESSION_ID_KEYS: ReadonlySet<string> = new Set([
+  // @traceai/pi-coding-agent
+  "pi.session.id",
+  // @traceai/claude-agent-sdk
+  "claude_agent.session.id", "claude_agent.session_id", "claude_agent.resume_session_id",
+  "claude_agent.session.previous_id", "claude_agent.session.fork_from",
+  // @traceai/genkit
+  "genkit:metadata:agent:sessionId",
+]);
+const identityKey = (key: string): boolean => GROUPING_KEYS.has(key) || INTEGRATION_SESSION_ID_KEYS.has(key);
+// The same keys as top-level fields of the FI metadata JSON object.
+const METADATA_KEY = "metadata";
+const METADATA_GROUPING_FIELDS = ["session_id", "user_id"] as const;
+const plainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+/** Discovery view of FI metadata with grouping fields: the object without
+ * them, then each grouping value on its own. Undefined keeps the original. */
+function metadataDiscoverySources(value: string, charge: (characters: number) => void): string[] | undefined {
+  if (value.length > MAX_DISCOVERY_BODY_BYTES || !METADATA_GROUPING_FIELDS.some(field => value.indexOf(`"${field}"`) >= 0)) return undefined;
+  charge(value.length);
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { return undefined; }
+  if (!plainObject(parsed)) return undefined;
+  const object = parsed;
+  const fields: string[] = METADATA_GROUPING_FIELDS.filter(field => hasOwn(object, field) && typeof object[field] === "string");
+  if (!fields.length) return undefined;
+  const rest = Object.fromEntries(Object.entries(object).filter(([key]) => !fields.includes(key)));
+  return [JSON.stringify(rest), ...fields.map(field => object[field] as string)];
+}
 
 // Only our pre-admission path can attest to a complete text MIME before SDK
 // truncation/projection. Keep evidence out of telemetry and invalidate it if any
@@ -509,8 +548,8 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const lostContext = incomplete && !admitted;
       const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const sessionIdentity = key === "session.id" && isSessionIdentity(responseContext, item);
-      if (!admission && !sessionIdentity && isCredentialName(key)) return credentialAttributeSentinel;
+      const groupingKey = identityKey(key);
+      if (!admission && !groupingKey && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
         // Numeric registered secrets outrank even media ancestry and metric roles.
@@ -530,7 +569,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (lostContext && redactedItem.length >= valueLimit && /^\s*[\[{"]/.test(redactedItem)) {
           try { JSON.parse(redactedItem); } catch { return "<omitted: media>"; }
         }
-        const skipName = sessionIdentity || admission && isCredentialName(key);
+        const skipName = (groupingKey || admission) && isCredentialName(key);
         // Name-only exceptions must not discard the original media path/hints.
         let clean = redactedItem === REDACTED_VALUE ? redactedItem : (skipName ? mediaValue(redactedItem) : undefined)
           ?? s1MediaPrefixReplacement(redactedItem)
@@ -547,6 +586,26 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         return items.map((item, i) => value(item, `${key}.${i}`, depth + 1, admitted));
       }
       return string(item === null ? "null" : typeof item);
+    };
+    // The JSON scrubber masks credential-NAMED members, including the session_id
+    // grouping field of FI metadata. Restore only top-level grouping members it
+    // masked, through the same value policy as the grouping attribute keys.
+    // Only a canonical rendering is re-serialized, so no other member changes.
+    const metadataGrouping = (original: string, cleaned: Attributes[string]): Attributes[string] => {
+      if (typeof cleaned !== "string" || cleaned === original || !METADATA_GROUPING_FIELDS.some(field => original.indexOf(`"${field}"`) >= 0)) return cleaned;
+      if ((budget.remaining -= original.length + cleaned.length) < 0) throw new Error("Privacy text budget");
+      let source: unknown, output: unknown;
+      try { source = JSON.parse(original); output = JSON.parse(cleaned); } catch { return cleaned; }
+      if (!plainObject(source) || !plainObject(output) || JSON.stringify(output) !== cleaned) return cleaned;
+      const input = source, result = output;
+      let restored = false;
+      for (const field of METADATA_GROUPING_FIELDS) {
+        const raw = hasOwn(input, field) ? input[field] : undefined;
+        if (typeof raw !== "string" || !hasOwn(result, field) || result[field] !== "<redacted>") continue;
+        const kept = value(raw, `${METADATA_KEY}.${field}`);
+        if (kept !== "<redacted>") { result[field] = kept; restored = true; }
+      }
+      return restored ? JSON.stringify(result) : cleaned;
     };
     const clean: Attributes = Object.create(null);
     for (const [key, original] of entries(attrs)) {
@@ -649,6 +708,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         }
       } else {
         clean[name] = value(item, key);
+        if (key === METADATA_KEY && typeof item === "string") clean[name] = metadataGrouping(item, clean[name]);
         if (key === "session.id" && outputResponseContext && isSessionIdentity(responseContext, item) && typeof clean[name] === "string") {
           rememberSessionIdentity(outputResponseContext, clean[name] as string);
         }
@@ -726,6 +786,15 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
+        } else if (identityKey(key)) {
+          // Same single debit; the value is discovered without its name.
+          requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
+          sources.push(paid(undefined, item));
+        } else if (key === METADATA_KEY && typeof item === "string") {
+          requireInspection(scanBudget, key.length + item.length);
+          const parts = metadataDiscoverySources(item, () => undefined);
+          if (parts) for (const part of parts) sources.push(paid(undefined, part));
+          else sources.push(paid(key, item));
         } else sources.push(reserve(scanBudget, key, item));
         continue;
       }
@@ -750,9 +819,14 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && spanBudget) spanBudget.unknown = true;
         // Conservative export fallback: discover ordinary credentials with the
         // budgeted adapter, then withhold, rather than invoke provider internals.
-        if (key === "session.id" && isSessionIdentity(responseContext, item)) {
+        const metadataParts = key === METADATA_KEY && typeof item === "string"
+          ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
+        if (identityKey(key)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
+        } else if (metadataParts) {
+          requireInspection(scanBudget, key.length);
+          sources.push(...metadataParts);
         } else {
           // Admission deliberately does not discover original attribute names.
           // Its scalar queue still owns values; export's map callback owns both.

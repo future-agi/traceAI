@@ -296,8 +296,9 @@ for (const kind of ['ordinary', 'credential-shaped', 'unbound']) {
     const provider = setup({ endpoint: receiver.endpoint, batch: true });
     const tracer = new FITracer({ tracer: provider.getTracer('privacy'), traceConfig: { hideErrorDetails: true } });
     const id = kind === 'ordinary' ? 'wire-session' : kind === 'credential-shaped' ? 'sk-' + 'W'.repeat(24) : 'wire-unbound-correlation';
-    const expected = kind === 'ordinary' ? id : '<redacted>';
-    // A raw attribute write is not the typed setSession -> startActiveSpan handoff.
+    const expected = kind === 'credential-shaped' ? '<redacted>' : id;
+    // A raw attribute write is not the typed setSession -> startActiveSpan
+    // handoff, but a session id is a grouping key and still exports as set.
     const active = kind === 'unbound' ? context.active() : setSession(context.active(), { sessionId: id });
     await context.with(active, async () => {
       await tracer.startActiveSpan('private-parent', async span => {
@@ -321,7 +322,7 @@ for (const kind of ['ordinary', 'credential-shaped', 'unbound']) {
       assert.equal(span.attributes.find(attribute => attribute.key === 'session.id')?.value.stringValue, expected);
       assert.equal(span.attributes.find(attribute => attribute.key === 'control.label')?.value.stringValue, 'wire-public-control');
     }
-    assert.equal(JSON.stringify(receiver.requests).includes(id), kind === 'ordinary');
+    assert.equal(JSON.stringify(receiver.requests).includes(id), kind !== 'credential-shaped');
     assert.equal(JSON.stringify(receiver.requests).includes('synthetic-secret'), false);
     const parent = spans.find(span => span.name === 'private-parent');
     const child = spans.find(span => span.name === 'private-child');

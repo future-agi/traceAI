@@ -239,7 +239,7 @@ def test_tool_journey_reaches_collector_path_mapped_with_content_hidden(built_pa
     for child in (llm, weather, failing):
         assert child["parentSpanId"] == root["spanId"]
 
-    # Model/provider/tool/user identity survives; session credentials do not.
+    # Model/provider/tool/user and session identity survive.
     assert l["gen_ai.request.model"] == "mockai/mock-model-1" and l["gen_ai.provider.name"] == "mockai"
     assert r["gen_ai.request.model"] == "mockai/mock-model-1"
     assert (w["gen_ai.tool.name"], w["gen_ai.tool.call.id"]) == ("get_weather", "call-weather")
@@ -291,9 +291,9 @@ def _hex_span_id(span_id: str) -> str:
 
 
 def _assert_session_privacy(spans: List[Dict[str, Any]], output: Dict[str, Any]) -> None:
-    # H1/S1: a caller-supplied conversation ID does not establish that session.id
-    # is non-authorizing. Require exact redaction, not omission or a wildcard.
-    # Preserve the old positive identity control on native spans, before AND
+    # The caller-supplied conversation ID is exported as set as session.id, next
+    # to user.id. Require the exact value, not omission or a wildcard.
+    # Preserve the positive identity control on native spans, before AND
     # after FI export; export must not mutate VoltAgent's own destinations.
     recorded = {span["spanId"]: span for span in output["recorded"]}
     native = {span["spanId"]: span for span in output["nativeIdentities"]}
@@ -305,10 +305,8 @@ def _assert_session_privacy(spans: List[Dict[str, Any]], output: Dict[str, Any])
             assert control["conversationId"] == "conv-123", span["name"]
             assert control["userId"] == "user-9", span["name"]
         a = _attrs(span)
-        assert a["session.id"] == "<redacted>", span["name"]
+        assert a["session.id"] == "conv-123", span["name"]
         assert a["user.id"] == "user-9", span["name"]
-    # Discovery from session.id also protects duplicate aliases and other surfaces.
-    assert "conv-123" not in json.dumps(spans)
 
 
 def test_content_is_exported_by_default(built_package: Path) -> None:
