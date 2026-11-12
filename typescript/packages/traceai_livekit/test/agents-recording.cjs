@@ -177,11 +177,12 @@ for (const [name, tighten, expected] of [
       const s = await startedSession(sdk, tracer); t.after(() => s.cleanup());
       const binding = bindLiveKitSessionRecording(s.session, s.ctx, { manager: a.manager, agents: sdk.agents, ownedRecordingFiles: true });
       assert.equal(binding.status, 'session_bound', 'admitted at bind');
-      const seen = watchSessionFs(t, s, binding);
       await s.recorder.close();
       tighten(a, env);
       // A removed file would make a stat-first order report source_unavailable instead of the policy reason.
       if (removeFile) fs.rmSync(s.file);
+      // Watch only the session end; the test's own recorder close and rmSync (which lstats) stay outside.
+      const seen = watchSessionFs(t, s, binding);
       await endSession(s, { closeRecorder: false });
       assert.equal(binding.status, expected);
       assert.deepEqual(seen, [], 'no stat, open or realpath of the session directory before the deny');
