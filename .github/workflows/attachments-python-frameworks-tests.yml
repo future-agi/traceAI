@@ -2,8 +2,8 @@ name: Python framework attachments
 
 # Real LangChain, LlamaIndex, Agno and Pydantic AI (declared floor and latest) through
 # the Python framework instrumentors to a TLS loopback F01 attachment server, with and
-# without traceai_openai on the same manager. Outbound network is disabled while the
-# tests run.
+# without traceai_openai (and traceai_anthropic under LangChain) on the same manager.
+# Outbound network is disabled while the tests run.
 
 on:
   pull_request:
@@ -14,6 +14,7 @@ on:
       - 'python/frameworks/agno/**'
       - 'python/frameworks/pydantic-ai/**'
       - 'python/frameworks/openai/**'
+      - 'python/frameworks/anthropic/**'
       - 'python/tests/attachments_frameworks/**'
       - 'python/tests/attachments_providers/conftest.py'
       - '.github/workflows/attachments-python-frameworks-tests.yml'
@@ -26,6 +27,7 @@ on:
       - 'python/frameworks/agno/**'
       - 'python/frameworks/pydantic-ai/**'
       - 'python/frameworks/openai/**'
+      - 'python/frameworks/anthropic/**'
       - 'python/tests/attachments_frameworks/**'
       - 'python/tests/attachments_providers/conftest.py'
       - '.github/workflows/attachments-python-frameworks-tests.yml'
@@ -49,15 +51,16 @@ jobs:
             python: '3.10'
             sdks: >-
               langchain-core==0.2.43 llama-index-core==0.12.41 agno==2.7.2
-              openinference-instrumentation-agno==1.1.0 pydantic-ai-slim[openai]==0.1.0 openai==1.74.0
+              openinference-instrumentation-agno==1.1.0 pydantic-ai-slim[openai]==0.1.0 openai==1.74.0 anthropic==0.41.0
               fastapi 'httpx<0.28' 'opentelemetry-api>=1.28,<1.39' 'opentelemetry-sdk>=1.28,<1.39'
-          # Latest releases, including the framework OpenAI integrations for the provider-and-framework tests.
+          # Latest releases, including the framework OpenAI and Anthropic integrations for the
+          # provider-and-framework tests.
           - name: latest
             python: '3.12'
             sdks: >-
               langchain-core==1.8.0 langchain-openai==1.7.4 llama-index-core==0.14.25
               llama-index-llms-openai==0.8.4 agno==3.1.12 openinference-instrumentation-agno==1.1.0
-              pydantic-ai-slim[openai]==2.67.0 fastapi
+              pydantic-ai-slim[openai]==2.67.0 langchain-anthropic==1.7.10 anthropic==2.8.0 fastapi
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -71,10 +74,11 @@ jobs:
         run: |
           python -m venv .venv
           # shellcheck disable=SC2086
-          eval .venv/bin/pip install -e python -e python/frameworks/openai -e python/frameworks/langchain \
+          eval .venv/bin/pip install -e python -e python/frameworks/openai -e python/frameworks/anthropic \
+            -e python/frameworks/langchain \
             -e python/frameworks/llama_index -e python/frameworks/agno -e python/frameworks/pydantic-ai \
             opentelemetry-sdk "'pytest>=7,<9'" $SDKS
-          .venv/bin/pip freeze | grep -iE '^(langchain|llama-index-core|llama-index-llms|agno|pydantic-ai|openai|openinference)' || true
+          .venv/bin/pip freeze | grep -iE '^(langchain|llama-index-core|llama-index-llms|agno|pydantic-ai|openai|anthropic|openinference)' || true
       - name: Run with outbound network disabled
         run: |
           sudo unshare --net -- bash -e -c '
