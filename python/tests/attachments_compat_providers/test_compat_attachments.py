@@ -220,6 +220,34 @@ def test_binding_keeps_call_when_openai_has_no_manager(f01, media_provider, inst
     manager.shutdown(5)
 
 
+@pytest.mark.parametrize("order", ["openai_first", "binding_first"])
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_binding_without_manager_keeps_its_span_next_to_capturing_openai(f01, media_provider, instrumented,
+                                                                          monkeypatch, package, order):
+    """Mixed setup: traceai_openai WITH a manager, binding WITHOUT one. Binding tracing is unchanged."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from traceai_openai import OpenAIInstrumentor
+
+    manager = f01.manager()
+    binding, span_name = _compat_binding(package, monkeypatch)
+    pair = [(OpenAIInstrumentor(), manager), (binding, None)]
+    if order == "binding_first":
+        pair.reverse()
+    for instrumentor, attachments in pair:
+        exporter = instrumented(instrumentor, attachments)
+    assert OpenAIInstrumentor().captures_attachments()
+    client, _ = _openai_clients(openai, media_provider)
+    client.chat.completions.create(model="m", messages=image_messages())
+    flush(manager)
+    assert f01.payloads == [IMAGE]
+    assert media_owners(exporter) == [("ChatCompletion", "model_input")]
+    names = sorted(span.name for span in exporter.get_finished_spans())
+    assert names == sorted([span_name, "ChatCompletion"]), names
+    manager.shutdown(5)
+
+
 @pytest.mark.parametrize("package", ["xai", "minimax"])
 def test_older_openai_without_accessor_never_takes_the_call(monkeypatch, package):
     """An enabled traceai_openai that predates captures_attachments() cannot capture: do not defer to it."""
