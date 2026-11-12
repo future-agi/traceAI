@@ -1,9 +1,12 @@
 
 
-## [Unreleased]
+## [0.1.7] - pending release
 
 ### Changed
 - traceai-smolagents now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- Streamed agent runs keep the run span open until the stream ends, so each step is nested under it, the run span records the final answer and token usage, and a stream closed before it finishes is not marked successful.
 
 ## [0.1.6] - 2026-10-29
 

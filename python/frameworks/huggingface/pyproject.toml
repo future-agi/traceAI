@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-huggingface"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for HuggingFace Inference API - text generation, chat, and embeddings"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

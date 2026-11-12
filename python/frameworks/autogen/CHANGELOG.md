@@ -1,3 +1,11 @@
+## [0.2.2] - pending release
+
+### Changed
+- traceai-autogen now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- AgentChat spans use the standard content attributes, so the tracing hide-input and hide-output settings apply, and a team span records its last generated message as output, not the task.
+
 ## [0.2.1] - 2026-10-18
 ### Fixed
 - Agent, team and tool spans were created with a raw OpenTelemetry tracer, so the

@@ -1,9 +1,12 @@
 
 
-## [Unreleased]
+## [0.1.10] - pending release
 
 ### Changed
 - traceai-dspy now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- Calls with multipart message content reach the model and are traced instead of failing before the call.
 
 ## [0.1.9] - 2026-10-29
 

@@ -1,5 +1,14 @@
 
 
+## [0.1.11] - pending release
+
+### Changed
+- traceai-groq now requires fi-instrumentation-otel 1.0.0 or later. Action: Upgrade fi-instrumentation-otel if your environment pins an earlier version.
+
+### Fixed
+- Groq spans record only known inference parameters, so request headers (including credentials in extra_headers), extra_body and extra_query are no longer recorded in span attributes.
+- Messages passed as an iterator reach Groq intact, and traced completion streams keep their with/close behaviour.
+
 ## [0.1.10] - 2026-10-29
 
 ### Fixed
