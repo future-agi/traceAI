@@ -2,7 +2,7 @@ import { context, trace } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { v4 as uuid } from "uuid";
 import { AttachmentTicket, type TicketHost } from "./admission";
-import { AttachmentCorrelation, attachmentTraceUuid, validAttachmentUuid } from "./correlation";
+import { AttachmentCorrelation, AttachmentDeferredCorrelation, attachmentTraceUuid, validAttachmentUuid, type AttachmentDeferredHost } from "./correlation";
 import { attachmentImportDirection, attachmentResolvedRecordingDenial, validAttachmentImportRequest } from "./imports";
 import type { AdmissionFacts, AttachmentHost, CoreJob, UploadOutcome, UploadSpec } from "./internal";
 import { validAttachmentWire } from "./wire";
@@ -17,7 +17,7 @@ import { AttachmentTransportError, attachmentIdempotencyKey, attachmentIsLegacyW
 import { attachmentWireRejected } from "./warn";
 import type {
   AttachmentAdmission, AttachmentAdmissionTicket, AttachmentClock, AttachmentCompletedRecordingRequest, AttachmentCompletion, AttachmentContentSource,
-  AttachmentFields, AttachmentFlushResult, AttachmentHandle, AttachmentImportHandle, AttachmentImportOptions, AttachmentManagerOptions, AttachmentOptions,
+  AttachmentDeferredCorrelationOptions, AttachmentFields, AttachmentFlushResult, AttachmentHandle, AttachmentImportHandle, AttachmentImportOptions, AttachmentManagerOptions, AttachmentOptions,
   AttachmentOwnedFileRef, AttachmentOwnedRecordingHandle, AttachmentOwnedRecordingOptions, AttachmentPacer, AttachmentPreflightOptions,
   AttachmentRecordingOptions, AttachmentRecordingWriter, AttachmentReference, AttachmentRuntimeState, AttachmentSession, AttachmentSource,
   AttachmentSourceKind, AttachmentSpan, AttachmentStatus, AttachmentStream, AttachmentStreamOptions, AttachmentTarget, AttachmentTransportV1,
@@ -90,11 +90,20 @@ class TokenBucket implements AttachmentPacer {
 interface Finalizer { register(target: object, held: () => void, token?: object): void; unregister(token: object): boolean }
 type FinalizerConstructor = new (cleanup: (held: () => void) => void) => Finalizer;
 class Lane { readonly jobs: CoreJob[] = []; busy = false; constructor(readonly id: string) {} }
-interface Reservation { bytes: number; expiresAt: number }
+/** `deferred`: the ticket was admitted against an unbound deferred target, so its bytes count toward the pre-bind cap. */
+interface Reservation { bytes: number; expiresAt: number; deferred?: AttachmentDeferredCorrelation }
+/** A capture admitted and committed against a deferred target that has not bound yet: bounded bytes held, nothing sent. */
+interface DeferredCapture {
+  readonly target: AttachmentDeferredCorrelation;
+  readonly facts: AdmissionFacts;
+  readonly bytes: number;
+  start(bound: AttachmentCorrelation): void;
+  fail(reason: AttachmentAdmission): void;
+}
 interface StreamExtra { facts: AdmissionFacts; fields: AttachmentFields; correlation: AttachmentCorrelation; purpose?: AttachmentOptions["purpose"] }
 
 /** One per provider/runtime; explicit attachment APIs and adapters use this same instance. */
-export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost {
+export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost, AttachmentDeferredHost {
   /** @internal */ readonly clock: AttachmentClock;
   /** @internal */ readonly sessionId = uuid();
   /** @internal */ readonly nonce = uuid();
@@ -121,6 +130,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   private readonly reservations = new Map<number, Reservation>();
   private nextReservation = 0;
   private readonly streams = new Set<StreamState & StreamExtra>();
+  private readonly deferredCaptures = new Set<DeferredCapture>();
   private readonly recordings = new Map<string, AttachmentRecording>();
   private recordingSlots = 0;
   private bytes = 0;
@@ -213,6 +223,17 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     if (!result) { result = new AttachmentCorrelation(spanOrContext); this.correlations.set(spanOrContext, result); }
     return result;
   }
+  /**
+   * A target for a span that does not exist yet (for example a wire span emitted only after the body completes).
+   * `preflight` / `attach` / `startAttachmentStream` admit Bytes, Blob and consumed-stream captures against it with the
+   * full deny-wins lattice; committed bytes stay in the owned budget (at most half of it pre-bind) until
+   * `target.bind(span)`, where policy and sampling are evaluated again before anything is sent. Timeout (`bindTimeoutMs`),
+   * `target.cancel()` and manager shutdown end pending captures `correlation_unavailable`, uploading nothing.
+   */
+  deferredCorrelation(options: AttachmentDeferredCorrelationOptions = {}): AttachmentDeferredCorrelation {
+    if (this.enabled) this.enter();
+    return new AttachmentDeferredCorrelation(this.enabled ? this : undefined, this.clock.now() + bounded(options?.bindTimeoutMs, 60000, 300000));
+  }
 
   // --- state and admission ------------------------------------------------------------------------
   /** @internal */
@@ -253,6 +274,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   }
   private resolveCorrelation(target: AttachmentTarget): AttachmentCorrelation | undefined {
     try {
+      if (target instanceof AttachmentDeferredCorrelation) return target.canonical ?? target;
       if (target instanceof AttachmentCorrelation) return target;
       if (target === undefined) {
         // The current span is read ONCE at call time.
@@ -262,7 +284,28 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       return this.correlation(target);
     } catch { return undefined; }
   }
-  private descriptors(): number { return this.queued + this.active.size + this.reservations.size + this.streams.size + this.recordings.size; }
+  private descriptors(): number { return this.queued + this.active.size + this.reservations.size + this.streams.size + this.recordings.size + this.deferredCaptures.size; }
+  /** Owned by this manager, unbound, not cancelled and within its bind deadline. */
+  private deferredOpen(target: AttachmentDeferredCorrelation): boolean {
+    return target.host === this && target.pending && this.clock.now() < target.expiresAt;
+  }
+  /** The bound identity (the canonical correlation when the span already had one) is sampled and was recording at bind. */
+  private static sampledTarget(correlation: AttachmentCorrelation): boolean {
+    const bound = correlation instanceof AttachmentDeferredCorrelation ? correlation.canonical ?? correlation : correlation;
+    return bound.snapshot()?.sampled === true;
+  }
+  private static pendingTarget(correlation: AttachmentCorrelation | undefined): AttachmentDeferredCorrelation | undefined {
+    return correlation instanceof AttachmentDeferredCorrelation && correlation.pending ? correlation : undefined;
+  }
+  /** Bytes held for targets that have not bound yet. Capped at half the owned budget so bound captures keep headroom. */
+  private deferredBytes(): number {
+    let total = 0;
+    for (const reservation of this.reservations.values()) if (reservation.deferred?.pending) total += reservation.bytes;
+    for (const state of this.streams) if (AttachmentManager.pendingTarget(state.correlation)) total += state.reserved;
+    for (const capture of this.deferredCaptures) total += capture.bytes;
+    return total;
+  }
+  private deferredCap(): number { return Math.floor(this.maxBytes / 2); }
   private uploadCap(mimeType: string, sourceKind: AttachmentSourceKind): number {
     const limit = Math.min(this.session?.limits.max_upload_bytes ?? 0, 50 * MiB);
     const kind = attachmentModality(mimeType) === "image" ? Math.min(limit, 20 * MiB) : limit;
@@ -303,6 +346,13 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     const now = this.clock.now();
     for (const [id, reservation] of this.reservations) if (reservation.expiresAt <= now) this.releaseReservation(id);
     for (const state of this.streams) if (state.open && now - state.lastWrite > state.idleTtl) this.streamAbort(state, "incomplete");
+    // Deferred targets past their bind deadline: fail closed, discard retained bytes (no timer; design 1.5 style).
+    for (const [id, reservation] of this.reservations) if (reservation.deferred?.pending && now >= reservation.deferred.expiresAt) this.releaseReservation(id);
+    for (const state of [...this.streams]) {
+      const target = AttachmentManager.pendingTarget(state.correlation);
+      if (state.open && target && now >= target.expiresAt) this.streamAbort(state, "correlation_unavailable");
+    }
+    for (const capture of [...this.deferredCaptures]) if (now >= capture.target.expiresAt) capture.fail("correlation_unavailable");
   }
   private maybeRenew(): void {
     const session = this.session;
@@ -344,7 +394,8 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       capture: options.capture ? { ...options.capture } : undefined, operation: options.operation ?? "observe_consumed",
       sourceKind: options.sourceKind ?? "Bytes", importSource };
   }
-  private admitTarget(target: AttachmentTarget, facts: AdmissionFacts): { reason?: AttachmentAdmission; correlation?: AttachmentCorrelation; identity?: { traceId: string; spanId: string } } {
+  private admitTarget(target: AttachmentTarget, facts: AdmissionFacts, allowDeferred = false):
+    { reason?: AttachmentAdmission; correlation?: AttachmentCorrelation; identity?: { traceId: string; spanId: string }; deferred?: AttachmentDeferredCorrelation } {
     if (typeof facts.mimeType !== "string" || !["input", "output", "mixed"].includes(facts.direction) ||
       !["observe_consumed", "import_existing", "create_recording"].includes(facts.operation)) {
       const first = this.recheck(facts, { admission: true });
@@ -353,6 +404,10 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     const reason = this.recheck(facts, { admission: true });
     if (reason) return { reason };
     const correlation = this.resolveCorrelation(target);
+    // An unbound deferred target is admitted on the lattice alone; sampling and policy are evaluated again at bind.
+    if (correlation instanceof AttachmentDeferredCorrelation && !correlation.snapshot()) {
+      return allowDeferred && this.deferredOpen(correlation) ? { correlation, deferred: correlation } : { reason: "correlation_unavailable" };
+    }
     const identity = correlation?.snapshot();
     if (!correlation || !identity) return { reason: "correlation_unavailable" };
     if (!identity.sampled) return { reason: "unsampled" };
@@ -375,15 +430,16 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     try {
       this.enter();
       const facts = this.preflightFacts(options ?? ({} as AttachmentPreflightOptions));
-      const { reason, correlation } = this.admitTarget(target, facts);
+      const { reason, correlation, deferred } = this.admitTarget(target, facts, facts.sourceKind === "Bytes" || facts.sourceKind === "Blob");
       if (reason) return denied(reason);
       const maxBytes = options.maxBytes;
       if (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > this.uploadCap(facts.mimeType, facts.sourceKind)) return denied("too_large");
       const reserve = facts.sourceKind === "OwnedRecordingFile" ? CHUNK : maxBytes;
       if (this.descriptors() >= this.maxDescriptors || this.bytes + reserve > this.maxBytes) return denied("queue_full");
+      if (deferred && this.deferredBytes() + reserve > this.deferredCap()) return denied("queue_full");
       const ttl = bounded(options.ttlMs, this.ticketTtl, 30000);
       const id = ++this.nextReservation; const expiresAt = this.clock.now() + ttl;
-      this.bytes += reserve; this.reservations.set(id, { bytes: reserve, expiresAt });
+      this.bytes += reserve; this.reservations.set(id, { bytes: reserve, expiresAt, ...(deferred ? { deferred } : {}) });
       const ticket = new AttachmentTicket(this, "queued", maxBytes, correlation, facts, id, expiresAt);
       this.finalizer()?.register(ticket, () => this.releaseReservation(id), ticket);
       return ticket;
@@ -399,6 +455,14 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     ticket.used = true;
     try { this.registry?.unregister(ticket); } catch { /* bounded */ }
     this.sweep();
+    const target = ticket.correlation;
+    if (target instanceof AttachmentDeferredCorrelation && !target.snapshot() && !this.deferredOpen(target)) {
+      this.releaseReservation(ticket.reservation); return { reason: "correlation_unavailable" };
+    }
+    // A ticket preflighted against a deferred target and committed after bind: the bound span must be sampled.
+    if (target instanceof AttachmentDeferredCorrelation && target.snapshot() && !AttachmentManager.sampledTarget(target)) {
+      this.releaseReservation(ticket.reservation); return { reason: "unsampled" };
+    }
     const reservation = this.reservations.get(ticket.reservation);
     if (!reservation || this.clock.now() >= ticket.expiresAt) { this.releaseReservation(ticket.reservation); return { reason: "expired" }; }
     // Commit re-check against the CURRENT policy epoch; tightening denies without reading the source.
@@ -469,9 +533,38 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       ...(fields.turnId ? { turn_id: fields.turnId } : {}),
       ...(fields.toolCallId ? { tool_call_id: fields.toolCallId } : {}) };
   }
+  /** The correlation to upload against now, or undefined while a deferred target is unbound. */
+  private boundTarget(correlation: AttachmentCorrelation): AttachmentCorrelation | undefined {
+    if (!(correlation instanceof AttachmentDeferredCorrelation)) return correlation;
+    return correlation.snapshot() ? correlation.canonical ?? correlation : undefined;
+  }
+  /** Holds a committed capture (its bytes stay reserved) until its deferred target binds, fails or times out. */
+  private park(target: AttachmentDeferredCorrelation, facts: AdmissionFacts, bytes: number, result: HandleControl,
+    start: (bound: AttachmentCorrelation) => void, discard: () => void): void {
+    const capture: DeferredCapture = { target, facts, bytes,
+      start: bound => { if (this.deferredCaptures.delete(capture)) start(bound); },
+      fail: reason => {
+        if (!this.deferredCaptures.delete(capture)) return;
+        discard(); this.releaseBytes(bytes); this.dropped++; result.finish(reason); this.notify();
+      } };
+    this.deferredCaptures.add(capture);
+    if (!this.deferredOpen(target)) capture.fail("correlation_unavailable");
+  }
   private enqueueUpload(facts: AdmissionFacts, fields: AttachmentFields, correlation: AttachmentCorrelation, size: number,
-    content: AttachmentContentSource | undefined, bytes: number, owned?: AttachmentOwnedFileRecord, project = true): AttachmentHandle {
-    const result = handle("queued");
+    content: AttachmentContentSource | undefined, bytes: number, owned?: AttachmentOwnedFileRecord, project = true, result: HandleControl = handle("queued")): AttachmentHandle {
+    const bound = this.boundTarget(correlation);
+    if (!bound) {
+      // Retained, bounded and not sent: the request (parent, policy version) is built only once the span is known.
+      this.park(correlation as AttachmentDeferredCorrelation, facts, bytes, result,
+        target => { this.enqueueUpload(facts, fields, target, size, content, bytes, owned, project, result); }, () => { content = undefined; });
+      return result.value;
+    }
+    if (!AttachmentManager.sampledTarget(bound)) {
+      // Backstop for captures admitted against a deferred target: an unsampled bound span never receives media.
+      content = undefined; this.releaseBytes(bytes); this.dropped++; result.finish("unsampled"); this.notify();
+      return result.value;
+    }
+    correlation = bound;
     const identity = correlation.snapshot()!;
     const request = this.uploadRequest(facts, fields, identity, result.value, size);
     const body = JSON.stringify(request);
@@ -510,7 +603,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       const kind = source.kind;
       const facts: AdmissionFacts = { mimeType: options.mimeType, direction: options.direction, purpose: options.purpose,
         capture: options.capture ? { ...options.capture } : undefined, operation: options.capture?.newRecording ? "create_recording" : "observe_consumed", sourceKind: kind };
-      const { reason, correlation } = this.admitTarget(spanOrContext, facts);
+      const { reason, correlation, deferred } = this.admitTarget(spanOrContext, facts, kind === "Bytes" || kind === "Blob");
       if (reason) return handle(reason).value;
       if (!this.validOptions(options)) return handle("policy_denied").value;
       if (this.descriptors() >= this.maxDescriptors) return handle("queue_full").value;
@@ -518,6 +611,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       if ("reason" in read) return handle(read.reason).value;
       const reserve = kind === "OwnedRecordingFile" ? CHUNK : read.size;
       if (this.descriptors() >= this.maxDescriptors || this.bytes + reserve > this.maxBytes) return handle("queue_full").value;
+      if (deferred && this.deferredBytes() + reserve > this.deferredCap()) return handle("queue_full").value;
       this.bytes += reserve;
       const fields: AttachmentFields = { messageIndex: options.messageIndex, partIndex: options.partIndex, role: options.role, channel: options.channel,
         conversationId: options.conversationId, turnId: options.turnId, toolCallId: options.toolCallId };
@@ -528,9 +622,13 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   // --- consumed streams ------------------------------------------------------------------------------
   startAttachmentStream(target: AttachmentTarget, options: AttachmentStreamOptions): AttachmentStream {
     try {
-      const ticket = this.preflight(target, { mimeType: options.mimeType, direction: options.direction, maxBytes: options.maxBytes,
+      // The reservation is min(requested, negotiated single-upload cap) (design 0.7): a server whose max_upload_bytes is
+      // below the adapter default still admits the stream, and a body over the effective cap is discarded whole (too_large).
+      let maxBytes = options.maxBytes;
+      if (this.session && Number.isInteger(maxBytes) && maxBytes > 0) maxBytes = Math.min(maxBytes, this.uploadCap(options.mimeType, "Bytes"));
+      const ticket = this.preflight(target, { mimeType: options.mimeType, direction: options.direction, maxBytes,
         purpose: options.purpose, capture: options.capture, operation: "observe_consumed", sourceKind: "Bytes" });
-      return ticket.startStream(options);
+      return ticket.startStream(maxBytes === options.maxBytes ? options : { ...options, maxBytes });
     } catch { return this.deniedStream("source_unavailable"); }
   }
   /** @internal */
@@ -585,14 +683,28 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     s.handle = this.enqueueUploadWithIds(s, content, bytes);
     return s.handle;
   }
-  private enqueueUploadWithIds(s: StreamState & StreamExtra, content: AttachmentContentSource, bytes: number): AttachmentHandle {
-    const result = handle("queued");
+  private enqueueUploadWithIds(s: StreamState & StreamExtra, content: AttachmentContentSource, bytes: number,
+    result: HandleControl = handle("queued"), parked?: AttachmentHandle): AttachmentHandle {
     const ids = { attachmentId: s.attachmentId!, occurrenceId: s.occurrenceId! };
+    const bound = this.boundTarget(s.correlation);
+    if (!bound) {
+      const value = Object.freeze({ attachmentId: ids.attachmentId, occurrenceId: ids.occurrenceId, admission: "queued" as AttachmentAdmission, completion: result.value.completion });
+      let data: AttachmentContentSource | undefined = content;
+      this.park(s.correlation as AttachmentDeferredCorrelation, s.facts, bytes, result,
+        () => { if (data) this.enqueueUploadWithIds(s, data, bytes, result, value); }, () => { data = undefined; });
+      return value;
+    }
+    const value = parked ?? Object.freeze({ attachmentId: ids.attachmentId, occurrenceId: ids.occurrenceId, admission: "queued" as AttachmentAdmission, completion: result.value.completion });
+    if (!AttachmentManager.sampledTarget(bound)) {
+      // Backstop: a stream opened against a deferred target that bound to an unsampled span uploads nothing.
+      this.releaseBytes(bytes); this.dropped++; result.finish("unsampled"); this.notify();
+      return value;
+    }
+    s.correlation = bound;
     const identity = s.correlation.snapshot()!;
     const request = this.uploadRequest(s.facts, s.fields, identity, ids, bytes);
     const body = JSON.stringify(request);
     let data: AttachmentContentSource | undefined = content;
-    const value = Object.freeze({ attachmentId: ids.attachmentId, occurrenceId: ids.occurrenceId, admission: "queued" as AttachmentAdmission, completion: result.value.completion });
     this.enqueue({ lane: ids.occurrenceId, bytes, controller: new AbortController(), denied: () => this.recheck(s.facts),
       fail: reason => { data = undefined; result.finish(reason); },
       run: async signal => {
@@ -607,7 +719,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
     return value;
   }
   /** @internal */
-  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large"): void {
+  streamAbort(state: StreamState, reason: "incomplete" | "policy_denied" | "too_large" | "correlation_unavailable" | "unsampled"): void {
     if (!state.open) return;
     state.open = false; this.streams.delete(state as StreamState & StreamExtra);
     try { this.registry?.unregister(state); } catch { /* bounded */ }
@@ -1078,6 +1190,52 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
   }
   private drop(job: CoreJob, reason: AttachmentCompletion["status"]): void { this.dropped++; job.fail(reason); }
 
+  // --- deferred targets ------------------------------------------------------------------------------------
+  /** @internal Called once by `AttachmentDeferredCorrelation.bind`. Synchronous; the transport runs only from the queue. */
+  deferredBound(target: AttachmentDeferredCorrelation, spanOrContext: AttachmentSpan): void {
+    if (target.host !== this) return;
+    // One reference list per span: a span that already has a correlation keeps it, and the target forwards to it.
+    try {
+      const existing = this.correlations.get(spanOrContext);
+      if (existing && existing !== target) target.canonical = existing;
+      else this.correlations.set(spanOrContext, target);
+    } catch { /* identity is still bound; projection falls back to the target itself */ }
+    this.sweep(); // a capture past its deadline fails closed before anything else
+    const bound = target.canonical ?? target;
+    const identity = bound.snapshot();
+    const late = this.closed || this.stoppingFlag || !!this.shutdownPromise || this.clock.now() >= target.expiresAt;
+    // Open streams and outstanding tickets on this target are refused now, not only captures already parked: once the
+    // identity is bound they are no longer `pending`, so no later sweep would see them.
+    const refused = late ? "correlation_unavailable" : identity?.sampled ? undefined : "unsampled";
+    if (refused) {
+      for (const state of [...this.streams]) if (state.correlation === target) this.streamAbort(state, refused);
+      for (const [id, reservation] of this.reservations) if (reservation.deferred === target) this.releaseReservation(id);
+    }
+    const captures = [...this.deferredCaptures].filter(capture => capture.target === target);
+    if (!captures.length) { if (refused) this.notify(); return; }
+    for (const capture of captures) {
+      if (late) { capture.fail("correlation_unavailable"); continue; }
+      // Policy is evaluated again at bind against the CURRENT epoch, environment and session.
+      const reason = this.recheck(capture.facts);
+      if (reason) { capture.fail(reason); continue; }
+      if (!identity?.sampled) { capture.fail("unsampled"); continue; }
+      capture.start(bound);
+    }
+    this.notify();
+  }
+  /** @internal Asked by `AttachmentDeferredCorrelation.bind` before it binds: the deadline uses this manager's clock. */
+  deferredExpired(target: AttachmentDeferredCorrelation): boolean {
+    return target.host === this && this.clock.now() >= target.expiresAt;
+  }
+  /** @internal Called once by `AttachmentDeferredCorrelation.cancel`. */
+  deferredCancelled(target: AttachmentDeferredCorrelation): void {
+    if (target.host !== this) return;
+    for (const capture of [...this.deferredCaptures]) if (capture.target === target) capture.fail("correlation_unavailable");
+    for (const state of [...this.streams]) if (state.correlation === target) this.streamAbort(state, "correlation_unavailable");
+    for (const [id, reservation] of this.reservations) if (reservation.deferred === target) this.releaseReservation(id);
+    this.notify();
+  }
+
   // --- policy and lifecycle ------------------------------------------------------------------------------
   /** Tightening discards all queued data and cancels transfers; re-enable never resurrects it or turns a disabled manager on. */
   updatePolicy(update: Pick<AttachmentManagerOptions, "enabled" | "traceConfig">): void {
@@ -1108,6 +1266,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
       if (reason) { job.controller.abort(); this.drop(job, reason); }
     }
     for (const state of [...this.streams]) if (this.recheck(state.facts)) this.streamAbort(state, "policy_denied");
+    for (const capture of [...this.deferredCaptures]) { const reason = this.recheck(capture.facts); if (reason) capture.fail(reason); }
     this.notify();
   }
   private deadline<T>(promise: Promise<T>, timeout: number, fallback: T): Promise<T> {
@@ -1129,7 +1288,7 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
         this.listeners.add(changed); changed();
       });
     }
-    return Object.freeze({ unfinished: this.queued + this.active.size + this.streams.size + this.recordings.size, dropped: this.dropped });
+    return Object.freeze({ unfinished: this.queued + this.active.size + this.streams.size + this.recordings.size + this.deferredCaptures.size, dropped: this.dropped });
   }
   shutdown(timeoutMs = this.shutdownTimeout): Promise<AttachmentFlushResult> {
     if (!this.shutdownPromise) {
@@ -1142,9 +1301,13 @@ export class AttachmentManager implements TicketHost, StreamHost, AttachmentHost
         const writers = [...this.recordings.values()];
         if (writers.length) await this.deadline(Promise.all(writers.map(writer => writer.shutdown(Math.max(1, deadline - this.clock.now())))), Math.max(1, deadline - this.clock.now()), []);
         for (const state of [...this.streams]) this.streamAbort(state, "incomplete");
+        // Captures still waiting for a span never upload after close.
+        for (const capture of [...this.deferredCaptures]) capture.fail("correlation_unavailable");
         for (const id of [...this.reservations.keys()]) this.releaseReservation(id);
         const result = await this.flush(Math.max(1, Math.floor(deadline - this.clock.now())));
-        this.closed = true; this.closedReason = "incomplete"; this.bootController?.abort();
+        // An earlier invalidate() keeps its reason (policy_denied / deleted / expired / scope_unresolved).
+        if (!this.closed) this.closedReason = "incomplete";
+        this.closed = true; this.bootController?.abort();
         for (const lane of [...this.order]) {
           for (const job of lane.jobs.splice(0)) { this.queued--; this.endJob(job); this.drop(job, "incomplete"); }
           this.dropLane(lane);
