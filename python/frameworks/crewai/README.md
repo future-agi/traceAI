@@ -17,6 +17,10 @@ pip install traceAI-crewai
 pip install crewai crewai_tools
 ```
 
+traceAI-crewai supports Python 3.10 to 3.13. On Python 3.13, use CrewAI 0.126.0 or later:
+older CrewAI releases, including the 0.41.1 floor, don't support 3.13.1 and later. On 3.13,
+CI tests CrewAI 1.15.0 and the latest release.
+
 
 ### Set Environment Variables
 Set up your environment variables to authenticate with FutureAGI
