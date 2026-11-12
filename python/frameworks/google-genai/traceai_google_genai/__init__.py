@@ -13,6 +13,20 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class GoogleGenAIInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for `google-genai`
@@ -55,32 +69,34 @@ class GoogleGenAIInstrumentor(BaseInstrumentor):  # type: ignore
             _SyncGenerateContentStream,
         )
 
+        media = dict(attachments=_attachment_manager(kwargs), config=config)
+
         self._original_generate_content = Models.generate_content
         wrap_function_wrapper(
             module="google.genai.models",
             name="Models.generate_content",
-            wrapper=_SyncGenerateContent(tracer=self._tracer),
+            wrapper=_SyncGenerateContent(tracer=self._tracer, **media),
         )
 
         self._original_async_generate_content = AsyncModels.generate_content
         wrap_function_wrapper(
             module="google.genai.models",
             name="AsyncModels.generate_content",
-            wrapper=_AsyncGenerateContentWrapper(tracer=self._tracer),
+            wrapper=_AsyncGenerateContentWrapper(tracer=self._tracer, **media),
         )
 
         self._original_generate_content_stream = Models.generate_content_stream
         wrap_function_wrapper(
             module="google.genai.models",
             name="Models.generate_content_stream",
-            wrapper=_SyncGenerateContentStream(tracer=self._tracer),
+            wrapper=_SyncGenerateContentStream(tracer=self._tracer, **media),
         )
 
         self._original_async_generate_content_stream = AsyncModels.generate_content_stream
         wrap_function_wrapper(
             module="google.genai.models",
             name="AsyncModels.generate_content_stream",
-            wrapper=_AsyncGenerateContentStream(tracer=self._tracer),
+            wrapper=_AsyncGenerateContentStream(tracer=self._tracer, **media),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -99,3 +115,12 @@ class GoogleGenAIInstrumentor(BaseInstrumentor):  # type: ignore
             setattr(
                 AsyncModels, "generate_content_stream", self._original_async_generate_content_stream
             )
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "google_genai_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_google_genai")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

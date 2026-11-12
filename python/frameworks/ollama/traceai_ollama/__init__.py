@@ -32,6 +32,20 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("ollama >= 0.3.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class OllamaInstrumentor(BaseInstrumentor):
     """OpenTelemetry instrumentor for Ollama."""
 
@@ -64,20 +78,21 @@ class OllamaInstrumentor(BaseInstrumentor):
         )
 
         ollama_module = import_module("ollama")
+        attachments = _attachment_manager(kwargs)
 
         # Wrap synchronous Client methods
         self._original_chat = ollama_module.Client.chat
         wrap_function_wrapper(
             module="ollama",
             name="Client.chat",
-            wrapper=_ChatWrapper(tracer=self._tracer),
+            wrapper=_ChatWrapper(tracer=self._tracer, attachments=attachments),
         )
 
         self._original_generate = ollama_module.Client.generate
         wrap_function_wrapper(
             module="ollama",
             name="Client.generate",
-            wrapper=_GenerateWrapper(tracer=self._tracer),
+            wrapper=_GenerateWrapper(tracer=self._tracer, attachments=attachments),
         )
 
         # Ollama uses 'embed' for single and 'embeddings' for batch
@@ -102,14 +117,14 @@ class OllamaInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="ollama",
             name="AsyncClient.chat",
-            wrapper=_AsyncChatWrapper(tracer=self._tracer),
+            wrapper=_AsyncChatWrapper(tracer=self._tracer, attachments=attachments),
         )
 
         self._original_async_generate = ollama_module.AsyncClient.generate
         wrap_function_wrapper(
             module="ollama",
             name="AsyncClient.generate",
-            wrapper=_AsyncGenerateWrapper(tracer=self._tracer),
+            wrapper=_AsyncGenerateWrapper(tracer=self._tracer, attachments=attachments),
         )
 
         if hasattr(ollama_module.AsyncClient, "embed"):
@@ -133,14 +148,14 @@ class OllamaInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 module="ollama",
                 name="chat",
-                wrapper=_ChatWrapper(tracer=self._tracer),
+                wrapper=_ChatWrapper(tracer=self._tracer, attachments=attachments),
             )
 
         if hasattr(ollama_module, "generate"):
             wrap_function_wrapper(
                 module="ollama",
                 name="generate",
-                wrapper=_GenerateWrapper(tracer=self._tracer),
+                wrapper=_GenerateWrapper(tracer=self._tracer, attachments=attachments),
             )
 
         if hasattr(ollama_module, "embed"):
@@ -187,3 +202,12 @@ class OllamaInstrumentor(BaseInstrumentor):
             ollama_module.AsyncClient.embed = self._original_async_embed
         if hasattr(self, "_original_async_embeddings"):
             ollama_module.AsyncClient.embeddings = self._original_async_embeddings
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "ollama_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_ollama")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

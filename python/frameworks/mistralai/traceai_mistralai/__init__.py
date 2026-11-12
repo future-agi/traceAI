@@ -17,6 +17,20 @@ logger.addHandler(logging.NullHandler())
 _MODULE = "mistralai"
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for mistralai
@@ -61,10 +75,13 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
                 "traceAI-mistralai supports mistralai >=1.1,<2 or >=3.6,<4"
             )
         self._native = None
+        media = dict(attachments=_attachment_manager(kwargs), config=config)
         if sdk_version >= Version("3.6.0"):
             from traceai_mistralai._native import _NativeInstrumentation
 
-            self._native = _NativeInstrumentation(tracer_provider, config)
+            self._native = _NativeInstrumentation(
+                tracer_provider, config, attachments=media["attachments"]
+            )
             return
 
         from traceai_mistralai._chat_wrapper import (
@@ -104,20 +121,20 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
         wrap_function_wrapper(
             module="mistralai.chat",
             name="Chat.complete",
-            wrapper=_SyncChatWrapper("MistralClient.chat", self._tracer, mistralai),
+            wrapper=_SyncChatWrapper("MistralClient.chat", self._tracer, mistralai, **media),
         )
 
         wrap_function_wrapper(
             module="mistralai.chat",
             name="Chat.stream",
-            wrapper=_SyncChatWrapper("MistralClient.chat", self._tracer, mistralai),
+            wrapper=_SyncChatWrapper("MistralClient.chat", self._tracer, mistralai, **media),
         )
 
         wrap_function_wrapper(
             module="mistralai.chat",
             name="Chat.complete_async",
             wrapper=_AsyncChatWrapper(
-                "MistralAsyncClient.chat", self._tracer, mistralai
+                "MistralAsyncClient.chat", self._tracer, mistralai, **media
             ),
         )
 
@@ -125,7 +142,7 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             module="mistralai.chat",
             name="Chat.stream_async",
             wrapper=_AsyncStreamChatWrapper(
-                "MistralAsyncClient.chat", self._tracer, mistralai
+                "MistralAsyncClient.chat", self._tracer, mistralai, **media
             ),
         )
 
@@ -201,3 +218,12 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
         Agents.stream = self._original_sync_stream_agent_method  # type: ignore
         Agents.complete_async = self._original_async_agent_method  # type: ignore
         Agents.stream_async = self._original_async_stream_agent_method  # type: ignore
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "mistralai_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_mistralai")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

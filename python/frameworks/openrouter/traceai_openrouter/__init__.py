@@ -238,7 +238,7 @@ class _AsyncStream(_Stream):
             self._finish(complete=False)
 
 
-def _start(tracer: Any, operation: str, kwargs: dict[str, Any], config: TraceConfig):
+def _start(tracer: Any, operation: str, kwargs: dict[str, Any], config: TraceConfig, attachments: Any = None):
     kind = FiSpanKindValues.EMBEDDING if operation == "embeddings" else FiSpanKindValues.LLM
     model = kwargs.get("model")
     attrs = {A.GEN_AI_PROVIDER_NAME: "openrouter", A.GEN_AI_OPERATION_NAME: operation}
@@ -251,10 +251,22 @@ def _start(tracer: Any, operation: str, kwargs: dict[str, Any], config: TraceCon
         config.hide_inputs or config.hide_input_text or config.hide_input_messages or config.hide_input_images
     )
     _input(span, operation, kwargs, capture_input)
+    if attachments is not None and operation == "chat":
+        _capture_chat_media(attachments, span, kwargs.get("messages"), config)
     return span
 
 
-def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
+def _capture_chat_media(attachments: Any, span: Any, messages: Any, config: TraceConfig) -> None:
+    """Chat ``image_url`` data URIs and ``input_audio`` through the shared manager; never raises."""
+    try:
+        from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+        ProviderMedia(attachments, span, "openrouter", trace_config=config).compatible_messages(messages, "openai")
+    except Exception:
+        pass
+
+
+def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool, attachments: Any = None):
     def complete(span, result):
         capture_output = not (config.hide_outputs or config.hide_output_text or config.hide_output_messages)
         if hasattr(result, "__anext__"):
@@ -267,7 +279,7 @@ def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
 
     if is_async:
         async def wrapped(wrapped, instance, args, kwargs):
-            span = _start(tracer, operation, kwargs, config)
+            span = _start(tracer, operation, kwargs, config, attachments)
             try:
                 with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
                     result = await wrapped(*args, **kwargs)
@@ -277,7 +289,7 @@ def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
                 raise
     else:
         def wrapped(wrapped, instance, args, kwargs):
-            span = _start(tracer, operation, kwargs, config)
+            span = _start(tracer, operation, kwargs, config, attachments)
             try:
                 with trace.use_span(span, end_on_exit=False, record_exception=False, set_status_on_exception=False):
                     result = wrapped(*args, **kwargs)
@@ -286,6 +298,20 @@ def _wrap(tracer: Any, operation: str, config: TraceConfig, is_async: bool):
                 _failure(span, exc)
                 raise
     return wrapped
+
+
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
 
 
 class OpenRouterInstrumentor(BaseInstrumentor):  # type: ignore[misc]
@@ -299,12 +325,13 @@ class OpenRouterInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         if not isinstance(config, TraceConfig):
             raise TypeError("config must be a TraceConfig")
         tracer = FITracer(trace.get_tracer(__name__, __version__, kwargs.get("tracer_provider")), config)
+        attachments = _attachment_manager(kwargs)
         self._originals = []
         for module, cls_name, operation, method in _ENDPOINTS:
             cls = getattr(import_module(module), cls_name)
             for name, is_async in ((method, False), (method + "_async", True)):
                 original = cls.__dict__[name]
-                wrap_function_wrapper(module, cls_name + "." + name, _wrap(tracer, operation, config, is_async))
+                wrap_function_wrapper(module, cls_name + "." + name, _wrap(tracer, operation, config, is_async, attachments))
                 self._originals.append((cls, name, original))
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -314,3 +341,11 @@ class OpenRouterInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
 
 __all__ = ["OpenRouterInstrumentor", "__version__"]
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "openrouter_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_openrouter")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

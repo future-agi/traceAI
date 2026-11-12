@@ -17,6 +17,20 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("portkey_ai >= 0.1.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class PortkeyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """An instrumentor for the Portkey AI framework."""
 
@@ -41,7 +55,10 @@ class PortkeyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         wrap_function_wrapper(
             module="portkey_ai.api_resources.apis.chat_complete",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
+            # Chat only: the generation API carries no typed media.
+            wrapper=_CompletionsWrapper(
+                tracer=self._tracer, attachments=_attachment_manager(kwargs), config=config
+            ),
         )
         wrap_function_wrapper(
             module="portkey_ai.api_resources.apis.generation",
@@ -53,3 +70,11 @@ class PortkeyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         portkey_module = import_module("portkey_ai.api_resources.apis.chat_complete")
         if self._original_completions_create is not None:
             portkey_module.Completions.create = self._original_completions_create
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "portkey_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_portkey")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

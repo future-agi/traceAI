@@ -152,10 +152,17 @@ class _NativeInstrumentation:
         "_telemetry_auto_disabled",
     )
 
-    def __init__(self, provider: trace.TracerProvider, config: TraceConfig) -> None:
+    def __init__(
+        self, provider: trace.TracerProvider, config: TraceConfig, attachments: Any = None
+    ) -> None:
         from mistralai.client._hooks.tracing import TracingHook
 
         self._provider = _NativeProvider(provider, config)
+        # Typed chat messages of the current call, handed to the SDK-created request span
+        # in before_request. Only set while an attachment manager is configured.
+        self._attachments = attachments
+        self._config = config
+        self._media_messages = ContextVar("mistral_media_messages", default=None)
         self._hooks = WeakKeyDictionary()
         self._async_sends = WeakKeyDictionary()
         self._lock = RLock()
@@ -224,12 +231,53 @@ class _NativeInstrumentation:
                 self._response_scope.reset(token)
 
     def _call(self, wrapped, instance, args, kwargs):
-        with self._call_scope():
+        with self._call_scope(), self._media_scope(wrapped, instance, kwargs):
             return wrapped(*args, **kwargs)
 
     async def _call_async(self, wrapped, instance, args, kwargs):
-        with self._call_scope():
+        with self._call_scope(), self._media_scope(wrapped, instance, kwargs):
             return await wrapped(*args, **kwargs)
+
+    @contextmanager
+    def _media_scope(self, wrapped, instance, kwargs):
+        """Hold chat.complete/stream messages for the first request span of this call."""
+        messages = None
+        if self._attachments is not None and self._media_messages.get() is None:
+            try:
+                from mistralai.client.chat import Chat
+
+                if isinstance(instance, Chat) and getattr(wrapped, "__name__", "").split("_")[0] in (
+                    "complete",
+                    "stream",
+                ):
+                    messages = kwargs.get("messages")
+            except Exception:
+                messages = None
+        if messages is None:
+            yield
+            return
+        token = self._media_messages.set([messages])
+        try:
+            yield
+        finally:
+            self._media_messages.reset(token)
+
+    def _capture_media(self, instance, request) -> None:
+        holder = self._media_messages.get()
+        if not holder or holder[0] is None:
+            return
+        messages, holder[0] = holder[0], None  # Retries never upload the same call twice.
+        try:
+            span = instance._get_request_span(request)
+            if not isinstance(span, _NativeSpan):
+                return
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(
+                self._attachments, span, "mistralai", trace_config=self._config
+            ).compatible_messages(messages, "mistral")
+        except Exception:
+            logger.debug("Attachment capture unavailable")
 
     def _before_request(self, wrapped, instance, args, kwargs):
         with self._lock:
@@ -244,6 +292,8 @@ class _NativeInstrumentation:
             # Do not let SDK auto-export configuration create a second destination.
             instance._telemetry_auto_disabled = True
         request = wrapped(*args, **kwargs)
+        if self._attachments is not None:
+            self._capture_media(instance, request)
         hook_ctx = kwargs.get("hook_ctx", args[0] if args else None)
         client = getattr(getattr(hook_ctx, "config", None), "async_client", None)
         if client is not None:

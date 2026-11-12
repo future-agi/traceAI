@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class VertexAIInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for `google-cloud-aiplatform` or the `vertexai` SDK
@@ -46,11 +60,12 @@ class VertexAIInstrumentor(BaseInstrumentor):  # type: ignore
         import google.api_core.gapic_v1 as gapic
         from traceai_vertexai._wrapper import _Wrapper
 
+        media = dict(attachments=_attachment_manager(kwargs), config=config)
         for method in (gapic.method.wrap_method, gapic.method_async.wrap_method):
             wrap_function_wrapper(
                 module=method.__module__,
                 name=method.__name__,
-                wrapper=lambda f, _, args, kwargs: _Wrapper(tracer)(f(*args, **kwargs)),
+                wrapper=lambda f, _, args, kwargs: _Wrapper(tracer, **media)(f(*args, **kwargs)),
             )
         if Protect is not None:
             self._original_protect = Protect.protect
@@ -69,3 +84,12 @@ class VertexAIInstrumentor(BaseInstrumentor):  # type: ignore
         for module in (gapic.method, gapic.method_async):
             if wrapped := getattr(module.wrap_method, "__wrapped__", None):
                 setattr(module, "wrap_method", wrapped)
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "vertexai_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_vertexai")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

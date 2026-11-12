@@ -102,9 +102,32 @@ logger.addHandler(logging.NullHandler())
 
 
 class _WithTracer(ABC):
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        attachments: Any = None,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: Any, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared attachment manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(
+                self._attachments, span, "mistralai", trace_config=self._config
+            ).compatible_messages(messages, "mistral")
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     @contextmanager
     def _start_as_current_span(
@@ -304,6 +327,7 @@ class _SyncChatWrapper(_WithTracer, _WithMistralAI):
                 request_parameters
             ),
         ) as with_span:
+            self._capture_chat_media(with_span._span, kwargs.get("messages"))
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -359,6 +383,7 @@ class _AsyncChatWrapper(_WithTracer, _WithMistralAI):
                 request_parameters
             ),
         ) as with_span:
+            self._capture_chat_media(with_span._span, kwargs.get("messages"))
             try:
                 response = await wrapped(*args, **kwargs)
             except (Exception, asyncio.CancelledError) as exception:
@@ -414,6 +439,7 @@ class _AsyncStreamChatWrapper(_WithTracer, _WithMistralAI):
                 request_parameters
             ),
         ) as with_span:
+            self._capture_chat_media(with_span._span, kwargs.get("messages"))
             try:
                 response = await wrapped(*args, **kwargs)
             except (Exception, asyncio.CancelledError) as exception:

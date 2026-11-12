@@ -131,3 +131,12 @@ class DeepSeekInstrumentor(BaseInstrumentor):
                 completions.AsyncCompletions.create = self._original_async_chat_create
         except Exception as e:
             logger.warning(f"Failed to uninstrument: {e}")
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "deepseek_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_deepseek")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

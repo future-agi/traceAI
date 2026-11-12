@@ -32,10 +32,12 @@ __all__ = ("capture_groq_speech", "capture_groq_audio_input", "groq_attachment_c
 
 groq_attachment_capabilities = {
     "schema_version": 1,
+    # Chat image input (data URIs) is the compatible-message capture in fi_instrumentation's provider_media.
     "operations": ("audio.speech.create.output", "audio.transcriptions.create.input",
-                   "audio.translations.create.input"),
-    "sources": ("sdk_buffered_bytes", "inline_bytes"),
-    "unsupported": ("streamed_speech", "file_path", "open_file_object", "chat_media"),
+                   "audio.translations.create.input", "chat.completions.create.input"),
+    "sources": ("sdk_buffered_bytes", "inline_bytes", "data_uri"),
+    "unsupported": ("streamed_speech", "file_path", "open_file_object", "chat_remote_url", "chat_input_audio",
+                    "chat_output_media"),
 }
 
 

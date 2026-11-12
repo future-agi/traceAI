@@ -59,6 +59,20 @@ __all__ = [
 ]
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class FireworksInstrumentor(BaseInstrumentor):
     """An instrumentor for Fireworks AI (OpenAI-compatible API)."""
 
@@ -107,7 +121,7 @@ class FireworksInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer, config=config),
+            wrapper=_CompletionsWrapper(tracer=self._tracer, config=config, attachments=_attachment_manager(kwargs)),
         )
 
         # Wrap asynchronous completions
@@ -115,7 +129,9 @@ class FireworksInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, config=config),
+            wrapper=_AsyncCompletionsWrapper(
+                tracer=self._tracer, config=config, attachments=_attachment_manager(kwargs)
+            ),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -127,3 +143,12 @@ class FireworksInstrumentor(BaseInstrumentor):
                 openai_module.AsyncCompletions.create = self._original_async_completions_create
         except ImportError:
             pass
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "fireworks_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_fireworks")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

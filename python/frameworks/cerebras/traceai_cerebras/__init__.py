@@ -117,3 +117,12 @@ class CerebrasInstrumentor(BaseInstrumentor):
                 cerebras_module.AsyncCompletionsResource.create = self._original_async_completions_create
         except ImportError:
             pass
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "cerebras_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_cerebras")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

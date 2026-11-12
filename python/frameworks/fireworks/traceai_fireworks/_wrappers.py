@@ -49,13 +49,30 @@ _REQUEST_BODY_FIELDS = frozenset({
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
+    _media_dialect = "image"
+
     def __init__(
         self, tracer: trace_api.Tracer, *args: Any,
-        config: Optional[TraceConfig] = None, **kwargs: Any,
+        config: Optional[TraceConfig] = None, attachments: Any = None, **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         self._config = config if config is not None else TraceConfig()
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+
+    def _capture_chat_media(self, span: Any, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared attachment manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(
+                self._attachments, span, "fireworks", trace_config=self._config
+            ).compatible_messages(messages, self._media_dialect)
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     @contextmanager
     def _start_span(
@@ -408,6 +425,7 @@ class _CompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = wrapped(*args, **kwargs)
 
@@ -472,6 +490,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, config=self._config, **extra_kwargs)
 
         with self._start_span("Fireworks Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = await wrapped(*args, **kwargs)
 

@@ -54,9 +54,34 @@ class _WithTracer(ABC):
     Base class for wrappers that need a tracer.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        attachments: Any = None,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_input(self, span: _WithSpan, wrapped: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+        """Typed inline_data Parts of the request; returns the capture for the response, or None."""
+        if self._attachments is None:
+            return None
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            bound = signature(wrapped).bind(*args, **kwargs).arguments
+            return ProviderMedia(
+                self._attachments, span._span, "google_genai", trace_config=self._config
+            ).gemini_contents(bound.get("contents"))
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
+            return None
 
     @contextmanager
     def _start_as_current_span(
@@ -148,6 +173,7 @@ class _SyncGenerateContent(_WithTracer):
                 request_parameters
             ),
         ) as span:
+            media = self._capture_input(span, wrapped, args, kwargs)
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -158,6 +184,9 @@ class _SyncGenerateContent(_WithTracer):
                 )
                 span.finish_tracing(status=status)
                 raise
+            if media is not None:
+                # Completed response only (generated images, audio, files); streams stay input-only.
+                media.gemini_response(response)
             try:
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -209,6 +238,7 @@ class _SyncGenerateContentStream(_WithTracer):
                 request_parameters
             ),
         ) as span:
+            media = self._capture_input(span, wrapped, args, kwargs)
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -268,6 +298,7 @@ class _AsyncGenerateContentWrapper(_WithTracer):
                 request_parameters
             ),
         ) as span:
+            media = self._capture_input(span, wrapped, args, kwargs)
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:
@@ -278,6 +309,9 @@ class _AsyncGenerateContentWrapper(_WithTracer):
                 )
                 span.finish_tracing(status=status)
                 raise
+            if media is not None:
+                # Completed response only (generated images, audio, files); streams stay input-only.
+                media.gemini_response(response)
             try:
                 _finish_tracing(
                     status=trace_api.Status(status_code=trace_api.StatusCode.OK),
@@ -329,6 +363,7 @@ class _AsyncGenerateContentStream(_WithTracer):
                 request_parameters
             ),
         ) as span:
+            media = self._capture_input(span, wrapped, args, kwargs)
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:
