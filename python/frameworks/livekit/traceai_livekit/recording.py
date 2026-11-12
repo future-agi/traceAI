@@ -6,6 +6,8 @@ never inspects requests, catches delegate failures, polls, or reads media bytes.
 
 import inspect
 import logging
+import math
+import re
 from typing import Any, Optional, Tuple
 
 from fi_instrumentation import FITracer, TraceConfig
@@ -225,3 +227,142 @@ def wrap_egress_client(
         client, parent=parent, room_name=room_name, conversation_id=conversation_id,
         tracer=selected, trace_config=config,
     )
+
+
+_EGRESS_MIMES = {".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4",
+                 ".mp4": "audio/mp4", ".wav": "audio/wav", ".webm": "audio/webm"}
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_TOKEN = re.compile(r"[a-zA-Z0-9_-]{1,128}")
+_AGENTS_SUPPORTED = ("1.8.10", "1.8.11")
+
+
+def _audio_only_request(info) -> bool:
+    """Audio-only is proven from the Egress REQUEST, never from a filename."""
+    kind = info.WhichOneof("request")
+    if kind == "room_composite":
+        return bool(info.room_composite.audio_only)
+    if kind == "track_composite":
+        request = info.track_composite
+        return bool(request.audio_track_id) and not request.video_track_id
+    # Track, participant and web egress cannot prove an audio-only output.
+    return False
+
+
+class LiveKitEgressResolver:
+    """Completed LiveKit Egress output -> opaque F01 ``ProviderFile`` facts.
+
+    ``EgressInfo`` comes ONLY from the application: either an object it already
+    holds (``egress_info``) or ONE fixed-ID read through its existing client
+    (``egress_client.list_egress(ListEgressRequest(egress_id=...))``). No generic
+    listing, no polling, no Egress start/stop. ``registry`` maps the completed
+    output to the server-registered output id (backend B08; CQ-4). No location,
+    filename, signed URL or credential leaves this object.
+    """
+
+    def __init__(self, *, connection_id: str, registry, room_name: str, egress_info=None,
+                 egress_client=None) -> None:
+        self._connection_id = connection_id
+        self._registry = registry
+        self._room_name = room_name
+        self._info = egress_info
+        self._client = egress_client
+
+    def __repr__(self) -> str:
+        return "LiveKitEgressResolver()"
+
+    async def _read(self, egress_id: str):
+        if self._info is not None:
+            return self._info
+        if self._client is None:
+            return None
+        from livekit import api
+        response = await self._client.list_egress(api.ListEgressRequest(egress_id=egress_id))
+        items = list(response.items)
+        return items[0] if len(items) == 1 else None
+
+    async def resolve(self, request, *, deadline: float):
+        from fi_instrumentation.attachments import ProviderFileSource, ResolvedCompletedRecording
+        from livekit import api
+
+        try:
+            if request.provider != "livekit_egress" or not _UUID.fullmatch(self._connection_id or ""):
+                return "source_unavailable"
+            info = await self._read(request.provider_ref)
+            if not isinstance(info, api.EgressInfo):
+                return "source_unavailable"
+            if info.egress_id != request.provider_ref or info.room_name != self._room_name:
+                return "source_unavailable"
+            # Start/stop snapshots and failed/aborted jobs are never "ready".
+            if info.status != api.EGRESS_COMPLETE or info.ended_at <= 0:
+                return "source_unavailable"
+            if not _audio_only_request(info):
+                return "source_unavailable"
+            if (len(info.file_results) != 1 or len(info.stream_results) or len(info.segment_results)
+                    or len(info.image_results)):
+                return "source_unavailable"
+            result = info.file_results[0]
+            name = result.filename.lower()
+            mime = next((m for ext, m in _EGRESS_MIMES.items() if name.endswith(ext)), None)
+            if mime is None or result.size <= 0 or result.duration <= 0:
+                return "source_unavailable"
+            registered = await self._registry.lookup(connection_id=self._connection_id,
+                                                     egress_id=request.provider_ref, file_index=0)
+            if not isinstance(registered, str) or not _UUID.fullmatch(registered):
+                return "source_unavailable"
+            return ResolvedCompletedRecording(
+                source=ProviderFileSource(connection_id=self._connection_id, registered_output_id=registered),
+                declared_bytes=int(result.size), declared_duration_ms=math.ceil(int(result.duration) / 1e6),
+                mime_type=mime, direction="mixed",
+            )
+        except Exception:
+            return "source_unavailable"
+
+
+async def import_completed_egress(egress_info=None, *, session_context, egress_id, room_name, manager,
+                                  connection_id=None, registry=None, egress_client=None,
+                                  existing_source_authorized=False, capture_policy=None, timeout=30.0):
+    """Offer an explicitly authorized COMPLETED Egress to the private importer.
+
+    The core's ``import_completed_recording`` preflights first (deny wins), then
+    this adapter's ``LiveKitEgressResolver`` turns the app-held ``EgressInfo``
+    (or one fixed-ID read through ``egress_client``) into opaque ProviderFile
+    facts, and the core submits an F01 ``completed_recording`` import with the
+    original credentials. ``ImportHandle.reason == "queued"`` means the server
+    accepted the job (``importing``), never that media is playable.
+
+    Without ``connection_id`` + ``registry`` (CQ-4) the result is
+    ``source_unavailable``. This never starts/stops Egress, polls, or sends a
+    location, filename, URL or credential. Metadata-only
+    ``record_egress()``/``wrap_egress_client()`` keep their behavior.
+    """
+    # Lazy imports keep metadata-only installs compatible with released cores.
+    from fi_instrumentation.attachments import (
+        CapturePolicy, CompletedRecordingRequest, CorrelationHandle, ImportHandle, UnavailableResolver,
+    )
+    if existing_source_authorized is not True:
+        return ImportHandle("disabled")
+    try:
+        capture = capture_policy if capture_policy is not None else CapturePolicy()
+        if not isinstance(capture, CapturePolicy) or capture.new_recording:
+            return ImportHandle("policy_denied")
+        if session_context is None:
+            return ImportHandle("correlation_unavailable")
+        from importlib.metadata import version
+        if version("livekit-agents") not in _AGENTS_SUPPORTED:
+            return ImportHandle("unsupported_version")
+        if (not isinstance(egress_id, str) or not _TOKEN.fullmatch(egress_id)
+                or type(room_name) is not str or not 0 < len(room_name) <= 256):
+            return ImportHandle("source_unavailable")
+        target = session_context
+        if not isinstance(target, CorrelationHandle) and not hasattr(target, "is_recording"):
+            target = CorrelationHandle.from_span(target)
+        if connection_id is not None and registry is not None:
+            resolver = LiveKitEgressResolver(connection_id=connection_id, registry=registry, room_name=room_name,
+                                             egress_info=egress_info, egress_client=egress_client)
+        else:
+            resolver = UnavailableResolver()
+        return await manager.import_completed_recording(
+            target, CompletedRecordingRequest("livekit_egress", egress_id, "mixed"),
+            resolver=resolver, capture_policy=capture, timeout=timeout)
+    except Exception:
+        return ImportHandle("source_unavailable")

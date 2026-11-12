@@ -57,8 +57,9 @@ them twice over:
   trace, `agent_session` included, as soon as the call ends.
 - **When the process exits**, just before it stops: this sends what LiveKit ends after the shutdown callbacks, its own
   `job_shutdown` span, and the job's root `job_entrypoint` span when tracing is set up before the job starts. With
-  set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, so it is never recorded and the
-  job trace arrives rooted at `job_shutdown`.
+  set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, so it is never recorded. The call
+  then arrives as separate traces: the session trace rooted at `agent_session`, and `job_shutdown` as a root of its own
+  (see "How Future AGI Voice finds a LiveKit call").
 
 Each waits at most 3 seconds for the collector, well inside the 10 seconds LiveKit gives a job process to exit, so its own
 clean-up still runs when the collector is slow.
@@ -188,3 +189,36 @@ The pinned development lock contains LiveKit Agents 1.8.6, API 1.2.1, protocol 1
 Check the `examples/` directory for agent examples (validate recording SDK compatibility before deployment):
 *   `simple_agent.py`: A basic voice assistant agent.
 *   `egress_agent.py`: An agent with opt-in Egress metadata capture, an explicit session envelope and bounded stop/close cleanup. The modern `LiveKitAPI().egress` request shape and native-session linkage require the deployment's SDK/mode validation.
+
+## Call recordings as trace attachments (opt-in)
+
+Attachments are off by default. Both paths below need the attachment-enabled `fi-instrumentation-otel` and `livekit-agents` 1.8.10 or 1.8.11. Neither starts, stops or enables recording.
+
+**Local session recording.** If your session already records audio (`record=True`), bind it after `await session.start(...)`:
+
+```python
+binding = traceai.bind_livekit_session(session, ctx, owned_recording_files=True)
+```
+
+When the session ends, the SDK's `audio.ogg` is uploaded as one `mixed` file. This happens before LiveKit deletes its temporary directory, with a deadline of up to 30 s. Hard links, symlinks, foreign owners and replaced files are refused. LiveKit redaction, `LIVEKIT_TELEMETRY_ALLOW_PII` and FI hide flags all deny. The session span is marked `fi.span.kind=CONVERSATION` only if it has no parent, which depends on where tracing is set up (below).
+
+**How Future AGI Voice finds a LiveKit call.** The SDK never invents a conversation root: it marks the session span only when that span is already the root of its trace. Which span is the root depends on where tracing is set up (checked with a real livekit-agents 1.8.10 and 1.8.11 worker):
+
+- **Tracing set up inside the entrypoint** (the Quick Start above). LiveKit starts `job_entrypoint` before tracing is on, so it is not recorded and `agent_session` is the root of the call's trace (it carries `lk.job_id`). An admitted `bind_livekit_session(..., owned_recording_files=True)` marks `agent_session` as `CONVERSATION`, the recording is attached to it, and the call is listed in Voice. Without an admitted binding (attachments off, a denial, or `owned_recording_files=False`) nothing is marked, and the call is not listed. `job_shutdown` (with the session-end upload span) and `room_connect` arrive as separate root traces.
+- **Tracing set up before the job starts** (for example in `setup_fnc`, or at worker start-up). LiveKit's `job_entrypoint` span is the trace root and carries `lk.job_id`; `agent_session` and `job_shutdown` are its children, so the binding does not mark `agent_session`. When attachments are enabled on the Future AGI server, ingest treats an untyped, parentless `job_entrypoint` span with a non-empty `lk.job_id` as the call's conversation root, so the call is listed in Voice and its recording is found on the child `agent_session` span.
+- Traces ingested before attachments were enabled on the server are not re-classified.
+- Do not set `fi.span.kind` on `job_entrypoint` or `agent_session` yourself to force a root; that changes how the whole trace is classified.
+
+**Completed Egress.** Pass a completed audio-only Egress that your app is authorized to use:
+
+```python
+handle = await traceai.import_livekit_completed_egress(
+    egress_info, session_context=session_span, egress_id=egress_info.egress_id,
+    room_name=room, connection_id=CONNECTION_ID, registry=registry, existing_source_authorized=True)
+```
+
+- `egress_info` is an object you already have. Alternatively, pass `egress_client=lkapi.egress`, which makes one read by that ID.
+- `connection_id` and `registry` identify the output that Future AGI has registered for your LiveKit connection.
+- Only `EGRESS_COMPLETE` jobs from audio-only room or track composites with exactly one file are accepted. Anything else returns `source_unavailable`.
+- No location, filename, URL or credential is ever sent.
+- `handle.reason == "queued"` means the server accepted the import. It does not mean the recording is playable yet.
