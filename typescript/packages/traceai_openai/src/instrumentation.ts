@@ -1,3 +1,5 @@
+import { patchSpeech, unpatchSpeech } from "./speech";
+import type { ProviderMediaOptions } from "@traceai/provider-media";
 import openai from "openai";
 import {
   InstrumentationBase,
@@ -107,6 +109,7 @@ function getExecContext(span: Span) {
 export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
   // Lazily initialized: InstrumentationBase can patch during super().
   // A Set is needed so disable() also undoes every manually patched ESM SDK.
   private patchedModules?: Set<typeof openai>;
@@ -114,6 +117,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   constructor({
     instrumentationConfig,
     traceConfig,
+    attachments,
   }: {
     /**
      * The config for the instrumentation
@@ -125,6 +129,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
      * @see {@link TraceConfigOptions}
      */
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
   } = {}) {
     super(
       "@traceai/fi-instrumentation-openai",
@@ -132,6 +137,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
     // The base constructor can call enable() before our trace options exist.
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
@@ -628,6 +634,10 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       );
     }
 
+    // Audio calls gain spans only while an explicitly supplied manager is active (checked per call,
+    // because the base constructor can patch before this.attachments is assigned).
+    patchSpeech(sdk, this, () => this.fiTracer, () => ({ attachments: this.attachments, traceConfig: this._traceConfig }), () => this.isEnabled());
+
     // Keep the legacy diagnostic property, but never use it as the guard.
     // Immutable class exports still work via the identity map.
     try { (sdk as typeof openai & { fiPatched?: boolean }).fiPatched = true; } catch { /* immutable SDK */ }
@@ -643,6 +653,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   private unpatch(moduleExports: typeof openai, moduleVersion?: string) {
     const sdk = moduleExports?.OpenAI;
     if (!sdk || patchRegistry.owners.get(sdk) !== this) return;
+    unpatchSpeech(sdk, this);
     this._unwrap(sdk.Chat.Completions.prototype, "create");
     this._unwrap(sdk.Completions.prototype, "create");
     this._unwrap(sdk.Embeddings.prototype, "create");

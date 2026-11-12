@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -161,7 +162,7 @@ interface StreamResponse<T> {
 /**
  * Configuration for vLLM instrumentation
  */
-export interface VLLMInstrumentationConfig {
+export interface VLLMInstrumentationConfig extends ProviderMediaOptions {
   instrumentationConfig?: InstrumentationConfig;
   traceConfig?: TraceConfigOptions;
   /** Base URL pattern to identify vLLM requests (optional) */
@@ -174,6 +175,7 @@ export interface VLLMInstrumentationConfig {
 export class VLLMInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
   private _baseUrlPattern?: string | RegExp;
   private readonly modules = new Set<OpenAIModule>();
   private readonly patches = new Map<ResourcePrototype, Create>();
@@ -187,6 +189,7 @@ export class VLLMInstrumentation extends InstrumentationBase {
       enabled: false,
     });
     this._traceConfig = config.traceConfig;
+    this.attachments = config.attachments;
     this._baseUrlPattern = config.baseUrlPattern;
     this.setConfig(config.instrumentationConfig ?? {});
     this.refreshTracer();
@@ -374,6 +377,7 @@ export class VLLMInstrumentation extends InstrumentationBase {
             },
           },
         );
+        if (chat) new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig }).compatibleMessages(body.messages);
         const finish = spanEnder(span);
         let result: Promise<unknown>;
         try {

@@ -1,0 +1,33 @@
+{
+  "name": "@traceai/provider-media",
+  "version": "0.1.0",
+  "description": "Typed provider attachment extraction using the shared traceAI attachment manager",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({type:'module'}))\"",
+    "test": "node --test test/layout.test.cjs test/media.test.cjs test/preflight.test.cjs test/speech-stream.test.cjs test/owner.test.cjs",
+    "test:sdk": "node --test test/sdk.test.cjs"
+  },
+  "dependencies": {
+    "@traceai/fi-core": "workspace:^"
+  },
+  "devDependencies": {
+    "tsc-alias": "^1.8.16"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}

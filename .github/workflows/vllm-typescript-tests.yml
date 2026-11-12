@@ -6,6 +6,7 @@ on:
     paths:
       - 'typescript/packages/traceai_vllm/**'
       - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/vllm-typescript-tests.yml'

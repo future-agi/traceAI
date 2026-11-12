@@ -17,4 +17,6 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "node_modules", "dist", "examples"]
+,
+  "references": [{ "path": "../provider-media" }]
 }

@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   context,
   trace,
@@ -21,7 +22,7 @@ import { VERSION } from "./version.js";
 import { wrapAPIPromise } from "./promise.js";
 export { VERSION } from "./version.js";
 
-export interface GoogleGenAITracingOptions {
+export interface GoogleGenAITracingOptions extends ProviderMediaOptions {
   tracerProvider?: TracerProvider;
   traceConfig?: TraceConfigOptions;
   /** Total captured content budget per call, in characters. Default 16,384; maximum 65,536. */
@@ -326,6 +327,7 @@ export function instrumentGoogleGenAI(
             activeCalls++;
             let span: Span | undefined;
             let capture: Capture | undefined;
+            let media: ProviderMediaCapture | undefined;
             let child = parent;
             safely(() => {
               span = tracer.startSpan(
@@ -350,6 +352,10 @@ export function instrumentGoogleGenAI(
               child = trace.setSpan(parent, span);
               capture = new Capture(span, config, limit);
               const params = record(args[0]);
+              if (resource === "models" && (name === "generateContent" || name === "generateContentStream")) {
+                media = new ProviderMediaCapture(span, options);
+                media.geminiContents(params.contents);
+              }
               capture.input(params, name);
               if (resource === "interactions" && name !== "create")
                 capture.string("google.genai.interaction_id", args[0]);
@@ -431,6 +437,7 @@ export function instrumentGoogleGenAI(
             const observe = (value: unknown) => {
               if (ended) return;
               safely(() => {
+                if (name === "generateContent") media?.geminiResponse(value);
                 capture?.response(value);
                 const status =
                   record(record(value).interaction).status ??

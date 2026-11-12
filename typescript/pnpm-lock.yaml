@@ -268,6 +268,16 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/provider-media:
+    dependencies:
+      '@traceai/fi-core':
+        specifier: workspace:^
+        version: link:../fi-core
+    devDependencies:
+      tsc-alias:
+        specifier: ^1.8.16
+        version: 1.8.16
+
   packages/traceai_agent_core:
     dependencies:
       '@opentelemetry/api':
@@ -561,6 +571,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.693.0
@@ -1306,6 +1319,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@google/generative-ai':
         specifier: ^0.21.0
@@ -1350,11 +1366,14 @@ importers:
         specifier: ^2.0.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
       '@traceai/fi-core':
-        specifier: ^1.1.0
-        version: 1.1.0
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
         specifier: ^1.0.0
         version: 1.0.0
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@google/genai':
         specifier: 2.32.0
@@ -1424,6 +1443,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: ^0.201.1
@@ -2044,6 +2066,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@mistralai/mistralai':
         specifier: ^1.0.0
@@ -2281,6 +2306,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@opentelemetry/exporter-trace-otlp-http':
         specifier: ^0.202.0
@@ -2679,6 +2707,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@opentelemetry/context-async-hooks':
         specifier: ^2.0.1
@@ -2961,6 +2992,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@google-cloud/vertexai':
         specifier: ^1.0.0
@@ -3041,6 +3075,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/provider-media':
+        specifier: workspace:^
+        version: link:../provider-media
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.29.0

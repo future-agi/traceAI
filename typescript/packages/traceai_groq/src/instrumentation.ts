@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -131,16 +132,19 @@ function audioInput(body: Record<string, unknown>): Record<string, unknown> {
 export class GroqInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
   // Base construction can call enable()/patch() before our constructor runs.
   private manualModules?: Set<Record<string, unknown>>;
   private patches?: Map<Resource, Patch>;
 
-  constructor({ instrumentationConfig, traceConfig }: {
+  constructor({ instrumentationConfig, traceConfig, attachments }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
+    attachments?: ProviderMediaOptions["attachments"];
   } = {}) {
     super("@traceai/groq", VERSION, { ...instrumentationConfig });
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
     this.refreshTracer();
   }
 
@@ -238,7 +242,14 @@ export class GroqInstrumentation extends InstrumentationBase {
           },
         },
       );
-      const execContext = trace.setSpan(context.active(), span);
+      const parent = context.active();
+      const media = new ProviderMediaCapture(span, { attachments: instrumentation.attachments, traceConfig: instrumentation._traceConfig, parentContext: parent });
+      if (operation === "chat") media.compatibleMessages(body.messages, "groq");
+      if (operation === "transcription" || operation === "translation") media.speechInput(body.file);
+      // Audio calls whose media this capture owns carry the shared owner marker, so wire-level
+      // capture (auto) never uploads a second copy. Chat media ownership is unchanged.
+      const spanContext = trace.setSpan(parent, span);
+      const execContext = operation === "chat" ? spanContext : media.claim(spanContext);
       const execPromise = safeExecuteInTheMiddle(
         () => context.with(execContext, () => original.apply(this, args)),
         error => {
@@ -251,7 +262,7 @@ export class GroqInstrumentation extends InstrumentationBase {
       );
       // Speech resolves to a binary Response owned by the caller. Record completion
       // at response availability, without reading/cloning the body or logging audio.
-      const output = operation === "chat" ? undefined : operation === "speech" ? () => ({}) : audioResponseAttributes;
+      const output = operation === "chat" ? undefined : operation === "speech" ? (result: unknown) => { media.speechResponse(result); return {}; } : audioResponseAttributes;
       return observeResponse(execPromise, span, execContext, output);
     };
   }

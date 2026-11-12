@@ -46,7 +46,8 @@
     "@opentelemetry/core": "^2.0.1",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@traceai/fi-core": "workspace:^",
-    "@traceai/fi-semantic-conventions": "workspace:^"
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "@traceai/provider-media": "workspace:^"
   },
   "peerDependencies": {
     "openai": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"

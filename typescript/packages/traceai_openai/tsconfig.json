@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
   "references": [
+    { "path": "../provider-media" },
     { "path": "../fi-core" },
     { "path": "../fi-semantic-conventions" }
   ]

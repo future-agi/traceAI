@@ -6,6 +6,7 @@ on:
     paths:
       - 'typescript/packages/traceai_openai/**'
       - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/provider-media/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/openai-sdk-contracts.yml'
@@ -47,9 +48,10 @@ jobs:
           pnpm --filter @traceai/openai run build
           pnpm --dir packages/traceai_openai pack --out "$RUNNER_TEMP/openai.tgz"
           pnpm --dir packages/fi-core pack --out "$RUNNER_TEMP/core.tgz"
+          pnpm --dir packages/provider-media pack --out "$RUNNER_TEMP/provider-media.tgz"
           npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/openai.tgz" "openai@${{ matrix.sdk }}" \
-            "$RUNNER_TEMP/core.tgz" @traceai/fi-semantic-conventions@1.0.0 \
+            "$RUNNER_TEMP/core.tgz" "$RUNNER_TEMP/provider-media.tgz" @traceai/fi-semantic-conventions@1.0.0 \
             @opentelemetry/sdk-trace-base@2.0.1 @opentelemetry/context-async-hooks@2.0.1 \
             @opentelemetry/exporter-trace-otlp-http@0.202.0 \
             @opentelemetry/exporter-trace-otlp-proto@0.202.0 @opentelemetry/otlp-transformer@0.202.0 \
@@ -58,7 +60,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/strict-consumer"
           cat > "$RUNNER_TEMP/strict-consumer/package.json" <<JSON
-          {"private":true,"dependencies":{"@traceai/openai":"file:$RUNNER_TEMP/openai.tgz","openai":"${{ matrix.sdk }}"},"pnpm":{"overrides":{"@traceai/fi-core":"file:$RUNNER_TEMP/core.tgz"}}}
+          {"private":true,"dependencies":{"@traceai/openai":"file:$RUNNER_TEMP/openai.tgz","openai":"${{ matrix.sdk }}"},"pnpm":{"overrides":{"@traceai/fi-core":"file:$RUNNER_TEMP/core.tgz","@traceai/provider-media":"file:$RUNNER_TEMP/provider-media.tgz"}}}
           JSON
           pnpm --dir "$RUNNER_TEMP/strict-consumer" install --ignore-scripts \
             --config.hoist=false --config.shamefully-hoist=false

@@ -1,3 +1,4 @@
+import { ProviderMediaCapture, type ProviderMediaOptions } from "@traceai/provider-media";
 /**
  * OpenTelemetry instrumentation for Google Cloud Vertex AI.
  *
@@ -25,7 +26,7 @@ import {
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
-export interface VertexAIInstrumentationConfig {
+export interface VertexAIInstrumentationConfig extends ProviderMediaOptions {
   instrumentationConfig?: Record<string, unknown>;
   traceConfig?: TraceConfigOptions;
 }
@@ -38,6 +39,7 @@ export interface VertexAIInstrumentationConfig {
 export class VertexAIInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: ProviderMediaOptions["attachments"];
 
   constructor(config: VertexAIInstrumentationConfig = {}) {
     super(
@@ -46,6 +48,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       config.instrumentationConfig || {}
     );
     this._traceConfig = config.traceConfig;
+    this.attachments = config.attachments;
   }
 
   override enable(): void {
@@ -211,6 +214,8 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       },
     });
 
+    const media = new ProviderMediaCapture(span, { attachments: this.attachments, traceConfig: this._traceConfig });
+    media.geminiContents(request.contents);
     const execContext = trace.setSpan(context.active(), span);
 
     try {
@@ -218,6 +223,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
         return original.apply(instance, args);
       });
 
+      media.geminiResponse(result);
       this.setResponseAttributes(span, result);
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
