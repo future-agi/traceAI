@@ -4,13 +4,16 @@ The real ``claude_agent_sdk`` spawns this through ``ClaudeAgentOptions(cli_path=
 For every user message it replays one tool call: the assistant ``tool_use``, the
 PreToolUse and PostToolUse hook callbacks the SDK registered, the ``tool_result``
 carrying the media in ``FAKE_CLAUDE_RESULT`` (a JSON file), then a final answer.
-``FAKE_CLAUDE_ORDER=result-first`` streams the tool result before PostToolUse.
-No model, network or file other than the result file is touched.
+``FAKE_CLAUDE_ORDER=result-first`` streams the tool result before PostToolUse;
+``no-result`` never streams it. ``FAKE_CLAUDE_GAP`` (seconds) waits between
+PostToolUse and the tool result. No model, network or file other than the
+result file is touched.
 """
 
 import json
 import os
 import sys
+import time
 
 if "-v" in sys.argv[1:] or "--version" in sys.argv[1:]:
     print("2.1.999 (Claude Code)")
@@ -19,6 +22,7 @@ if "-v" in sys.argv[1:] or "--version" in sys.argv[1:]:
 with open(os.environ["FAKE_CLAUDE_RESULT"]) as handle:
     TOOL_RESULT = json.load(handle)
 ORDER = os.environ.get("FAKE_CLAUDE_ORDER", "hooks-first")
+GAP = float(os.environ.get("FAKE_CLAUDE_GAP", "0"))
 TOOL = "mcp__screen__capture"
 hooks = {}
 counter = [0]
@@ -67,7 +71,9 @@ def turn():
         hook("PostToolUse", tool_use_id, {"tool_response": TOOL_RESULT.get("content")})
     else:
         hook("PostToolUse", tool_use_id, {"tool_response": TOOL_RESULT.get("content")})
-        send(result)
+        time.sleep(GAP)
+        if ORDER != "no-result":
+            send(result)
     assistant([{"type": "text", "text": "done"}])
     send({"type": "result", "subtype": "success", "duration_ms": 1, "duration_api_ms": 1, "is_error": False,
           "num_turns": 1, "session_id": "s1", "total_cost_usd": 0.0, "result": "done",

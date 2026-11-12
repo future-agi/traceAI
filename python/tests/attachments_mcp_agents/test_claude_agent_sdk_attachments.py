@@ -19,6 +19,7 @@ pytest.importorskip("traceai_claude_agent_sdk")
 from fi_instrumentation import TraceConfig  # noqa: E402
 from fi_instrumentation.attachments import AttachmentConfig, create_attachment_manager  # noqa: E402
 from traceai_claude_agent_sdk import ClaudeAgentInstrumentor  # noqa: E402
+from traceai_claude_agent_sdk._attributes import ClaudeAgentAttributes  # noqa: E402
 
 from _harness import PDF, b64, flush, png, refs  # noqa: E402
 
@@ -32,7 +33,7 @@ def image(data, mime="image/png"):
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
-    def make(content, order="hooks-first", is_error=False):
+    def make(content, order="hooks-first", is_error=False, gap=0.0):
         result = tmp_path / "result.json"
         result.write_text(json.dumps({"content": content, "is_error": is_error}))
         launcher = tmp_path / "claude"
@@ -40,6 +41,7 @@ def cli(tmp_path, monkeypatch):
         launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
         monkeypatch.setenv("FAKE_CLAUDE_RESULT", str(result))
         monkeypatch.setenv("FAKE_CLAUDE_ORDER", order)
+        monkeypatch.setenv("FAKE_CLAUDE_GAP", str(gap))
         monkeypatch.setenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
         # Releases without ClaudeAgentOptions.cli_path find the CLI as "claude" on PATH.
         monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
@@ -99,12 +101,43 @@ def test_tool_result_image_and_pdf_upload_before_truncation_on_the_tool_span(f01
     (tool,) = tool_spans(exporter)
     parents = {u["association"]["parent"]["span_id"] for u in f01.uploads}
     assert parents == {format(tool.context.span_id, "016x")}
-    if order == "result-first":
-        assert len(refs(tool)) == 2  # still open: projected on the span
+    # In both orders the tool span is still recording when its result arrives, so every
+    # uploaded occurrence is projected (fi.attachment.refs) on its upload parent.
+    assert sorted(r["occurrence_id"] for r in refs(tool)) == sorted(u["occurrence_id"] for u in f01.uploads)
+    assert tool.status.is_ok
     # Bytes never reach a text attribute (tool output, conversation output).
     for span in exporter.get_finished_spans():
         for value in span.attributes.values():
             assert b64(SHOT)[:40] not in str(value)
+    manager.shutdown(5)
+
+
+def _duration_ms(span):
+    return (span.end_time - span.start_time) / 1e6
+
+
+def test_hooks_first_tool_span_keeps_the_hook_end_time_while_waiting_for_its_result(f01, instrument, cli):
+    manager = f01.manager()
+    exporter = instrument(manager)
+    converse(cli([image(SHOT)], gap=0.6))
+    flush(manager)
+    (tool,) = tool_spans(exporter)
+    assert len(refs(tool)) == 1 and len(f01.uploads) == 1
+    hook_ms = tool.attributes[ClaudeAgentAttributes.TOOL_DURATION_MS]
+    # Ended at the PostToolUse time, not when the result streamed 600 ms later.
+    assert abs(_duration_ms(tool) - hook_ms) < 150 and _duration_ms(tool) < 450
+    manager.shutdown(5)
+
+
+def test_a_result_that_never_arrives_still_ends_the_tool_span_at_its_hook_time(f01, instrument, cli):
+    manager = f01.manager()
+    exporter = instrument(manager)
+    messages = converse(cli([image(SHOT)], order="no-result", gap=0.3))
+    flush(manager)
+    assert type(messages[-1]).__name__ == "ResultMessage"
+    (tool,) = tool_spans(exporter)
+    assert tool.status.is_ok and not refs(tool) and f01.uploads == []
+    assert abs(_duration_ms(tool) - tool.attributes[ClaudeAgentAttributes.TOOL_DURATION_MS]) < 150
     manager.shutdown(5)
 
 

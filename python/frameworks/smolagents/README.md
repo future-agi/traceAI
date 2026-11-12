@@ -88,8 +88,9 @@ Pass the shared manager: `SmolagentsInstrumentor().instrument(tracer_provider=..
   blocks: task images and `ActionStep.observations_images`, such as a browser
   screenshot a step callback stored) are uploaded on the model span as
   `model_input`, once per image object (memory replays are not re-uploaded).
-  When the model span captured an image, provider instrumentors below it are
-  told the call's media is already owned.
+  Every model call that carries a captured image, new or replayed, tells
+  provider instrumentors below it that the call's media is already owned, so
+  a replayed image is never uploaded again from the provider request.
 - A tool's returned in-memory PIL image or `AgentImage` is uploaded on the
   tool span as `tool_result`.
 

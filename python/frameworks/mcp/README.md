@@ -66,7 +66,8 @@ and `BlobResourceContents.blob` (in an `EmbeddedResource` or a
 parts and 256 KiB of decoded bytes per result. `resource_link` blocks,
 resource URIs and `structuredContent` are never read. A MIME of another
 modality than the block type, or outside the attachment MIME list, uploads
-nothing. `attachments=` overrides the provider's manager; `trace_config=` and
+nothing, and so do bytes whose leading signature names another modality than
+the declared MIME (a PNG labelled `audio/wav` or `application/octet-stream`). `attachments=` overrides the provider's manager; `trace_config=` and
 `attachment_capture=` only add restrictions. Wrapping a wrapped session
 returns it unchanged. `capture_mcp_result(manager, span, result, operation)`
 is the same capture for an existing span.

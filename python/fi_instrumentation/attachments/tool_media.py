@@ -13,6 +13,10 @@ give them one set of rules (the TypeScript ``@traceai/mcp`` and
   opens a file, or reads a stream. A URL or file-backed value is skipped.
 - Every value is preflighted before it is read or decoded. Each observation
   has a bounded decode budget and part count; parts beyond them are skipped.
+- A declared MIME is never trusted over the bytes: when the first bytes are a
+  known signature of ANOTHER modality (a PNG labelled ``audio/wav`` or
+  ``application/octet-stream``), the part is denied, so a mislabel cannot
+  escape ``hide_input_images`` or a modality restriction. Never relabelled.
 - A context marked by another adapter as the owner of this call's media
   (``OWNER_KEY``, shared by name with ``traceai``) captures nothing here.
 
@@ -20,6 +24,8 @@ Not part of ``fi_instrumentation.attachments.__all__``. Every function is
 non-throwing and returns ``None``/empty on denial.
 """
 
+import base64
+import binascii
 import dataclasses
 import io
 import sys
@@ -39,7 +45,8 @@ TOOL_RESULT_BUDGET = 256 * KiB
 MAX_TOOL_PARTS = 64
 #: In-memory images are PNG-encoded only up to this many pixels (no huge synchronous encodes).
 MAX_IMAGE_PIXELS = 2048 * 2048
-OWNER_KEY = "traceai.auto.attachment_owner.v1"
+#: The cross-adapter owner mark, by name (``media_capture.OWNER_KEY`` where the core defines it).
+OWNER_KEY = getattr(mc, "OWNER_KEY", "traceai.auto.attachment_owner.v1")
 URI_PREFIX = "fi-attachment:"
 Occurrence = mc.Occurrence
 
@@ -81,6 +88,50 @@ def tool_capture_policy(trace_config=None, capture: Optional[CapturePolicy] = No
 def mime_kind(mime: Any) -> Optional[str]:
     """The F01 modality of an exact MIME; None when the MIME is not in the F01 enum."""
     return MIME_MODALITIES.get(mime) if isinstance(mime, str) else None
+
+
+#: Leading-byte signatures with an unambiguous F01 modality. Containers shared by audio and
+#: video (MP4 ``ftyp``, WebM/Matroska) have none: they can only be denied by their declared MIME.
+_SIGNATURES = (
+    (0, b"\x89PNG\r\n\x1a\n", "image"), (0, b"\xff\xd8\xff", "image"), (0, b"GIF87a", "image"),
+    (0, b"GIF89a", "image"), (8, b"WEBP", "image"), (8, b"WAVE", "audio"),
+    (0, b"OggS", "audio"), (0, b"fLaC", "audio"), (0, b"ID3", "audio"), (0, b"%PDF-", "document"),
+)
+
+
+def signature_kind(head: bytes) -> Optional[str]:
+    """The modality the first bytes name, or None when they name none (or are ambiguous)."""
+    for offset, magic, kind in _SIGNATURES:
+        if head[offset:offset + len(magic)] == magic:
+            if offset == 8 and head[:4] != b"RIFF":
+                continue
+            return kind
+    return None
+
+
+def _declared_kind(value: str, mimes, raw: bool) -> Optional[str]:
+    if raw:
+        return mime_kind(mimes[0])
+    end = value.find(";", 5, 128)
+    return mime_kind(value[5:end]) if value.startswith("data:") and end > 5 else None
+
+
+def consistent(value: Any, mimes, raw: bool) -> bool:
+    """False when the base64 value's first bytes are a signature of another modality than declared."""
+    if not isinstance(value, str):
+        return True  # Not inline base64: the structural parse rejects it.
+    start = 0
+    if not raw:
+        comma = value.find(",", 0, 128)
+        if comma < 0:
+            return True
+        start = comma + 1
+    try:
+        head = base64.b64decode(value[start:start + 16], validate=True)
+    except (binascii.Error, ValueError):
+        return True  # Malformed base64: strict decoding rejects it later.
+    found = signature_kind(head)
+    return found is None or found == _declared_kind(value, mimes, raw)
 
 
 def _pil_image(value: Any) -> bool:
@@ -172,7 +223,8 @@ class ToolMedia:
 
         def once():
             if "value" not in seen:
-                seen["value"] = read()
+                value = read()
+                seen["value"] = value if consistent(value, mimes, raw) else None
             return seen["value"]
 
         def capture():
