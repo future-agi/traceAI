@@ -35,6 +35,23 @@ __all__ = [
 _MODULE = "langchain_core"
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumentor for LangChain
@@ -63,7 +80,18 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-        self._tracer: Optional[LangChainFiTracer] = LangChainFiTracer(self.fi_tracer)
+        attachments = _attachment_manager(kwargs)
+        self._tracer: Optional[LangChainFiTracer] = LangChainFiTracer(
+            self.fi_tracer,
+            attachments=attachments,
+            trace_config=config,
+        )
+        # One model call, one owner: only while attachments are enabled (else nothing is patched).
+        self._owner_patches: List[Any] = []
+        if attachments is not None:
+            from traceai_langchain._attachments import own_chat_model_calls
+
+            self._owner_patches = own_chat_model_calls(attachments)
         self._original_callback_manager_init = BaseCallbackManager.__init__
         wrap_function_wrapper(
             module="langchain_core.callbacks",
@@ -82,6 +110,11 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
+        if getattr(self, "_owner_patches", None):
+            from traceai_langchain._attachments import release_chat_model_calls
+
+            release_chat_model_calls(self._owner_patches)
+        self._owner_patches = []
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore
         self._original_callback_manager_init = None  # type: ignore
         if self._protect_class is not None:

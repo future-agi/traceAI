@@ -39,6 +39,17 @@ def _wrap_methods(
             wrap_function_wrapper(target, name, wrapper)
 
 
+def _attachment_manager(manager: Any) -> Any:
+    """An enabled shared manager, else None (a disabled or pre-attachments core is a no-op)."""
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 def _instrument(self: Any, **kwargs: Any) -> None:
     from agno.agent import _run as agent_run
     from agno.knowledge.knowledge import Knowledge
@@ -75,7 +86,12 @@ def _instrument(self: Any, **kwargs: Any) -> None:
         ),
     )
     run = _RunWrapper(self._tracer)
-    model = _ModelWrapper(self._tracer, hide_inputs=bool(config.hide_inputs))
+    model = _ModelWrapper(
+        self._tracer,
+        hide_inputs=bool(config.hide_inputs),
+        attachments=_attachment_manager(kwargs.get("attachments")),
+        trace_configs=(fi_config, config),
+    )
     tool = _FunctionCallWrapper(self._tracer, hide_inputs=bool(config.hide_inputs))
     workflow = _WorkflowWrapper(self._tracer)
     execute = _WorkflowExecuteWrapper(self._tracer)

@@ -36,6 +36,7 @@ class AgnoInstrumentorWrapper:
             dict[str, str],
             str | None,
             TraceConfig | None,
+            object | None,
         ]
         | None
     )
@@ -59,6 +60,7 @@ class AgnoInstrumentorWrapper:
         *,
         project_name: str | None = None,
         config: TraceConfig | None = None,
+        attachments: object | None = None,
     ) -> AgnoInstrumentorWrapper:
         """Use an existing provider OR create an OTLP/HTTP protobuf exporter.
 
@@ -66,6 +68,9 @@ class AgnoInstrumentorWrapper:
         globally. Endpoint configuration owns a private provider. With no
         arguments, an already configured global provider is required.
         ``config`` is OpenInference's TraceConfig, not fi_instrumentation's.
+        ``attachments`` is the provider-owned attachment manager
+        (``register(...).attachment_manager``); media is captured only when it is
+        enabled, under both the FI and the OpenInference content policy.
         """
         with self._lock:
             configuration = (
@@ -74,6 +79,7 @@ class AgnoInstrumentorWrapper:
                 dict(otlp_headers or {}),
                 project_name,
                 config,
+                attachments,
             )
             if self._agno_instrumentor is not None and not self.is_instrumented:
                 raise RuntimeError(
@@ -88,6 +94,7 @@ class AgnoInstrumentorWrapper:
                         otlp_headers,
                         project_name,
                         config,
+                        attachments,
                     )
                 ):
                     return self
@@ -151,6 +158,7 @@ class AgnoInstrumentorWrapper:
                     delegate,
                     tracer_provider=provider,
                     config=config,
+                    attachments=attachments,
                     raise_exception_on_conflict=True,
                 )
                 if not delegate.is_instrumented_by_opentelemetry:
@@ -204,6 +212,7 @@ def configure_agno_tracing(
     project_name: str | None = None,
     *,
     config: TraceConfig | None = None,
+    attachments: object | None = None,
 ) -> AgnoInstrumentorWrapper:
     """Configure Agno using an existing provider or a complete OTLP traces URL.
 
@@ -219,6 +228,7 @@ def configure_agno_tracing(
         otlp_headers=otlp_headers,
         project_name=project_name,
         config=config,
+        attachments=attachments,
     )
 
 
