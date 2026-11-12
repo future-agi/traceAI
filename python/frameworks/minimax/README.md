@@ -216,13 +216,12 @@ MiniMaxInstrumentor().instrument(
 
 | Attribute | Description |
 |-----------|-------------|
-| `fi.span.kind` | "LLM" |
-| `llm.system` | "minimax" |
-| `llm.provider` | "minimax" |
-| `llm.model` | Model name (MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
+| `gen_ai.span.kind` | "LLM" |
+| `gen_ai.provider.name` | "minimax" |
+| `gen_ai.request.model` | Model name (MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed) |
+| `gen_ai.usage.input_tokens` | Input token count |
+| `gen_ai.usage.output_tokens` | Output token count |
+| `gen_ai.usage.total_tokens` | Total token count |
 
 ### MiniMax-Specific Attributes
 
