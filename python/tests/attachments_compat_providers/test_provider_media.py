@@ -273,15 +273,18 @@ def test_part_cap_bounds_work(f01, spans):
         return preflight(*args, **kwargs)
 
     manager.preflight = counted
-    content = [{"type": "image_url", "image_url": {"url": data_uri(png(seed=i))}} for i in range(80)]
-    media, _ = capture(manager, tracer_provider, lambda m: m.compatible_messages([{"role": "user", "content": content}]))
+    # 80 parts over two messages: each list is within its own bound, so only the per-observation cap stops it.
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": data_uri(png(seed=m * 40 + i))}}
+                                             for i in range(40)]} for m in range(2)]
+    media, _ = capture(manager, tracer_provider, lambda m: m.compatible_messages(messages))
     flush(manager)
     assert len(f01.payloads) == provider_media.MAX_PARTS == len(media.captured)
     # One preflight per admitted part (exact type and size already match the gate), none past the cap.
     assert len(calls) == provider_media.MAX_PARTS
     del manager.preflight
     media, _ = capture(manager, tracer_provider, lambda m: m.compatible_messages(
-        [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": b64(wav()), "format": "wav"}}] * 80}]))
+        [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": b64(wav(seed=i)), "format": "wav"}}
+                                      for i in range(40)]}] * 2))
     flush(manager)
     assert len(media.captured) == provider_media.MAX_PARTS
     manager.shutdown(5)
