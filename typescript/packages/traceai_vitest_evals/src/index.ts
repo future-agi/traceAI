@@ -7,7 +7,12 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 
 const DEFAULT_ENDPOINT = 'https://api.futureagi.com/tracer/v1/traces';
-const RESOURCE = resourceFromAttributes({ 'service.name': 'vitest-evals' });
+// Future AGI files every span under its resource's project; a batch without project_name is refused.
+const DEFAULT_PROJECT = 'vitest-evals';
+function projectResource(projectName?: string) {
+  const name = projectName || process.env.FI_PROJECT_NAME || DEFAULT_PROJECT;
+  return resourceFromAttributes({ 'service.name': 'vitest-evals', project_name: name, project_type: 'observe' });
+}
 const SCOPE = { name: '@traceai/vitest-evals', version: '0.1.0' };
 const SAFE_KEYS = new Set([
   'gen_ai.system', 'gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.response.model',
@@ -25,7 +30,7 @@ type EvalMeta = { scores?: Score[]; avgScore?: number | null; thresholdFailed?: 
 type Run = { traces?: SourceTrace[]; usage?: { provider?: string; model?: string; inputTokens?: number; outputTokens?: number; totalTokens?: number } };
 type TestLike = { name: string; meta(): { eval?: EvalMeta; harness?: { run?: Run } }; result(): { state: string } };
 type ModuleLike = { children: { allTests(): Iterable<TestLike> } };
-export type ReporterOptions = { exporter?: SpanExporter; endpoint?: string; apiKey?: string; secretKey?: string };
+export type ReporterOptions = { exporter?: SpanExporter; endpoint?: string; apiKey?: string; secretKey?: string; projectName?: string };
 
 const hexId = (value: string | undefined, length: number): value is string =>
   typeof value === 'string' && new RegExp(`^[a-fA-F0-9]{${length}}$`).test(value) && !/^0+$/.test(value);
@@ -67,7 +72,7 @@ function safeAttributes(span: SourceSpan, evalMeta?: EvalMeta, run?: Run): Attri
   }
   return attributes;
 }
-function mappedTrace(trace: SourceTrace, evalMeta?: EvalMeta, run?: Run): ReadableSpan[] {
+function mappedTrace(trace: SourceTrace, resource: ReadableSpan['resource'], evalMeta?: EvalMeta, run?: Run): ReadableSpan[] {
   const sourceTraceId = trace.id ?? trace.spans.find(span => hexId(span.traceId, 32))?.traceId;
   const traceId = hexId(sourceTraceId, 32) ? sourceTraceId.toLowerCase() : newId(16);
   const ids = new Map<string, string>();
@@ -94,7 +99,7 @@ function mappedTrace(trace: SourceTrace, evalMeta?: EvalMeta, run?: Run): Readab
       startTime: start, endTime: end, duration, ended: true,
       status: { code: span.status === 'error' ? SpanStatusCode.ERROR : SpanStatusCode.OK },
       attributes: safeAttributes(span, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined),
-      events: [], links: [], resource: RESOURCE, instrumentationScope: SCOPE,
+      events: [], links: [], resource, instrumentationScope: SCOPE,
       droppedAttributesCount: 0, droppedEventsCount: 0, droppedLinksCount: 0,
     };
   });
@@ -102,7 +107,9 @@ function mappedTrace(trace: SourceTrace, evalMeta?: EvalMeta, run?: Run): Readab
 
 export class VitestEvalsReporter {
   private readonly exporter: SpanExporter;
+  private readonly resource: ReadableSpan['resource'];
   constructor(options: ReporterOptions = {}) {
+    this.resource = projectResource(options.projectName);
     this.exporter = options.exporter ?? new OTLPTraceExporter({
       url: options.endpoint ?? DEFAULT_ENDPOINT,
       headers: {
@@ -120,7 +127,7 @@ export class VitestEvalsReporter {
       const run = harness?.run;
       const traces = run?.traces?.filter(trace => trace.spans?.length) ?? [];
       if (!traces.length) traces.push({ spans: [{ name: test.name, kind: 'run', status: test.result().state === 'failed' ? 'error' : 'ok' }] });
-      for (const [index, trace] of traces.entries()) spans.push(...mappedTrace(trace, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined));
+      for (const [index, trace] of traces.entries()) spans.push(...mappedTrace(trace, this.resource, index === 0 ? evalMeta : undefined, index === 0 ? run : undefined));
     }
     if (!spans.length) return;
     await new Promise<void>((resolve, reject) => this.exporter.export(spans, result => {
