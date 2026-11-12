@@ -178,7 +178,8 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
       if (response && (response.status ?? 0) >= 200 && (response.status ?? 0) < 300 && !response.truncated && mediaType(header(response.headers, "content-type")) === "application/json") jsonOutput(parseJson(response.body));
     },
     settle() {
-      // No wire span will be bound (unmatched or failed call, delivery gate, build failure): end pending captures now.
+      // No wire span will be bound (unmatched call; a thrown, rejected or aborted call, including a response body that
+      // failed or was aborted while read, whose error wire span binds nothing; delivery gate; build failure): end now.
       if (correlation || settled) return;
       settled = true;
       try { deferred?.cancel(); } catch { /* never throws */ }

@@ -243,7 +243,11 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         if (finished) return; finished = true;
         const complete = () => {
           if (audio) { response.audioOutputBytes = audio.bytes; response.body = undefined; }
-          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value, request, response) : undefined); } catch { /* Capture must not reach application code. */ }
+          // A transport failure or abort (fetch rejected, or the response body failed or was aborted while read) still
+          // emits an error wire span, but nothing held is bound to it, as on the synchronous-throw path: the held
+          // capture is cancelled below. A completed HTTP error response (4xx/5xx) is a finished call and binds.
+          const bindMedia = media && !response.error ? (span: Span) => media!.bind(span, request, response) : undefined;
+          try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, bindMedia); } catch { /* Capture must not reach application code. */ }
           // `emit` binds only when it starts the wire span; any other outcome cancels what was held for it.
           finally { settle(); resolve(); pending.delete(done); }
         };

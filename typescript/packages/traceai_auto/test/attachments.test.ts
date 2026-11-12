@@ -27,6 +27,8 @@ let original: typeof fetch, server: Server, origin: string, manager: AttachmentM
 let uploads: Buffer[], requests: any[], transfers: string[], providerBodies: Buffer[], providerRequests: number;
 let provider: BasicTracerProvider, exporter: InMemorySpanExporter;
 let responseStatus: number, responseData: Buffer, responseType: string, responseChunks: number;
+/** `reset` destroys the socket once the request body arrived; `hang` never answers; `partial` sends half the body, then destroys. */
+let responseMode: "normal" | "reset" | "hang" | "partial";
 const nativeFetch = globalThis.fetch;
 const serverPolicy = { version: "fixture-v1", enabled: true, allowed_sources: ["Bytes", "Blob"], allowed_modalities: ["image", "audio", "document", "file"],
   require_media_redaction: false, require_metadata_removal: false, allow_unredacted_media_with_text_pii: false, record_audio: false, record_video: false };
@@ -82,10 +84,15 @@ function install(target = manager, emit: "span" | "none" | "invalid" = "span") {
     bindMedia?.(span); span.end(end);
   }, [], target);
 }
-const transcription = () => {
+const transcription = (signal?: AbortSignal) => {
   const body = new FormData(); body.set("model", "whisper-1"); body.set("file", new Blob([audio], { type: "audio/wav" }), "PRIVATE_CANARY_FILENAME.wav");
-  return fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", body });
+  return fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", body, signal });
 };
+/** Polls a condition well inside the 300 s deferred deadline, so a pass proves the call's own exit released it. */
+async function eventually(condition: () => boolean, ms = 2000) {
+  for (const until = Date.now() + ms; !condition() && Date.now() < until;) await new Promise(r => setTimeout(r, 5));
+  expect(condition()).toBe(true);
+}
 async function readAll(response: Response, mode: "reader" | "iterator" = "reader"): Promise<Buffer> {
   const chunks: Buffer[] = [];
   if (mode === "iterator") { for await (const chunk of response.body as any) chunks.push(Buffer.from(chunk)); }
@@ -108,7 +115,7 @@ beforeAll(() => context.setGlobalContextManager(new AsyncLocalStorageContextMana
 afterAll(() => context.disable());
 beforeEach(async () => {
   original = globalThis.fetch; uploads = []; requests = []; transfers = []; providerBodies = []; providerRequests = 0;
-  responseStatus = 200; responseData = audio; responseType = "audio/wav"; responseChunks = 1;
+  responseStatus = 200; responseData = audio; responseType = "audio/wav"; responseChunks = 1; responseMode = "normal";
   server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", chunk => chunks.push(chunk));
@@ -116,7 +123,10 @@ beforeEach(async () => {
       const body = Buffer.concat(chunks);
       if (req.headers["x-attachment-control"]) { control(req, body, res); return; }
       providerRequests++; providerBodies.push(body);
+      if (responseMode === "reset") { req.socket.destroy(); return; }
+      if (responseMode === "hang") return;
       res.writeHead(responseStatus, { "content-type": responseType });
+      if (responseMode === "partial") { res.write(responseData.subarray(0, Math.ceil(responseData.length / 2)), () => setTimeout(() => req.socket.destroy(), 15)); return; }
       // Several network chunks, spaced so loopback does not coalesce them: incremental readers see several reads.
       const size = Math.ceil(responseData.length / responseChunks), data = responseData;
       void (async () => {
@@ -277,6 +287,32 @@ describe("A03 FormData and JSON media", () => {
     expect(requests[0]).toMatchObject({ direction: "input", purpose: "model_input", source_kind: "Blob", mime_type: "audio/wav" });
     expect(requests[0].association.parent.span_id).toBe(spans[0].spanContext().spanId);
     expect(JSON.stringify(requests)).not.toContain("PRIVATE_CANARY");
+    expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
+  });
+  test.each(["reset", "abort", "partial"] as const)("wire-only transcription whose call fails after the send (%s) drops the held audio at once: the error wire span binds nothing", async mode => {
+    // reset: the connection drops, fetch rejects. abort: the application aborts after the send, fetch rejects (AbortError).
+    // partial: the response body fails while the application reads it. In each case the provider received the audio.
+    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic transcription"}');
+    responseMode = mode === "abort" ? "hang" : mode;
+    install(); const controller = new AbortController(); const pending = transcription(controller.signal);
+    expect(manager.status().ownedBytes).toBe(audio.length);
+    if (mode === "abort") { await eventually(() => providerRequests === 1); controller.abort(); }
+    const failure = await pending.then(response => response.json()).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    if (mode === "abort") expect((failure as Error).name).toBe("AbortError");
+    await eventually(() => manager.status().ownedBytes === 0);
+    expect(manager.status()).toMatchObject({ openTickets: 0, openStreams: 0, ownedBytes: 0 });
+    expect(providerRequests).toBe(1); expect(providerBodies[0].includes(audio)).toBe(true);
+    // The error wire span is still emitted; nothing held was bound to it.
+    await eventually(() => exporter.getFinishedSpans().length === 1);
+    await settle(); expect(uploads).toHaveLength(0); expect(requests).toHaveLength(0); expect(sessionsOnly()).toEqual([]);
+  });
+  test("wire-only transcription answered with an HTTP error (completed 400) is a finished call: the held audio binds to its wire span", async () => {
+    responseStatus = 400; responseType = "application/json"; responseData = Buffer.from('{"error":{"message":"synthetic","type":"invalid_request_error"}}');
+    install(); const response = await transcription(); expect(response.status).toBe(400); await response.json();
+    await settle(); expect(uploads).toEqual([audio]);
+    const spans = exporter.getFinishedSpans(); expect(spans).toHaveLength(1);
+    expect(requests[0].association.parent.span_id).toBe(spans[0].spanContext().spanId);
     expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
   });
   test("wire-only image edits have no wire span: the held file is dropped when the call completes and nothing uploads", async () => {
