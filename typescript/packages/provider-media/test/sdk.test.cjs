@@ -103,7 +103,8 @@ for (const tier of tiers) {
   // The context the SDK's own fetch runs in is the one wire-level capture (the auto module) inspects.
   const marking = seen => (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-    seen.push([url.pathname.replace(/^.*\/(chat|audio)\//, '$1/'), api.context.active().getValue(OWNER)]);
+    // Non-HTTP requests an SDK makes through the custom fetch (not provider calls) are recorded by scheme.
+    seen.push([url.protocol.startsWith('http') ? url.pathname.replace(/^.*\/(chat|audio)\//, '$1/') : url.protocol, api.context.active().getValue(OWNER)]);
     return redirect(input, init);
   };
   const ownerRows = async (client, model, voice, f, seen) => {
@@ -150,7 +151,10 @@ for (const tier of tiers) {
       const seen = [];
       await new sdk.OpenAI({ apiKey: 'synthetic', baseURL: 'https://unknown.invalid/v1', fetch: marking(seen) }).audio.transcriptions.create({ model: 'whisper-1', file: new File([wav()], 'a.wav', { type: 'audio/wav' }) });
       await f.manager.flush();
-      assert.deepEqual(seen, [['audio/transcriptions', undefined]]); assert.equal(f.uploads.length, 0);
+      // Only the provider call is asserted by route; nothing the SDK fetches on this host carries the marker.
+      assert.deepEqual(seen.filter(([route]) => route.startsWith('audio/')), [['audio/transcriptions', undefined]], JSON.stringify(seen));
+      for (const [, value] of seen) assert.equal(value, undefined, JSON.stringify(seen));
+      assert.equal(f.uploads.length, 0);
     } finally { inst.disable(); await f.close(); exporter.reset(); }
   });
 
