@@ -44,8 +44,9 @@ def test_framework_and_provider_spans_each_own_their_occurrence(f01, spans):
     names = {span.name: refs(span) for span in exporter.get_finished_spans()}
     assert [r["occurrence_id"] for r in names["framework"]] == [first.occurrence_id]
     assert [r["occurrence_id"] for r in names["provider"]] == [second.occurrence_id]
-    assert _parents(f01) == ["%016x" % parent.get_span_context().span_id,
-                             "%016x" % child.get_span_context().span_id]
+    # Upload workers run concurrently, so the order the server sees them in is not fixed.
+    assert sorted(_parents(f01)) == sorted(["%016x" % parent.get_span_context().span_id,
+                                            "%016x" % child.get_span_context().span_id])
 
 
 def test_raw_bytes_and_inline_base64_at_two_positions_are_two_occurrences(f01, spans):
