@@ -36,7 +36,10 @@ function nativeAttributes(attributes: Attributes): Attributes {
   else if (typeof attributes["gen_ai.system"] === "string") result["gen_ai.provider.name"] = attributes["gen_ai.system"];
   const inputTokens = result["gen_ai.usage.input_tokens"];
   const outputTokens = result["gen_ai.usage.output_tokens"];
-  if (typeof inputTokens === "number" && typeof outputTokens === "number") result["gen_ai.usage.total_tokens"] = inputTokens + outputTokens;
+  // Derive the total only when the span did not set a canonical total itself.
+  if (typeof inputTokens === "number" && typeof outputTokens === "number" && typeof attributes["gen_ai.usage.total_tokens"] !== "number") {
+    result["gen_ai.usage.total_tokens"] = inputTokens + outputTokens;
+  }
   // Tool arguments are already normalized to input.value. The legacy alias is
   // outside both FI masking and the export boundary's covered content families.
   delete result["tool.parameters"];
