@@ -69,10 +69,25 @@ Both helpers use the provider and hide flags from `traceai.init`, and pass the s
 manager only while capture is on.
 
 `traceai.report()` shows the attachment state and, per integration, `media`:
-`provider_adapter` when the installed instrumentor captures media (today `traceAI-openai`,
-`traceAI-anthropic`, `traceAI-groq` and the six MCP and agent packages above),
-`session_binding` for voice integrations that capture only through an explicit `bind_*`
-call, otherwise `unqualified`. It contains no endpoint or credential and is not a playback claim.
+`provider_adapter` when the installed instrumentor version captures media, with its
+`media_operations`; `session_binding` for voice integrations that capture only through an
+explicit `bind_*` call; otherwise `unqualified`. It contains no endpoint or credential and
+is not a playback claim. A row can be `provider_adapter` for:
+
+| Kind | Packages |
+|---|---|
+| Providers | `openai`, `anthropic`, `groq`, `google_genai`, `vertexai`, `bedrock`, `litellm`, `fireworks`, `xai`, `mistralai`, `openrouter`, `portkey`, `ollama`, `vllm`, `minimax` |
+| Frameworks | `langchain`, `llamaindex`, `agno`, `pydantic_ai` |
+| MCP and agents | the six packages above |
+
+An installed version without the adapter reports `unqualified`. `together`, `deepseek` and
+`cerebras` capture no media.
+
+Agno reads `pii_redaction` and `hide_error_details` only from `FI_PII_REDACTION` and
+`FI_HIDE_ERROR_DETAILS`. When `trace_config` sets either one in code and the environment does
+not, `traceai` still traces Agno but captures no Agno media, and its status is
+`config_unsupported`. Agno span text then does not follow that flag; set the environment
+variable to apply it.
 
 ## License
 

@@ -675,3 +675,70 @@ def test_agno_without_the_media_adapter_keeps_the_off_arguments(monkeypatch):
     provider, call = _agno_init(monkeypatch, _enabled_like_manager(), TraceConfig())
     assert call.kwargs == {"tracer_provider": provider}
     assert traceai.attachment_status()["adapters"]["agno"] == "registered"
+
+
+def _agno_on(monkeypatch):
+    for name in ("FI_ATTACHMENTS_ENABLED", "FI_PII_REDACTION", "FI_HIDE_ERROR_DETAILS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(traceai, "_media_support", lambda module: {"media": "provider_adapter"})
+
+
+def _agno_row():
+    return {row["name"]: row for row in traceai.report()["integrations"]}["agno"]["status"]
+
+
+def test_agno_fails_closed_on_a_pii_or_error_flag_it_cannot_apply(monkeypatch):
+    """Agno reads pii_redaction / hide_error_details only from the environment: no media, own status."""
+    _stub_openinference(monkeypatch)
+    for config in (TraceConfig(pii_redaction=True), TraceConfig(hide_error_details=True),
+                   TraceConfig(pii_redaction=True, hide_error_details=True)):
+        _agno_on(monkeypatch)
+        monkeypatch.setattr(traceai, "_adapter_status", {})
+        provider, call = _agno_init(monkeypatch, _enabled_like_manager(), config)
+        assert call.kwargs == {"tracer_provider": provider}, config
+        assert traceai.attachment_status()["adapters"]["agno"] == "config_unsupported"
+        assert _agno_row() == "config_unsupported"
+    # A hide flag Agno does receive keeps its config, and the error flag it derives is not lost.
+    _agno_on(monkeypatch)
+    monkeypatch.setattr(traceai, "_adapter_status", {})
+    provider, call = _agno_init(monkeypatch, _enabled_like_manager(),
+                                TraceConfig(hide_inputs=True, pii_redaction=True))
+    assert set(call.kwargs) == {"tracer_provider", "config"} and call.kwargs["config"].hide_inputs is True
+    assert _agno_row() == "config_unsupported"
+
+
+def test_agno_keeps_media_when_the_environment_carries_the_flag(monkeypatch):
+    _stub_openinference(monkeypatch)
+    for env, config in (("FI_PII_REDACTION", TraceConfig(pii_redaction=True)),
+                        ("FI_HIDE_ERROR_DETAILS", TraceConfig(hide_error_details=True))):
+        _agno_on(monkeypatch)
+        monkeypatch.setenv(env, "true")
+        monkeypatch.setattr(traceai, "_adapter_status", {})
+        manager = _enabled_like_manager()
+        provider, call = _agno_init(monkeypatch, manager, config)
+        assert call.kwargs == {"tracer_provider": provider, "attachments": manager}, env
+        assert _agno_row() == "registered"
+    # hide_error_details derived from a forwarded content hide flag is applied by Agno too.
+    _agno_on(monkeypatch)
+    monkeypatch.setattr(traceai, "_adapter_status", {})
+    manager = _enabled_like_manager()
+    config = TraceConfig(hide_inputs=True)
+    assert config.hide_error_details is True
+    provider, call = _agno_init(monkeypatch, manager, config)
+    assert set(call.kwargs) == {"tracer_provider", "config", "attachments"}
+    assert _agno_row() == "registered"
+
+
+def test_agno_off_arguments_are_unchanged_by_an_unreachable_flag(monkeypatch):
+    _stub_openinference(monkeypatch)
+    for off in ("env", "disabled"):
+        _agno_on(monkeypatch)
+        monkeypatch.setattr(traceai, "_adapter_status", {})
+        if off == "env":
+            monkeypatch.setenv("FI_ATTACHMENTS_ENABLED", "false")
+            manager = _enabled_like_manager()
+        else:
+            manager = traceai.DisabledAttachmentManager()
+        provider, call = _agno_init(monkeypatch, manager, TraceConfig(pii_redaction=True))
+        assert call.kwargs == {"tracer_provider": provider}, off
+        assert _agno_row() == "config_unsupported", off

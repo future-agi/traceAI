@@ -345,8 +345,16 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
             instrumentor = instrumentor_class()
             provider = _tracer_provider
             kwargs = dict(tracer_provider=provider, config=getattr(provider, "trace_config", None))
+            status = "registered"
             if instrumentor_module == "traceai_agno":
-                kwargs = _agno_kwargs(provider)
+                kwargs, unreachable = _agno_kwargs(provider)
+                if unreachable:
+                    # Agno is traced, but cannot apply these flags and captures no media.
+                    status = "config_unsupported"
+                    if verbose:
+                        print(f"Warning: {lib_name} cannot apply trace_config {', '.join(unreachable)} "
+                              "set in code (it reads them only from FI_* environment variables); "
+                              "its media capture is off and its span text does not follow them")
             elif _ATTACHMENTS_SUPPORTED:
                 manager = get_attachment_manager()
                 if _capturing(manager):
@@ -365,7 +373,7 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
                     print(f"Warning: {lib_name} was not instrumented (dependency check failed)")
                 return False
             _instrumented.add(instrumentor_module)
-            _adapter_status[lib_name_lower] = "registered"
+            _adapter_status[lib_name_lower] = status
 
         if verbose:
             print(f"|  Auto-instrumented: {lib_name}")
@@ -384,30 +392,58 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
         return False
 
 
-def _agno_kwargs(provider) -> Dict[str, Any]:
-    """Keyword arguments for ``AgnoInstrumentorWrapper.instrument``.
+# FI-only TraceConfig flags. Agno's privacy bridge builds its FI config from the environment and
+# takes only the hide_* flags from the OpenInference config auto passes, so these reach Agno only
+# through FI_PII_REDACTION / FI_HIDE_ERROR_DETAILS.
+_AGNO_ENV_ONLY = ("pii_redaction", "hide_error_details")
 
-    It takes OpenInference's TraceConfig (not fi's) and no ``attachment_*`` alias. Auto's
-    hide flags are carried over, and only when one is set, so an unrestricted setup keeps
-    Agno's own default and environment policy. ``attachments`` is passed only while capturing
-    and only to a version that has the media adapter.
+
+def _agno_privacy(trace_config):
+    """``(hide flags for Agno's OpenInference config or None, FI-only flags set on auto that Agno cannot apply)``.
+
+    What Agno applies is its environment policy plus the forwarded hide flags (they also derive
+    ``hide_error_details``), so a flag counts as unreachable only when that would not set it.
     """
-    kwargs: Dict[str, Any] = {"tracer_provider": provider}
-    trace_config = getattr(provider, "trace_config", None)
-    hidden = {field.name: True for field in dataclasses.fields(TraceConfig)
-              if field.name.startswith("hide_") and getattr(trace_config, field.name, False) is True}
+    hidden = [field.name for field in dataclasses.fields(TraceConfig)
+              if field.name.startswith("hide_") and getattr(trace_config, field.name, False) is True]
+    forwarded: Optional[Dict[str, bool]] = None
     if hidden:
         from openinference.instrumentation import TraceConfig as OpenInferenceTraceConfig
 
         names = {field.name for field in dataclasses.fields(OpenInferenceTraceConfig)}
-        kwargs["config"] = OpenInferenceTraceConfig(**{name: True for name in hidden if name in names})
-    if _ATTACHMENTS_SUPPORTED:
+        forwarded = {name: True for name in hidden if name in names}
+    wanted = [name for name in _AGNO_ENV_ONLY if getattr(trace_config, name, False) is True]
+    if not wanted:
+        return forwarded, []
+    try:
+        reach = TraceConfig(**(forwarded or {}))
+    except Exception:
+        reach = None  # Unknown: treat every wanted flag as unreachable.
+    return forwarded, [name for name in wanted if getattr(reach, name, False) is not True]
+
+
+def _agno_kwargs(provider):
+    """``(keyword arguments for AgnoInstrumentorWrapper.instrument, unreachable FI-only flags)``.
+
+    It takes OpenInference's TraceConfig (not fi's) and no ``attachment_*`` alias. Auto's
+    hide flags are carried over, and only when one is set, so an unrestricted setup keeps
+    Agno's own default and environment policy. ``attachments`` is passed only while capturing,
+    only to a version that has the media adapter, and never while auto's trace_config sets
+    ``pii_redaction`` or ``hide_error_details`` that Agno cannot apply (fail closed).
+    """
+    kwargs: Dict[str, Any] = {"tracer_provider": provider}
+    forwarded, unreachable = _agno_privacy(getattr(provider, "trace_config", None))
+    if forwarded is not None:
+        from openinference.instrumentation import TraceConfig as OpenInferenceTraceConfig
+
+        kwargs["config"] = OpenInferenceTraceConfig(**forwarded)
+    if _ATTACHMENTS_SUPPORTED and not unreachable:
         manager = get_attachment_manager()
         # Only a traceai-agno version with the media adapter (it declares the descriptor) accepts
         # ``attachments``; an older one keeps tracing with the OFF arguments.
         if _capturing(manager) and _media_support("traceai_agno")["media"] == "provider_adapter":
             kwargs["attachments"] = manager
-    return kwargs
+    return kwargs, unreachable
 
 
 def get_tracer_provider() -> Optional[TracerProvider]:
@@ -584,6 +620,11 @@ def report() -> dict:
     integrations that capture only through an explicit ``bind_*`` call, otherwise
     ``unqualified``. It describes capability, not that any media was captured, and
     never a playback claim. No endpoint, header or credential is included.
+
+    ``integrations[].status`` is ``registered`` once enabled, ``config_unsupported`` for an
+    Agno traced without media because auto's trace_config sets ``pii_redaction`` or
+    ``hide_error_details`` it cannot apply, ``dependency_unavailable``, ``unsupported_version``,
+    else ``not_enabled`` or ``not_installed``.
     """
     names = {}
     for name, module in _INSTRUMENTOR_REGISTRY.items():
