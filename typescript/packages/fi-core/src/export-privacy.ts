@@ -169,6 +169,20 @@ function withheldMarker(key: string): string { return key === "session.id" ? "<r
 // their values, and SDK data loss still withholds them. Discovery reads their
 // values without their names, so an id never becomes a registered credential.
 const GROUPING_KEYS: ReadonlySet<string> = new Set(["session.id", "user.id", "session_name", "metadata.session_id", "metadata.user_id"]);
+// Integrations that also record the session id under their own attribute name,
+// with the same value as session.id, get the same name-only exemption. Exact
+// keys only: other session-named attributes, such as session tokens and
+// cookies, keep the credential name rule.
+const INTEGRATION_SESSION_ID_KEYS: ReadonlySet<string> = new Set([
+  // @traceai/pi-coding-agent
+  "pi.session.id",
+  // @traceai/claude-agent-sdk
+  "claude_agent.session.id", "claude_agent.session_id", "claude_agent.resume_session_id",
+  "claude_agent.session.previous_id", "claude_agent.session.fork_from",
+  // @traceai/genkit
+  "genkit:metadata:agent:sessionId",
+]);
+const identityKey = (key: string): boolean => GROUPING_KEYS.has(key) || INTEGRATION_SESSION_ID_KEYS.has(key);
 // The same keys as top-level fields of the FI metadata JSON object.
 const METADATA_KEY = "metadata";
 const METADATA_GROUPING_FIELDS = ["session_id", "user_id"] as const;
@@ -534,7 +548,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
       const lostContext = incomplete && !admitted;
       const ambiguousBase64 = !NON_CONTENT_KEYS.has(key) && (truncated || !isProjectionMetadata(key.replace(/(?:\.\d+)+$/, "")));
       const mediaValue = (v: unknown) => mediaReplacement(v, key, hints, true, false, false, lostContext, ambiguousBase64);
-      const groupingKey = GROUPING_KEYS.has(key);
+      const groupingKey = identityKey(key);
       if (!admission && !groupingKey && isCredentialName(key)) return credentialAttributeSentinel;
       if (tc.hideEmbeddingVectors && /(?:^|\.)(?:embedding|embeddings|vector|vectors)(?:\.|$)/i.test(key) && !/(?:count|dimension|text)/i.test(key)) return REDACTED_VALUE;
       if (typeof item === "number" || typeof item === "boolean") {
@@ -772,7 +786,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         if (binding && typeof item === "string") {
           requireInspection(scanBudget, key.length + item.length);
           for (const secret of discoverProviderResponseSecrets(JSON.parse(item), binding.format)) registerSecret(secret);
-        } else if (GROUPING_KEYS.has(key)) {
+        } else if (identityKey(key)) {
           // Same single debit; the value is discovered without its name.
           requireInspection(scanBudget, key.length + (typeof item === "string" ? item.length : 0));
           sources.push(paid(undefined, item));
@@ -807,7 +821,7 @@ export function privacyFilter(options: PrivacyOptions = {}, configured: readonly
         // budgeted adapter, then withhold, rather than invoke provider internals.
         const metadataParts = key === METADATA_KEY && typeof item === "string"
           ? metadataDiscoverySources(item, characters => requireInspection(scanBudget, characters)) : undefined;
-        if (GROUPING_KEYS.has(key)) {
+        if (identityKey(key)) {
           requireInspection(scanBudget, key.length);
           sources.push(item);
         } else if (metadataParts) {

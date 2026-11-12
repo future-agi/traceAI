@@ -513,7 +513,11 @@ resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an option
 application `resource` are preserved.
 
 `session.id` and `user.id` are exported as set, so don't use a credential or a
-session cookie as either.
+session cookie as either. The same applies to the session id that the Pi coding
+agent, Claude Agent SDK and Genkit integrations also record under their own keys
+(`pi.session.id`, `claude_agent.session.id`, `claude_agent.session_id`, the
+`claude_agent` resume, previous and fork session ids, and
+`genkit:metadata:agent:sessionId`).
 
 Resource detection is minimal by default: the provider adds the Node.js runtime
 name and version (`process.runtime.*`) and nothing that identifies the machine,
