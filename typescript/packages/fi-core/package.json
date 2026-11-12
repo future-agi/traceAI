@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-core",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "OpenTelemetry tracing for AI applications: tracer setup, span helpers, and exporters for Future AGI.",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

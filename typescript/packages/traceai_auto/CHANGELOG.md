@@ -1,3 +1,9 @@
+## [0.1.5] - pending release
+
+### Fixed
+
+- The bundled launcher (`@traceai/auto/preload.cjs`, which the server bundler plugins also load) includes @traceai/fi-core 1.2.5, so session ids from the application context are exported as set instead of "<redacted>", and spans from its built-in OpenAI instrumentation carry the FI context attributes of the active context. On a span that lost data before export (for example attributes dropped by the OpenTelemetry attribute limits, or a wire capture marked traceai.wire.truncated, traceai.wire.incomplete or traceai.wire.body_unavailable), session.id still reads "<redacted>". Upgrade @traceai/auto to 0.1.5, and replace any copied dist/agent directory, if you use preload.cjs or a bundler plugin (@traceai/auto/esbuild, /vite, /rollup, /webpack or /next). If you start your app with @traceai/auto/register or call init() from @traceai/auto, it uses the installed @traceai/fi-core, so upgrading @traceai/fi-core is enough.
+
 ## [0.1.4] - pending release
 
 ### Added
