@@ -17,11 +17,15 @@ Observed at SDK execution boundaries only:
 declared ``media_type``. Videos, uploaded provider files and unknown content
 objects are not captured, and nothing is serialized to look for media.
 
-One model call, one owner: while attachments are enabled, the model request runs
-under the owner mark (``media_capture.owned_call``; a streamed request only while
-the stream is entered and exited, never the caller's ``async with`` body), so a
-provider instrumentor beneath Pydantic AI (``traceai_openai``, ...) uploads nothing
-for that call; the model request span holds the occurrence. DIFFERENT calls each
+One model call, one owner: while attachments are enabled, a model request in which
+this adapter observes at least one input media part runs under the owner mark
+(``media_capture.owned_call``; a streamed request only while the stream is entered
+and exited, never the caller's ``async with`` body), so a provider instrumentor
+beneath Pydantic AI (``traceai_openai``, ...) uploads nothing for that call; the
+model request span holds the occurrence. A request with no observed part is not
+marked, so the provider span keeps what only the SDK sees. Residual: a request that
+mixes an observed part with one this adapter never reads (an uploaded provider
+file, ...) is marked, so the provider skips that part too. DIFFERENT calls each
 get their own occurrence (a tool span's result and the next request that re-sends
 it are two observations; byte deduplication is server-side).
 """
@@ -156,6 +160,20 @@ class PydanticAIMedia:
         if not isinstance(messages, (list, tuple)):
             return EMPTY
         return self._capture(span, _request_parts(messages), "input")
+
+    def observes_request(self, messages: Any) -> bool:
+        """True when this adapter observes at least one input media part of the request.
+
+        Only then does the request run under the owner mark. A part this adapter never reads
+        (a local path, a provider file, ...) is left to the provider instrumentor. Never raises;
+        an error means False (no mark), so the provider is never suppressed by mistake.
+        """
+        try:
+            if not isinstance(messages, (list, tuple)):
+                return False
+            return next(_request_parts(messages), None) is not None
+        except Exception:
+            return False
 
     def response(self, span, response: Any) -> Mapping[str, Occurrence]:
         # Historical Model.request returns (ModelResponse, Usage).

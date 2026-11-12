@@ -6,6 +6,10 @@ mark (``media_capture.OWNER_KEY``), so ``traceai_openai`` uploads nothing for th
 part is uploaded exactly once, under the framework span. DIFFERENT calls still each own their
 occurrence, even with identical bytes (byte deduplication is server-side). With attachments off
 for the framework nothing is marked and the provider captures as before.
+
+The mark is set only for a call in which the adapter observes at least one input media part.
+Media the adapter never reads (an Agno ``filepath``, a LlamaIndex ``path``) is inlined by the
+SDK integration as a data URI, so ``traceai_openai`` must still capture it on the provider span.
 """
 
 import asyncio
@@ -16,12 +20,13 @@ import pytest
 pytest.importorskip("openai")
 pytest.importorskip("traceai_openai")
 
-from conftest import assert_uris_resolve, b64, flush, png, refs  # noqa: E402
+from conftest import PDF, assert_uris_resolve, b64, flush, png, refs  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402
 from traceai_openai import OpenAIInstrumentor  # noqa: E402
 
 IMAGE = png(seed=31)
 URI = "data:image/png;base64," + b64(IMAGE)
+PATH_IMAGE = png(seed=32)  # only ever read from disk by the framework's SDK integration
 OPENAI_SCOPE = "traceai_openai"
 
 
@@ -186,6 +191,17 @@ class LlamaIndex:
         next(stream)
         return stream
 
+    def path_call(self, path, kind, with_content=False):
+        """One chat call with a ``path`` block (never read by the adapter), optionally after a content block."""
+        from llama_index.core.base.llms.types import ChatMessage, DocumentBlock, ImageBlock, TextBlock
+
+        blocks = [TextBlock(text="what")]
+        if with_content:
+            blocks.append(ImageBlock(image=IMAGE, image_mimetype="image/png"))
+        blocks.append(ImageBlock(path=path, image_mimetype="image/png") if kind == "image"
+                      else DocumentBlock(path=path, document_mimetype="application/pdf"))
+        self._llm().chat([ChatMessage(role="user", blocks=blocks)])
+
 
 class Agno:
     name = "agno"
@@ -228,6 +244,17 @@ class Agno:
         else:
             for _ in self._agent().run("what is this", images=images, stream=True):
                 pass
+
+    def path_call(self, path, kind, with_content=False):
+        """One model call with a ``filepath`` source (never read by the adapter), optionally after content."""
+        from agno.media import File, Image
+
+        if kind == "image":
+            images = ([Image(content=IMAGE, format="png")] if with_content else []) + [Image(filepath=str(path))]
+            self._agent().run("what is this", images=images)
+        else:
+            images = [Image(content=IMAGE, format="png")] if with_content else None
+            self._agent().run("what is this", images=images, files=[File(filepath=str(path))])
 
 
 class PydanticAI:
@@ -406,6 +433,78 @@ def test_the_callers_stream_body_is_not_marked(f01, provider, spans, openai_on, 
     assert f01.payloads == [IMAGE, IMAGE]
     found = owners(exporter)
     assert sorted(is_provider_span(s) for s in found) == [False, True]
+
+
+# ------------------------------------------------------------------ media only the SDK reads
+PATH_SOURCES = [("agno", "image"), ("agno", "file"), ("llamaindex", "image"), ("llamaindex", "document")]
+
+
+def sent(provider, data):
+    return any(path.endswith("/chat/completions") and b64(data) in json.dumps(body)
+               for path, body, raw in provider.requests)
+
+
+def _path(tmp_path, kind):
+    data = PATH_IMAGE if kind == "image" else PDF
+    path = tmp_path / ("source.png" if kind == "image" else "source.pdf")
+    path.write_bytes(data)
+    return path, data
+
+
+@pytest.mark.parametrize("framework, kind", PATH_SOURCES, indirect=["framework"])
+def test_a_source_only_the_sdk_reads_is_still_captured_by_the_provider(f01, provider, spans, openai_on,
+                                                                        framework, kind, tmp_path):
+    """The adapter never opens a path, the SDK integration inlines it: no mark, ONE upload, on the provider span.
+
+    With the mark set on every call (16311a37..1080f58d) this was 0: nobody captured it.
+    """
+    _, exporter = spans
+    manager = f01.manager()
+    framework.instrument(manager)
+    openai_on(manager)
+    path, data = _path(tmp_path, kind)
+    framework.path_call(path, kind)
+    flush(manager)
+    assert sent(provider, data), "the SDK integration did not inline the path source"
+    assert f01.payloads == [data], len(f01.payloads)
+    (owner,) = owners(exporter)
+    assert is_provider_span(owner), owner.name
+    (ref,) = refs(owner)
+    (upload,) = f01.uploads
+    assert upload["occurrence_id"] == ref["occurrence_id"]
+    assert upload["association"]["parent"]["span_id"] == format(owner.context.span_id, "016x")
+    assert_uris_resolve(exporter)
+
+
+@pytest.mark.parametrize("framework, kind", PATH_SOURCES, indirect=["framework"])
+def test_the_framework_alone_never_reads_a_path_source(f01, provider, spans, framework, kind, tmp_path):
+    """Negative control for the row above: without traceai_openai the path source is uploaded by nobody."""
+    _, exporter = spans
+    manager = f01.manager()
+    framework.instrument(manager)
+    path, data = _path(tmp_path, kind)
+    framework.path_call(path, kind)
+    flush(manager)
+    assert sent(provider, data)
+    assert f01.payloads == [] and owners(exporter) == []
+
+
+@pytest.mark.parametrize("framework", ["agno", "llamaindex"], indirect=True)
+def test_residual_a_call_mixing_an_observed_part_and_a_path_part_is_marked(f01, provider, spans, openai_on,
+                                                                           framework, tmp_path):
+    """Disclosed residual: the adapter observes the content part, so the WHOLE call is marked and the
+    provider skips the path part too. One upload (the content part), on the framework span."""
+    _, exporter = spans
+    manager = f01.manager()
+    framework.instrument(manager)
+    openai_on(manager)
+    path, data = _path(tmp_path, "image")
+    framework.path_call(path, "image", with_content=True)
+    flush(manager)
+    assert sent(provider, IMAGE) and sent(provider, data)
+    assert f01.payloads == [IMAGE], len(f01.payloads)
+    (owner,) = owners(exporter)
+    assert not is_provider_span(owner), owner.name
 
 
 # ------------------------------------------------------------------ the mark carries the framework's deny

@@ -24,6 +24,9 @@ use these to capture inline base64/data-URI parts and speech audio. Rules:
   provider instrumentor beneath it (``traceai_openai``, ``traceai_anthropic``,
   ...) uploads nothing for that call. Inside its own mark the adapter's
   ``capture_parts`` still captures. With attachments off nothing is marked.
+  The adapter marks only a call in which it observes at least one input
+  media part: a source it never reads (a local path the SDK inlines) is left
+  to the provider instrumentor.
 - Across DIFFERENT calls every observing span gets its OWN occurrence:
   identical bytes in two calls, or at two positions, are two occurrences;
   byte deduplication is server-side. A ``fi-attachment:`` reference is only

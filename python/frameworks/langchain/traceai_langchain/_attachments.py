@@ -12,13 +12,18 @@ tracer receives (``dumpd`` messages under ``kwargs.content``):
 Remote URLs go to the core's ``RemoteUrl`` policy and are never fetched; provider
 file IDs and anything else are ignored.
 
-One model call, one owner: while attachments are enabled, ``BaseChatModel``
-``generate`` / ``agenerate`` / ``stream`` / ``astream`` run under the owner mark
+One model call, one owner: while attachments are enabled, a ``BaseChatModel``
+``generate`` / ``agenerate`` / ``stream`` / ``astream`` call in which this module
+observes at least one input media part runs under the owner mark
 (``media_capture.owned_call``), so a provider instrumentor beneath LangChain
 (``traceai_openai``, ...) uploads nothing for that call; the LangChain span holds
-the occurrence. A DIFFERENT call with the same bytes gets its own occurrence (byte
-deduplication is server-side). The mark also carries LangChain's hide flags down:
-what the LangChain span may not capture, the provider span does not capture either.
+the occurrence. A call with no observed part (no media, or only shapes this module
+does not read, such as a provider file ID) is not marked, so the provider span keeps
+what only the SDK sees. Residual: a call that mixes an observed part with an
+unread one is marked, so the provider skips the unread part too. A DIFFERENT call
+with the same bytes gets its own occurrence (byte deduplication is server-side).
+The mark also carries LangChain's hide flags down for a marked call: what the
+LangChain span may not capture, the provider span does not capture either.
 
 This module imports ``fi_instrumentation.attachments``; the tracer imports it only
 when an enabled attachment manager is passed.
@@ -45,8 +50,8 @@ from fi_instrumentation.attachments.media_capture import (
 )
 from wrapt import FunctionWrapper
 
-__all__ = ("capture_langchain_messages", "langchain_attachment_capabilities", "own_chat_model_calls",
-           "release_chat_model_calls")
+__all__ = ("capture_langchain_messages", "langchain_attachment_capabilities", "observes_langchain_input",
+           "own_chat_model_calls", "release_chat_model_calls")
 
 langchain_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -200,9 +205,38 @@ _OWNED_METHODS = ("generate", "agenerate", "stream", "astream")
 _NAMESPACE = "langchain"
 
 
-def _owned(manager):
+def _input(name: str, instance: Any, args: Any, kwargs: Any) -> List[Any]:
+    """The chat messages one owned entry point sends: every batch of generate, or stream's input."""
+    if name in ("generate", "agenerate"):
+        batches = args[0] if args else kwargs.get("messages")
+        return [message for batch in items(batches) for message in items(batch)]
+    value = args[0] if args else kwargs.get("input")
+    if isinstance(value, str):
+        return []
+    # LangChain's own conversion (PromptValue, message sequences, dicts, tuples).
+    return list(instance._convert_input(value).to_messages())
+
+
+def observes_langchain_input(name: str, instance: Any, args: Any, kwargs: Any) -> bool:
+    """True when this module observes at least one input media part of the call (owner-mark gate).
+
+    Never raises; an error means False (no mark), so the provider is never suppressed by mistake.
+    """
+    try:
+        return next(_parts(_input(name, instance, args, kwargs), "input"), None) is not None
+    except Exception:
+        return False
+
+
+def _owner(name: str, manager, instance: Any, args: Any, kwargs: Any):
+    if not observes_langchain_input(name, instance, args, kwargs):
+        return None
+    return call_owner(manager, _NAMESPACE)
+
+
+def _owned(manager, name: str):
     def wrapper(wrapped, instance, args, kwargs):
-        owner = call_owner(manager, _NAMESPACE)
+        owner = _owner(name, manager, instance, args, kwargs)
         if owner is None:
             return wrapped(*args, **kwargs)
         with owner_scope(owner):
@@ -212,9 +246,9 @@ def _owned(manager):
     return wrapper
 
 
-def _owned_async(manager):
+def _owned_async(manager, name: str):
     async def wrapper(wrapped, instance, args, kwargs):
-        owner = call_owner(manager, _NAMESPACE)
+        owner = _owner(name, manager, instance, args, kwargs)
         if owner is None:
             return await wrapped(*args, **kwargs)
         with owner_scope(owner):
@@ -223,7 +257,10 @@ def _owned_async(manager):
 
 
 def own_chat_model_calls(manager) -> List[Tuple[type, str, Any]]:
-    """Run every chat-model call under the owner mark while ``manager`` can admit.
+    """Run every chat-model call whose input media is observed here under the owner mark.
+
+    Only while ``manager`` can admit, and only for a call with at least one observed input
+    part (``observes_langchain_input``).
 
     A provider instrumentor beneath LangChain then uploads nothing for that call; the
     LangChain span owns its media. Returns the patches for ``release_chat_model_calls``.
@@ -235,7 +272,7 @@ def own_chat_model_calls(manager) -> List[Tuple[type, str, Any]]:
         original = BaseChatModel.__dict__.get(name)
         if original is None:
             continue
-        wrapper = _owned_async(manager) if name == "agenerate" else _owned(manager)
+        wrapper = _owned_async(manager, name) if name == "agenerate" else _owned(manager, name)
         setattr(BaseChatModel, name, FunctionWrapper(original, wrapper))
         patches.append((BaseChatModel, name, original))
     return patches

@@ -11,11 +11,16 @@ non-streaming chat response are observed:
 An ``IOBase`` source is never read, a ``path`` is never opened, and a ``url`` goes
 to the core's ``RemoteUrl`` policy without being fetched.
 
-One model call, one owner: while attachments are enabled, every LLM's ``chat`` /
-``achat`` / ``stream_chat`` / ``astream_chat`` (the calls whose messages are observed
-here) runs under the owner mark (``media_capture.owned_call``; a stream only while it
+One model call, one owner: while attachments are enabled, an LLM ``chat`` /
+``achat`` / ``stream_chat`` / ``astream_chat`` call (the calls whose messages are
+observed here) in which this module observes at least one input media part runs
+under the owner mark (``media_capture.owned_call``; a stream only while it
 advances), so a provider instrumentor beneath LlamaIndex (``traceai_openai``, ...)
-uploads nothing for that call; the LlamaIndex span holds the occurrence. Completion
+uploads nothing for that call; the LlamaIndex span holds the occurrence. A call
+with no observed part is not marked: the OpenAI integration inlines a ``path``
+image or document as a data URI before the SDK call, so the provider span captures
+it. Residual: a call that mixes an observed part with a ``path`` (or ``IOBase``)
+one is marked, so the provider skips that part too. Completion
 calls are not observed here and are not marked. A DIFFERENT call with the same bytes
 gets its own occurrence (byte deduplication is server-side).
 
@@ -44,7 +49,8 @@ from fi_instrumentation.attachments.media_capture import (
 )
 from wrapt import FunctionWrapper
 
-__all__ = ("ChatOwnership", "capture_llamaindex_messages", "llamaindex_attachment_capabilities")
+__all__ = ("ChatOwnership", "capture_llamaindex_messages", "llamaindex_attachment_capabilities",
+           "observes_llamaindex_messages")
 
 llamaindex_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -120,6 +126,21 @@ def _parts(messages: Sequence[Any], direction: str) -> Iterator[MediaPart]:
             # IOBase sources and paths: never read or opened.
 
 
+def observes_llamaindex_messages(messages: Any) -> bool:
+    """True when this module observes at least one input media part (owner-mark gate). Never raises.
+
+    ``path`` and ``IOBase`` sources are never observed, so a call holding only those is
+    left to the provider instrumentor. An error means False (no mark): the provider is
+    never suppressed by mistake.
+    """
+    try:
+        if not isinstance(messages, (list, tuple)):
+            return False
+        return next(_parts(messages, "input"), None) is not None
+    except Exception:
+        return False
+
+
 def capture_llamaindex_messages(manager, span, messages: Any, *, direction: str, trace_config=None,
                                 capture=None) -> Mapping[str, Occurrence]:
     """Capture typed block media of chat messages; returns ``"{dir}/{msg}/{part}"`` positions.
@@ -145,7 +166,10 @@ _MISSING = object()
 
 
 class ChatOwnership:
-    """Run every LLM chat call under the owner mark while ``manager`` can admit.
+    """Run every LLM chat call whose input media is observed here under the owner mark.
+
+    Only while ``manager`` can admit, and only for a call with at least one observed
+    input part (``observes_llamaindex_messages``).
 
     Patched like ``StreamInstrumentation``: every loaded ``BaseLLM`` / ``MultiModalLLM``
     subclass that defines a chat method, plus an ``__init__`` hook for providers imported
@@ -199,11 +223,20 @@ class ChatOwnership:
             self._patch_class(type(instance))
         return result
 
-    def _owner(self):
-        return call_owner(self._manager, _NAMESPACE) if self._enabled else None
+    def _owner(self, args: Any, kwargs: Any):
+        """The mark for a call whose input media this module observes, else None (no mark)."""
+        if not self._enabled:
+            return None
+        try:
+            messages = args[0] if args else kwargs.get("messages")
+        except Exception:
+            return None
+        if not observes_llamaindex_messages(messages):
+            return None
+        return call_owner(self._manager, _NAMESPACE)
 
     def _call(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-        owner = self._owner()
+        owner = self._owner(args, kwargs)
         if owner is None:
             return wrapped(*args, **kwargs)
         with owner_scope(owner):
@@ -211,7 +244,7 @@ class ChatOwnership:
         return owned_stream(result, owner)
 
     async def _call_async(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-        owner = self._owner()
+        owner = self._owner(args, kwargs)
         if owner is None:
             return await wrapped(*args, **kwargs)
         with owner_scope(owner):

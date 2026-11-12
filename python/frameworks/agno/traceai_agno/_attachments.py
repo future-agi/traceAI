@@ -16,10 +16,14 @@ Privacy is the INTERSECTION of the FI TraceConfig and the OpenInference
 TraceConfig the instrumentor runs with (either one hiding wins), the manager's
 own policy, and the per-call capture policy.
 
-One model call, one owner: while attachments are enabled, the wrapped model call
-runs under the owner mark (``media_capture.OWNER_KEY``, a stream only while it
-advances), so a provider instrumentor beneath Agno (``traceai_openai``, ...)
-uploads nothing for that call; the Agno span holds the occurrence. A DIFFERENT
+One model call, one owner: while attachments are enabled, a model call in which
+this adapter observes at least one input media part runs under the owner mark
+(``media_capture.OWNER_KEY``, a stream only while it advances), so a provider
+instrumentor beneath Agno (``traceai_openai``, ...) uploads nothing for that call;
+the Agno span holds the occurrence. A call with no observed part is not marked:
+Agno inlines a ``filepath`` image or file as a data URI before the SDK call, so the
+provider span captures it. Residual: a call that mixes an observed part with a
+``filepath`` one is marked, so the provider skips the ``filepath`` part too. A DIFFERENT
 call with the same bytes gets its own occurrence (byte deduplication is
 server-side).
 """
@@ -40,7 +44,7 @@ from fi_instrumentation.attachments.media_capture import (
     looks_base64,
 )
 
-__all__ = ("capture_agno_input", "capture_agno_output", "agno_attachment_capabilities")
+__all__ = ("capture_agno_input", "capture_agno_output", "agno_attachment_capabilities", "observes_agno_input")
 
 agno_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -142,6 +146,21 @@ def capture_agno_input(manager, span, messages: Any, *, trace_configs: Sequence[
                              trace_configs=trace_configs, capture=capture)
     except Exception:
         return EMPTY
+
+
+def observes_agno_input(messages: Any) -> bool:
+    """True when this adapter observes at least one input media part (owner-mark gate). Never raises.
+
+    A ``filepath`` part is never observed, so a call holding only those is left to the
+    provider instrumentor. An error means False (no mark): the provider is never
+    suppressed by mistake.
+    """
+    try:
+        if not isinstance(messages, (list, tuple)):
+            return False
+        return next(_input_parts(messages), None) is not None
+    except Exception:
+        return False
 
 
 def capture_agno_output(manager, span, response: Any, *, trace_configs: Sequence[Any] = (),

@@ -129,11 +129,17 @@ class _ModelStreamContext:
             return await self.manager.__aexit__(exc_type, exc_value, traceback)
 
 
-def _call_owner(media):
-    """The owner mark for one model request while attachments are enabled, else None."""
+def _call_owner(media, messages):
+    """The owner mark for one model request whose input media this adapter observes, else None.
+
+    None while attachments are off, and None for a request with no part this adapter
+    observes, so the provider instrumentor beneath still captures what only it can see.
+    """
     if media is None:
         return None
     try:
+        if not media.observes_request(messages):
+            return None
         from fi_instrumentation.attachments.media_capture import call_owner
 
         return call_owner(media.manager)
@@ -177,7 +183,7 @@ def wrap_model_request(original, tracer, streaming=False, media=None):
             with _model_request_span(self, tracer, current=False) as span:
                 # Input only: streamed output is not captured.
                 _capture(media, "request", span, _request_messages(args, kwargs))
-                owner = _call_owner(media)
+                owner = _call_owner(media, _request_messages(args, kwargs))
                 with _owner_scope(owner):
                     manager = original(self, *args, **kwargs)
                 async with _ModelStreamContext(manager, self, span, owner) as response:
@@ -190,7 +196,7 @@ def wrap_model_request(original, tracer, streaming=False, media=None):
         with _model_request_span(self, tracer) as span:
             # Input media is captured before the provider call; this span owns its own occurrences.
             _capture(media, "request", span, _request_messages(args, kwargs))
-            with _owner_scope(_call_owner(media)):
+            with _owner_scope(_call_owner(media, _request_messages(args, kwargs))):
                 response = await original(self, *args, **kwargs)
             _record_model_usage(span, response)
             # Only a successful response: an error never reaches this line.

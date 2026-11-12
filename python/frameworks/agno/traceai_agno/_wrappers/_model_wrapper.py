@@ -646,18 +646,23 @@ class _ModelWrapper:
         except Exception:
             pass
 
-    def _owned(self, values: Dict[str, Any]) -> Dict[str, Any]:
-        """``values`` plus the owner mark while attachments are enabled (one call, one owner).
+    def _owned(self, values: Dict[str, Any], arguments: Mapping[str, Any]) -> Dict[str, Any]:
+        """``values`` plus the owner mark when this call's input media is observed here.
 
         span_scope attaches it only around the downstream call and each stream advance,
         so the provider instrumentor beneath Agno skips this call's media. Attachments
-        off, or a call already owned further out: ``values`` unchanged.
+        off, a call with no input part this adapter observes (only ``filepath`` media,
+        which the SDK inlines and the provider captures), or a call already owned
+        further out: ``values`` unchanged.
         """
         if self._attachments is None:
             return values
         try:
             from fi_instrumentation.attachments.media_capture import OWNER_KEY, call_owner
+            from traceai_agno._attachments import observes_agno_input
 
+            if not observes_agno_input(arguments.get("messages")):
+                return values
             owner = call_owner(self._attachments)
         except Exception:
             return values
@@ -713,7 +718,7 @@ class _ModelWrapper:
                 span.set_attribute(LLM_SYSTEM, llm_system)
             self._capture_input(span, arguments)
 
-            with span_scope(span, self._owned(_invocation_context(instance, "invoke", wrapped))):
+            with span_scope(span, self._owned(_invocation_context(instance, "invoke", wrapped), arguments)):
                 response = wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
             self._capture_output(span, response)
@@ -768,7 +773,7 @@ class _ModelWrapper:
             # Token usage will be set after streaming completes based on final response
 
             responses = []
-            values = self._owned(_invocation_context(instance, "invoke_stream", wrapped))
+            values = self._owned(_invocation_context(instance, "invoke_stream", wrapped), arguments)
             with span_scope(span, values):
                 source = iter(wrapped(*args, **kwargs))
             with closing(iterate(source, span, values)) as iterator:
@@ -828,7 +833,7 @@ class _ModelWrapper:
                 span.set_attribute(LLM_SYSTEM, llm_system)
             self._capture_input(span, arguments)
 
-            with span_scope(span, self._owned(_invocation_context(instance, "ainvoke", wrapped))):
+            with span_scope(span, self._owned(_invocation_context(instance, "ainvoke", wrapped), arguments)):
                 response = await wrapped(*args, **kwargs)
             output_message = _parse_model_output(response)
             self._capture_output(span, response)
@@ -885,7 +890,7 @@ class _ModelWrapper:
             # Token usage will be set after streaming completes based on final response
 
             responses = []
-            values = self._owned(_invocation_context(instance, "ainvoke_stream", wrapped))
+            values = self._owned(_invocation_context(instance, "ainvoke_stream", wrapped), arguments)
             with span_scope(span, values):
                 source = wrapped(*args, **kwargs)
             async with aclosing(aiterate(source, span, values)) as iterator:
