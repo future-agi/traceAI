@@ -18,17 +18,25 @@ use these to capture inline base64/data-URI parts and speech audio. Rules:
   add restrictions. A context marked under ``OWNER_KEY``
   (``traceai.with_attachment_ownership``) belongs to an adapter that captures
   the media itself, so nothing is captured here for that call.
-- Every observing span gets its OWN occurrence. A framework span and the
-  provider span beneath it each upload what they observed, and identical bytes
-  at two positions are two occurrences; byte deduplication is server-side. A
-  ``fi-attachment:`` reference is only ever projected onto the span whose
-  ``fi.attachment.refs`` carries that occurrence.
+- One model call, one owner. A framework adapter (LangChain, LlamaIndex, Agno,
+  Pydantic AI) that captures a model call's media runs the downstream provider
+  SDK call under ``owned_call`` (a ``CallOwner`` under ``OWNER_KEY``), so a
+  provider instrumentor beneath it (``traceai_openai``, ``traceai_anthropic``,
+  ...) uploads nothing for that call. Inside its own mark the adapter's
+  ``capture_parts`` still captures. With attachments off nothing is marked.
+- Across DIFFERENT calls every observing span gets its OWN occurrence:
+  identical bytes in two calls, or at two positions, are two occurrences;
+  byte deduplication is server-side. A ``fi-attachment:`` reference is only
+  ever projected onto the span whose ``fi.attachment.refs`` carries that
+  occurrence.
 
 Every public function is non-throwing and returns ``None``/empty on denial.
 """
 
 import base64
 import binascii
+import collections.abc
+import contextlib
 import dataclasses
 import re
 import threading
@@ -644,6 +652,145 @@ def intersect(*policies: CapturePolicy) -> CapturePolicy:
     return CapturePolicy(**values)
 
 
+class CallOwner:
+    """The ``OWNER_KEY`` value a framework adapter sets around ONE model call whose media it captures.
+
+    Any value other than None marks the call as owned (``owned_elsewhere``), so provider
+    instrumentors beneath the adapter skip it. ``namespace`` is set only by an adapter that
+    captures INSIDE its own mark (LangChain, LlamaIndex callbacks): ``capture_parts`` with the
+    same namespace treats the mark as its own and still captures. An adapter that captures
+    before marking (Agno, Pydantic AI) passes None, so a nested request of the same framework
+    (a wrapper or fallback model) is owned too.
+    """
+
+    __slots__ = ("namespace",)
+
+    def __init__(self, namespace: Optional[str] = None) -> None:
+        self.namespace = namespace
+
+
+def call_owner(manager, namespace: Optional[str] = None) -> Optional[CallOwner]:
+    """The owner mark for one model call this adapter captures, or None to leave the context as is.
+
+    None when ``manager`` cannot admit (attachments off: the base code path, nothing marked)
+    or when the call is already owned (an outer adapter, ``traceai.with_attachment_ownership``).
+    """
+    try:
+        if not active(manager) or owned_elsewhere():
+            return None
+        return CallOwner(namespace)
+    except Exception:
+        return None
+
+
+@contextlib.contextmanager
+def owner_scope(owner: Optional[CallOwner]):
+    """Attach ``owner`` for the enclosed synchronous step or awaited operation, never across a yield."""
+    if owner is None:
+        yield
+        return
+    token = otel_context.attach(otel_context.set_value(OWNER_KEY, owner))
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
+
+
+def owned_call(manager, namespace: Optional[str] = None):
+    """Run the enclosed downstream provider SDK call as the owner of its media (see ``call_owner``)."""
+    return owner_scope(call_owner(manager, namespace))
+
+
+class _OwnedStream:
+    """A returned generator advanced (and closed) under the owner mark, restored before every yield.
+
+    Implements the full generator protocol, so ``collections.abc.Generator`` checks still pass;
+    any other attribute is the wrapped generator's.
+    """
+
+    __slots__ = ("_stream", "_owner")
+
+    def __init__(self, stream: Any, owner: CallOwner) -> None:
+        self._stream, self._owner = stream, owner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def __iter__(self) -> "_OwnedStream":
+        return self
+
+    def __next__(self) -> Any:
+        with owner_scope(self._owner):
+            return next(self._stream)
+
+    def send(self, value: Any) -> Any:
+        with owner_scope(self._owner):
+            return self._stream.send(value)
+
+    def throw(self, *args: Any) -> Any:
+        with owner_scope(self._owner):
+            return self._stream.throw(*args)
+
+    def close(self) -> Any:
+        with owner_scope(self._owner):
+            return self._stream.close()
+
+
+class _OwnedAsyncStream:
+    """The async-generator form of ``_OwnedStream``: each awaited step runs under the mark."""
+
+    __slots__ = ("_stream", "_owner")
+
+    def __init__(self, stream: Any, owner: CallOwner) -> None:
+        self._stream, self._owner = stream, owner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def __aiter__(self) -> "_OwnedAsyncStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        with owner_scope(self._owner):
+            return await self._stream.__anext__()
+
+    async def asend(self, value: Any) -> Any:
+        with owner_scope(self._owner):
+            return await self._stream.asend(value)
+
+    async def athrow(self, *args: Any) -> Any:
+        with owner_scope(self._owner):
+            return await self._stream.athrow(*args)
+
+    async def aclose(self) -> Any:
+        with owner_scope(self._owner):
+            return await self._stream.aclose()
+
+
+def owned_stream(result: Any, owner: Optional[CallOwner]) -> Any:
+    """``result`` itself, or a generator / async generator proxy advanced under ``owner``.
+
+    A lazy SDK stream makes its provider request on the first advance, after the call that
+    returned it; the mark covers every advance but is never left attached across a yield, so
+    the caller's code between chunks (and an abandoned stream) is never marked.
+    """
+    if owner is None:
+        return result
+    if isinstance(result, collections.abc.Generator):
+        return _OwnedStream(result, owner)
+    if isinstance(result, collections.abc.AsyncGenerator):
+        return _OwnedAsyncStream(result, owner)
+    return result
+
+
+def _own_mark(namespace: str) -> bool:
+    try:
+        owner = otel_context.get_value(OWNER_KEY)
+    except Exception:
+        return False
+    return isinstance(owner, CallOwner) and owner.namespace is not None and owner.namespace == namespace
+
+
 def capture_parts(manager, span, namespace: str, parts: Iterable[MediaPart], *, direction: str,
                   trace_configs: Sequence[Any] = (), capture: Optional[CapturePolicy] = None,
                   max_bytes: int = MAX_FRAMEWORK_BYTES,
@@ -657,6 +804,15 @@ def capture_parts(manager, span, namespace: str, parts: Iterable[MediaPart], *, 
     denies it. At most ``MAX_FRAMEWORK_PARTS`` positions per span. Never raises, never
     walks arbitrary objects, never fetches or opens anything.
     """
+    if _own_mark(namespace):
+        # This adapter owns the call: the mark is for the provider beneath it, not for itself.
+        token = otel_context.attach(otel_context.set_value(OWNER_KEY, None))
+        try:
+            return capture_parts(manager, span, namespace, parts, direction=direction,
+                                 trace_configs=trace_configs, capture=capture, max_bytes=max_bytes,
+                                 policy_directions=policy_directions)
+        finally:
+            otel_context.detach(token)
     observation = Observation(manager, span, namespace)
     if not observation.usable:
         return EMPTY

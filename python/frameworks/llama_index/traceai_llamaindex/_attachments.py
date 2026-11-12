@@ -9,16 +9,23 @@ non-streaming chat response are observed:
 - the magic bytes must match the admitted type.
 
 An ``IOBase`` source is never read, a ``path`` is never opened, and a ``url`` goes
-to the core's ``RemoteUrl`` policy without being fetched. The LlamaIndex span and a
-provider instrumentor's span each get their own occurrence (byte deduplication is
-server-side).
+to the core's ``RemoteUrl`` policy without being fetched.
+
+One model call, one owner: while attachments are enabled, every LLM's ``chat`` /
+``achat`` / ``stream_chat`` / ``astream_chat`` (the calls whose messages are observed
+here) runs under the owner mark (``media_capture.owned_call``; a stream only while it
+advances), so a provider instrumentor beneath LlamaIndex (``traceai_openai``, ...)
+uploads nothing for that call; the LlamaIndex span holds the occurrence. Completion
+calls are not observed here and are not marked. A DIFFERENT call with the same bytes
+gets its own occurrence (byte deduplication is server-side).
 
 This module imports ``fi_instrumentation.attachments``; the handler imports it only
 when an enabled attachment manager is passed.
 """
 
+from threading import RLock
 from types import MappingProxyType
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Tuple
 
 from fi_instrumentation.attachments.media_capture import (
     AUDIO_MIMES,
@@ -29,11 +36,15 @@ from fi_instrumentation.attachments.media_capture import (
     MAX_FRAMEWORK_PARTS,
     MediaPart,
     Occurrence,
+    call_owner,
     capture_parts,
     looks_base64,
+    owned_stream,
+    owner_scope,
 )
+from wrapt import FunctionWrapper
 
-__all__ = ("capture_llamaindex_messages", "llamaindex_attachment_capabilities")
+__all__ = ("ChatOwnership", "capture_llamaindex_messages", "llamaindex_attachment_capabilities")
 
 llamaindex_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -122,3 +133,103 @@ def capture_llamaindex_messages(manager, span, messages: Any, *, direction: str,
                              trace_configs=(trace_config,), capture=capture)
     except Exception:
         return EMPTY
+
+
+# ------------------------------------------------------------------ one call, one owner
+# The LLM methods whose messages this module observes (LLMChatStart/End events). Completion
+# methods are not observed, so they are never marked.
+_SYNC_METHODS = ("chat", "stream_chat")
+_ASYNC_METHODS = ("achat", "astream_chat")
+_NAMESPACE = "llamaindex"
+_MISSING = object()
+
+
+class ChatOwnership:
+    """Run every LLM chat call under the owner mark while ``manager`` can admit.
+
+    Patched like ``StreamInstrumentation``: every loaded ``BaseLLM`` / ``MultiModalLLM``
+    subclass that defines a chat method, plus an ``__init__`` hook for providers imported
+    later. A returned stream is marked only while it advances. Install after and uninstall
+    before ``StreamInstrumentation``.
+    """
+
+    def __init__(self, manager: Any) -> None:
+        self._manager = manager
+        self._patches: Dict[Tuple[type, str], Any] = {}
+        self._lock = RLock()
+        self._enabled = True
+
+    def install(self) -> None:
+        from llama_index.core.base.llms.base import BaseLLM
+        from llama_index.core.multi_modal_llms import MultiModalLLM
+
+        seen = set()
+
+        def visit(cls: type) -> None:
+            if cls in seen:
+                return
+            seen.add(cls)
+            self._patch_class(cls)
+            for child in cls.__subclasses__():
+                visit(child)
+
+        for base in (BaseLLM, MultiModalLLM):
+            visit(base)
+            self._patch(base, "__init__", self._initialize)
+
+    def _patch_class(self, cls: type) -> None:
+        for base in reversed(cls.__mro__):
+            for name in _SYNC_METHODS + _ASYNC_METHODS:
+                attr = base.__dict__.get(name)
+                if attr is not None and not getattr(attr, "__isabstractmethod__", False):
+                    self._patch(base, name, self._call_async if name in _ASYNC_METHODS else self._call)
+
+    def _patch(self, cls: type, name: str, wrapper: Any) -> None:
+        with self._lock:
+            if not self._enabled or (cls, name) in self._patches:
+                return
+            attr = getattr(cls, name)
+            self._patches[cls, name] = cls.__dict__.get(name, _MISSING)
+            setattr(cls, name, FunctionWrapper(attr, wrapper))
+
+    def _initialize(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+        # After the inner hooks, so a later provider class is patched in install order too.
+        result = wrapped(*args, **kwargs)
+        if self._enabled:
+            self._patch_class(type(instance))
+        return result
+
+    def _owner(self):
+        return call_owner(self._manager, _NAMESPACE) if self._enabled else None
+
+    def _call(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+        owner = self._owner()
+        if owner is None:
+            return wrapped(*args, **kwargs)
+        with owner_scope(owner):
+            result = wrapped(*args, **kwargs)
+        return owned_stream(result, owner)
+
+    async def _call_async(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+        owner = self._owner()
+        if owner is None:
+            return await wrapped(*args, **kwargs)
+        with owner_scope(owner):
+            result = await wrapped(*args, **kwargs)
+        return owned_stream(result, owner)
+
+    def uninstall(self) -> None:
+        self._enabled = False
+        with self._lock:
+            for (cls, name), original in reversed(list(self._patches.items())):
+                attr = cls.__dict__.get(name)
+                if (
+                    not isinstance(attr, FunctionWrapper)
+                    or getattr(attr._self_wrapper, "__self__", None) is not self
+                ):
+                    continue  # Do not overwrite another instrumentor's patch.
+                if original is _MISSING:
+                    delattr(cls, name)
+                else:
+                    setattr(cls, name, original)
+            self._patches.clear()

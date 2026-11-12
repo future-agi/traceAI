@@ -87,6 +87,7 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
         self._event_handler = None
         self._workflow_run_patches = []
         self._stream_instrumentation = None
+        self._chat_ownership = None
 
         if self._use_legacy_callback_handler:
             import llama_index.core
@@ -100,8 +101,9 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             from ._handler import EventHandler, instrument_workflow_runs
             from ._stream import StreamInstrumentation
 
+            attachments = _attachment_manager(kwargs)
             self._event_handler = EventHandler(
-                tracer=tracer, config=config, attachments=_attachment_manager(kwargs)
+                tracer=tracer, config=config, attachments=attachments
             )
             self._span_handler = self._event_handler._span_handler
             dispatcher = get_dispatcher()
@@ -118,6 +120,12 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             self._workflow_run_patches = instrument_workflow_runs()
             self._stream_instrumentation = StreamInstrumentation()
             self._stream_instrumentation.install()
+            if attachments is not None:
+                # One model call, one owner: only while attachments are enabled.
+                from ._attachments import ChatOwnership
+
+                self._chat_ownership = ChatOwnership(attachments)
+                self._chat_ownership.install()
 
         if Protect is not None:
             self._original_protect = Protect.protect
@@ -142,6 +150,9 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
 
             from ._handler import uninstrument_workflow_runs
 
+            if getattr(self, "_chat_ownership", None) is not None:
+                self._chat_ownership.uninstall()
+                self._chat_ownership = None
             if self._stream_instrumentation is not None:
                 self._stream_instrumentation.uninstall()
                 self._stream_instrumentation = None

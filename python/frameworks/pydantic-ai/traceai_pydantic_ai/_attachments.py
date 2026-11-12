@@ -15,9 +15,15 @@ Observed at SDK execution boundaries only:
 
 ``BinaryContent.data`` must be complete bytes whose magic bytes match its
 declared ``media_type``. Videos, uploaded provider files and unknown content
-objects are not captured, and nothing is serialized to look for media. Every
-observing span (tool span, model request span, a provider instrumentor's span)
-gets its own occurrence; byte deduplication is server-side.
+objects are not captured, and nothing is serialized to look for media.
+
+One model call, one owner: while attachments are enabled, the model request runs
+under the owner mark (``media_capture.owned_call``; a streamed request only while
+the stream is entered and exited, never the caller's ``async with`` body), so a
+provider instrumentor beneath Pydantic AI (``traceai_openai``, ...) uploads nothing
+for that call; the model request span holds the occurrence. DIFFERENT calls each
+get their own occurrence (a tool span's result and the next request that re-sends
+it are two observations; byte deduplication is server-side).
 """
 
 import dataclasses

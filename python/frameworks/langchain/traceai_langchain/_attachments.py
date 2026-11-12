@@ -10,16 +10,22 @@ tracer receives (``dumpd`` messages under ``kwargs.content``):
 - Anthropic-style ``source: {"type": "base64"}`` blocks.
 
 Remote URLs go to the core's ``RemoteUrl`` policy and are never fetched; provider
-file IDs and anything else are ignored. The LangChain span and a provider
-instrumentor's span each get their own occurrence of what they observed (byte
-deduplication is server-side).
+file IDs and anything else are ignored.
+
+One model call, one owner: while attachments are enabled, ``BaseChatModel``
+``generate`` / ``agenerate`` / ``stream`` / ``astream`` run under the owner mark
+(``media_capture.owned_call``), so a provider instrumentor beneath LangChain
+(``traceai_openai``, ...) uploads nothing for that call; the LangChain span holds
+the occurrence. A DIFFERENT call with the same bytes gets its own occurrence (byte
+deduplication is server-side). The mark also carries LangChain's hide flags down:
+what the LangChain span may not capture, the provider span does not capture either.
 
 This module imports ``fi_instrumentation.attachments``; the tracer imports it only
 when an enabled attachment manager is passed.
 """
 
 from types import MappingProxyType
-from typing import Any, Iterator, List, Mapping, Optional
+from typing import Any, Iterator, List, Mapping, Optional, Tuple
 
 from fi_instrumentation.attachments.media_capture import (
     AUDIO_MIMES,
@@ -30,12 +36,17 @@ from fi_instrumentation.attachments.media_capture import (
     MAX_FRAMEWORK_PARTS,
     MediaPart,
     Occurrence,
+    call_owner,
     capture_parts,
     get,
     items,
+    owned_stream,
+    owner_scope,
 )
+from wrapt import FunctionWrapper
 
-__all__ = ("capture_langchain_messages", "langchain_attachment_capabilities")
+__all__ = ("capture_langchain_messages", "langchain_attachment_capabilities", "own_chat_model_calls",
+           "release_chat_model_calls")
 
 langchain_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -180,3 +191,56 @@ def run_messages(run: Any, direction: str) -> Optional[list]:
                 if message is not None]
     except Exception:
         return None
+
+
+# ------------------------------------------------------------------ one call, one owner
+# BaseChatModel entry points that run one or more chat-model calls (invoke/batch go through
+# generate/agenerate). The tracer captures inside them, so the mark carries this namespace.
+_OWNED_METHODS = ("generate", "agenerate", "stream", "astream")
+_NAMESPACE = "langchain"
+
+
+def _owned(manager):
+    def wrapper(wrapped, instance, args, kwargs):
+        owner = call_owner(manager, _NAMESPACE)
+        if owner is None:
+            return wrapped(*args, **kwargs)
+        with owner_scope(owner):
+            result = wrapped(*args, **kwargs)
+        # stream/astream return a lazy generator: mark each advance, never across a yield.
+        return owned_stream(result, owner)
+    return wrapper
+
+
+def _owned_async(manager):
+    async def wrapper(wrapped, instance, args, kwargs):
+        owner = call_owner(manager, _NAMESPACE)
+        if owner is None:
+            return await wrapped(*args, **kwargs)
+        with owner_scope(owner):
+            return await wrapped(*args, **kwargs)
+    return wrapper
+
+
+def own_chat_model_calls(manager) -> List[Tuple[type, str, Any]]:
+    """Run every chat-model call under the owner mark while ``manager`` can admit.
+
+    A provider instrumentor beneath LangChain then uploads nothing for that call; the
+    LangChain span owns its media. Returns the patches for ``release_chat_model_calls``.
+    """
+    from langchain_core.language_models.chat_models import BaseChatModel
+
+    patches = []
+    for name in _OWNED_METHODS:
+        original = BaseChatModel.__dict__.get(name)
+        if original is None:
+            continue
+        wrapper = _owned_async(manager) if name == "agenerate" else _owned(manager)
+        setattr(BaseChatModel, name, FunctionWrapper(original, wrapper))
+        patches.append((BaseChatModel, name, original))
+    return patches
+
+
+def release_chat_model_calls(patches: List[Tuple[type, str, Any]]) -> None:
+    for cls, name, original in reversed(patches):
+        setattr(cls, name, original)

@@ -99,23 +99,26 @@ class _ModelStreamContext:
     The span may outlive either task, but a ContextVar token may not cross them.
     """
 
-    def __init__(self, manager, model, span):
+    def __init__(self, manager, model, span, owner=None):
         self.manager = manager
         self.model = model
         self.span = span
+        # The attachment owner mark (one call, one owner): entered and exited, never the caller's body.
+        self.owner = owner
 
     @contextmanager
     def _current(self):
-        if self.span is None:
-            yield
-            return
-        token = _ACTIVE_MODEL_REQUEST.set((self.model, _ACTIVE_USAGE.get()))
-        try:
-            with use_span(self.span, end_on_exit=False, record_exception=False,
-                          set_status_on_exception=False):
+        with _owner_scope(self.owner):
+            if self.span is None:
                 yield
-        finally:
-            _ACTIVE_MODEL_REQUEST.reset(token)
+                return
+            token = _ACTIVE_MODEL_REQUEST.set((self.model, _ACTIVE_USAGE.get()))
+            try:
+                with use_span(self.span, end_on_exit=False, record_exception=False,
+                              set_status_on_exception=False):
+                    yield
+            finally:
+                _ACTIVE_MODEL_REQUEST.reset(token)
 
     async def __aenter__(self):
         with self._current():
@@ -124,6 +127,31 @@ class _ModelStreamContext:
     async def __aexit__(self, exc_type, exc_value, traceback):
         with self._current():
             return await self.manager.__aexit__(exc_type, exc_value, traceback)
+
+
+def _call_owner(media):
+    """The owner mark for one model request while attachments are enabled, else None."""
+    if media is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import call_owner
+
+        return call_owner(media.manager)
+    except Exception:
+        return None
+
+
+@contextmanager
+def _owner_scope(owner):
+    """Run the enclosed provider SDK call as the owner of its media, so the provider
+    instrumentor beneath Pydantic AI skips it. No mark: the context is unchanged."""
+    if owner is None:
+        yield
+        return
+    from fi_instrumentation.attachments.media_capture import owner_scope
+
+    with owner_scope(owner):
+        yield
 
 
 def _request_messages(args, kwargs):
@@ -149,8 +177,10 @@ def wrap_model_request(original, tracer, streaming=False, media=None):
             with _model_request_span(self, tracer, current=False) as span:
                 # Input only: streamed output is not captured.
                 _capture(media, "request", span, _request_messages(args, kwargs))
-                manager = original(self, *args, **kwargs)
-                async with _ModelStreamContext(manager, self, span) as response:
+                owner = _call_owner(media)
+                with _owner_scope(owner):
+                    manager = original(self, *args, **kwargs)
+                async with _ModelStreamContext(manager, self, span, owner) as response:
                     yield response
                 _record_model_usage(span, response)
         return stream_wrapper
@@ -160,7 +190,8 @@ def wrap_model_request(original, tracer, streaming=False, media=None):
         with _model_request_span(self, tracer) as span:
             # Input media is captured before the provider call; this span owns its own occurrences.
             _capture(media, "request", span, _request_messages(args, kwargs))
-            response = await original(self, *args, **kwargs)
+            with _owner_scope(_call_owner(media)):
+                response = await original(self, *args, **kwargs)
             _record_model_usage(span, response)
             # Only a successful response: an error never reaches this line.
             _capture(media, "response", span, response)

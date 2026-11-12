@@ -14,8 +14,13 @@ media references are ignored. Videos are not captured.
 
 Privacy is the INTERSECTION of the FI TraceConfig and the OpenInference
 TraceConfig the instrumentor runs with (either one hiding wins), the manager's
-own policy, and the per-call capture policy. The Agno span and a provider
-instrumentor's span each get their own occurrence (byte deduplication is
+own policy, and the per-call capture policy.
+
+One model call, one owner: while attachments are enabled, the wrapped model call
+runs under the owner mark (``media_capture.OWNER_KEY``, a stream only while it
+advances), so a provider instrumentor beneath Agno (``traceai_openai``, ...)
+uploads nothing for that call; the Agno span holds the occurrence. A DIFFERENT
+call with the same bytes gets its own occurrence (byte deduplication is
 server-side).
 """
 

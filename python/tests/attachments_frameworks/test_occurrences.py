@@ -1,7 +1,9 @@
 """Shared helper: per-span occurrences, raw bytes, URL policy and part limits (no framework installed).
 
 F01 resolves an occurrence only under its own parent span, so every observing span owns
-its own occurrence: nothing here reuses an occurrence across spans or traces.
+its own occurrence: nothing here reuses an occurrence across spans or traces. Two layers of
+ONE model call do not both observe it: the framework adapter's owner mark makes the provider
+skip (``test_owner.py``, ``test_provider_and_framework.py``); here no mark is set.
 """
 
 import http.server
@@ -30,7 +32,7 @@ def _parents(f01):
     return [body["association"]["parent"]["span_id"] for body in f01.uploads]
 
 
-def test_framework_and_provider_spans_each_own_their_occurrence(f01, spans):
+def test_two_unmarked_observing_spans_each_own_their_occurrence(f01, spans):
     tracer_provider, exporter = spans
     manager = f01.manager()
     tracer = tracer_provider.get_tracer("t")
