@@ -169,7 +169,8 @@ def test_untyped_images_sniff_their_type_and_skip_paths(f01, spans, tmp_path, mo
 
     monkeypatch.setattr(builtins, "open", watch(real_open))
     monkeypatch.setattr(io, "open", watch(real_io_open))
-    images = [IMAGE, b64(jpeg(7)), str(path), path, "not base64!"]
+    # A PDF has no image signature: untyped sources are images only, so it is never uploaded.
+    images = [IMAGE, b64(jpeg(7)), str(path), path, "not base64!", PDF, b64(PDF)]
     media, _ = capture(manager, tracer_provider, lambda m: m.ollama_images(images))
     flush(manager)
     monkeypatch.undo()
@@ -264,10 +265,25 @@ def test_second_observer_of_same_span_uploads_nothing(f01, spans):
 def test_part_cap_bounds_work(f01, spans):
     tracer_provider, _ = spans
     manager = f01.manager()
+    calls = []
+    preflight = manager.preflight
+
+    def counted(*args, **kwargs):
+        calls.append(kwargs.get("mime_type"))
+        return preflight(*args, **kwargs)
+
+    manager.preflight = counted
     content = [{"type": "image_url", "image_url": {"url": data_uri(png(seed=i))}} for i in range(80)]
     media, _ = capture(manager, tracer_provider, lambda m: m.compatible_messages([{"role": "user", "content": content}]))
     flush(manager)
     assert len(f01.payloads) == provider_media.MAX_PARTS == len(media.captured)
+    # One preflight per admitted part (exact type and size already match the gate), none past the cap.
+    assert len(calls) == provider_media.MAX_PARTS
+    del manager.preflight
+    media, _ = capture(manager, tracer_provider, lambda m: m.compatible_messages(
+        [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": b64(wav()), "format": "wav"}}] * 80}]))
+    flush(manager)
+    assert len(media.captured) == provider_media.MAX_PARTS
     manager.shutdown(5)
 
 
