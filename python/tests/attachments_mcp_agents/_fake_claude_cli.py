@@ -6,8 +6,9 @@ PreToolUse and PostToolUse hook callbacks the SDK registered, the ``tool_result`
 carrying the media in ``FAKE_CLAUDE_RESULT`` (a JSON file), then a final answer.
 ``FAKE_CLAUDE_ORDER=result-first`` streams the tool result before PostToolUse;
 ``no-result`` never streams it. ``FAKE_CLAUDE_GAP`` (seconds) waits between
-PostToolUse and the tool result. No model, network or file other than the
-result file is touched.
+PostToolUse and the tool result; ``FAKE_CLAUDE_HOLD`` (a path) also waits there,
+until that file exists (at most 20 s). ``FAKE_TOOL_ID`` names the tool call. No
+model, network or file other than the result and hold files is touched.
 """
 
 import json
@@ -23,6 +24,8 @@ with open(os.environ["FAKE_CLAUDE_RESULT"]) as handle:
     TOOL_RESULT = json.load(handle)
 ORDER = os.environ.get("FAKE_CLAUDE_ORDER", "hooks-first")
 GAP = float(os.environ.get("FAKE_CLAUDE_GAP", "0"))
+HOLD = os.environ.get("FAKE_CLAUDE_HOLD", "")
+TOOL_ID = os.environ.get("FAKE_TOOL_ID", "toolu_screen_1")
 TOOL = "mcp__screen__capture"
 hooks = {}
 counter = [0]
@@ -61,7 +64,8 @@ def assistant(content):
 
 
 def turn():
-    tool_use_id = "toolu_screen_1"
+    tool_use_id = TOOL_ID
+    time.sleep(0.05)  # Model latency: the client is iterating receive_response() before any hook.
     assistant([{"type": "tool_use", "id": tool_use_id, "name": TOOL, "input": {}}])
     hook("PreToolUse", tool_use_id, {})
     result = {"type": "user", "parent_tool_use_id": None, "session_id": "s1", "message": {
@@ -72,6 +76,9 @@ def turn():
     else:
         hook("PostToolUse", tool_use_id, {"tool_response": TOOL_RESULT.get("content")})
         time.sleep(GAP)
+        deadline = time.monotonic() + 20
+        while HOLD and not os.path.exists(HOLD) and time.monotonic() < deadline:
+            time.sleep(0.02)
         if ORDER != "no-result":
             send(result)
     assistant([{"type": "text", "text": "done"}])

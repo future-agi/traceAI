@@ -28,16 +28,32 @@ logger = logging.getLogger(__name__)
 # Key: tool_use_id, Value: (span, start_time, tool_name)
 _active_tool_spans: Dict[str, Tuple[Span, float, str]] = {}
 
-# Tool spans the PostToolUse hook completed while tool-result media capture is on. The SDK streams
-# the tool result AFTER that hook, so the span stays recording until its ToolResultBlock has been
-# captured (its media refs are projected on it), then ends at the time the hook recorded.
-# Key: tool_use_id, Value: (span, end_time_ns, timer handle or None). Bounded and time-limited.
-_deferred_tool_ends: "OrderedDict[str, Tuple[Span, int, Any]]" = OrderedDict()
 _MAX_DEFERRED_ENDS = 256
-# Tool results streamed while their span was still open (result-first): PostToolUse ends those now.
-_results_seen: "OrderedDict[str, bool]" = OrderedDict()
 #: A deferred tool span ends at most this long after its hook, even if its result never arrives.
 DEFERRED_END_TIMEOUT_S = 30.0
+
+
+class ToolDeferrals:
+    """One client's tool spans whose end waits for their result (tool-result media capture on).
+
+    The SDK streams a tool result AFTER the PostToolUse hook, so while that client's
+    ``receive_response()`` conversation span is live, a completed tool span stays recording
+    until its ToolResultBlock has been captured (its media refs are projected on it), then
+    ends at the time the hook recorded. Outside a live conversation (``receive_messages()``,
+    or a hook that fires before ``receive_response()`` starts) the hook ends the span as
+    before. Each client has its own tables, so one conversation's end flushes only its own.
+
+    ``ends``: tool_use_id -> (span, end_time_ns, timer handle or None), bounded and
+    time-limited. ``results_seen``: results streamed while their span was still open
+    (result-first), so PostToolUse ends those now. ``live``: open conversation spans.
+    """
+
+    __slots__ = ("ends", "results_seen", "live")
+
+    def __init__(self) -> None:
+        self.ends: "OrderedDict[str, Tuple[Span, int, Any]]" = OrderedDict()
+        self.results_seen: "OrderedDict[str, bool]" = OrderedDict()
+        self.live = 0
 
 # Tools that launch a subagent: "Task" in older Claude Code releases, "Agent" in current ones
 SUBAGENT_TOOLS = ("Task", "Agent")
@@ -288,67 +304,73 @@ def _end_deferred(entry: Tuple[Span, int, Any]) -> None:
         logger.debug(f"Failed to end deferred tool span: {e}")
 
 
-def _expire_deferred(tool_use_id: str, entry: Tuple[Span, int, Any]) -> None:
-    if _deferred_tool_ends.get(tool_use_id) is entry:
-        del _deferred_tool_ends[tool_use_id]
+def _expire_deferred(deferrals: ToolDeferrals, tool_use_id: str, entry: Tuple[Span, int, Any]) -> None:
+    if deferrals.ends.get(tool_use_id) is entry:
+        del deferrals.ends[tool_use_id]
         _end_deferred(entry)
 
 
-def _defer_tool_end(tool_use_id: str, span: Span, end_ns: int) -> bool:
+def _defer_tool_end(deferrals: ToolDeferrals, tool_use_id: str, span: Span, end_ns: int) -> bool:
     """Keep a completed tool span recording until its result is captured. False: end it now."""
+    if deferrals.results_seen.pop(tool_use_id, None):
+        return False  # Its result was already captured on the open span.
+    if deferrals.live <= 0:
+        return False  # No receive_response() conversation will capture its result: end now.
     try:
         import asyncio
 
         loop = asyncio.get_running_loop()
     except Exception:
         return False  # No asyncio loop to bound the wait (another async backend): end now.
-    if _results_seen.pop(tool_use_id, None):
-        return False  # Its result was already captured on the open span.
     try:
-        previous = _deferred_tool_ends.pop(tool_use_id, None)
+        previous = deferrals.ends.pop(tool_use_id, None)
         if previous is not None:
             _end_deferred(previous)
         holder: List[Any] = []
-        handle = loop.call_later(DEFERRED_END_TIMEOUT_S, lambda: _expire_deferred(tool_use_id, holder[0]))
+        handle = loop.call_later(DEFERRED_END_TIMEOUT_S,
+                                 lambda: _expire_deferred(deferrals, tool_use_id, holder[0]))
         entry = (span, end_ns, handle)
         holder.append(entry)
-        _deferred_tool_ends[tool_use_id] = entry
-        while len(_deferred_tool_ends) > _MAX_DEFERRED_ENDS:
-            _, oldest = _deferred_tool_ends.popitem(last=False)
+        deferrals.ends[tool_use_id] = entry
+        while len(deferrals.ends) > _MAX_DEFERRED_ENDS:
+            _, oldest = deferrals.ends.popitem(last=False)
             _end_deferred(oldest)
         return True
     except Exception:
         return False
 
 
-def end_deferred_tool(tool_use_id: Any) -> None:
-    """End one deferred tool span (its result was processed), at the time its hook recorded."""
-    if not isinstance(tool_use_id, str):
+def end_deferred_tool(deferrals: Optional[ToolDeferrals], tool_use_id: Any) -> None:
+    """End one of this client's deferred tool spans (its result was processed), at its hook's time."""
+    if deferrals is None or not isinstance(tool_use_id, str):
         return
-    entry = _deferred_tool_ends.pop(tool_use_id, None)
+    entry = deferrals.ends.pop(tool_use_id, None)
     if entry is not None:
         _end_deferred(entry)
     elif tool_use_id in _active_tool_spans:
-        _results_seen[tool_use_id] = True
-        while len(_results_seen) > _MAX_DEFERRED_ENDS:
-            _results_seen.popitem(last=False)
+        deferrals.results_seen[tool_use_id] = True
+        while len(deferrals.results_seen) > _MAX_DEFERRED_ENDS:
+            deferrals.results_seen.popitem(last=False)
 
 
-def end_deferred_tool_spans() -> None:
-    """End every deferred tool span at its recorded time (conversation end)."""
-    _results_seen.clear()
-    while _deferred_tool_ends:
-        _, entry = _deferred_tool_ends.popitem(last=False)
+def end_deferred_tool_spans(deferrals: Optional[ToolDeferrals]) -> None:
+    """End every deferred tool span of ONE client at its recorded time (its conversation ended)."""
+    if deferrals is None:
+        return
+    deferrals.results_seen.clear()
+    while deferrals.ends:
+        _, entry = deferrals.ends.popitem(last=False)
         _end_deferred(entry)
 
 
-def create_post_tool_use_hook(tracer: trace_api.Tracer, defer_end: bool = False) -> Callable:
+def create_post_tool_use_hook(tracer: trace_api.Tracer, deferrals: Optional[ToolDeferrals] = None) -> Callable:
     """Create a PostToolUse hook for completing tool traces.
 
     Args:
         tracer: OpenTelemetry tracer instance
-        defer_end: keep the completed span recording until its tool result is captured
-            (only when tool-result media capture is on; the span keeps the hook's end time)
+        deferrals: the client's deferral tables when tool-result media capture is on: while
+            its receive_response() conversation is live, the completed span stays recording
+            until its tool result is captured (it keeps the hook's end time)
 
     Returns:
         Async hook function compatible with Claude Agent SDK
@@ -425,9 +447,10 @@ def create_post_tool_use_hook(tracer: trace_api.Tracer, defer_end: bool = False)
                 },
             )
 
-            # End the span. With media capture on, the tool result (streamed after this
-            # hook) is captured on the still-recording span first; it ends at end_ns.
-            if not (defer_end and _defer_tool_end(tool_use_id, span, end_ns)):
+            # End the span. With media capture on and a live conversation, the tool result
+            # (streamed after this hook) is captured on the still-recording span first; it
+            # ends at end_ns.
+            if not (deferrals is not None and _defer_tool_end(deferrals, tool_use_id, span, end_ns)):
                 span.end()
 
             # Clean up subagent span if this launched a subagent
@@ -524,8 +547,8 @@ def clear_active_tool_spans() -> None:
     """
     global _active_tool_spans, _subagent_spans
 
-    # Completed tool spans still waiting for their result end normally, at their hook's time.
-    end_deferred_tool_spans()
+    # Deferred tool spans belong to one client; its conversation flushes its own
+    # (end_deferred_tool_spans) before calling this.
 
     # End any orphaned spans
     for tool_use_id, (span, start_time, tool_name) in _active_tool_spans.items():

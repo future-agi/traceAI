@@ -17,8 +17,8 @@ from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from ._attachments import capture_tool_results, tool_result_ids
 from ._attributes import ClaudeAgentAttributes, ClaudeAgentSpanKind
 from ._hooks import (
+    ToolDeferrals,
     _active_tool_spans,
-    _deferred_tool_ends,
     create_pre_tool_use_hook,
     create_subagent_start_hook,
     create_post_tool_use_hook,
@@ -171,13 +171,15 @@ class TurnTracker:
         return str(content)
 
 
-def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer, defer_tool_end: bool = False) -> None:
+def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer,
+                         deferrals: Optional[ToolDeferrals] = None) -> None:
     """Inject OpenTelemetry tracing hooks into ClaudeAgentOptions.
 
     Args:
         options: ClaudeAgentOptions instance
         tracer: OpenTelemetry tracer
-        defer_tool_end: tool-result media capture is on, so a completed tool span stays
+        deferrals: the client's deferral tables when tool-result media capture is on: while
+            its receive_response() conversation is live, a completed tool span stays
             recording until its result is captured (it keeps the hook's end time)
     """
     if not hasattr(options, "hooks"):
@@ -199,7 +201,7 @@ def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer, defer_tool_end:
         from claude_agent_sdk import HookMatcher
 
         pre_hook = create_pre_tool_use_hook(tracer)
-        post_hook = (create_post_tool_use_hook(tracer, defer_end=True) if defer_tool_end
+        post_hook = (create_post_tool_use_hook(tracer, deferrals=deferrals) if deferrals is not None
                      else create_post_tool_use_hook(tracer))
         start_hook = create_subagent_start_hook(tracer)
 
@@ -246,9 +248,11 @@ def wrap_claude_sdk_client(
         def __init__(self, *args: Any, **kwargs: Any):
             # Extract options for hook injection
             options = kwargs.get("options") or (args[0] if args else None)
+            # This client's deferred tool ends (tool-result media capture only).
+            deferrals = ToolDeferrals() if attachments is not None else None
             if options:
-                if attachments is not None:
-                    inject_tracing_hooks(options, tracer, defer_tool_end=True)
+                if deferrals is not None:
+                    inject_tracing_hooks(options, tracer, deferrals=deferrals)
                 else:
                     inject_tracing_hooks(options, tracer)
 
@@ -264,6 +268,7 @@ def wrap_claude_sdk_client(
             self._prompt: Optional[str] = None
             self._start_time: Optional[float] = None
             self._options = options
+            self._tool_deferrals = deferrals
 
         async def query(self, *args: Any, **kwargs: Any) -> Any:
             """Capture prompt and timestamp when query starts."""
@@ -285,6 +290,9 @@ def wrap_claude_sdk_client(
                 attributes=span_attributes,
             ) as conversation_span:
                 set_parent_span(conversation_span)
+                deferrals = getattr(self, "_tool_deferrals", None)
+                if deferrals is not None:
+                    deferrals.live += 1
 
                 # Initialize turn tracker
                 turn_tracker = TurnTracker(
@@ -326,14 +334,14 @@ def wrap_claude_sdk_client(
                                         msg,
                                         conversation_span,
                                         _active_tool_spans,
-                                        _deferred_tool_ends,
+                                        deferrals.ends if deferrals is not None else {},
                                         message_index=message_index,
                                         trace_config=trace_config,
                                         capture=attachment_capture,
                                     )
                                 finally:
                                     for tool_use_id in tool_result_ids(msg):
-                                        end_deferred_tool(tool_use_id)
+                                        end_deferred_tool(deferrals, tool_use_id)
                             # End current turn, mark next start
                             turn_tracker.end_current_turn()
                             turn_tracker.mark_next_start()
@@ -388,6 +396,10 @@ def wrap_claude_sdk_client(
                 finally:
                     turn_tracker.end_current_turn()
                     clear_parent_span()
+                    if deferrals is not None:
+                        # Only this conversation's deferred tool spans end here, at their hook's time.
+                        deferrals.live -= 1
+                        end_deferred_tool_spans(deferrals)
                     clear_active_tool_spans()
 
         def _build_span_attributes(self) -> Dict[str, Any]:
@@ -539,11 +551,11 @@ def wrap_claude_sdk_client(
     if attachments is not None and hasattr(original_class, "disconnect"):
 
         async def disconnect(self: Any, *args: Any, **kwargs: Any) -> Any:
-            """Disconnect; completed tool spans still waiting for their result end now."""
+            """Disconnect; this client's tool spans still waiting for their result end now."""
             try:
                 return await super(TracedClaudeSDKClient, self).disconnect(*args, **kwargs)
             finally:
-                end_deferred_tool_spans()
+                end_deferred_tool_spans(getattr(self, "_tool_deferrals", None))
 
         TracedClaudeSDKClient.disconnect = disconnect
 

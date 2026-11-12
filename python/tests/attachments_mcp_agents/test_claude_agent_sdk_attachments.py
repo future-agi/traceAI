@@ -9,6 +9,7 @@ import json
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -67,10 +68,19 @@ def instrument(spans):
         state["instrumentor"].uninstrument()
 
 
+def client_options(cli_path, **env):
+    fields = getattr(claude_agent_sdk.ClaudeAgentOptions, "__dataclass_fields__", {})
+    kwargs = {"cli_path": cli_path} if "cli_path" in fields else {}
+    if env:
+        if "env" not in fields:
+            pytest.skip("this claude-agent-sdk release has no ClaudeAgentOptions.env")
+        kwargs["env"] = env
+    return claude_agent_sdk.ClaudeAgentOptions(**kwargs)
+
+
 def converse(cli_path):
     async def go():
-        fields = getattr(claude_agent_sdk.ClaudeAgentOptions, "__dataclass_fields__", {})
-        options = claude_agent_sdk.ClaudeAgentOptions(**({"cli_path": cli_path} if "cli_path" in fields else {}))
+        options = client_options(cli_path)
         messages = []
         async with claude_agent_sdk.ClaudeSDKClient(options=options) as client:
             await client.query("take a screenshot")
@@ -169,3 +179,102 @@ def test_disabled_manager_uploads_nothing_and_the_conversation_is_unchanged(f01,
     assert f01.uploads == []
     blocks = [m for m in messages if type(m).__name__ == "UserMessage"][0].content
     assert blocks[0].content[0]["source"]["data"] == b64(SHOT)
+
+
+def test_receive_messages_without_disconnect_ends_the_tool_span_at_its_hook(f01, instrument, cli):
+    """No receive_response() conversation is live, so PostToolUse ends the span as with attachments off."""
+    manager = f01.manager()
+    exporter = instrument(manager)
+    path = cli([image(SHOT)], gap=0.3)
+    clients = []
+
+    async def go():
+        client = claude_agent_sdk.ClaudeSDKClient(options=client_options(path))
+        clients.append(client)
+        await client.connect()
+        await client.query("take a screenshot")
+        async for message in client.receive_messages():
+            if type(message).__name__ == "ResultMessage":
+                break
+        # Returns without disconnect() or async-with: nothing flushes deferred spans.
+
+    asyncio.run(go())
+    flush(manager)
+    (tool,) = tool_spans(exporter)
+    assert tool.status.is_ok and not refs(tool) and f01.uploads == []
+    assert abs(_duration_ms(tool) - tool.attributes[ClaudeAgentAttributes.TOOL_DURATION_MS]) < 150
+    assert not clients[0]._tool_deferrals.ends and clients[0]._tool_deferrals.live == 0
+    manager.shutdown(5)
+
+
+def test_conversation_end_flushes_its_waiting_tool_span_without_disconnect(f01, instrument, cli):
+    """A result that never arrives: the span ends when receive_response() ends, not at the 30 s timer."""
+    manager = f01.manager()
+    exporter = instrument(manager)
+    path = cli([image(SHOT)], order="no-result", gap=0.2)
+    clients = []
+
+    async def go():
+        client = claude_agent_sdk.ClaudeSDKClient(options=client_options(path))
+        clients.append(client)
+        await client.connect()
+        await client.query("take a screenshot")
+        async for _ in client.receive_response():
+            pass
+        # Inspected before any disconnect(): only the conversation end can have ended it.
+        deferrals = clients[0]._tool_deferrals
+        return len(tool_spans(exporter)), list(deferrals.ends), deferrals.live
+
+    ended, waiting, live = asyncio.run(go())
+    assert (ended, waiting, live) == (1, [], 0)
+    (tool,) = tool_spans(exporter)
+    assert tool.status.is_ok and not refs(tool) and f01.uploads == []
+    assert abs(_duration_ms(tool) - tool.attributes[ClaudeAgentAttributes.TOOL_DURATION_MS]) < 150
+    manager.shutdown(5)
+
+
+def test_one_conversation_ending_does_not_end_another_clients_deferred_tool_span(f01, instrument, cli, tmp_path):
+    """B's tool span waits for its result while A runs to completion; A's end flushes only A's spans."""
+    manager = f01.manager()
+    exporter = instrument(manager)
+    path = cli([image(SHOT)])
+    other = png(seed=52)
+    a_result = tmp_path / "result-a.json"
+    a_result.write_text(json.dumps({"content": [image(other)], "is_error": False}))
+    release = tmp_path / "release-b"
+    clients = {}
+    parked = {}
+
+    async def converse_as(name, **env):
+        client = claude_agent_sdk.ClaudeSDKClient(options=client_options(path, FAKE_TOOL_ID="toolu_" + name, **env))
+        clients[name] = client
+        async with client:
+            await client.query("take a screenshot")
+            async for _ in client.receive_response():
+                pass
+
+    async def go():
+        b = asyncio.ensure_future(converse_as("b", FAKE_CLAUDE_HOLD=str(release)))
+        deadline = time.monotonic() + 15
+        while not ("b" in clients and clients["b"]._tool_deferrals.ends):
+            assert time.monotonic() < deadline and not b.done(), "B never parked its tool span"
+            await asyncio.sleep(0.02)
+        await converse_as("a", FAKE_CLAUDE_RESULT=str(a_result))
+        parked["b"] = list(clients["b"]._tool_deferrals.ends)
+        release.write_text("go")
+        await b
+
+    asyncio.run(go())
+    flush(manager)
+    assert parked["b"] == ["toolu_b"]
+    tools = {s.attributes[ClaudeAgentAttributes.TOOL_USE_ID]: s for s in tool_spans(exporter)}
+    assert sorted(tools) == ["toolu_a", "toolu_b"]
+    assert sorted(u.get("tool_call_id") for u in f01.uploads) == ["toolu_a", "toolu_b"]
+    assert sorted(f01.payloads) == sorted([SHOT, other])
+    for upload in f01.uploads:
+        tool = tools[upload["tool_call_id"]]
+        assert tool.status.is_ok
+        assert upload["association"]["parent"]["span_id"] == format(tool.context.span_id, "016x")
+        assert [r["occurrence_id"] for r in refs(tool)] == [upload["occurrence_id"]]
+    assert not clients["a"]._tool_deferrals.ends and not clients["b"]._tool_deferrals.ends
+    manager.shutdown(5)

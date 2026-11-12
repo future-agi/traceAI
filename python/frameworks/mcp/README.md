@@ -66,8 +66,15 @@ and `BlobResourceContents.blob` (in an `EmbeddedResource` or a
 parts and 256 KiB of decoded bytes per result. `resource_link` blocks,
 resource URIs and `structuredContent` are never read. A MIME of another
 modality than the block type, or outside the attachment MIME list, uploads
-nothing, and so do bytes whose leading signature names another modality than
-the declared MIME (a PNG labelled `audio/wav` or `application/octet-stream`). `attachments=` overrides the provider's manager; `trace_config=` and
+nothing. So do bytes whose leading signature names another modality than the
+declared MIME, for example a PNG labelled `audio/wav`. The signatures checked
+are PNG, JPEG, GIF, WebP, BMP, TIFF, the HEIF/AVIF image brands of an ISO-BMFF
+`ftyp` box (`avif`, `heic`, `heix`, `mif1`, `msf1`), WAV, Ogg, FLAC, MP3 with
+an ID3 tag, and PDF. Other bytes, including MP4 and WebM containers and MP3
+without an ID3 tag, are judged by the declared MIME only.
+`application/octet-stream` is the generic file modality, so an octet-stream
+blob whose bytes carry one of those image, audio or PDF signatures is skipped
+rather than relabelled. `attachments=` overrides the provider's manager; `trace_config=` and
 `attachment_capture=` only add restrictions. Wrapping a wrapped session
 returns it unchanged. `capture_mcp_result(manager, span, result, operation)`
 is the same capture for an existing span.

@@ -14,9 +14,15 @@ give them one set of rules (the TypeScript ``@traceai/mcp`` and
 - Every value is preflighted before it is read or decoded. Each observation
   has a bounded decode budget and part count; parts beyond them are skipped.
 - A declared MIME is never trusted over the bytes: when the first bytes are a
-  known signature of ANOTHER modality (a PNG labelled ``audio/wav`` or
-  ``application/octet-stream``), the part is denied, so a mislabel cannot
-  escape ``hide_input_images`` or a modality restriction. Never relabelled.
+  known signature (``_SIGNATURES``) of ANOTHER modality (a PNG labelled
+  ``audio/wav``), the part is denied, so a mislabel cannot escape
+  ``hide_input_images`` or a modality restriction. Never relabelled. The
+  signatures checked are PNG, JPEG, GIF, WebP, BMP, TIFF, ISO-BMFF image
+  brands (``ftyp`` avif/heic/heix/mif1/msf1), WAV, Ogg, FLAC, ID3-tagged MP3
+  and PDF; other bytes (MP4/WebM containers, MP3 without an ID3 tag) are
+  judged by their declared MIME only. ``application/octet-stream`` is the
+  ``file`` modality, so an octet-stream blob whose bytes carry a recognised
+  image, audio or PDF signature is skipped (fail-closed, never relabelled).
 - A context marked by another adapter as the owner of this call's media
   (``OWNER_KEY``, shared by name with ``traceai``) captures nothing here.
 
@@ -90,11 +96,15 @@ def mime_kind(mime: Any) -> Optional[str]:
     return MIME_MODALITIES.get(mime) if isinstance(mime, str) else None
 
 
-#: Leading-byte signatures with an unambiguous F01 modality. Containers shared by audio and
-#: video (MP4 ``ftyp``, WebM/Matroska) have none: they can only be denied by their declared MIME.
+#: Leading-byte signatures with an unambiguous F01 modality. ISO-BMFF ``ftyp`` boxes name an
+#: image only for the HEIF/AVIF still-image brands listed here; other brands (mp42, isom,
+#: ``M4A ``, ``qt  ``) and WebM/Matroska are shared by audio and video, so those bytes are
+#: judged by their declared MIME only. ``consistent`` decodes the first 12 bytes.
 _SIGNATURES = (
     (0, b"\x89PNG\r\n\x1a\n", "image"), (0, b"\xff\xd8\xff", "image"), (0, b"GIF87a", "image"),
-    (0, b"GIF89a", "image"), (8, b"WEBP", "image"), (8, b"WAVE", "audio"),
+    (0, b"GIF89a", "image"), (8, b"WEBP", "image"), (0, b"BM", "image"), (0, b"II*\x00", "image"),
+    (0, b"MM\x00*", "image"), (4, b"ftypavif", "image"), (4, b"ftypheic", "image"), (4, b"ftypheix", "image"),
+    (4, b"ftypmif1", "image"), (4, b"ftypmsf1", "image"), (8, b"WAVE", "audio"),
     (0, b"OggS", "audio"), (0, b"fLaC", "audio"), (0, b"ID3", "audio"), (0, b"%PDF-", "document"),
 )
 
