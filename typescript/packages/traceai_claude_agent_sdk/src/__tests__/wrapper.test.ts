@@ -502,14 +502,16 @@ describe("wrapQuery", () => {
       expect(tool.status.code).toBe(SpanStatusCode.ERROR);
       // Error text is tool output: hidden with hideOutputs.
       expect(tool.attributes["claude_agent.tool.error_message"]).toBeUndefined();
-      expect(tool.status.message).toBe("tool error");
+      // fi-core hides the status description with hidden error details.
+      expect(tool.status.message).toBeUndefined();
 
       expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
       expect(conversation.attributes["claude_agent.is_error"]).toBe(true);
       expect(conversation.attributes["claude_agent.error.type"]).toBe("error_max_turns");
       // The result's error strings are raw error text: hidden with hideOutputs.
       expect(conversation.attributes["claude_agent.error.message"]).toBeUndefined();
-      expect(conversation.status.message).toBe("error_max_turns");
+      // fi-core hides the status description with hidden outputs/error details.
+      expect(conversation.status.message).toBeUndefined();
       expect(conversation.attributes["gen_ai.cost.total"]).toBe(0.002);
     });
 
@@ -676,7 +678,7 @@ describe("wrapQuery", () => {
       expect(JSON.stringify({ a: conversation.attributes, e: conversation.events, s: conversation.status })).not.toContain(
         "SECRET_ERROR_TEXT_MARKER",
       );
-      expect(conversation.status.message).toBe("TypeError");
+      expect(conversation.status.message).toBeUndefined();
       expect(conversation.attributes["claude_agent.error.type"]).toBe("TypeError");
       expect(conversation.events.find((e) => e.name === "exception")?.attributes).toEqual({ "exception.type": "TypeError" });
     });

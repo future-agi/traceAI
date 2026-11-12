@@ -152,3 +152,43 @@ pnpm --filter @traceai/claude-agent-sdk test     # jest: wrapper, parity, fi-cor
 ```
 
 The shared-harness contract tests (`contract/test_harness_contract.py`) run the built package in Node against the Python OTLP `Receiver`, run the real SDK against a loopback Messages API mock, pack the tarball and check it holds no SDK file or native binary, and import the package as CJS and ESM. See the module docstring for the command.
+
+
+## Original tool media
+
+The wrapper can send original typed image and PDF blocks to the provider's
+shared attachment manager before tool output is truncated into span text. Tool
+results attach to their exact tool span; direct user media attaches to the
+conversation span. The wrapper does not turn screenshots into recordings.
+
+This requires an attachment-capable service and an attachment-enabled
+`@traceai/fi-core` provider. Capture is off by default. The existing
+`wrapQuery(query, { tracerProvider })` setup uses `tracerProvider.attachments`;
+you may also supply `attachments` explicitly when using a custom provider.
+`attachmentCapture` adds integration restrictions such as `captureContent: false`,
+`recordInputs: false`, `recordOutputs: false`, `muted: true` or
+`temporaryChat: true`. These restrictions cannot loosen the manager's policy.
+
+Only typed inline base64 image/PDF sources are observed, with at most 64 parts
+and 256 KiB of decoded bytes per content list. URLs, file IDs, arbitrary tool
+objects and local paths are not retrieved. Each block is checked with the
+manager's `preflight` (every privacy, sampling and budget rule) before its base64
+is read or decoded, so denied media is never touched. SDK messages arrive complete,
+not as byte streams, so there is no streaming capture to configure.
+Input hide rules apply to tool media
+that is sent back to the model; output hide rules also apply to tool results.
+Required PII redaction without a qualified media sanitizer denies raw capture.
+Original media may contain embedded metadata.
+
+Parameters, hooks, message objects, iterator cancellation and control methods
+remain owned by the application. The wrapper neither awaits uploads during
+inference nor keeps spans open for uploads. Flush the provider before process
+exit; if an explicitly supplied manager differs from the provider's manager,
+flush that manager as well.
+
+Each original media block is offered to the manager at most once per query,
+so a replayed or re-yielded frame does not create a second occurrence. The SDK
+runs model calls inside the spawned Claude Code executable, so an in-process
+Anthropic provider instrumentation does not see the same media. If you also
+capture the same bytes yourself through another adapter, the manager does not
+deduplicate across adapters.
