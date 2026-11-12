@@ -1,4 +1,4 @@
-/* SDK design 6.4: a reader the application obtained is observed chunk by chunk; nothing is pulled by the adapter. */
+/* SDK design 6.4: a reader or async iterator the application obtained is observed chunk by chunk; nothing is pulled by the adapter. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ProviderMediaCapture } = require('../dist/src');
@@ -153,5 +153,100 @@ test('S-10 a body over the server cap (but under 4 MiB) is discarded whole; the 
     new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
     assert.deepEqual(await drain(response.body.getReader()), body);
     await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+/* `for await` and values() lock the body with an internal reader, never the public getReader(). */
+const iterate = async (iterable, stopAfter = Infinity) => {
+  const out = []; let n = 0;
+  for await (const chunk of iterable) { out.push(chunk); if (++n >= stopAfter) break; }
+  return Buffer.concat(out);
+};
+
+for (const entry of ['for await', 'values()']) test(`S-11 ${entry} to the end uploads exactly the chunks the application received, pulling nothing itself`, async () => {
+  const f = await fixture();
+  try {
+    const { response, pulls } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    const iterator = entry === 'values()' ? response.body.values() : response.body[Symbol.asyncIterator]();
+    assert.equal(pulls(), 0, 'obtaining the iterator reads nothing');
+    assert.equal(f.manager.status().openStreams, 1);
+    const received = await iterate({ [Symbol.asyncIterator]: () => iterator });
+    assert.deepEqual(received, wav());
+    await f.manager.flush(); await idle(f);
+    assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, wav());
+    assert.equal(f.uploads[0].request.direction, 'output'); assert.equal(f.uploads[0].request.mime_type, 'audio/wav');
+  } finally { await f.close(); }
+});
+
+test('S-12 a for-await loop that breaks early uploads nothing and returns its budget', async () => {
+  const f = await fixture();
+  try {
+    const { response } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    assert.equal((await iterate(response.body, 2)).length, 32);
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+test('S-13 values({ preventCancel }) then a later reader sees only the rest of the body, so nothing uploads', async () => {
+  const f = await fixture();
+  try {
+    const { response } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    const head = await iterate({ [Symbol.asyncIterator]: () => response.body.values({ preventCancel: true }) }, 2);
+    const rest = await drain(response.body.getReader());
+    assert.deepEqual(Buffer.concat([head, rest]), wav());
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+test('S-14 an iterated stream over the 4 MiB cap uploads nothing; the application still reads every byte', async () => {
+  const f = await fixture();
+  try {
+    const big = Buffer.alloc(4 * 1024 * 1024 + 64, 3);
+    const { response } = audio(big, 256 * 1024);
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    assert.equal((await iterate(response.body)).length, big.length);
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+test('S-15 an error during iteration reaches the application unchanged and uploads nothing', async () => {
+  const f = await fixture();
+  try {
+    let sent = false;
+    const body = new ReadableStream({ pull(controller) { if (!sent) { sent = true; controller.enqueue(new Uint8Array(wav().subarray(0, 8))); } else controller.error(new Error('synthetic-network')); } }, { highWaterMark: 0 });
+    const response = new Response(body, { headers: { 'content-type': 'audio/wav' } });
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    await assert.rejects(iterate(response.body), /synthetic-network/);
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+for (const mode of ['hideOutputs', 'piiRedaction', 'localHide', 'disabled']) test(`S-16 ${mode}: iterating opens no stream and nothing uploads`, async () => {
+  const f = await fixture(mode === 'disabled' ? { enabled: false } : mode === 'localHide' ? {} : { traceConfig: { [mode]: true } });
+  try {
+    const { response } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager, traceConfig: mode === 'localHide' ? { hideOutputs: true } : {} }).speechResponse(response);
+    const iterator = response.body[Symbol.asyncIterator]();
+    await iterator.next();
+    assert.equal(f.manager.status().openStreams, 0);
+    assert.ok((await iterate({ [Symbol.asyncIterator]: () => iterator })).length > 0);
+    await f.manager.flush(); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});
+
+test('S-17 iterating a body already locked by a reader throws the host error unchanged; the reader still uploads once', async () => {
+  const f = await fixture();
+  try {
+    const { response } = audio();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    const reader = response.body.getReader();
+    assert.throws(() => response.body[Symbol.asyncIterator](), TypeError);
+    assert.throws(() => response.body.values(), TypeError);
+    assert.deepEqual(await drain(reader), wav());
+    await f.manager.flush(); await idle(f);
+    assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, wav());
   } finally { await f.close(); }
 });

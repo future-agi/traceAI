@@ -273,11 +273,12 @@ export class ProviderMediaCapture {
   }
 
   /**
-   * Observe only bytes the caller consumed: whole-body arrayBuffer()/blob() reads, and the
-   * chunks of a reader the caller obtained with response.body.getReader() (SDK design 6.4),
-   * up to the end of the stream. Unread, cancelled, partially read and released bodies upload
-   * nothing, and so do a second reader on the same body, consumers that never call the public
-   * getReader(), and Node-stream bodies.
+   * Observe only bytes the caller consumed: whole-body arrayBuffer()/blob() reads, the chunks
+   * of a reader the caller obtained with response.body.getReader() (SDK design 6.4), and the
+   * chunks of an async iteration of response.body (`for await`, values()), up to the end of the
+   * stream. Unread, cancelled, partially read, released and broken-out-of bodies upload nothing,
+   * and so do a second reader or iterator on the same body, tee()/pipeTo()/pipeThrough()/clone()
+   * consumers, and Node-stream bodies.
    */
   speechResponse<T>(response: T): T {
     this.safely(() => {
@@ -303,19 +304,31 @@ export class ProviderMediaCapture {
       }
       // Reading the body property neither locks nor reads the stream.
       const body = target.body as ReadableStream<Uint8Array> | null;
-      const getReader = body?.getReader;
-      if (body && typeof getReader === "function") {
-        // Only the first reader is observed. releaseLock() does not end the stream, so a
-        // later reader would see only the remaining bytes and must never upload them as whole.
+      if (body) {
+        // Only the first reader or iterator is observed. releaseLock() (or an iterator's
+        // return() with preventCancel) does not end the stream, so a later consumer would see
+        // only the remaining bytes and must never upload them as whole.
         let observed = false;
-        Object.defineProperty(body, "getReader", { configurable: true, writable: true, value: function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
-          const reader = (getReader as (...a: unknown[]) => unknown).apply(this, args);
-          if (this === body && !observed) {
-            observed = true;
-            capture.safely(() => capture.observeReader(mimeType, reader));
-          }
-          return reader;
-        } });
+        // `for await` and values() lock the stream with an internal reader, never the public
+        // getReader(), so each entry point is observed on this body instance.
+        const entries: Array<[PropertyKey, "read" | "next", readonly string[]]> = [
+          ["getReader", "read", ["releaseLock", "cancel"]],
+          ["values", "next", ["return"]],
+          [Symbol.asyncIterator, "next", ["return"]],
+        ];
+        for (const [name, pull, stops] of entries) {
+          const method = (body as unknown as Record<PropertyKey, unknown>)[name];
+          if (typeof method !== "function") continue;
+          Object.defineProperty(body, name, { configurable: true, writable: true, value: function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
+            // A locked body throws here, unchanged, before anything is observed.
+            const consumer = (method as (...a: unknown[]) => unknown).apply(this, args);
+            if (this === body && !observed) {
+              observed = true;
+              capture.safely(() => capture.observeChunks(mimeType, consumer, pull, stops));
+            }
+            return consumer;
+          } });
+        }
       }
     });
     return response;
@@ -336,14 +349,16 @@ export class ProviderMediaCapture {
   }
 
   /**
-   * Forward each chunk the caller's own read() resolved to a consumed stream (design 6).
-   * Never calls read, clone, tee or getReader itself. A whole stream within the cap
-   * uploads once at its end; anything else uploads nothing.
+   * Forward each chunk the caller's own reader read() or iterator next() resolved to a consumed
+   * stream (design 6). Never calls read, next, clone, tee or getReader itself. A whole stream
+   * within the cap uploads once at its end; a rejected pull, a non-byte chunk, an over-cap chunk
+   * or any stop method (releaseLock/cancel, or an iterator's return() on break) uploads nothing.
    */
-  private observeReader(mimeType: string, reader: unknown): void {
+  private observeChunks(mimeType: string, consumer: unknown, pull: "read" | "next", stops: readonly string[]): void {
     const manager = this.manager;
-    const target = reader as { read?: (...a: unknown[]) => Promise<{ done?: boolean; value?: unknown }>; releaseLock?: () => void; cancel?: (...a: unknown[]) => Promise<void> };
-    if (!manager || !this.correlation || typeof manager.startAttachmentStream !== "function" || !target || typeof target.read !== "function" ||
+    const target = consumer as Record<string, unknown> | null;
+    const pullMethod = target?.[pull] as ((...a: unknown[]) => Promise<{ done?: boolean; value?: unknown }>) | undefined;
+    if (!manager || !this.correlation || typeof manager.startAttachmentStream !== "function" || !target || typeof pullMethod !== "function" ||
       this.seen.has("speech:output") || this.locallyDenied(mimeType, "output")) return;
     // The whole budget is reserved at admission, so a write never fails mid-stream for budget reasons.
     const stream = manager.startAttachmentStream(this.correlation, { mimeType, direction: "output", purpose: "model_output", maxBytes: MAX_SPEECH_STREAM_BYTES });
@@ -357,10 +372,10 @@ export class ProviderMediaCapture {
         else if (stream.finish().admission === "queued") this.seen.add("speech:output");
       } catch { /* bounded */ }
     };
-    const { read, releaseLock, cancel } = target;
     const define = (name: string, value: (...a: unknown[]) => unknown) => Object.defineProperty(target, name, { configurable: true, writable: true, value });
-    define("read", function (this: unknown, ...args: unknown[]) {
-      const pending = read.apply(this, args);
+    // Defined before the consumer is returned: `for await` captures next() when it starts.
+    define(pull, function (this: unknown, ...args: unknown[]) {
+      const pending = pullMethod.apply(this, args);
       if (this !== target || !open) return pending;
       // The caller receives the same result or rejection; chunks are copied by tryWrite.
       return pending.then(result => {
@@ -371,8 +386,10 @@ export class ProviderMediaCapture {
         return result;
       }, error => { end(false); throw error; });
     });
-    if (typeof releaseLock === "function") define("releaseLock", function (this: unknown) { if (this === target) end(false); return releaseLock.apply(this); });
-    if (typeof cancel === "function") define("cancel", function (this: unknown, ...args: unknown[]) { if (this === target) end(false); return cancel.apply(this, args); });
+    for (const name of stops) {
+      const stop = target[name];
+      if (typeof stop === "function") define(name, function (this: unknown, ...args: unknown[]) { if (this === target) end(false); return stop.apply(this, args); });
+    }
   }
 
   /**
