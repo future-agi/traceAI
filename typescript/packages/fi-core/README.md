@@ -512,6 +512,9 @@ Other provider structures have no new exception without catalog/source evidence.
 resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an optional
 application `resource` are preserved.
 
+`session.id` and `user.id` are exported as set, so don't use a credential or a
+session cookie as either.
+
 Resource detection is minimal by default: the provider adds the Node.js runtime
 name and version (`process.runtime.*`) and nothing that identifies the machine,
 the OS user or the command line (which can hold secrets passed as flags). To add
