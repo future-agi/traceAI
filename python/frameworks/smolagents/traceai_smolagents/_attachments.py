@@ -13,16 +13,19 @@ Images are PNG-encoded only after a pixel-bounded preflight admitted them.
 A file-backed ``AgentImage`` or PIL image that is not loaded yet, image URLs,
 ``image_url`` strings and every ``AgentAudio`` (a path or a tensor) are not
 read (``source_unavailable``). smolagents replays memory images on every
-model call; the same image object is uploaded once per manager.
+model call; the same image object is uploaded once per manager, and every
+model call that carries a captured image (new or replayed) is marked as the
+owner of its media so a provider adapter below never uploads it again.
 """
 
+import os
 import threading
 import weakref
 from collections import OrderedDict
 from types import MappingProxyType
 from typing import Any, Mapping
 
-__all__ = ("capture_model_images", "capture_tool_image", "smolagents_attachment_capabilities")
+__all__ = ("capture_model_images", "capture_tool_image", "owner_context", "smolagents_attachment_capabilities")
 
 smolagents_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -40,17 +43,28 @@ class _Seen:
     """Image objects already uploaded, per manager (identity only; PIL images are unhashable)."""
 
     def __init__(self) -> None:
+        self._reset()
+
+    def _reset(self) -> None:
+        self._pid = os.getpid()
         self._lock = threading.Lock()
         self._managers: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
+    def _owned_lock(self) -> threading.Lock:
+        # A forked child gets a fresh lock and table: a lock another thread held at fork
+        # time would never be released there. No fork hook is registered.
+        if self._pid != os.getpid():
+            self._reset()
+        return self._lock
+
     def __contains__(self, item) -> bool:
         manager, image = item
-        with self._lock:
+        with self._owned_lock():
             entry = self._managers.get(manager, {}).get(id(image))
             return entry is not None and entry() is image
 
     def add(self, manager, image) -> None:
-        with self._lock:
+        with self._owned_lock():
             seen = self._managers.get(manager)
             if seen is None:
                 seen = self._managers[manager] = OrderedDict()
@@ -78,7 +92,11 @@ def _in_memory(value: Any) -> Any:
 
 
 def capture_model_images(manager, span, messages: Any, *, trace_config=None, capture=None) -> int:
-    """Capture the in-memory images of one model call's input messages. Returns the admitted count."""
+    """Capture the in-memory images of one model call's input messages.
+
+    Returns the number of images this call owns: admitted now, or already uploaded
+    (a memory replay). A positive count means the caller marks the model call as owner.
+    """
     try:
         from fi_instrumentation.attachments.media_capture import active
         from fi_instrumentation.attachments.tool_media import MAX_TOOL_PARTS, ToolMedia
@@ -100,7 +118,10 @@ def capture_model_images(manager, span, messages: Any, *, trace_config=None, cap
                 if _get(part, "type") != "image":
                     continue
                 image = _in_memory(_get(part, "image"))
-                if image is None or (manager, image) in _SEEN:
+                if image is None:
+                    continue
+                if (manager, image) in _SEEN:
+                    admitted += 1  # Replayed: already uploaded, still owned here.
                     continue
                 found = media.image("model/%d/%d" % (message_index, part_index), image, purpose="model_input",
                                     role="user", message_index=message_index, part_index=part_index)
@@ -110,6 +131,13 @@ def capture_model_images(manager, span, messages: Any, *, trace_config=None, cap
     except Exception:
         return admitted
     return admitted
+
+
+def owner_context():
+    """The current context marked as owner of this call's media (by the shared key name)."""
+    from fi_instrumentation.attachments.tool_media import with_ownership
+
+    return with_ownership()
 
 
 def capture_tool_image(manager, span, response: Any, *, trace_config=None, capture=None) -> int:

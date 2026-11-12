@@ -162,3 +162,70 @@ def test_disabled_manager_uploads_nothing(f01, instrument, provider):
     instrument(create_attachment_manager(config=AttachmentConfig()))
     call(model(provider), [user_message(picture(7))])
     assert f01.uploads == []
+
+
+def test_every_model_call_carrying_a_captured_image_is_marked_owner(f01, instrument, provider, monkeypatch):
+    """A replayed memory image is already uploaded: the provider adapter below must not upload it again."""
+    import openai.resources.chat.completions as completions
+    from fi_instrumentation.attachments import tool_media
+    from opentelemetry import context as otel_context
+
+    marks = []
+    real = completions.Completions.create
+
+    def create(self, *args, **kwargs):
+        marks.append(otel_context.get_value(tool_media.OWNER_KEY))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(completions.Completions, "create", create)
+    manager = f01.manager()
+    instrument(manager)
+    shot = picture(11)
+    m = model(provider)
+    call(m, [user_message(shot)])
+    call(m, [user_message(shot)])  # memory replay: the same image object goes to the model again
+    call(m, [user_message()])  # no image: no mark
+    flush(manager)
+    assert marks == [True, True, None]
+    assert len(f01.uploads) == 1
+    assert sum(raw.count(b"data:image/png;base64,") for _, _, raw in provider.requests) == 2
+    manager.shutdown(5)
+
+
+def test_seen_table_is_fresh_in_a_forked_child_even_if_its_lock_was_held():
+    import os
+    import signal
+    import threading
+
+    from traceai_smolagents import _attachments as sa
+
+    if not hasattr(os, "fork"):
+        pytest.skip("no fork")
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with sa._SEEN._owned_lock():
+            held.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    held.wait(5)
+
+    class Manager:
+        pass
+
+    keep = Manager()
+    pid = os.fork()
+    if pid == 0:  # child: must not block on the lock the parent's thread held at fork
+        signal.alarm(5)
+        try:
+            image = picture(1)
+            sa._SEEN.add(keep, image)
+            os._exit(0 if (keep, image) in sa._SEEN else 4)
+        except BaseException:
+            os._exit(3)
+    release.set()
+    thread.join()
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0

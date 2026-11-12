@@ -106,3 +106,36 @@ def test_pil_images_are_encoded_only_when_in_memory(f01, spans, tmp_path):
     flush(manager)
     assert [u["mime_type"] for u in f01.uploads] == ["image/png"]
     manager.shutdown(5)
+
+
+def test_signature_of_another_modality_is_denied_and_never_relabelled(f01, spans):
+    """A PNG declared as audio, a generic file or a PDF is not uploaded (hide_input_images cannot be escaped)."""
+    from _harness import PDF, wav
+
+    manager = f01.manager()
+    provider, _ = spans
+    shot = png(seed=21)
+    with provider.get_tracer("t").start_as_current_span("tool") as span:
+        media = tool_media.ToolMedia(manager, span, "test", trace_config=TraceConfig(hide_input_images=True))
+        assert media.base64("a", lambda: b64(shot), "audio/wav", purpose="tool_result", expect="audio") is None
+        assert media.base64("b", lambda: b64(shot), "application/octet-stream", purpose="tool_result") is None
+        assert media.base64("c", lambda: b64(shot), "application/pdf", purpose="tool_result") is None
+        assert media.data_uri("d", lambda: "data:audio/wav;base64," + b64(shot), ("audio/wav",),
+                              purpose="tool_result") is None
+        # Matching signatures and signature-less bytes still upload.
+        assert media.base64("e", lambda: b64(wav()), "audio/wav", purpose="tool_result", expect="audio")
+        assert media.base64("f", lambda: b64(PDF), "application/pdf", purpose="tool_result")
+    flush(manager)
+    assert shot not in f01.payloads
+    assert sorted(u["mime_type"] for u in f01.uploads) == ["application/pdf", "audio/wav"]
+    manager.shutdown(5)
+
+
+@pytest.mark.parametrize("head,kind", [
+    (b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00", "image"), (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01", "image"),
+    (b"RIFF\x00\x00\x00\x00WEBP", "image"), (b"RIFF\x00\x00\x00\x00WAVE", "audio"), (b"OggS\x00\x02", "audio"),
+    (b"fLaC\x00\x00", "audio"), (b"ID3\x04\x00", "audio"), (b"%PDF-1.7\n", "document"),
+    (b"\x00\x00\x00\x18ftypmp42", None), (b"\x1aE\xdf\xa3\x9fB\x86", None), (b"RIFF\x00\x00\x00\x00AVI ", None),
+    (b"plain text", None)])
+def test_signature_kind(head, kind):
+    assert tool_media.signature_kind(head) == kind

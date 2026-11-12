@@ -14,10 +14,11 @@ from typing import Any, Dict, List, Optional
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
-from ._attachments import capture_tool_results, forget_ended_tools
+from ._attachments import capture_tool_results, tool_result_ids
 from ._attributes import ClaudeAgentAttributes, ClaudeAgentSpanKind
 from ._hooks import (
     _active_tool_spans,
+    _deferred_tool_ends,
     create_pre_tool_use_hook,
     create_subagent_start_hook,
     create_post_tool_use_hook,
@@ -25,6 +26,8 @@ from ._hooks import (
     clear_parent_span,
     set_mcp_servers,
     clear_active_tool_spans,
+    end_deferred_tool,
+    end_deferred_tool_spans,
     safe_json_serialize,
 )
 
@@ -168,12 +171,14 @@ class TurnTracker:
         return str(content)
 
 
-def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer) -> None:
+def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer, defer_tool_end: bool = False) -> None:
     """Inject OpenTelemetry tracing hooks into ClaudeAgentOptions.
 
     Args:
         options: ClaudeAgentOptions instance
         tracer: OpenTelemetry tracer
+        defer_tool_end: tool-result media capture is on, so a completed tool span stays
+            recording until its result is captured (it keeps the hook's end time)
     """
     if not hasattr(options, "hooks"):
         return
@@ -194,7 +199,8 @@ def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer) -> None:
         from claude_agent_sdk import HookMatcher
 
         pre_hook = create_pre_tool_use_hook(tracer)
-        post_hook = create_post_tool_use_hook(tracer)
+        post_hook = (create_post_tool_use_hook(tracer, defer_end=True) if defer_tool_end
+                     else create_post_tool_use_hook(tracer))
         start_hook = create_subagent_start_hook(tracer)
 
         # Insert at beginning to ensure we trace before user hooks
@@ -241,7 +247,10 @@ def wrap_claude_sdk_client(
             # Extract options for hook injection
             options = kwargs.get("options") or (args[0] if args else None)
             if options:
-                inject_tracing_hooks(options, tracer)
+                if attachments is not None:
+                    inject_tracing_hooks(options, tracer, defer_tool_end=True)
+                else:
+                    inject_tracing_hooks(options, tracer)
 
                 # Store MCP server configs for tool attribution
                 mcp_servers = getattr(options, "mcp_servers", None)
@@ -308,16 +317,23 @@ def wrap_claude_sdk_client(
                         elif msg_type == "UserMessage":
                             # Tool-result media first, from the original typed blocks,
                             # before any text flattening or truncation.
+                            # A tool span the PostToolUse hook completed is still recording
+                            # (deferred end), so the media refs are projected on it.
                             if attachments is not None:
-                                capture_tool_results(
-                                    attachments,
-                                    msg,
-                                    conversation_span,
-                                    _active_tool_spans,
-                                    message_index=message_index,
-                                    trace_config=trace_config,
-                                    capture=attachment_capture,
-                                )
+                                try:
+                                    capture_tool_results(
+                                        attachments,
+                                        msg,
+                                        conversation_span,
+                                        _active_tool_spans,
+                                        _deferred_tool_ends,
+                                        message_index=message_index,
+                                        trace_config=trace_config,
+                                        capture=attachment_capture,
+                                    )
+                                finally:
+                                    for tool_use_id in tool_result_ids(msg):
+                                        end_deferred_tool(tool_use_id)
                             # End current turn, mark next start
                             turn_tracker.end_current_turn()
                             turn_tracker.mark_next_start()
@@ -373,7 +389,6 @@ def wrap_claude_sdk_client(
                     turn_tracker.end_current_turn()
                     clear_parent_span()
                     clear_active_tool_spans()
-                    forget_ended_tools()
 
         def _build_span_attributes(self) -> Dict[str, Any]:
             """Build span attributes from options and prompt."""
@@ -520,5 +535,16 @@ def wrap_claude_sdk_client(
 
         async def __aexit__(self, *args: Any) -> None:
             await super().__aexit__(*args)
+
+    if attachments is not None and hasattr(original_class, "disconnect"):
+
+        async def disconnect(self: Any, *args: Any, **kwargs: Any) -> Any:
+            """Disconnect; completed tool spans still waiting for their result end now."""
+            try:
+                return await super(TracedClaudeSDKClient, self).disconnect(*args, **kwargs)
+            finally:
+                end_deferred_tool_spans()
+
+        TracedClaudeSDKClient.disconnect = disconnect
 
     return TracedClaudeSDKClient

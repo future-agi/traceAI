@@ -5,10 +5,14 @@ The SDK parses each CLI ``user`` message into a ``UserMessage`` whose
 base64 ``image`` and PDF ``document`` blocks there are uploaded BEFORE any text
 flattening or truncation, at the tool's span (with ``tool_call_id``):
 
-- while the tool span is still open, on that span (and projected on it);
-- after the PostToolUse hook ended it, on its exact span context (the
-  occurrence keeps the causal parent; the ended span is never mutated);
+- on the tool span, while it is still recording: before the PostToolUse hook
+  (result-first) or after it, because with capture on the hook defers the
+  span's end until its result has been captured (hooks-first, the CLI's
+  usual order); the span then ends at the time the hook recorded;
 - for a result with no traced tool, on the conversation span.
+
+Every occurrence is projected (``fi.attachment.refs``) on the live span that
+is its upload parent.
 
 URL and file sources, paths and transcripts are never read. The SDK drops
 top-level user image blocks during parsing, so prompt images are not
@@ -16,12 +20,10 @@ observable here (``source_unavailable``). Model calls run inside the Claude
 Code process, so no in-process provider adapter sees the same bytes.
 """
 
-from collections import OrderedDict
 from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Any, List, Mapping
 
-__all__ = ("capture_tool_results", "claude_agent_attachment_capabilities", "remember_ended_tool",
-           "media_safe")
+__all__ = ("capture_tool_results", "claude_agent_attachment_capabilities", "media_safe", "tool_result_ids")
 
 claude_agent_attachment_capabilities = MappingProxyType({
     "schema_version": 1,
@@ -33,25 +35,7 @@ claude_agent_attachment_capabilities = MappingProxyType({
 
 _EMPTY: Mapping[str, Any] = MappingProxyType({})
 _MEDIA_TYPES = ("image", "document", "audio")
-_MAX_ENDED = 256
-_ended: "OrderedDict[str, Any]" = OrderedDict()
-
-
-def remember_ended_tool(tool_use_id: Any, span: Any) -> None:
-    """Keep the exact span context of a tool span the PostToolUse hook ended (bounded)."""
-    try:
-        if not isinstance(tool_use_id, str):
-            return
-        _ended[tool_use_id] = span.get_span_context()
-        _ended.move_to_end(tool_use_id)
-        while len(_ended) > _MAX_ENDED:
-            _ended.popitem(last=False)
-    except Exception:
-        return
-
-
-def forget_ended_tools() -> None:
-    _ended.clear()
+_MAX_BLOCKS = 64
 
 
 def _get(value: Any, key: str) -> Any:
@@ -61,12 +45,27 @@ def _get(value: Any, key: str) -> Any:
         return None
 
 
-def capture_tool_results(manager, message: Any, conversation_span: Any, active_spans: Mapping[str, Any], *,
-                         message_index: int, trace_config=None, capture=None) -> int:
+def tool_result_ids(message: Any) -> List[str]:
+    """The tool_use_ids of the ``ToolResultBlock``s in one ``UserMessage`` (bounded). Never raises."""
+    try:
+        content = _get(message, "content")
+        if not isinstance(content, list):
+            return []
+        return [block.tool_use_id for block in content[:_MAX_BLOCKS]
+                if type(block).__name__ == "ToolResultBlock" and isinstance(_get(block, "tool_use_id"), str)]
+    except Exception:
+        return []
+
+
+def capture_tool_results(manager, message: Any, conversation_span: Any, active_spans: Mapping[str, Any],
+                         deferred_spans: Mapping[str, Any] = _EMPTY, *, message_index: int, trace_config=None,
+                         capture=None) -> int:
     """Capture the media blocks of every ``ToolResultBlock`` in one ``UserMessage``. Never raises.
 
-    ``active_spans`` maps a tool_use_id to its still-open span (the hooks' table).
-    Returns the number of admitted blocks.
+    ``active_spans`` maps a tool_use_id to its open span (PostToolUse not run yet) and
+    ``deferred_spans`` to a span PostToolUse completed whose end waits for this result;
+    both are the hooks' tables and both spans are still recording. Any other result is
+    captured on the (recording) conversation span. Returns the number of admitted blocks.
     """
     try:
         from fi_instrumentation.attachments.media_capture import active
@@ -87,12 +86,11 @@ def capture_tool_results(manager, message: Any, conversation_span: Any, active_s
             if not isinstance(blocks, list):
                 continue
             tool_use_id = _get(block, "tool_use_id")
-            open_entry = active_spans.get(tool_use_id) if isinstance(tool_use_id, str) else None
-            if open_entry is not None:
-                target = open_entry[0]
-            elif isinstance(tool_use_id, str) and tool_use_id in _ended:
-                target = _ended[tool_use_id]
-            else:
+            entry = None
+            if isinstance(tool_use_id, str):
+                entry = active_spans.get(tool_use_id) or deferred_spans.get(tool_use_id)
+            target = entry[0] if entry is not None else conversation_span
+            if not _recording(target):
                 target = conversation_span
             error = _get(block, "is_error") is True
             media = ToolMedia(manager, target, "claude_agent_sdk", trace_config=trace_config, capture=capture)
@@ -116,6 +114,13 @@ def capture_tool_results(manager, message: Any, conversation_span: Any, active_s
     except Exception:
         return admitted
     return admitted
+
+
+def _recording(span: Any) -> bool:
+    try:
+        return bool(span.is_recording())
+    except Exception:
+        return False
 
 
 def media_safe(value: Any, depth: int = 0) -> Any:

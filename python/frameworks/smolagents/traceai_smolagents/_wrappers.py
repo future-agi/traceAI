@@ -418,9 +418,6 @@ def _input_value_and_mime_type(
     yield INPUT_VALUE, safe_json_dumps(arguments)
 
 
-_OWNER_KEY = "traceai.auto.attachment_owner.v1"
-
-
 class _Media:
     """The shared attachment manager and its local restrictions (None manager: capture off)."""
 
@@ -461,12 +458,13 @@ class _ModelWrapper:
         ) as span:
             owner_token = None
             if self._media.manager is not None:
-                from traceai_smolagents._attachments import capture_model_images
+                from traceai_smolagents._attachments import capture_model_images, owner_context
 
                 if capture_model_images(self._media.manager, span, arguments.get("messages"),
                                         trace_config=self._media.trace_config, capture=self._media.capture):
-                    # These images are captured here; a provider adapter below must not upload them again.
-                    owner_token = context_api.attach(context_api.set_value(_OWNER_KEY, True))
+                    # These images are captured here (now or on an earlier call); a provider
+                    # adapter below must not upload them again.
+                    owner_token = context_api.attach(owner_context())
             try:
                 output_message = wrapped(*args, **kwargs)
             finally:

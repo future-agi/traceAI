@@ -190,8 +190,12 @@ Pass the shared manager: `ClaudeAgentInstrumentor().instrument(tracer_provider=.
 The base64 `image` and PDF `document` blocks of a `ToolResultBlock` are
 uploaded from the original SDK message, before any text flattening or
 truncation, as `tool_result` occurrences with the `tool_use_id`. They belong
-to the tool's span: while it is open they are projected on it; once the
-PostToolUse hook ended it, they keep its exact span context as their parent.
+to the tool's span and are projected on it (`fi.attachment.refs`). The CLI
+usually runs the PostToolUse hook before it streams the tool result, so with
+attachments on the tool span stays recording until its result has been
+captured (at most 30 seconds, or until the conversation ends) and then ends
+at the time the hook recorded; its duration is unchanged. With attachments
+off, the hook ends the span immediately, as before.
 Media bytes never reach `tool.output` or the conversation output text. The
 SDK drops top-level user image blocks while parsing, so prompt images are not
 captured. URL and file sources are never read.
