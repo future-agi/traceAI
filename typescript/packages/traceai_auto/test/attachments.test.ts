@@ -298,8 +298,8 @@ describe("A03 FormData and JSON media", () => {
     expect(manager.status().ownedBytes).toBe(audio.length);
     if (mode === "abort") { await eventually(() => providerRequests === 1); controller.abort(); }
     const failure = await pending.then(response => response.json()).then(() => undefined, (error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    if (mode === "abort") expect((failure as Error).name).toBe("AbortError");
+    // Undici's errors come from Node's realm (not jest's), so check the shape, not `instanceof Error`.
+    expect((failure as Error | undefined)?.name).toBe(mode === "abort" ? "AbortError" : "TypeError");
     await eventually(() => manager.status().ownedBytes === 0);
     expect(manager.status()).toMatchObject({ openTickets: 0, openStreams: 0, ownedBytes: 0 });
     expect(providerRequests).toBe(1); expect(providerBodies[0].includes(audio)).toBe(true);
