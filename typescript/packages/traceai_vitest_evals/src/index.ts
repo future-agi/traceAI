@@ -13,7 +13,7 @@ function projectResource(projectName?: string) {
   const name = projectName || process.env.FI_PROJECT_NAME || DEFAULT_PROJECT;
   return resourceFromAttributes({ 'service.name': 'vitest-evals', project_name: name, project_type: 'observe' });
 }
-const SCOPE = { name: '@traceai/vitest-evals', version: '0.1.0' };
+const SCOPE = { name: '@traceai/vitest-evals', version: '0.1.1' };
 const SAFE_KEYS = new Set([
   'gen_ai.system', 'gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.response.model',
   'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'gen_ai.usage.total_tokens',

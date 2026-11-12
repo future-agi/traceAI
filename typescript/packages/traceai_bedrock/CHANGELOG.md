@@ -1,3 +1,8 @@
+## [0.1.4] - pending release
+
+### Fixed
+- Traced send() keeps its options and callbacks, response streams are read only as your code reads them, the requested model id is recorded in full, and streamed tool arguments from Anthropic models are recorded, with a placeholder when the argument JSON is incomplete or malformed.
+
 ## [0.1.1] - 2026-10-18
 ### Fix
 - Declare `@aws-sdk/client-bedrock-runtime` `^3.693.0` as a peer dependency, like the other instrumentors declare their SDK. The package loads it at runtime, so a clean install without it failed with "Cannot find module".
