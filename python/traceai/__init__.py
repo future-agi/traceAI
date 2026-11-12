@@ -69,6 +69,19 @@ _MEDIA_ADAPTERS = {
     "traceai_claude_agent_sdk": ("traceai_claude_agent_sdk._attachments", "claude_agent_attachment_capabilities"),
     "traceai_smolagents": ("traceai_smolagents._attachments", "smolagents_attachment_capabilities"),
     "traceai_firecrawl": ("traceai_firecrawl._attachments", "firecrawl_attachment_capabilities"),
+    # Provider media (shared provider_media walkers). Each package resolves its descriptor lazily from
+    # fi_instrumentation.attachments.provider_media, so an installed version without the binding, or a core
+    # without provider_media, reports unqualified. together, deepseek and cerebras claim no media operation
+    # and are deliberately absent (their rows stay unqualified).
+    **{module: (module, module[len("traceai_"):] + "_attachment_capabilities") for module in (
+        "traceai_google_genai", "traceai_vertexai", "traceai_bedrock", "traceai_litellm", "traceai_fireworks",
+        "traceai_xai", "traceai_mistralai", "traceai_openrouter", "traceai_portkey", "traceai_ollama",
+        "traceai_vllm", "traceai_minimax")},
+    # Framework media.
+    "traceai_langchain": ("traceai_langchain._attachments", "langchain_attachment_capabilities"),
+    "traceai_llamaindex": ("traceai_llamaindex._attachments", "llamaindex_attachment_capabilities"),
+    "traceai_agno": ("traceai_agno._attachments", "agno_attachment_capabilities"),
+    "traceai_pydantic_ai": ("traceai_pydantic_ai._attachments", "pydantic_ai_attachment_capabilities"),
 }
 # Voice integrations capture only through an explicit session binding (bind_* below).
 _SESSION_BINDINGS = {"traceai_pipecat": "bind_audio_processor", "traceai_livekit": "bind_session"}
@@ -97,6 +110,10 @@ _INSTRUMENTOR_REGISTRY: Dict[str, str] = {
     "ollama": "traceai_ollama",
     "google_genai": "traceai_google_genai",
     "google-genai": "traceai_google_genai",
+    "openrouter": "traceai_openrouter",
+    "portkey": "traceai_portkey",
+    "vllm": "traceai_vllm",
+    "minimax": "traceai_minimax",
     # Framework instrumentors
     "langchain": "traceai_langchain",
     "llamaindex": "traceai_llamaindex",
@@ -111,6 +128,9 @@ _INSTRUMENTOR_REGISTRY: Dict[str, str] = {
     "mcp": "traceai_mcp",
     "mcp_use": "traceai_mcp_use",
     "mcp-use": "traceai_mcp_use",
+    "agno": "traceai_agno",
+    "pydantic_ai": "traceai_pydantic_ai",
+    "pydantic-ai": "traceai_pydantic_ai",
     # Agent frameworks and tools
     "openai_agents": "traceai_openai_agents",
     "openai-agents": "traceai_openai_agents",
@@ -138,6 +158,11 @@ _ENTRY_POINTS = {
     "traceai_guardrails": "GuardrailsInstrumentor", "traceai_mcp": "MCPInstrumentor",
     "traceai_openai_agents": "OpenAIAgentsInstrumentor", "traceai_claude_agent_sdk": "ClaudeAgentInstrumentor",
     "traceai_smolagents": "SmolagentsInstrumentor", "traceai_firecrawl": "FirecrawlInstrumentor",
+    "traceai_openrouter": "OpenRouterInstrumentor", "traceai_portkey": "PortkeyInstrumentor",
+    "traceai_vllm": "VLLMInstrumentor", "traceai_minimax": "MiniMaxInstrumentor",
+    "traceai_pydantic_ai": "PydanticAIInstrumentor",
+    # A process-wide wrapper over OpenInference Agno, with its own keyword arguments (_agno_kwargs).
+    "traceai_agno": "AgnoInstrumentorWrapper",
 }
 
 _tracer_provider: Optional[TracerProvider] = None
@@ -320,7 +345,9 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
             instrumentor = instrumentor_class()
             provider = _tracer_provider
             kwargs = dict(tracer_provider=provider, config=getattr(provider, "trace_config", None))
-            if _ATTACHMENTS_SUPPORTED:
+            if instrumentor_module == "traceai_agno":
+                kwargs = _agno_kwargs(provider)
+            elif _ATTACHMENTS_SUPPORTED:
                 manager = get_attachment_manager()
                 if _capturing(manager):
                     # The ONE shared manager, as ``attachments`` (``attachment_manager`` is the
@@ -330,6 +357,13 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
                     # Attachments OFF: exactly the keyword arguments auto passed before.
                     kwargs.update(attachment_manager=manager, attachment_policy=getattr(manager, "policy", None))
             instrumentor.instrument(**kwargs)
+            if getattr(instrumentor, "is_instrumented_by_opentelemetry", True) is False:
+                # BaseInstrumentor returns without instrumenting on a dependency conflict (for
+                # example pydantic-ai-slim for a "pydantic-ai" requirement): never report it registered.
+                _adapter_status[lib_name_lower] = "dependency_unavailable"
+                if verbose:
+                    print(f"Warning: {lib_name} was not instrumented (dependency check failed)")
+                return False
             _instrumented.add(instrumentor_module)
             _adapter_status[lib_name_lower] = "registered"
 
@@ -348,6 +382,29 @@ def _instrument_library(lib_name: str, verbose: bool = True) -> bool:
         if verbose:
             print(f"Warning: Failed to instrument {lib_name}")
         return False
+
+
+def _agno_kwargs(provider) -> Dict[str, Any]:
+    """Keyword arguments for ``AgnoInstrumentorWrapper.instrument``.
+
+    It takes OpenInference's TraceConfig (not fi's) and no ``attachment_*`` alias. Auto's
+    hide flags are carried over, and only when one is set, so an unrestricted setup keeps
+    Agno's own default and environment policy. ``attachments`` is passed only while capturing.
+    """
+    kwargs: Dict[str, Any] = {"tracer_provider": provider}
+    trace_config = getattr(provider, "trace_config", None)
+    hidden = {field.name: True for field in dataclasses.fields(TraceConfig)
+              if field.name.startswith("hide_") and getattr(trace_config, field.name, False) is True}
+    if hidden:
+        from openinference.instrumentation import TraceConfig as OpenInferenceTraceConfig
+
+        names = {field.name for field in dataclasses.fields(OpenInferenceTraceConfig)}
+        kwargs["config"] = OpenInferenceTraceConfig(**{name: True for name in hidden if name in names})
+    if _ATTACHMENTS_SUPPORTED:
+        manager = get_attachment_manager()
+        if _capturing(manager):
+            kwargs["attachments"] = manager
+    return kwargs
 
 
 def get_tracer_provider() -> Optional[TracerProvider]:
@@ -447,6 +504,8 @@ _AUTO_SOURCES = (
     "OpenAI and Groq transcription/translation audio the SDK holds as bytes",
     "Anthropic Messages base64 images and PDFs, and computer-use tool_result screenshots (traceai_anthropic)",
     "Pipecat and LiveKit recordings, only through an explicit bind_* call",
+    "for every other integration, exactly the media_operations of its provider_adapter row below "
+    "(the installed instrumentor version decides)",
 )
 _AUTO_UNSUPPORTED = (
     "integrations whose media row is 'unqualified'",
@@ -500,7 +559,11 @@ def _media_support(module: str) -> Dict[str, Any]:
         if module in _MEDIA_ADAPTERS:
             path, name = _MEDIA_ADAPTERS[module]
             descriptor = getattr(importlib.import_module(path), name)
-            return {"media": "provider_adapter", "media_operations": list(descriptor["operations"])}
+            operations = list(descriptor["operations"])
+            if operations:
+                return {"media": "provider_adapter", "media_operations": operations}
+            # A descriptor that claims no operation (tracing only) is not a media adapter.
+            return {"media": "unqualified"}
         if module in _SESSION_BINDINGS and callable(getattr(importlib.import_module(module),
                                                             _SESSION_BINDINGS[module], None)):
             return {"media": "session_binding"}

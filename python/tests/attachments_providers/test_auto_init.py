@@ -143,7 +143,15 @@ def test_report_rows_for_installed_media_adapters(auto_state):
     rows = {row["name"]: row for row in traceai.report()["integrations"]}
     assert {name: rows[name]["media"] for name in ("openai", "anthropic", "groq")} == dict.fromkeys(
         ("openai", "anthropic", "groq"), "provider_adapter")
-    assert rows["litellm"]["media"] == "unqualified"
+    # traceai_litellm is a media adapter only in a version that declares the descriptor, on a core with
+    # provider_media; otherwise (or when it is not installed) its row is unqualified.
+    try:
+        import traceai_litellm
+
+        declared = list(traceai_litellm.litellm_attachment_capabilities["operations"])
+    except Exception:
+        declared = []
+    assert rows["litellm"]["media"] == ("provider_adapter" if declared else "unqualified")
 
 
 def test_auto_borrowed_manager_is_shared_and_tightened(f01, provider, auto_state, monkeypatch):
