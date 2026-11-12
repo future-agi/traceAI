@@ -57,8 +57,9 @@ them twice over:
   trace, `agent_session` included, as soon as the call ends.
 - **When the process exits**, just before it stops: this sends what LiveKit ends after the shutdown callbacks, its own
   `job_shutdown` span, and the job's root `job_entrypoint` span when tracing is set up before the job starts. With
-  set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, so it is never recorded and the
-  job trace arrives rooted at `job_shutdown`.
+  set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, so it is never recorded. The call
+  then arrives as separate traces: the session trace rooted at `agent_session`, and `job_shutdown` as a root of its own
+  (see "How Future AGI Voice finds a LiveKit call").
 
 Each waits at most 3 seconds for the collector, well inside the 10 seconds LiveKit gives a job process to exit, so its own
 clean-up still runs when the collector is slow.
@@ -199,11 +200,12 @@ Attachments are off by default. Both paths below need the attachment-enabled `fi
 binding = traceai.bind_livekit_session(session, ctx, owned_recording_files=True)
 ```
 
-When the session ends, the SDK's `audio.ogg` is uploaded as one `mixed` file. This happens before LiveKit deletes its temporary directory, with a deadline of up to 30 s. Hard links, symlinks, foreign owners and replaced files are refused. LiveKit redaction, `LIVEKIT_TELEMETRY_ALLOW_PII` and FI hide flags all deny. The session span is marked `fi.span.kind=CONVERSATION` only if it has no parent. In a LiveKit worker, `agent_session` is a child of `job_entrypoint`, so it is not marked.
+When the session ends, the SDK's `audio.ogg` is uploaded as one `mixed` file. This happens before LiveKit deletes its temporary directory, with a deadline of up to 30 s. Hard links, symlinks, foreign owners and replaced files are refused. LiveKit redaction, `LIVEKIT_TELEMETRY_ALLOW_PII` and FI hide flags all deny. The session span is marked `fi.span.kind=CONVERSATION` only if it has no parent, which depends on where tracing is set up (below).
 
-**How Future AGI Voice finds a LiveKit call.** The SDK never invents a conversation root. In a real worker the trace's true root is LiveKit's own `job_entrypoint` span, which carries `lk.job_id`, and the recording is attached to `agent_session`, its child. When attachments are enabled on the Future AGI server, ingest treats an untyped, parentless `job_entrypoint` span with a non-empty `lk.job_id` as the call's conversation root, so the call is listed in Voice and its recording is found on the child span.
+**How Future AGI Voice finds a LiveKit call.** The SDK never invents a conversation root: it marks the session span only when that span is already the root of its trace. Which span is the root depends on where tracing is set up (checked with a real livekit-agents 1.8.10 and 1.8.11 worker):
 
-- This needs tracing set up before the job starts (for example at worker start-up, see "Flushing at the end of a job"). With set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, the trace is rooted at `job_shutdown` instead, and the call is not listed in Voice.
+- **Tracing set up inside the entrypoint** (the Quick Start above). LiveKit starts `job_entrypoint` before tracing is on, so it is not recorded and `agent_session` is the root of the call's trace (it carries `lk.job_id`). An admitted `bind_livekit_session(..., owned_recording_files=True)` marks `agent_session` as `CONVERSATION`, the recording is attached to it, and the call is listed in Voice. Without an admitted binding (attachments off, a denial, or `owned_recording_files=False`) nothing is marked, and the call is not listed. `job_shutdown` (with the session-end upload span) and `room_connect` arrive as separate root traces.
+- **Tracing set up before the job starts** (for example in `setup_fnc`, or at worker start-up). LiveKit's `job_entrypoint` span is the trace root and carries `lk.job_id`; `agent_session` and `job_shutdown` are its children, so the binding does not mark `agent_session`. When attachments are enabled on the Future AGI server, ingest treats an untyped, parentless `job_entrypoint` span with a non-empty `lk.job_id` as the call's conversation root, so the call is listed in Voice and its recording is found on the child `agent_session` span.
 - Traces ingested before attachments were enabled on the server are not re-classified.
 - Do not set `fi.span.kind` on `job_entrypoint` or `agent_session` yourself to force a root; that changes how the whole trace is classified.
 

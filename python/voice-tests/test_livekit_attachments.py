@@ -447,7 +447,9 @@ async def test_child_session_span_is_never_marked_root(manager, tmp_path):
     from opentelemetry import trace
     session, job, _, span, provider, _ = owned_session(tmp_path)
     span.end()
-    # The real worker shape: LiveKit's own root carries lk.job_id; the session is its child.
+    # The real worker shape when tracing is set up before the job: LiveKit's own root carries
+    # lk.job_id and the session is its child. (Set up inside the entrypoint, agent_session is
+    # itself the root and is marked; see the parentless-span test above.)
     parent = provider.get_tracer("synthetic").start_span("job_entrypoint", attributes={"lk.job_id": "synthetic-job"})
     child = provider.get_tracer("synthetic").start_span("agent_session", context=trace.set_span_in_context(parent))
     session._session_span = child
