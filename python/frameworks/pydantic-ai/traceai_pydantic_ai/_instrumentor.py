@@ -3,6 +3,8 @@
 Main instrumentor class that provides OpenTelemetry tracing for Pydantic AI.
 """
 
+import functools
+import inspect
 import logging
 import sys
 from typing import Any, Collection, Optional
@@ -11,7 +13,7 @@ from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
-from ._agent_wrapper import wrap_agent_run, wrap_legacy_usage_incr
+from ._agent_wrapper import _record_output_value, wrap_agent_run, wrap_legacy_usage_incr
 from ._attributes import PydanticAIAttributes, PydanticAISpanKind
 from ._privacy import _PydanticTraceConfig
 from ._execution_wrappers import wrap_model_request, wrap_tool_call
@@ -284,9 +286,12 @@ class PydanticAIInstrumentor(BaseInstrumentor):
 
             attributes = {
                 PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.STREAM.value,
+                PydanticAIAttributes.GEN_AI_SPAN_KIND: "AGENT",
                 PydanticAIAttributes.RUN_ID: run_id,
                 PydanticAIAttributes.RUN_METHOD: "run_stream",
                 PydanticAIAttributes.RUN_PROMPT: prompt,
+                PydanticAIAttributes.INPUT_VALUE: prompt,
+                PydanticAIAttributes.INPUT_MIME_TYPE: "text/plain",
             }
 
             if model_info.get("model_name"):
@@ -332,6 +337,8 @@ class PydanticAIInstrumentor(BaseInstrumentor):
                         PydanticAIAttributes.STREAM_CHUNK_COUNT,
                         traced_stream._chunk_count if traced_stream is not None else 0,
                     )
+                    if traced_stream is not None:
+                        traced_stream._record_final_output(span)
 
         if not inspect.iscoroutinefunction(original_method):
             return wrapper
@@ -345,9 +352,12 @@ class PydanticAIInstrumentor(BaseInstrumentor):
             )
             attributes = {
                 PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.STREAM.value,
+                PydanticAIAttributes.GEN_AI_SPAN_KIND: "AGENT",
                 PydanticAIAttributes.RUN_ID: str(uuid.uuid4()),
                 PydanticAIAttributes.RUN_METHOD: "run_stream",
                 PydanticAIAttributes.RUN_PROMPT: prompt,
+                PydanticAIAttributes.INPUT_VALUE: prompt,
+                PydanticAIAttributes.INPUT_MIME_TYPE: "text/plain",
             }
             model_info = extract_model_info(self)
             if model_info.get("model_name"):
@@ -403,12 +413,21 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         return self._is_instrumented
 
 
+# Result methods that hand the run's final output to the caller. They are only
+# observed: consuming or re-validating a stream here would repeat validators and
+# message-history updates, so a stream the caller never finishes has no output.
+_OUTPUT_STREAMS = ("stream_output", "stream_text", "stream")
+_OUTPUT_GETTERS = ("get_output", "get_data")
+_NO_OUTPUT = object()
+
+
 class _TracedStream:
     """Proxy the entered result; its original manager owns stream cleanup."""
 
     def __init__(self, stream):
         self._stream = stream
         self._chunk_count = 0
+        self._final_output = _NO_OUTPUT
 
     def __aiter__(self):
         return self
@@ -420,7 +439,62 @@ class _TracedStream:
 
     # Forward other attributes to underlying stream
     def __getattr__(self, name):
-        return getattr(self._stream, name)
+        value = getattr(self._stream, name)
+        if callable(value) and name in _OUTPUT_STREAMS:
+            return self._observe_stream(value)
+        if callable(value) and name in _OUTPUT_GETTERS:
+            return self._observe_getter(value)
+        return value
+
+    def _observe_stream(self, method):
+        @functools.wraps(method)
+        def observed(*args, **kwargs):
+            items = method(*args, **kwargs)
+            if not hasattr(items, "__aiter__"):
+                return items
+            return self._observe_items(items, bool(kwargs.get("delta")))
+
+        return observed
+
+    async def _observe_items(self, items, delta):
+        # A real async generator, so callers that close generators explicitly
+        # still close the native one.
+        parts = []
+        try:
+            async for item in items:
+                if delta:
+                    parts.append(item)
+                else:
+                    parts = [item]
+                yield item
+        finally:
+            aclose = getattr(items, "aclose", None)
+            if aclose is not None:
+                await aclose()
+        if delta:
+            self._final_output = "".join(str(part) for part in parts)
+        elif parts:
+            self._final_output = parts[-1]
+
+    def _observe_getter(self, method):
+        @functools.wraps(method)
+        def observed(*args, **kwargs):
+            output = method(*args, **kwargs)
+            if not inspect.isawaitable(output):
+                self._final_output = output
+                return output
+            return self._await_output(output)
+
+        return observed
+
+    async def _await_output(self, awaitable):
+        output = await awaitable
+        self._final_output = output
+        return output
+
+    def _record_final_output(self, span):
+        if self._final_output is not _NO_OUTPUT:
+            _record_output_value(span, self._final_output)
 
 
 class _AwaitableTracedStream(_TracedStream):
@@ -468,6 +542,7 @@ class _AwaitableTracedStream(_TracedStream):
         else:
             self._span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
             self._span.set_status(trace_api.Status(trace_api.StatusCode.OK))
+        self._record_final_output(self._span)
         self._span.end()
 
 
