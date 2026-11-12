@@ -24,6 +24,7 @@ _HOSTS = {
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.novita.ai": "novita",
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
+    "api.cerebras.ai": "cerebras",
     "api.x.ai": FiLLMProviderValues.XAI.value,
     "api.z.ai": "zai",
     "api.together.ai": "together",

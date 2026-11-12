@@ -31,5 +31,5 @@ def test_exported_output_contract(
         assert json.loads(captured[SpanAttributes.OUTPUT_VALUE]) == payload
         assert captured[content_key] == content
     # Masking content must not throw away accounting or model attribution.
-    assert captured[SpanAttributes.GEN_AI_REQUEST_MODEL] == attrs[SpanAttributes.GEN_AI_REQUEST_MODEL]
+    assert captured[SpanAttributes.GEN_AI_RESPONSE_MODEL] == attrs[SpanAttributes.GEN_AI_RESPONSE_MODEL]
     assert captured[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] == attrs[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS]
