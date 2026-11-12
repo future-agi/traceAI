@@ -1,6 +1,6 @@
 {
   "name": "@traceai/anthropic",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "OpenTelemetry instrumentation for Anthropic",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

@@ -1,5 +1,5 @@
 {
-  "name": "@traceai/vitest-evals", "version": "0.1.0",
+  "name": "@traceai/vitest-evals", "version": "0.1.1",
   "description": "Export vitest-evals harness traces and scores to Future AGI via OpenTelemetry",
   "main": "./dist/index.js", "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "require": "./dist/index.js", "import": "./dist/index.js" } },

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] - pending release
+
+### Fixed
+- Integer (int8 and uint8) embedding vectors are recorded.
+- Binary and ubinary embedding vectors are recorded as returned, packed with one value per eight dimensions; cohere.embedding_type names the recorded type.
+
 ## [0.1.1](https://github.com/future-agi/traceAI/compare/npm-traceai-cohere-v0.1.0...npm-traceai-cohere-v0.1.1) (2026-11-05)
 
 

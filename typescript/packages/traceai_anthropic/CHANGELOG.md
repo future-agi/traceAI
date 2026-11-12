@@ -1,3 +1,8 @@
+## [0.1.6] - pending release
+
+### Fixed
+- Manually configured tracing stops when disabled and resumes when re-enabled, separate copies of the Anthropic SDK loaded in one process can each be traced, and non-streamed output messages keep the text around tool calls.
+
 ## [0.1.3] - 2026-10-18
 ### Fix
 - Content hiding now applies to the prompt passed when the span is created (`gen_ai.input.messages`, `raw.input`), via `@traceai/fi-core` 1.1.0, which this release depends on. 0.1.2 was published against `@traceai/fi-core` `^0.1.13`, which exported those attributes unmasked.

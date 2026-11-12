@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## [0.1.1] - pending release
+
+### Fixed
+- The README shows how to install the package from npm instead of building it from source.
+
+## [0.1.0] - 2026-11-09
 
 - Add workflow and node execution attempt spans for `n8n-core >=2.16.1 <3`.
 - Preserve workflow results, cancellable promises, parent context and retry

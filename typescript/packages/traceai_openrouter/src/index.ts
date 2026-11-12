@@ -5,7 +5,7 @@ import { HTTPClient, type Fetcher } from "@openrouter/sdk";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sdkOperations = require("@openrouter/sdk/models/operations") as Record<string, { safeParse(value: unknown): { success: boolean } }>;
 
-export const VERSION = "0.1.0"; // x-release-please-version
+export const VERSION = "0.1.1"; // x-release-please-version
 
 /** Only official SDK inference endpoints are traced; unrelated OpenRouter APIs are left alone. */
 const operations: Readonly<Record<string, string>> = {

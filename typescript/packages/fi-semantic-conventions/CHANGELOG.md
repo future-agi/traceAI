@@ -1,3 +1,8 @@
+## [1.3.0] - pending release
+
+### Changed
+- ATTR_PROJECT_NAME now emits project_name instead of fi.project.name, and ATTR_SERVICE_NAME now emits service.name instead of SERVICE_NAME. Action: Update any resource lookups, processors or queries that read the old keys; traces already recorded keep the old keys.
+
 ## [1.2.0] - 2026-11-10
 ### Added
 - Align GenAI constant names with Python's `SpanAttributes`: expose `GEN_AI_*` names as named exports and on `SemanticConventions`.

@@ -1,3 +1,8 @@
+## [1.2.4] - pending release
+
+### Fixed
+- A full collector URL set in the environment is used as given, so traces are delivered instead of failing with 404.
+
 ## [1.2.3] - pending release
 ### Fix
 - **Upgrade.** 1.2.0, 1.2.1 and 1.2.2 could export short base64 media payloads that carry no recognized file signature: type- or modality-declared video (`type: video`, `type: input_video`, `modality: video`) at any cap, including the default 0; type-declared images (for example `{"type":"image","data":"<base64>"}`) when a positive `base64ImageMaxLength` (or `FI_BASE64_IMAGE_MAX_LENGTH`) was set; and images whose declaration is a separate attribute from the payload (for example `parts.0.type` = `image` beside `parts.0.data`), at any cap. 1.2.3 omits all of these at any cap. Setting the cap to 0 is not a workaround.
