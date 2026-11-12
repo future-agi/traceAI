@@ -8,6 +8,8 @@ export interface FetchMediaSink { write(chunk: Uint8Array): boolean; end(): void
 export interface FetchMediaObserver {
   /** The wire span, before it ends, with the wire path's own bounded request and response copies. */
   bind(span: Span, request?: RequestData, response?: ResponseData): void;
+  /** No wire span will be bound for this call: end anything held for it now (never waits for a timeout). */
+  settle?(): void;
   request(body: BodyInit | null | undefined): void;
   /** The application started incremental consumption of a response body (reader or async iterator). */
   consumed?(mimeType: string, successful: boolean, contentLength: number | undefined): FetchMediaSink | undefined;
@@ -208,9 +210,11 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
           const span = found && req && initial && build(found, req, { headers: {}, size: 0, error: hostError instanceof Error ? hostError : new Error("Transport failure") }, initial);
           if (span) emit(span, parent, start, errorAt);
         } catch { /* Preserve the host error identity. */ }
+        finally { try { media?.settle?.(); } catch { /* Media never reaches the application. */ } }
         throw hostError;
       }
-      try { inspect(); } catch { return result; }
+      const settle = () => { try { media?.settle?.(); } catch { /* Media never reaches the application. */ } };
+      try { inspect(); } catch { settle(); return result; }
       if (media) {
         const observer = media, observed = new WeakSet<Response>();
         const decorate = (response: Response) => {
@@ -229,7 +233,8 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         };
         observe(result, decorate, () => {});
       }
-      if (!found || !req || !initial) return result;
+      // No wire span for this call: a deferred wire-only capture can never bind (a native target is unaffected).
+      if (!found || !req || !initial) { settle(); return result; }
       const matched = found, request = req, parsed = initial;
       let resolve!: () => void;
       const done = new Promise<void>(r => { resolve = r; });
@@ -239,7 +244,8 @@ export function createFetchHook<T>(max: number, emit: (result: SpanResult, paren
         const complete = () => {
           if (audio) { response.audioOutputBytes = audio.bytes; response.body = undefined; }
           try { const span = build(matched, request, response, parsed); if (span) emit(span, parent, start, end, media ? value => media!.bind(value, request, response) : undefined); } catch { /* Capture must not reach application code. */ }
-          finally { resolve(); pending.delete(done); }
+          // `emit` binds only when it starts the wire span; any other outcome cancels what was held for it.
+          finally { settle(); resolve(); pending.delete(done); }
         };
         // Only completed responses awaiting bounded decoding are flushable, never unread streams.
         // Compressed JSON/SSE audio must be decoded before its base64 length scanner.

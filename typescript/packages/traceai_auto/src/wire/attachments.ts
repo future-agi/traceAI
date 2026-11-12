@@ -1,6 +1,6 @@
 import { createContextKey, trace, type Context, type Span } from "@opentelemetry/api";
 import type {
-  AttachmentCapturePolicy, AttachmentCorrelation, AttachmentManager, AttachmentPurpose, AttachmentStream,
+  AttachmentCapturePolicy, AttachmentCorrelation, AttachmentDeferredCorrelation, AttachmentManager, AttachmentPurpose, AttachmentStream,
 } from "@traceai/fi-core/attachments";
 import type { FetchMediaObserver, FetchMediaSink } from "./fetch-runtime";
 import { header } from "./core";
@@ -34,6 +34,12 @@ export const WIRE_STREAM_MAX_BYTES = 4 * 1024 * 1024;
 const WIRE_STREAM_FALLBACK_BYTES = 1024 * 1024;
 /** Request JSON is parsed only from the wire path's own bounded copy, and only up to this size. */
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
+/**
+ * How long a wire-only capture may wait for its wire span, which exists only once the response completed. The core
+ * maximum, because a transcription of a long recording can take minutes; every path on which no span will be emitted
+ * cancels the target at once (`settle`), so this bound is only the backstop (for example a hook removed mid-flight).
+ */
+export const WIRE_DEFERRED_BIND_TIMEOUT_MS = 300000;
 
 type Operation = "speech" | "transcription" | "image_edit" | "image_generation" | "chat" | "responses";
 /** Allowlisted protocol entries: exact HTTPS origin and path. A compatible path on another host is not authority to capture. */
@@ -96,8 +102,10 @@ function imageFormat(value: unknown): "png" | "jpeg" | "webp" | undefined {
  *   decoded. JSON media goes through the OpenAI provider adapter (#682), so an SDK span and a wire observation of the
  *   same span and position share one occurrence.
  * - No reader, clone, tee, filesystem, URL retrieval or recorder: only values and chunks the application consumed.
- * - Before the wire span exists, nothing is retained: wire-only FormData and wire-only incremental reads are not
- *   captured (`correlation_unavailable`).
+ * - Wire-only FormData files and wire-only incremental speech reads are admitted against a deferred target before the
+ *   wire span exists (the core holds bounded bytes and reads or sends nothing). `bind` binds the wire span, where policy
+ *   and sampling are evaluated again; a span that never comes (`settle`), a late bind or a timeout uploads nothing.
+ *   JSON media never uses the deferred target: it is captured at `bind`, from the wire path's own bounded copies.
  */
 export function wireAttachmentObserver(manager: AttachmentManager, parent: Context, method: string, url: string): FetchMediaObserver | undefined {
   if (parent.getValue(MEDIA_OWNER) || manager.status().state !== "ready") return;
@@ -110,12 +118,22 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
   if (native && !capture) return;
   let correlation: AttachmentCorrelation | undefined = native ? manager.correlation(native) : undefined;
   let outputObserved = false, inputObserved = false, format: ReturnType<typeof imageFormat>;
+  // Wire-only: one deferred target per call, created only when a FormData file or an incremental read needs it.
+  let deferred: AttachmentDeferredCorrelation | undefined, settled = false;
+  /** The capture target now: the native or bound wire span, else (until the wire span exists or never will) the deferred one. */
+  const target = (): AttachmentCorrelation | undefined => {
+    if (correlation || settled) return correlation;
+    try { deferred ??= manager.deferredCorrelation({ bindTimeoutMs: WIRE_DEFERRED_BIND_TIMEOUT_MS }); } catch { return undefined; }
+    return deferred;
+  };
 
   /** Preflight at the exact size, then attach. The source is touched only after admission. */
   const attachExact = (size: number, mimeType: string, direction: "input" | "output", purpose: AttachmentPurpose,
     source: () => { kind: "Bytes"; data: Uint8Array } | { kind: "Blob"; data: Blob }, sourceKind: "Bytes" | "Blob") => {
-    if (!correlation || !(size > 0)) return;
-    const ticket = manager.preflight(correlation, { mimeType, direction, purpose, maxBytes: size, sourceKind, capture: { ...capture, ...(direction === "input" ? { modelInput: true } : {}) } });
+    if (!(size > 0)) return;
+    const into = target();
+    if (!into) return;
+    const ticket = manager.preflight(into, { mimeType, direction, purpose, maxBytes: size, sourceKind, capture: { ...capture, ...(direction === "input" ? { modelInput: true } : {}) } });
     if (!ticket.admitted) return;
     try { ticket.attach(source() as never); } catch { ticket.release(); }
   };
@@ -147,7 +165,11 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
   return {
     bind(span, request, response) {
       // The emitter supplies its actual identity before ending, never a later ambient span.
-      if (correlation) return;
+      if (correlation || settled) return;
+      settled = true;
+      // Pending wire-only captures are re-evaluated against this span now (policy, environment, sampling). `false` means
+      // late, cancelled or an invalid span identity: cancel (a no-op once cancelled) so nothing waits for the deadline.
+      try { if (deferred && !deferred.bind(span)) deferred.cancel(); } catch { /* never throws; fail closed */ }
       correlation = manager.correlation(span);
       // JSON uses the wire path's own bounded copies; nothing was retained for media before this point.
       if (op === "chat" || op === "responses" || op === "image_generation") captureJsonInput(parseJson(request?.body));
@@ -155,19 +177,27 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
       // position captured again from json() below resolves to the first occurrence in the adapter's registry.
       if (response && (response.status ?? 0) >= 200 && (response.status ?? 0) < 300 && !response.truncated && mediaType(header(response.headers, "content-type")) === "application/json") jsonOutput(parseJson(response.body));
     },
+    settle() {
+      // No wire span will be bound (unmatched or failed call, delivery gate, build failure): end pending captures now.
+      if (correlation || settled) return;
+      settled = true;
+      try { deferred?.cancel(); } catch { /* never throws */ }
+    },
     request(body) {
-      // Wire-only: the span does not exist yet, so FormData is not retained until a late span (fail closed).
-      if (!correlation) return;
+      // FormData files are admitted before the span exists (deferred target when wire-only); JSON waits for `bind`.
       if (body instanceof FormData && (op === "transcription" || op === "image_edit")) formData(body);
+      else if (!correlation) return;
       else if (typeof body === "string" && (op === "chat" || op === "responses" || op === "image_generation") && body.length <= MAX_JSON_BYTES) {
         try { captureJsonInput(JSON.parse(body)); } catch { /* Not JSON: nothing to capture. */ }
       }
     },
     consumed(mimeType, successful, contentLength): FetchMediaSink | undefined {
-      // Incremental reads need the target before the first chunk: only a native span qualifies (A04).
+      // Incremental reads need the target before the first chunk: the native span, else the deferred wire target (A04).
       const type = mediaType(mimeType);
-      if (outputObserved || !correlation || !successful || op !== "speech" || !AUDIO_MIMES.has(type)) return;
-      const open = (maxBytes: number) => manager.startAttachmentStream(correlation!, { mimeType: type, direction: "output", purpose: "model_output", maxBytes, capture });
+      if (outputObserved || !successful || op !== "speech" || !AUDIO_MIMES.has(type)) return;
+      const into = target();
+      if (!into) return;
+      const open = (maxBytes: number) => manager.startAttachmentStream(into, { mimeType: type, direction: "output", purpose: "model_output", maxBytes, capture });
       const exact = contentLength !== undefined && contentLength > 0 && contentLength <= WIRE_STREAM_MAX_BYTES ? contentLength : undefined;
       let stream: AttachmentStream = open(exact ?? WIRE_STREAM_MAX_BYTES);
       // The negotiated upload limit or the owned budget can be below the default reservation.
@@ -177,7 +207,7 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
       return { write: chunk => stream.tryWrite(chunk), end: () => { stream.finish(); }, abort: () => stream.abort("incomplete") };
     },
     materialized(value, methodName, mimeType, successful) {
-      if (outputObserved || !correlation || !successful) return;
+      if (outputObserved || !successful) return;
       const type = mediaType(mimeType);
       if (op === "speech" && AUDIO_MIMES.has(type)) {
         if (methodName === "blob" && value instanceof Blob) {
@@ -188,7 +218,7 @@ export function wireAttachmentObserver(manager: AttachmentManager, parent: Conte
           // The view (and the core's synchronous copy) exists only after admission.
           attachExact(value.byteLength, type, "output", "model_output", () => ({ kind: "Bytes", data: new Uint8Array(value) }), "Bytes");
         }
-      } else if (methodName === "json" && type === "application/json") jsonOutput(value);
+      } else if (correlation && methodName === "json" && type === "application/json") jsonOutput(value);
     },
   };
 }

@@ -25,8 +25,10 @@ export function selectAttachmentManager(provider: AttachmentProvider, config: Co
   try { existing = options.attachmentManager ?? provider?.attachments ?? provider?.getDelegate?.()?.attachments; } catch { existing = undefined; }
   if (existing) {
     // Borrowing never turns capture on and never loosens application policy: only auto's hide/PII flags are added.
-    // The env override (FI_ATTACHMENTS_ENABLED=false) is already applied by the manager at every admission, so a
-    // borrowed manager is not permanently disabled here (updatePolicy is tighten-only).
+    // A borrowed manager is not permanently disabled here (updatePolicy is tighten-only). The env override
+    // (FI_ATTACHMENTS_ENABLED=false) is applied at every admission by a manager whose `environment` reads
+    // `process.env` (auto's own and the `createNodeAttachmentManager` default); a borrowed manager built with a custom
+    // `environment` sees only what that function returns.
     try { existing.updatePolicy({ traceConfig: restrictive(attachmentOptions(config, options).traceConfig as Record<string, unknown>) as NodeAttachmentManagerOptions["traceConfig"] }); } catch { /* fail closed below */ }
     return { manager: existing, owned: ownsProvider && !options.attachmentManager };
   }
@@ -36,14 +38,17 @@ export function selectAttachmentManager(provider: AttachmentProvider, config: Co
 /** What auto can capture, independent of whether the manager is on. Nothing here is a playback claim. */
 export const AUTO_ATTACHMENT_SOURCES = Object.freeze([
   "wire FormData Blob (transcription audio, image edit image/mask) under a native model span with an explicit capture policy",
+  "wire-only FormData Blob (transcription and translation audio), held bounded until the wire span exists",
   "wire JSON input images/files/computer screenshots (OpenAI chat, responses) via the @traceai/openai adapter",
   "wire JSON output images (OpenAI images b64_json, responses image_generation_call) consumed by the application via json()",
   "wire speech audio materialized by the application via arrayBuffer()/blob()",
   "wire speech audio read incrementally by the application (reader or async iterator) under a native model span with an explicit capture policy",
+  "wire-only speech audio read incrementally by the application (reader or async iterator), held bounded until the wire span exists",
 ]);
 export const AUTO_ATTACHMENT_UNSUPPORTED = Object.freeze([
-  "wire-only FormData (the wire span does not exist before the upload; no source is retained until then)",
-  "wire-only incremental speech reads (correlation_unavailable until the core supports deferred-target preflight)",
+  "wire-only image edits and variations (no wire span is emitted for these routes; held files are dropped at once)",
+  "wire-only FormData or incremental speech above the pre-bind budget (half the owned budget): queue_full",
+  "wire-only captures whose wire span is never emitted, or binds after the deadline: correlation_unavailable",
   "native model spans without an explicit integration capture policy",
   "raw multipart bodies, streamed request bodies, compressed responses consumed before the span is emitted",
   "RemoteUrl / ProviderFile retrieval",

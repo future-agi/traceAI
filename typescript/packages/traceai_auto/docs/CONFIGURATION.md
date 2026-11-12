@@ -250,8 +250,12 @@ Wire capture (`wire`) observes only allowlisted HTTPS protocol entries (`report(
 | JSON input images, files, computer screenshots (chat, responses) | Captured, from the wire request copy | By the instrumentor (`@traceai/openai`); the same position is never uploaded twice |
 | JSON output images (images `b64_json`, responses `image_generation_call`) | Captured, from the wire response copy | By the instrumentor where it covers the operation; wire capture needs an explicit integration policy (`withAttachmentCapturePolicy`) |
 | Speech audio the application read with `arrayBuffer()` / `blob()` | Captured | Needs an explicit integration policy |
-| Speech audio the application read incrementally (reader, async iterator) | Not captured: the wire span does not exist yet and nothing is retained | Needs an explicit integration policy; cancel, early return, pipe or tee upload nothing |
-| FormData audio / image files | Not captured (no retention before the span exists) | Needs an explicit integration policy |
+| Speech audio the application read incrementally (reader, async iterator) | Captured: held in a bounded buffer until the wire span exists, then checked again | Needs an explicit integration policy; cancel, early return, pipe or tee upload nothing |
+| FormData audio / image files | Transcription and translation audio captured: held (not read) until the wire span exists, then checked again. Image edits and variations have no wire span, so their files are not captured | Needs an explicit integration policy |
+
+A wire-only capture waits for the wire span, which exists only once the response completed. When the span is emitted, policy, the environment switch and sampling are checked again before anything is sent. If no span will come (the call failed, was not traced, or its span was not delivered), the held capture is dropped at once; a span that arrives after five minutes binds nothing. Bytes held this way are capped at half the owned budget, so a larger file is not captured (`queue_full`).
+
+Media in Anthropic `messages.create` input (inline base64 images and documents) is captured by `@traceai/anthropic` when auto enables it; `report().integrations[].media` reports `provider_adapter` for `openai` and `anthropic` when the installed instrumentor exposes its capability descriptor.
 
 An adapter that captures media itself marks its context with `withAttachmentOwnership(context)` (context key `traceai.auto.attachment_owner.v1`), and wire capture then skips that call. `report().attachments` shows the manager state, queue counters, routes, sources and unsupported sources; `report().integrations[].media` shows whether an integration captures media through a provider adapter. No row is a playback claim.
 

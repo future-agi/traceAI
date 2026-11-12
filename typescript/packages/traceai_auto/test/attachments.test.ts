@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { context, trace, ROOT_CONTEXT } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { AlwaysOffSampler, BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { AttachmentManager, createAttachmentHttpTransport, type AttachmentHttpClient, type AttachmentManagerOptions } from "@traceai/fi-core/attachments";
 import { captureOpenAIAttachments } from "@traceai/openai";
 import { patchFetch } from "../src/wire/fetch";
@@ -67,15 +67,27 @@ async function createManager(options: AttachmentManagerOptions = {}, serverOverr
   expect(result.status().state).toBe(options.enabled === false ? "disabled" : "ready");
   return result;
 }
-function install(target = manager) {
+/** `emitSpans: false` models an emitter that never starts the wire span (for example its delivery gate refused it). */
+function install(target = manager, emitSpans = true) {
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const u = new URL(input instanceof Request ? input.url : String(input));
     return nativeFetch(`${origin}${u.pathname}${u.search}`, init);
   };
   hook = patchFetch(4194304, (result, parent, start, end, bindMedia) => {
+    if (!emitSpans) return;
     const span = provider.getTracer("wire-test").startSpan(result.name, { startTime: start, attributes: result.attributes }, parent);
     bindMedia?.(span); span.end(end);
   }, [], target);
+}
+const transcription = () => {
+  const body = new FormData(); body.set("model", "whisper-1"); body.set("file", new Blob([audio], { type: "audio/wav" }), "PRIVATE_CANARY_FILENAME.wav");
+  return fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", body });
+};
+async function readAll(response: Response, mode: "reader" | "iterator" = "reader"): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  if (mode === "iterator") { for await (const chunk of response.body as any) chunks.push(Buffer.from(chunk)); }
+  else { const reader = response.body!.getReader(); for (;;) { const x = await reader.read(); if (x.done) break; chunks.push(Buffer.from(x.value)); } }
+  return Buffer.concat(chunks);
 }
 let nativeSpanId = "";
 function inNative<T>(fn: () => T, kind = "LLM", policyContext = true): T {
@@ -191,9 +203,33 @@ describe("A04 speech output", () => {
       const unread = await speech(); expect(unread.bodyUsed).toBe(false); await unread.body!.cancel();
       const partial = await speech(); const reader = partial.body!.getReader(); await reader.read(); await reader.cancel();
     });
-    // Wire-only incremental reads are not captured (the wire span does not exist yet; nothing is retained).
-    const wireOnly = await speech(); const reader = wireOnly.body!.getReader(); while (!(await reader.read()).done) { /* app reads */ }
+    // Wire-only (deferred target): a reader cancelled midway uploads nothing, and nothing stays held.
+    const wireOnly = await speech(); const reader = wireOnly.body!.getReader(); await reader.read(); await reader.cancel();
     await settle(); expect(uploads).toHaveLength(0); expect(manager.status()).toMatchObject({ openStreams: 0, openTickets: 0, ownedBytes: 0 });
+  });
+  test.each([
+    ["api.openai.com/v1/audio/speech", { model: "tts-1", input: "synthetic", voice: "alloy" }, "reader"],
+    ["api.openai.com/v1/audio/speech", { model: "tts-1", input: "synthetic", voice: "alloy" }, "iterator"],
+    ["api.deepgram.com/v1/speak", { text: "synthetic" }, "reader"],
+  ] as const)("wire-only %s (%j, %s): incremental reads upload once, bound to the wire span through a deferred target", async (route, body, mode) => {
+    responseChunks = 4; install();
+    const response = await fetch(`https://${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect(await readAll(response, mode)).toEqual(audio);
+    await settle(); expect(uploads).toEqual([audio]);
+    const spans = exporter.getFinishedSpans(); expect(spans).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].association.parent.span_id).toBe(spans[0].spanContext().spanId);
+    expect(requests[0]).toMatchObject({ direction: "output", purpose: "model_output", mime_type: "audio/wav", declared_bytes: audio.length });
+    expect(manager.status()).toMatchObject({ openStreams: 0, openTickets: 0, ownedBytes: 0 });
+  });
+  test("wire-only captures whose wire span is never emitted are dropped when the call completes, not after the deadline", async () => {
+    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}'); install(manager, false);
+    await (await transcription()).json();
+    responseType = "audio/wav"; responseData = audio; responseChunks = 4;
+    expect(await readAll(await speech())).toEqual(audio);
+    await new Promise(done => setImmediate(done));
+    expect(manager.status()).toMatchObject({ openStreams: 0, openTickets: 0, ownedBytes: 0 });
+    await settle(); expect(uploads).toHaveLength(0); expect(sessionsOnly()).toEqual([]); expect(exporter.getFinishedSpans()).toHaveLength(0);
   });
   test("piped bodies are not captured", async () => {
     install(); await inNative(async () => {
@@ -225,11 +261,34 @@ describe("A03 FormData and JSON media", () => {
     install(); await inNative(async () => { await (await fetch("https://api.openai.com/v1/images/edits", { method: "POST", body })).json(); });
     await settle(); expect(uploads).toEqual([png]);
   });
-  test("wire-only FormData is not captured, and its source is not retained until the late span", async () => {
+  test("wire-only transcription FormData is held (unread) until the wire span exists, then uploads once bound to it", async () => {
     responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}');
-    const body = new FormData(); body.set("model", "whisper-1"); body.set("file", new Blob([audio], { type: "audio/wav" }));
-    install(); await (await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", body })).json();
-    await settle(); expect(uploads).toHaveLength(0);
+    install(); const pending = transcription();
+    // Admitted before the span exists: bytes are reserved, nothing is sent until bind.
+    expect(manager.status().ownedBytes).toBe(audio.length); expect(sessionsOnly()).toEqual([]);
+    expect(await (await pending).json()).toEqual({ text: "synthetic" });
+    await settle(); expect(uploads).toEqual([audio]); expect(providerBodies[0].includes(audio)).toBe(true);
+    const spans = exporter.getFinishedSpans(); expect(spans).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ direction: "input", purpose: "model_input", source_kind: "Blob", mime_type: "audio/wav" });
+    expect(requests[0].association.parent.span_id).toBe(spans[0].spanContext().spanId);
+    expect(JSON.stringify(requests)).not.toContain("PRIVATE_CANARY");
+    expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
+  });
+  test("wire-only image edits have no wire span: the held file is dropped when the call completes and nothing uploads", async () => {
+    responseType = "application/json"; responseData = Buffer.from('{"data":[]}');
+    const body = new FormData(); body.set("image", new Blob([png], { type: "image/png" }));
+    install(); await (await fetch("https://api.openai.com/v1/images/edits", { method: "POST", body })).json();
+    expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
+    await settle(); expect(uploads).toHaveLength(0); expect(sessionsOnly()).toEqual([]);
+  });
+  test("a wire span that is not sampled uploads nothing held for it (re-checked at bind)", async () => {
+    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}');
+    await provider.shutdown(); exporter = new InMemorySpanExporter();
+    provider = new BasicTracerProvider({ sampler: new AlwaysOffSampler(), spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    install(); await (await transcription()).json();
+    responseType = "audio/wav"; responseData = audio; responseChunks = 4; expect(await readAll(await speech())).toEqual(audio);
+    await settle(); expect(uploads).toHaveLength(0); expect(sessionsOnly()).toEqual([]);
+    expect(manager.status()).toMatchObject({ openStreams: 0, openTickets: 0, ownedBytes: 0 });
   });
   test("wire-only image JSON output uploads decoded bytes through the provider adapter, never URLs", async () => {
     responseType = "application/json"; responseData = Buffer.from(JSON.stringify({ data: [{ b64_json: png.toString("base64") }, { url: "https://untrusted.invalid/private?token=CANARY" }] }));
@@ -276,12 +335,23 @@ describe("privacy negative controls", () => {
     install(); await inNative(async () => { await (await fetch("https://api.openai.com/v1/images/edits", { method: "POST", body })).json(); });
     await (await fetch("https://api.openai.com/v1/chat/completions", { method: "POST",
       body: JSON.stringify({ messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${png.toString("base64")}` } }] }] }) })).json();
-    await settle(); expect(sessionsOnly()).toEqual([]);
+    // Wire-only FormData audio through the deferred target: denied at admission, nothing held (image hiding is image-only).
+    if (!options.traceConfig?.hideInputImages) { responseData = Buffer.from('{"text":"synthetic"}'); await (await transcription()).json(); }
+    await settle(); expect(sessionsOnly()).toEqual([]); expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
+  });
+  test.each(["hideInputs", "hideInputMessages", "piiRedaction"] as const)("%s set after a wire-only file was held denies it at bind", async flag => {
+    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}');
+    install(); const pending = transcription();
+    expect(manager.status().ownedBytes).toBe(audio.length);
+    manager.updatePolicy({ traceConfig: { [flag]: true } }); transfers = [];
+    await (await pending).json();
+    await settle(); expect(sessionsOnly()).toEqual([]); expect(uploads).toHaveLength(0); expect(manager.status()).toMatchObject({ openTickets: 0, ownedBytes: 0 });
   });
   test.each(["hideOutputs", "hideOutputMessages", "hideOutputText", "piiRedaction"] as const)("%s prevents output speech and image transfer", async flag => {
     manager.updatePolicy({ traceConfig: { [flag]: true } }); transfers = [];
     install(); await inNative(async () => { await (await speech()).arrayBuffer(); });
     await (await speech()).arrayBuffer();
+    responseChunks = 4; await readAll(await speech()); responseChunks = 1;
     responseType = "application/json"; responseData = Buffer.from(JSON.stringify({ data: [{ b64_json: png.toString("base64") }] }));
     await (await fetch("https://api.openai.com/v1/images/generations", { method: "POST", body: "{}" })).json();
     await settle(); expect(sessionsOnly()).toEqual([]);
@@ -352,18 +422,35 @@ describe("A02 ownership and configuration", () => {
     install(); await inNative(async () => { await (await speech()).arrayBuffer(); });
     await settle(); expect(uploads).toHaveLength(0);
   });
-  test("an env override does not permanently disable a borrowed manager (updatePolicy is tighten-only)", async () => {
-    const before = process.env.FI_ATTACHMENTS_ENABLED; process.env.FI_ATTACHMENTS_ENABLED = "false";
-    try { selectAttachmentManager({ attachments: manager }, resolveConfig({ configFile: "/nonexistent" }, {}), {}, false); }
-    finally { if (before === undefined) delete process.env.FI_ATTACHMENTS_ENABLED; else process.env.FI_ATTACHMENTS_ENABLED = before; }
-    install(); await inNative(async () => { await (await speech()).arrayBuffer(); });
-    await settle(); expect(uploads).toEqual([audio]);
+  test("FI_ATTACHMENTS_ENABLED=false denies at admission on a process-env manager, without permanently disabling a borrowed one", async () => {
+    const before = process.env.FI_ATTACHMENTS_ENABLED;
+    delete process.env.FI_ATTACHMENTS_ENABLED;
+    try {
+      // A manager whose `environment` reads process.env, as auto's own and the Node factory's default do.
+      await manager.shutdown(); manager = await createManager({ environment: () => process.env });
+      process.env.FI_ATTACHMENTS_ENABLED = "false";
+      selectAttachmentManager({ attachments: manager }, resolveConfig({ configFile: "/nonexistent" }, {}), {}, false);
+      transfers = []; install();
+      // Kill switch at admission: materialized, incremental and FormData wire captures, native and wire-only, all denied.
+      await inNative(async () => { await (await speech()).arrayBuffer(); });
+      await (await speech()).arrayBuffer();
+      responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}'); await (await transcription()).json();
+      await settle(); expect(sessionsOnly()).toEqual([]); expect(uploads).toHaveLength(0);
+      expect(manager.status()).toMatchObject({ openTickets: 0, openStreams: 0, ownedBytes: 0 });
+      // The switch is read at each admission: lifting it resumes capture on the same borrowed manager.
+      delete process.env.FI_ATTACHMENTS_ENABLED;
+      responseType = "audio/wav"; responseData = audio;
+      await inNative(async () => { await (await speech()).arrayBuffer(); });
+      await settle(); expect(uploads).toEqual([audio]);
+    } finally { if (before === undefined) delete process.env.FI_ATTACHMENTS_ENABLED; else process.env.FI_ATTACHMENTS_ENABLED = before; }
   });
   test("status report is policy and source aware and claims no playback", () => {
     const report = attachmentReport(manager);
     expect(report.state).toBe("ready"); expect(report.status).toMatchObject({ openTickets: 0 });
     expect(report.routes).toContain("POST https://api.openai.com/v1/audio/speech (speech)");
     expect(report.unsupported).toEqual(expect.arrayContaining(["WebSocket / RTC audio", "product playback qualification"]));
+    expect(report.unsupported.join("\n")).not.toMatch(/deferred-target preflight/);
+    expect(report.sources).toEqual(expect.arrayContaining([expect.stringContaining("wire-only FormData Blob"), expect.stringContaining("wire-only speech audio read incrementally")]));
     expect(attachmentReport().state).toBe("not_initialized");
   });
 });
@@ -394,7 +481,7 @@ describe("real SDKs against loopback", () => {
     expect(result.data[0].b64_json).toBe(png.toString("base64"));
     await settle(); expect(uploads).toEqual([png]);
   });
-  test("OpenAI SDK transcription (wire-only) keeps the multipart request intact and captures nothing", async () => {
+  test("OpenAI SDK transcription (wire-only) keeps the multipart request intact and uploads the file once, bound to the wire span", async () => {
     const mod = sdk();
     // openai 4.x sends multipart as a Node stream, which a WHATWG fetch rejects without `duplex` (SDK limitation, not auto).
     if (Number(sdkVersion().split(".")[0]) < 5) return; const OpenAI = mod.default ?? mod.OpenAI; const toFile = mod.toFile;
@@ -402,6 +489,9 @@ describe("real SDKs against loopback", () => {
     install(); const client = new OpenAI({ apiKey: "synthetic-provider-key", fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args) });
     const result = await client.audio.transcriptions.create({ model: "whisper-1", file: await toFile(audio, "synthetic.wav", { type: "audio/wav" }) });
     expect(result.text).toBe("synthetic"); expect(providerBodies[0].includes(audio)).toBe(true);
-    await settle(); expect(uploads).toHaveLength(0);
+    await settle(); expect(uploads).toEqual([audio]);
+    const spans = exporter.getFinishedSpans(); expect(spans).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ direction: "input", purpose: "model_input", source_kind: "Blob" });
+    expect(requests[0].association.parent.span_id).toBe(spans[0].spanContext().spanId);
   });
 });

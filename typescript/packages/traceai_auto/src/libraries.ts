@@ -17,7 +17,7 @@ export interface Integration { name: string; package: string; targets: string[];
 export type MediaStatus = "provider_adapter" | "unqualified";
 export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string; media?: MediaStatus }
 /** Integrations whose instrumentor captures media through the shared manager it receives as `attachments` (#682). */
-const MEDIA_ADAPTERS = new Map([["openai", "openAIAttachmentCapabilities"]]);
+const MEDIA_ADAPTERS = new Map([["openai", "openAIAttachmentCapabilities"], ["anthropic", "anthropicAttachmentCapabilities"]]);
 export const integrations: Integration[] = catalog as Integration[];
 export function appRequire() { return createRequire(join(process.cwd(), "__traceai_auto__.cjs")); }
 function resolvable(name: string): boolean {
