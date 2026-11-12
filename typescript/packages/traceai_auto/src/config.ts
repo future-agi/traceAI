@@ -6,7 +6,14 @@ import type { TracerProvider } from "@opentelemetry/api";
 import type { PrivacyOptions as TraceConfigOptions } from "./export-privacy";
 import { compileOutgoingPolicy, type OutgoingPolicy, type OutgoingPropagationMode } from "./outgoing-policy";
 
+import type { NodeAttachmentManagerOptions } from "@traceai/fi-core/attachments/node";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+
 export interface Options {
+  /** Default OFF. The control endpoint is independent of baseUrl/OTLP. */
+  attachments?: NodeAttachmentManagerOptions;
+  /** Borrow the application's manager; auto never shuts down a borrowed manager. */
+  attachmentManager?: AttachmentManager;
   /** Experimental node:http/node:https propagation; off until explicitly selected. */
   propagateOutgoingAdapters?: boolean;
   /** default/all retain mandatory vendor-host, provider-port and redirect vetoes. */

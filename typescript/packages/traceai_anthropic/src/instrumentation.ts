@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { captureAnthropicAttachments, projectAnthropicMedia } from "./attachments";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -334,16 +336,22 @@ function finishInstrumentationStream(
 export class AnthropicInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private attachments?: AttachmentManager;
 
   constructor({
     instrumentationConfig,
     traceConfig,
+    attachments,
   }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
+    /** The provider-owned shared attachment manager. */
+    attachments?: AttachmentManager;
   } = {}) {
     super("@traceai/instrumentation-anthropic", VERSION,Object.assign({}, instrumentationConfig));
     this._traceConfig = traceConfig;
+    this.attachments = attachments;
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
   public override enable(): void {
@@ -404,21 +412,26 @@ export class AnthropicInstrumentation extends InstrumentationBase{
         // Not async: the SDK returns an APIPromise whose withResponse(), asResponse()
         // and lazy body parsing callers (including messages.stream()) depend on.
         return function patchedMessagesCreate(this: Anthropic.Messages, ...args: Parameters<Anthropic.Messages['create']>) {
-          const params = args[0] as Anthropic.MessageCreateParams;
-          const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = params;
+          const originalParams = args[0] as Anthropic.MessageCreateParams;
+          const { messages: _messages, system: _system, tools: _tools, ...invocationParameters } = originalParams;
 
+          // Content attributes are set after capture so admitted media can be projected out first.
           const span = instrumentation.fiTracer.startSpan("Anthropic Messages Create", {
             kind: SpanKind.INTERNAL,
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-              [SemanticConventions.LLM_MODEL_NAME]: params.model,
+              [SemanticConventions.LLM_MODEL_NAME]: originalParams.model,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.ANTHROPIC,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
+            },
+          });
+          const captured = captureAnthropicAttachments(instrumentation.attachments, span, originalParams, { traceConfig: instrumentation._traceConfig });
+          const params = projectAnthropicMedia(originalParams, captured) as Anthropic.MessageCreateParams;
+          span.setAttributes({
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(invocationParameters) ?? "",
               ...getAnthropicInputMessagesAttributes(params),
               ...getAnthropicToolsAttributes(params),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(params) ?? "",
-            },
           });
 
           const execContext = getExecContext(span);

@@ -13,7 +13,11 @@ import { Config, enabled, Options } from "./config";
 
 export type Status = "instrumented" | "pending" | "not_installed" | "missing_instrumentor" | "disabled" | "manual" | "failed";
 export interface Integration { name: string; package: string; targets: string[]; modules: string[]; className?: string; manual?: string; enable?: string }
-export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string }
+/** Media capture is tracked apart from span coverage: an SDK span hook does not imply media capture, and vice versa. */
+export type MediaStatus = "provider_adapter" | "unqualified";
+export interface IntegrationStatus { name: string; package?: string; targets?: string[]; status: Status; reason?: string; media?: MediaStatus }
+/** Integrations whose instrumentor captures media through the shared manager it receives as `attachments` (#682). */
+const MEDIA_ADAPTERS = new Map([["openai", "openAIAttachmentCapabilities"], ["anthropic", "anthropicAttachmentCapabilities"]]);
 export const integrations: Integration[] = catalog as Integration[];
 export function appRequire() { return createRequire(join(process.cwd(), "__traceai_auto__.cjs")); }
 function resolvable(name: string): boolean {
@@ -22,7 +26,7 @@ function resolvable(name: string): boolean {
   }
 }
 export function inventory(config: Config): IntegrationStatus[] {
-  return integrations.map(i => ({ name: i.name, package: i.package, targets: i.targets,
+  return integrations.map(i => ({ name: i.name, package: i.package, targets: i.targets, media: MEDIA_ADAPTERS.has(i.name) ? "provider_adapter" : "unqualified",
     status: !enabled(i.name, config) ? "disabled" : ![...i.targets, ...i.modules].some(resolvable) ? "not_installed" : i.manual && !i.enable ? "manual" : !resolvable(i.package) && i.name !== "openai" ? "missing_instrumentor" : "pending",
     ...(i.manual ? { reason: i.manual } : {}) }));
 }
@@ -109,12 +113,14 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       // Keep this require inside the enabled branch: disabled integrations register no hooks.
       const path = entry.enable && resolvable(`${entry.package}/auto`) ? `${entry.package}/auto` : entry.package;
       const exports = resolvable(path) ? appRequire()(path) : entry.name === "openai" ? require("@traceai/openai") : appRequire()(path);
+      // Version aware: an installed instrumentor without the capability descriptor captures no media.
+      if (status.media === "provider_adapter" && !exports?.[MEDIA_ADAPTERS.get(entry.name)!]) status.media = "unqualified";
       if (entry.enable) {
         const enable = exports.enable ?? exports[entry.enable];
         if (typeof enable !== "function") { status.status = "manual"; status.reason = "Installed instrumentor has no zero-argument enable entry; wire capture remains available"; continue; }
         // Enable entries receive the selected neutral destination explicitly.
         // Never synthesize FI credentials to unlock a framework integration.
-        const result = enable({ tracerProvider: provider, spanProcessor, traceConfig: options.traceConfig });
+        const result = enable({ tracerProvider: provider, spanProcessor, traceConfig: options.traceConfig, attachments: options.attachmentManager });
         if (result && typeof result.setTracerProvider === "function") result.setTracerProvider(provider);
         status.status = result === false || result === undefined ? "manual" : result?.status ?? "instrumented";
         status.reason = result?.reason;
@@ -123,7 +129,7 @@ export function enableLibraries(config: Config, options: Options, provider: Trac
       }
       const Instrumentor = exports[entry.className!];
       if (typeof Instrumentor !== "function") throw new Error("Missing exported Instrumentation class");
-      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false });
+      instance = new Instrumentor({ instrumentationConfig: { enabled: false }, traceConfig: options.traceConfig, tracerProvider: provider, exclusiveProcessor: false, attachments: options.attachmentManager });
       const known = (instance._modules ?? []).map((definition: any) => ({ definition, version: moduleVersion(definition.name) })).filter((item: any) => item.version);
       if (known.length && known.every(({ definition, version }: any) => !definition.supportedVersions.some((range: string) => satisfies(version, range, { includePrerelease: definition.includePrerelease })))) {
         instance.disable(); status.status = "failed"; status.reason = "Installed target version is outside the instrumentor's supported range";

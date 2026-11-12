@@ -2,7 +2,7 @@ const fs = require('node:fs');
 for (const dir of ['dist/esm', 'dist/esnext']) {
   fs.writeFileSync(`${dir}/package.json`, '{"type":"module"}\n');
   // A single CJS implementation keeps init idempotent across mixed ESM/CJS apps.
-  fs.writeFileSync(`${dir}/index.js`, 'export { init, shutdown, forceFlush, report, registerSecret } from "../src/index.js";\n');
+  fs.writeFileSync(`${dir}/index.js`, 'export { init, shutdown, forceFlush, report, registerSecret, getAttachmentManager, withAttachmentOwnership, withAttachmentCapturePolicy } from "../src/index.js";\n');
   fs.writeFileSync(`${dir}/register.js`, 'import "../src/register.js";\n');
   for (const name of ['esbuild', 'vite', 'rollup', 'webpack', 'next']) {
     const named = name === 'next' ? 'withTraceAI' : name === 'webpack' ? 'traceAI, TraceAIPlugin' : 'traceAI';
