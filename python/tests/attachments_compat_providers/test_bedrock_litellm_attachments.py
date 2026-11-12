@@ -21,6 +21,7 @@ NOVA = "amazon.nova-lite-v1:0"
 @pytest.fixture
 def bedrock(spans, media_provider):
     pytest.importorskip("boto3")
+    pytest.importorskip("traceai_bedrock")
     from traceai_bedrock import BedrockInstrumentor
 
     tracer_provider, exporter = spans
@@ -106,6 +107,7 @@ def test_converse_unknown_model_family_is_never_read(f01, bedrock):
 
 
 def test_nova_converse_video_block(f01, bedrock):
+    f01.state["policy"] = {"allowed_modalities": ["audio", "image", "document", "file", "video"]}
     manager = f01.manager()
     client, _ = bedrock(manager)
     client.converse(modelId=NOVA, messages=[{"role": "user", "content": [
@@ -196,6 +198,7 @@ def test_invoke_model_unknown_body_is_never_scraped(f01, bedrock):
 @pytest.fixture
 def litellm_instrument(spans):
     pytest.importorskip("litellm")
+    pytest.importorskip("traceai_litellm")
     from traceai_litellm import LiteLLMInstrumentor
 
     tracer_provider, exporter = spans
@@ -273,8 +276,8 @@ def test_litellm_image_generation_output(f01, media_provider, litellm_instrument
 
     manager = f01.manager()
     exporter = litellm_instrument(manager)
-    options = dict(model="openai/dall-e-3", prompt="a cat", api_base=media_provider.url, api_key="sk-synthetic",
-                   response_format="b64_json")
+    # gpt-image-1 always answers with b64_json; the loopback also returns a URL result, which is never fetched.
+    options = dict(model="openai/gpt-image-1", prompt="a cat", api_base=media_provider.url, api_key="sk-synthetic")
     if async_:
         result = asyncio.run(litellm.aimage_generation(**options))
     else:

@@ -90,6 +90,7 @@ def test_wrong_label_is_never_uploaded_and_cannot_bypass_hide_input_images(f01, 
 
 def test_declared_pdf_and_video_need_matching_bytes(f01, spans):
     tracer_provider, _ = spans
+    f01.state["policy"] = {"allowed_modalities": ["audio", "image", "document", "file", "video"]}
     manager = f01.manager()
     contents = [{"role": "user", "parts": [
         {"inline_data": {"mime_type": "application/pdf", "data": PDF}},
@@ -102,6 +103,16 @@ def test_declared_pdf_and_video_need_matching_bytes(f01, spans):
     assert sorted(f01.payloads) == sorted([PDF, MP4, jpeg(4)])
     purposes = sorted(u["purpose"] for u in f01.uploads)
     assert purposes == ["document", "model_input", "model_input"]
+    manager.shutdown(5)
+
+
+def test_server_policy_without_video_denies_video(f01, spans):
+    tracer_provider, _ = spans
+    manager = f01.manager()  # the harness policy allows audio, image, document and file only
+    contents = [{"role": "user", "parts": [{"inline_data": {"mime_type": "video/mp4", "data": MP4}}]}]
+    capture(manager, tracer_provider, lambda m: m.gemini_contents(contents))
+    flush(manager)
+    assert f01.payloads == []
     manager.shutdown(5)
 
 
@@ -270,7 +281,7 @@ def test_sniff_and_consistent():
 
 
 def test_capability_matrix_is_explicit():
-    for package in ("traceai_deepseek", "traceai_cerebras"):
+    for package in ("traceai_deepseek", "traceai_cerebras", "traceai_together"):
         assert PROVIDER_MEDIA_CAPABILITIES[package]["operations"] == ()
         assert PROVIDER_MEDIA_CAPABILITIES[package]["note"]
     for package, descriptor in PROVIDER_MEDIA_CAPABILITIES.items():

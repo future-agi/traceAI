@@ -15,6 +15,7 @@ IMAGE = png(seed=41)
 @pytest.fixture
 def genai_instrument(spans):
     pytest.importorskip("google.genai")
+    pytest.importorskip("traceai_google_genai")
     from traceai_google_genai import GoogleGenAIInstrumentor
 
     tracer_provider, exporter = spans
@@ -88,6 +89,7 @@ def test_genai_stream_captures_input_only(f01, media_provider, genai_instrument)
 def test_genai_bare_parts_and_audio(f01, media_provider, genai_instrument):
     from google.genai import types
 
+    f01.state["policy"] = {"allowed_modalities": ["audio", "image", "document", "file", "video"]}
     manager = f01.manager()
     genai_instrument(manager)
     sound = wav(seed=5)
@@ -106,7 +108,8 @@ def test_genai_bare_parts_and_audio(f01, media_provider, genai_instrument):
 def test_genai_local_restrictions(f01, media_provider, genai_instrument, config):
     manager = f01.manager()
     genai_instrument(manager, config)
-    genai_client(media_provider).models.generate_content(model="gemini-synthetic", contents=gemini_contents())
+    client = genai_client(media_provider)  # keep the client alive: it closes its transport when collected
+    client.models.generate_content(model="gemini-synthetic", contents=gemini_contents())
     flush(manager)
     if config.hide_input_images:
         assert sorted(f01.payloads) == sorted([PDF, media_provider.generated])
@@ -117,7 +120,8 @@ def test_genai_local_restrictions(f01, media_provider, genai_instrument, config)
 
 def test_genai_without_manager_is_unchanged(media_provider, genai_instrument):
     exporter = genai_instrument(None)
-    genai_client(media_provider).models.generate_content(model="gemini-synthetic", contents=gemini_contents())
+    client = genai_client(media_provider)  # keep the client alive: it closes its transport when collected
+    client.models.generate_content(model="gemini-synthetic", contents=gemini_contents())
     span = span_named(exporter, "GenerateContent")
     assert "fi.attachment.refs" not in span.attributes
 
@@ -126,6 +130,7 @@ def test_genai_without_manager_is_unchanged(media_provider, genai_instrument):
 @pytest.fixture
 def vertex_instrument(spans):
     pytest.importorskip("google.cloud.aiplatform_v1")
+    pytest.importorskip("traceai_vertexai")
     from traceai_vertexai import VertexAIInstrumentor
 
     tracer_provider, exporter = spans

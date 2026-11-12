@@ -50,6 +50,7 @@ def media_refs(exporter):
 # ------------------------------------------------------------------ groq (image-only chat)
 def test_groq_chat_images(f01, media_provider, instrumented):
     groq = pytest.importorskip("groq")
+    pytest.importorskip("traceai_groq")
     from traceai_groq import GroqInstrumentor
 
     manager = f01.manager()
@@ -66,8 +67,11 @@ def test_groq_chat_images(f01, media_provider, instrumented):
 
 
 # ------------------------------------------------------------------ together
-def test_together_chat_images(f01, media_provider, instrumented):
+def test_together_chat_is_not_claimed(f01, media_provider, instrumented):
+    """traceai_together does not trace chat today, so it must not claim (or upload) chat media."""
     together = pytest.importorskip("together")
+    pytest.importorskip("traceai_together")
+    import traceai_together
     from traceai_together import TogetherInstrumentor
 
     manager = f01.manager()
@@ -75,8 +79,9 @@ def test_together_chat_images(f01, media_provider, instrumented):
     client = together.Together(api_key="synthetic", base_url=media_provider.url + "/v1")
     client.chat.completions.create(model="m", messages=image_messages())
     flush(manager)
-    assert f01.payloads == [IMAGE]
-    assert len(media_refs(exporter)) == 1
+    assert f01.payloads == [] and media_refs(exporter) == []
+    descriptor = traceai_together.together_attachment_capabilities
+    assert descriptor["operations"] == () and "chat.completions.create" in descriptor["unsupported"]
     manager.shutdown(5)
 
 
@@ -84,6 +89,7 @@ def test_together_chat_images(f01, media_provider, instrumented):
 @pytest.mark.parametrize("package", ["fireworks", "xai"])
 def test_openai_sdk_routes_capture_images(f01, media_provider, instrumented, monkeypatch, package):
     openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_" + package)
     if package == "fireworks":
         from traceai_fireworks import FireworksInstrumentor as Instrumentor
         from traceai_fireworks import _wrappers
@@ -108,6 +114,7 @@ def test_openai_sdk_routes_capture_images(f01, media_provider, instrumented, mon
 
 @pytest.mark.parametrize("package", ["deepseek", "cerebras"])
 def test_routes_without_media_surface_capture_nothing(f01, media_provider, instrumented, monkeypatch, package):
+    pytest.importorskip("traceai_" + package)
     if package == "deepseek":
         openai = pytest.importorskip("openai")
         import traceai_deepseek
@@ -128,8 +135,11 @@ def test_routes_without_media_surface_capture_nothing(f01, media_provider, instr
 
         manager = f01.manager()
         exporter = instrumented(Instrumentor(), manager)
-        client = sdk.Cerebras(api_key="synthetic", base_url=media_provider.url, max_retries=0,
-                              warm_tcp_connection=False)
+        try:
+            client = sdk.Cerebras(api_key="synthetic", base_url=media_provider.url, max_retries=0,
+                                  warm_tcp_connection=False)
+        except TypeError:  # cerebras-cloud-sdk 1.0.0 has no warm_tcp_connection option
+            client = sdk.Cerebras(api_key="synthetic", base_url=media_provider.url, max_retries=0)
         client.chat.completions.create(model="llama", messages=image_messages())
         descriptor = traceai_cerebras.cerebras_attachment_capabilities
     flush(manager)
@@ -142,6 +152,7 @@ def test_routes_without_media_surface_capture_nothing(f01, media_provider, instr
 @pytest.mark.parametrize("async_", [False, True])
 def test_mistral_chat_images(f01, media_provider, instrumented, async_):
     mistralai = pytest.importorskip("mistralai")
+    pytest.importorskip("traceai_mistralai")
     from traceai_mistralai import MistralAIInstrumentor
 
     manager = f01.manager()
@@ -164,6 +175,7 @@ def test_mistral_chat_images(f01, media_provider, instrumented, async_):
 
 def test_mistral_stream_and_hide_input_images(f01, media_provider, instrumented):
     mistralai = pytest.importorskip("mistralai")
+    pytest.importorskip("traceai_mistralai")
     from traceai_mistralai import MistralAIInstrumentor
 
     manager = f01.manager()
@@ -181,6 +193,7 @@ def test_mistral_stream_and_hide_input_images(f01, media_provider, instrumented)
 # ------------------------------------------------------------------ openrouter
 def test_openrouter_chat_images_and_audio(f01, media_provider, instrumented):
     openrouter = pytest.importorskip("openrouter")
+    pytest.importorskip("traceai_openrouter")
     from traceai_openrouter import OpenRouterInstrumentor
 
     manager = f01.manager()
@@ -197,6 +210,7 @@ def test_openrouter_chat_images_and_audio(f01, media_provider, instrumented):
 # ------------------------------------------------------------------ portkey
 def test_portkey_chat_images(f01, media_provider, instrumented):
     portkey_ai = pytest.importorskip("portkey_ai")
+    pytest.importorskip("traceai_portkey")
     from traceai_portkey import PortkeyInstrumentor
 
     manager = f01.manager()
@@ -213,6 +227,7 @@ def test_portkey_chat_images(f01, media_provider, instrumented):
 # ------------------------------------------------------------------ ollama
 def test_ollama_chat_and_generate_images(f01, media_provider, instrumented, tmp_path):
     ollama = pytest.importorskip("ollama")
+    pytest.importorskip("traceai_ollama")
     from traceai_ollama import OllamaInstrumentor
 
     manager = f01.manager()
@@ -233,6 +248,7 @@ def test_ollama_chat_and_generate_images(f01, media_provider, instrumented, tmp_
 
 def test_ollama_async_chat(f01, media_provider, instrumented):
     ollama = pytest.importorskip("ollama")
+    pytest.importorskip("traceai_ollama")
     from traceai_ollama import OllamaInstrumentor
 
     manager = f01.manager()

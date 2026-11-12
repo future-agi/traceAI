@@ -89,6 +89,7 @@ def _openai_chat(body):
         return "text/event-stream", "".join("data: %s\n\n" % json.dumps(c) for c in chunks).encode() + b"data: [DONE]\n\n"
     return "application/json", json.dumps({
         "id": "c1", "object": "chat.completion", "created": 1, "model": body.get("model", "m"),
+        "system_fingerprint": "fp_synthetic",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}).encode()
 

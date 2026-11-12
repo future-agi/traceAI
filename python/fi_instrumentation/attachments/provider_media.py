@@ -28,6 +28,7 @@ Not in ``attachments.__all__``: an adapter-facing module, like ``media_capture``
 
 import re
 from collections.abc import Sequence
+from itertools import islice
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Tuple
 
@@ -577,10 +578,13 @@ class ProviderMedia:
 
 def _items(value: Any) -> list:
     """A bounded list of a list, tuple or other sequence (proto repeated fields); never a str or bytes."""
+    if isinstance(value, (list, tuple)):
+        return list(value[:MAX_PARTS])
     if isinstance(value, (str, bytes, bytearray, memoryview, Mapping)) or not isinstance(value, Sequence):
         return []
     try:
-        return list(value[:MAX_PARTS])
+        # Proto repeated fields do not all support slicing; bound the walk instead.
+        return list(islice(value, MAX_PARTS))
     except Exception:
         return []
 
@@ -669,8 +673,10 @@ PROVIDER_MEDIA_CAPABILITIES: Mapping[str, Mapping[str, Any]] = MappingProxyType(
         ("remote_url", "provider_file", "streamed_output", "image_generation.url", "image_edit",
          "speech", "transcription")),
     "traceai_groq": _descriptor(("chat.completions.create.input",), ("data_uri",), _COMPAT_UNSUPPORTED),
-    "traceai_together": _descriptor(("chat.completions.create.input",), ("data_uri",),
-                                    _COMPAT_UNSUPPORTED + ("images.generate",)),
+    # The binding is wired, but traceai_together installs no chat wrapper today (its install check looks
+    # for `chat` on the Together class, where it is an instance attribute), so nothing is claimed.
+    "traceai_together": _descriptor((), (), _COMPAT_UNSUPPORTED + ("chat.completions.create", "images.generate"),
+                                    "traceai_together does not trace chat.completions.create yet; no media claim."),
     "traceai_fireworks": _descriptor(("chat.completions.create.input",), ("data_uri",), _COMPAT_UNSUPPORTED),
     "traceai_xai": _descriptor(("chat.completions.create.input",), ("data_uri",), _COMPAT_UNSUPPORTED),
     "traceai_mistralai": _descriptor(("chat.complete.input", "chat.stream.input"), ("data_uri",),
