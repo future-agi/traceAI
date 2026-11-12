@@ -776,10 +776,11 @@ def owned_stream(result: Any, owner: Optional[CallOwner]) -> Any:
     """
     if owner is None:
         return result
-    if isinstance(result, collections.abc.Generator):
-        return _OwnedStream(result, owner)
+    # Async first: a stream proxy (LlamaIndex's) can implement both protocols.
     if isinstance(result, collections.abc.AsyncGenerator):
         return _OwnedAsyncStream(result, owner)
+    if isinstance(result, collections.abc.Generator):
+        return _OwnedStream(result, owner)
     return result
 
 

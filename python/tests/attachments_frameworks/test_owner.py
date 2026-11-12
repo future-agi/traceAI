@@ -122,3 +122,49 @@ def test_owned_async_stream_marks_each_awaited_step_only():
 
     asyncio.run(run())
     assert seen == [True, True] and caller == [False, False]
+
+
+def test_a_proxy_with_both_protocols_is_treated_as_async():
+    """LlamaIndex's async stream proxy also defines send/throw/close: it must still be iterated async."""
+
+    async def stream():
+        yield mc.owned_elsewhere()
+
+    class BothProtocols:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+        def send(self, value):
+            raise StopIteration
+
+        def throw(self, *args):
+            raise StopIteration
+
+        def close(self):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        def __anext__(self):
+            return self.inner.__anext__()
+
+        def asend(self, value):
+            return self.inner.asend(value)
+
+        def athrow(self, *args):
+            return self.inner.athrow(*args)
+
+        def aclose(self):
+            return self.inner.aclose()
+
+    async def run():
+        return [item async for item in mc.owned_stream(BothProtocols(stream()), mc.CallOwner("fw"))]
+
+    assert asyncio.run(run()) == [True]
