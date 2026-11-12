@@ -179,3 +179,20 @@ def test_pydantic_ai_gate_marks_only_a_request_with_an_observed_part():
     assert media.observes_request([text]) is False
     assert media.observes_request([text, image]) is True
     assert media.observes_request(None) is False and media.observes_request([object()]) is False
+
+
+def test_pydantic_ai_call_owner_follows_the_gate(f01):
+    """The wrapper marks only a request the adapter observes; a text-only request runs unmarked."""
+    pytest.importorskip("pydantic_ai")
+    pytest.importorskip("traceai_pydantic_ai")
+    from pydantic_ai import BinaryContent
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+    from traceai_pydantic_ai._attachments import PydanticAIMedia
+    from traceai_pydantic_ai._execution_wrappers import _call_owner
+
+    media = PydanticAIMedia(f01.manager(), None)
+    text = ModelRequest(parts=[UserPromptPart(content="text only")])
+    image = ModelRequest(parts=[UserPromptPart(content=["what", BinaryContent(data=IMAGE, media_type="image/png")])])
+    assert _call_owner(media, [text]) is None
+    assert isinstance(_call_owner(media, [text, image]), mc.CallOwner)
+    assert _call_owner(None, [image]) is None

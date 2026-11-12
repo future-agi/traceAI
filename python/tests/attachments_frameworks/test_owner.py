@@ -36,6 +36,19 @@ def test_call_owner_is_gated_on_an_enabled_manager_and_an_unowned_call(f01):
         otel_context.detach(token)
 
 
+def test_each_provider_side_check_honours_the_mark(f01, spans):
+    """A provider instrumentor skips an owned call twice over: its Observation is unusable AND its
+    local capture policy is unrequested. Each check is pinned on its own (one alone would hide the other)."""
+    tracer_provider, _ = spans
+    manager = f01.manager()
+    with tracer_provider.get_tracer("t").start_as_current_span("provider") as span:
+        assert mc.Observation(manager, span, "openai").usable
+        assert mc.local_capture_policy(direction="input").requested
+        with mc.owner_scope(mc.CallOwner("fw")):
+            assert not mc.Observation(manager, span, "openai").usable
+            assert mc.local_capture_policy(direction="input").requested is False
+
+
 def test_owned_call_marks_only_the_enclosed_block():
     assert not mc.owned_elsewhere()
     with mc.owner_scope(mc.CallOwner("fw")):
