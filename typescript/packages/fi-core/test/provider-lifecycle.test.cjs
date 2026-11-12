@@ -26,14 +26,15 @@ afterEach(async () => {
   propagation.disable();
 });
 
-async function collector() {
+async function collector(acceptedPath) {
   const requests = [];
   const server = http.createServer((request, response) => {
     const chunks = [];
     request.on('data', chunk => chunks.push(chunk));
     request.on('end', () => {
-      requests.push({ path: request.url, body: JSON.parse(Buffer.concat(chunks).toString()) });
-      response.writeHead(200, { 'Content-Type': 'application/json' });
+      const status = !acceptedPath || request.url === acceptedPath ? 200 : 404;
+      requests.push({ path: request.url, status, body: JSON.parse(Buffer.concat(chunks).toString()) });
+      response.writeHead(status, { 'Content-Type': 'application/json' });
       response.end('{}');
     });
   });
@@ -53,6 +54,53 @@ function setup(options = {}) {
 function memoryProcessor() {
   const exporter = new InMemorySpanExporter();
   return { exporter, processor: new SimpleSpanProcessor(exporter) };
+}
+
+// Each collector accepts only the configured route, so an extra suffix loses the span.
+for (const route of ['/v1/traces', '/tracer/v1/traces']) {
+  test(`collector endpoint regression: full environment URL ${route}`, async () => {
+    const receiver = await collector(route);
+    process.env.FI_COLLECTOR_ENDPOINT = `${receiver.endpoint}${route}`;
+    try {
+      const provider = setup({ endpoint: undefined });
+      provider.getTracer('endpoint').startSpan('environment-span').end();
+      let flushError;
+      try { await provider.forceFlush(); } catch (error) { flushError = error; }
+      assert.deepEqual(receiver.requests.map(({ path, status }) => ({ path, status })),
+        [{ path: route, status: 200 }]);
+      assert.equal(flushError, undefined);
+      assert.deepEqual(receiver.spans().map(span => span.name), ['environment-span']);
+    } finally {
+      delete process.env.FI_COLLECTOR_ENDPOINT;
+    }
+  });
+}
+
+for (const item of [
+  { name: 'base origin', base: '', path: '/tracer/v1/traces' },
+  { name: 'base origin with trailing slash', base: '/', path: '/tracer/v1/traces' },
+  { name: 'base origin retains precedence', base: '', env: '/unused', path: '/tracer/v1/traces' },
+  { name: 'explicit full URL', endpoint: '/v1/traces', path: '/v1/traces' },
+  { name: 'explicit collector URL', endpoint: '/tracer/v1/traces', path: '/tracer/v1/traces' },
+  { name: 'explicit base origin', endpoint: '', path: '/tracer/v1/traces' },
+  { name: 'explicit URL overrides environment', endpoint: '/v1/traces', base: '/unused', env: '/unused', path: '/v1/traces' },
+]) {
+  test(`collector endpoint control: ${item.name}`, async () => {
+    const receiver = await collector(item.path);
+    if (item.base !== undefined) process.env.FI_BASE_URL = `${receiver.endpoint}${item.base}`;
+    if (item.env !== undefined) process.env.FI_COLLECTOR_ENDPOINT = `${receiver.endpoint}${item.env}`;
+    try {
+      const provider = setup({ endpoint: item.endpoint === undefined ? undefined : `${receiver.endpoint}${item.endpoint}` });
+      provider.getTracer('endpoint').startSpan('control-span').end();
+      await provider.forceFlush();
+      assert.deepEqual(receiver.requests.map(({ path, status }) => ({ path, status })),
+        [{ path: item.path, status: 200 }]);
+      assert.deepEqual(receiver.spans().map(span => span.name), ['control-span']);
+    } finally {
+      delete process.env.FI_BASE_URL;
+      delete process.env.FI_COLLECTOR_ENDPOINT;
+    }
+  });
 }
 
 for (const batch of [false, true]) {
