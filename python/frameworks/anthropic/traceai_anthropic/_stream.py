@@ -533,11 +533,11 @@ class _MessageResponseAccumulator:
     def __init__(self) -> None:
         self._is_null = True
         self._current_message_idx = -1
-        # (kind, type, tool name) of the open content block; kind is "text",
-        # "tool_use" or None for blocks whose deltas are not recorded.
-        self._current_block: Tuple[Optional[str], Optional[str], Optional[str]] = (
-            None, None, None
-        )
+        # (kind, type, tool name, tool ID) of the open content block; kind is
+        # "text", "tool_use" or None for blocks whose deltas are not recorded.
+        self._current_block: Tuple[
+            Optional[str], Optional[str], Optional[str], Optional[str]
+        ] = (None, None, None, None)
         self._values = _ValuesAccumulator(
             messages=_IndexedAccumulator(
                 lambda: _ValuesAccumulator(
@@ -547,6 +547,7 @@ class _MessageResponseAccumulator:
                             type=_SimpleStringReplace(),
                             text=_StringAccumulator(),
                             tool_name=_SimpleStringReplace(),
+                            tool_id=_SimpleStringReplace(),
                             tool_input=_StringAccumulator(),
                         ),
                     ),
@@ -580,10 +581,10 @@ class _MessageResponseAccumulator:
         if isinstance(chunk, RawContentBlockStartEvent):
             block = chunk.content_block
             if isinstance(block, TextBlock):
-                return ("block_start", "text", block.type, None)
+                return ("block_start", "text", block.type, None, None)
             if isinstance(block, ToolUseBlock):
-                return ("block_start", "tool_use", block.type, block.name)
-            return ("block_start", None, None, None)
+                return ("block_start", "tool_use", block.type, block.name, block.id)
+            return ("block_start", None, None, None, None)
         if isinstance(chunk, RawContentBlockDeltaEvent):
             delta_type = getattr(chunk.delta, "type", None)
             if delta_type == "text_delta":
@@ -614,7 +615,7 @@ class _MessageResponseAccumulator:
             self._current_block = event[1:]
         elif kind == "block_delta":
             _, index, delta_type, fragment = event
-            block_kind, block_type, tool_name = self._current_block
+            block_kind, block_type, tool_name, tool_id = self._current_block
             if block_kind == "text" and delta_type == "text_delta":
                 content = {"index": index, "type": block_type, "text": fragment}
             elif block_kind == "tool_use" and delta_type == "input_json_delta":
@@ -622,6 +623,7 @@ class _MessageResponseAccumulator:
                     "index": index,
                     "type": block_type,
                     "tool_name": tool_name,
+                    "tool_id": tool_id,
                     "tool_input": fragment,
                 }
             else:
@@ -722,6 +724,11 @@ class _MessageResponseExtractor:
                         content.get("text", ""),
                     )
                 elif content_type == "tool_use":
+                    if tool_id := content.get("tool_id"):
+                        yield (
+                            f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_ID}",
+                            tool_id,
+                        )
                     yield (
                         f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
                         content.get("tool_name", ""),

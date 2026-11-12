@@ -1,5 +1,6 @@
 import logging
 from abc import ABC
+from collections.abc import Iterable
 from contextlib import contextmanager
 from itertools import chain
 from typing import (
@@ -262,6 +263,16 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 return response
 
 
+def _snapshot_messages(kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Share a reusable message sequence between telemetry and the SDK."""
+    messages = kwargs.get("messages")
+    if isinstance(messages, Iterable) and not isinstance(messages, (list, tuple)):
+        # An iterable may share a single iterator without implementing __next__.
+        # Copy kwargs, not the message values, and retain ordinary sequences as-is.
+        return {**kwargs, "messages": list(messages)}
+    return kwargs
+
+
 class _MessagesWrapper(_BaseWrapper):
     """
     Wrapper for the pipeline processing
@@ -279,6 +290,7 @@ class _MessagesWrapper(_BaseWrapper):
             return wrapped(*args, **kwargs)
         wrapped = self._without_native_span(wrapped, instance)
 
+        kwargs = _snapshot_messages(kwargs)
         arguments = kwargs
         llm_input_messages = dict(arguments).pop("messages", None)
         llm_prompt = dict(arguments).pop("system", None)
@@ -337,6 +349,7 @@ class _AsyncMessagesWrapper(_WithTracer):
             return await wrapped(*args, **kwargs)
         wrapped = self._without_native_span_async(wrapped, instance)
 
+        kwargs = _snapshot_messages(kwargs)
         arguments = kwargs
         llm_prompt = dict(arguments).pop("system", None)
         llm_input_messages = dict(arguments).pop("messages", None)
@@ -419,6 +432,7 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             return wrapped(*args, **kwargs)
         wrapped = self._without_native_span(wrapped, instance)
 
+        kwargs = _snapshot_messages(kwargs)
         arguments = kwargs
         llm_input_messages = arguments.get("messages", None)
         llm_prompt = dict(arguments).pop("system", None)
@@ -779,6 +793,10 @@ def _get_output_messages(response: Any) -> Any:
     for block in response.content:
         yield f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", response.role
         if isinstance(block, ToolUseBlock):
+            yield (
+                f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_ID}",
+                block.id,
+            )
             yield (
                 f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_NAME}",
                 block.name,
