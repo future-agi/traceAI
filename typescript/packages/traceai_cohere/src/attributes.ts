@@ -149,12 +149,17 @@ export function outputAttributes(operation: Operation, response: Data, config: T
   if (operation === "embed") {
     // raw.output would otherwise bypass hideEmbeddingVectors.
     if (!hideOutput(config) && !config.hideEmbeddingVectors) {
-      const vectors = Array.isArray(response.embeddings) ? response.embeddings : object(response.embeddings).float;
+      const embeddings = object(response.embeddings);
+      // Prefer float coordinates, then integer coordinates. Packed binary and
+      // ubinary values are not coordinates and must not use the vector attribute.
+      const embeddingType = ["float", "int8", "uint8"].find(type => Array.isArray(embeddings[type]));
+      const vectors = Array.isArray(response.embeddings) ? response.embeddings : embeddingType ? embeddings[embeddingType] : undefined;
       list(vectors).forEach((vector, index) => {
         if (Array.isArray(vector) && vector.every((n) => typeof n === "number")) {
           attrs[`${S.EMBEDDING_EMBEDDINGS}.${index}.${S.EMBEDDING_VECTOR}`] = vector;
         }
       });
+      if (embeddingType) attrs["cohere.embedding_type"] = embeddingType;
       attrs[S.RAW_OUTPUT] = json(response);
     }
   } else if (operation === "rerank") {
