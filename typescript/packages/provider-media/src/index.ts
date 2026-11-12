@@ -279,8 +279,9 @@ export class ProviderMediaCapture {
    * stream. Unread, cancelled, partially read, released and broken-out-of bodies upload nothing,
    * and so do a second reader or iterator on the same body, tee()/pipeTo()/pipeThrough()/clone()
    * consumers, and any chunk-wise read of a Node-stream body (the node-fetch shim openai 4.x uses
-   * by default): only WHATWG ReadableStream bodies are observed chunk by chunk. A whole-body
-   * arrayBuffer()/blob() read is observed on either transport.
+   * by default): only WHATWG ReadableStream bodies are observed chunk by chunk. On that transport
+   * a whole-body arrayBuffer() read is observed, but blob() is not (node-fetch resolves its own Blob
+   * class, not the global Blob).
    */
   speechResponse<T>(response: T): T {
     this.safely(() => {

@@ -106,7 +106,7 @@ for (const tier of tiers) {
 
   // openai 4.x's default Node transport is node-fetch 2: its body is a Node PassThrough, not a WHATWG stream.
   // The SDK's own node-fetch is driven against the loopback fixture, so the Response and body are the shim's.
-  for (const privacy of ['enabled', 'disabled', 'hideInputs', 'piiRedaction']) test(`OpenAI 4.x ${tier} node-fetch shim: speech ${privacy}; a chunk-wise read uploads nothing, a whole-body read is observed`, async () => {
+  for (const privacy of ['enabled', 'disabled', 'hideInputs', 'piiRedaction']) test(`OpenAI 4.x ${tier} node-fetch shim: speech ${privacy}; chunk-wise and blob() reads upload nothing, arrayBuffer() is observed`, async () => {
     const sdk = sdkLoad(`sdk-openai4-${tier}`);
     const nodeFetch = createRequire(sdkLoad.resolve(`sdk-openai4-${tier}`))('node-fetch');
     const shim = (input, init = {}) => {
@@ -137,6 +137,11 @@ for (const tier of tiers) {
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), wav()); await f.manager.flush();
       assert.equal(f.uploads.length - before, ['enabled', 'hideInputs'].includes(privacy) ? 1 : 0);
       if (f.uploads.length > before) { assert.equal(f.uploads.at(-1).request.direction, 'output'); assert.deepEqual(f.uploads.at(-1).data, wav()); }
+      // node-fetch 2 resolves blob() to its own Blob class, not globalThis.Blob, so that read uploads nothing.
+      const blobbed = await (await speech()).blob();
+      assert.equal(blobbed instanceof Blob, false); assert.equal(blobbed.size, wav().length);
+      const afterBlob = f.uploads.length; await f.manager.flush(); assert.equal(f.uploads.length, afterBlob, 'blob() on node-fetch');
+      assert.equal(f.manager.status().openStreams, 0);
     } finally { inst.disable(); await f.close(); exporter.reset(); }
   });
 
