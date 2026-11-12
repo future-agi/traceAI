@@ -250,3 +250,26 @@ test('S-17 iterating a body already locked by a reader throws the host error unc
     assert.equal(f.uploads.length, 1); assert.deepEqual(f.uploads[0].data, wav());
   } finally { await f.close(); }
 });
+
+/* openai 4.x's default Node transport is node-fetch 2, whose body is a Node PassThrough. */
+const nodeStreamResponse = (bytes = wav(), chunk = 16) => {
+  const { PassThrough } = require('node:stream');
+  const body = new PassThrough();
+  for (let offset = 0; offset < bytes.length; offset += chunk) body.write(bytes.subarray(offset, offset + chunk));
+  body.end();
+  return { headers: new Headers({ 'content-type': 'audio/wav' }), bodyUsed: false, body };
+};
+
+for (const stop of ['end', 'break']) test(`S-18 iterating a Node-stream body (node-fetch shim) to its ${stop} installs no hook and uploads nothing`, async () => {
+  const f = await fixture();
+  try {
+    const response = nodeStreamResponse();
+    new ProviderMediaCapture(identity, { attachments: f.manager }).speechResponse(response);
+    assert.equal(Object.getOwnPropertyDescriptor(response.body, Symbol.asyncIterator), undefined);
+    assert.equal(Object.getOwnPropertyDescriptor(response.body, 'values'), undefined);
+    const received = await iterate(response.body, stop === 'break' ? 2 : Infinity);
+    if (stop === 'end') assert.deepEqual(received, wav());
+    assert.equal(f.manager.status().openStreams, 0);
+    await f.manager.flush(); await idle(f); assert.equal(f.uploads.length, 0);
+  } finally { await f.close(); }
+});

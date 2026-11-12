@@ -6,7 +6,9 @@ const root = process.argv[2];
 if (!root || !path.isAbsolute(root)) throw Error('Supply an absolute isolated SDK directory');
 fs.mkdirSync(root, { recursive: true });
 const entries = [
-  ['openai', 'openai', '4.0.0', '7.55.0'], ['groq', 'groq-sdk', '0.3.0', '1.6.0'],
+  ['openai', 'openai', '4.0.0', '7.55.0'],
+  // openai 4.x on its default node-fetch transport; audio.speech is first usable at 4.52.7 on this harness.
+  ['openai4', 'openai', '4.52.7', '4.104.0'], ['groq', 'groq-sdk', '0.3.0', '1.6.0'],
   ['genai', '@google/genai', '1.33.0', '3.1.0'], ['gemini', '@google/generative-ai', '0.1.0', '0.24.1'],
   ['vertex', '@google-cloud/vertexai', '1.0.0', '1.12.0'], ['bedrock', '@aws-sdk/client-bedrock-runtime', '3.693.0', '3.1166.0'],
   // Typed Mistral image chunks start at 1.1.0; 0.x and 1.0.0 are legacy text clients and are not advertised.

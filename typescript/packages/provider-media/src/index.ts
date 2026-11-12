@@ -278,7 +278,9 @@ export class ProviderMediaCapture {
    * chunks of an async iteration of response.body (`for await`, values()), up to the end of the
    * stream. Unread, cancelled, partially read, released and broken-out-of bodies upload nothing,
    * and so do a second reader or iterator on the same body, tee()/pipeTo()/pipeThrough()/clone()
-   * consumers, and Node-stream bodies.
+   * consumers, and any chunk-wise read of a Node-stream body (the node-fetch shim openai 4.x uses
+   * by default): only WHATWG ReadableStream bodies are observed chunk by chunk. A whole-body
+   * arrayBuffer()/blob() read is observed on either transport.
    */
   speechResponse<T>(response: T): T {
     this.safely(() => {
@@ -304,7 +306,10 @@ export class ProviderMediaCapture {
       }
       // Reading the body property neither locks nor reads the stream.
       const body = target.body as ReadableStream<Uint8Array> | null;
-      if (body) {
+      // WHATWG streams only. A node-fetch body is a Node PassThrough: it has [Symbol.asyncIterator]
+      // but no getReader(), and its chunk-wise reads are deliberately left unobserved (the auto wire
+      // layer, which captures through fetch only, does not observe them either).
+      if (body && typeof (body as { getReader?: unknown }).getReader === "function") {
         // Only the first reader or iterator is observed. releaseLock() (or an iterator's
         // return() with preventCancel) does not end the stream, so a later consumer would see
         // only the remaining bytes and must never upload them as whole.
