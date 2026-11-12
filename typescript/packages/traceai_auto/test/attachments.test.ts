@@ -3,7 +3,7 @@ import { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { context, trace, ROOT_CONTEXT } from "@opentelemetry/api";
+import { context, trace, ROOT_CONTEXT, INVALID_SPAN_CONTEXT } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { AlwaysOffSampler, BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { AttachmentManager, createAttachmentHttpTransport, type AttachmentHttpClient, type AttachmentManagerOptions } from "@traceai/fi-core/attachments";
@@ -67,15 +67,18 @@ async function createManager(options: AttachmentManagerOptions = {}, serverOverr
   expect(result.status().state).toBe(options.enabled === false ? "disabled" : "ready");
   return result;
 }
-/** `emitSpans: false` models an emitter that never starts the wire span (for example its delivery gate refused it). */
-function install(target = manager, emitSpans = true) {
+/**
+ * `emit: "none"` models an emitter that never starts the wire span (for example its delivery gate refused it);
+ * `"invalid"` binds a span with an invalid identity, which a deferred target refuses to bind.
+ */
+function install(target = manager, emit: "span" | "none" | "invalid" = "span") {
   globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const u = new URL(input instanceof Request ? input.url : String(input));
     return nativeFetch(`${origin}${u.pathname}${u.search}`, init);
   };
   hook = patchFetch(4194304, (result, parent, start, end, bindMedia) => {
-    if (!emitSpans) return;
-    const span = provider.getTracer("wire-test").startSpan(result.name, { startTime: start, attributes: result.attributes }, parent);
+    if (emit === "none") return;
+    const span = emit === "invalid" ? trace.wrapSpanContext(INVALID_SPAN_CONTEXT) : provider.getTracer("wire-test").startSpan(result.name, { startTime: start, attributes: result.attributes }, parent);
     bindMedia?.(span); span.end(end);
   }, [], target);
 }
@@ -222,8 +225,8 @@ describe("A04 speech output", () => {
     expect(requests[0]).toMatchObject({ direction: "output", purpose: "model_output", mime_type: "audio/wav", declared_bytes: audio.length });
     expect(manager.status()).toMatchObject({ openStreams: 0, openTickets: 0, ownedBytes: 0 });
   });
-  test("wire-only captures whose wire span is never emitted are dropped when the call completes, not after the deadline", async () => {
-    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}'); install(manager, false);
+  test.each(["none", "invalid"] as const)("wire-only captures whose wire span is never bound (emit: %s) are dropped when the call completes, not after the deadline", async emit => {
+    responseType = "application/json"; responseData = Buffer.from('{"text":"synthetic"}'); install(manager, emit);
     await (await transcription()).json();
     responseType = "audio/wav"; responseData = audio; responseChunks = 4;
     expect(await readAll(await speech())).toEqual(audio);
