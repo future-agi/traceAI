@@ -181,7 +181,16 @@ import {
         // The global tracer can be a real one, so its span gets the masked attributes too.
         tracer = trace.getTracer("fi-noop-tracer-internal");
       }
-      return this.startFISpan(tracer, name, options, options?.attributes, context);
+      const ctx = context ?? apiContext.active();
+      const contextAttributes = getAttributesFromContext(ctx);
+      return this.startFISpan(
+        tracer,
+        name,
+        options,
+        { ...contextAttributes, ...options?.attributes },
+        ctx,
+        getSession(ctx)?.sessionId,
+      );
     }
 
     /**

@@ -624,6 +624,14 @@ function scrubJSON(value: string, parsed: unknown, secrets: readonly string[], d
   const numericOnly = renderJSON(parsed, numbers.input, budget, depth, secrets, numbers.root);
   return reuse && rendered === numericOnly ? value : rendered;
 }
+type IncompleteContentKind = "audio" | "tool arguments";
+const incompleteContentLabel = (kind: IncompleteContentKind): string => `<omitted: incomplete ${kind}>`;
+function isToolArgumentPath(path: string): boolean {
+  const parts = pathParts(path).map(normalizePrivacyName);
+  return /(?:^|\.)toolcalls\.\d+\.(?:function\.)?(?:arguments|input)$/.test(parts.join("."))
+    || /(?:^|\.)functioncall\.arguments$/.test(parts.join("."));
+}
+
 /** Walk only plain, already-materialized data. The Node S1 boundary rejects proxies before calling. */
 export function scrubValue(value: any, secrets: readonly string[] = [], path = "", depth = 0, inheritedAudio = false, budget: PrivacyBudget = newBudget(), hints: PrivacyHints = noHints, framed = true, inheritedMedia = false, incomplete = false, ambiguousBase64 = true): any {
   return walkValue(value, secrets, path, depth, inheritedAudio, budget, hints, framed, inheritedMedia, incomplete, ambiguousBase64);
@@ -678,6 +686,13 @@ function walkValue(value: any, secrets: readonly string[], path: string, depth: 
   if (typeof value === "string") {
     budget.text -= value.length; if (budget.text < 0) throw new Error("Privacy text budget");
     if (wholeSecret(value, secrets)) return replacement;
+    if (isToolArgumentPath(path)) {
+      const label = incompleteContentLabel("tool arguments");
+      // Admission can run at both write and export time. Keep authored omission
+      // markers stable, and never export an unparsed argument fragment.
+      if (value === label || value === replacement || value === "__REDACTED__") return value;
+      try { JSON.parse(value); } catch { return label; }
+    }
     const clean = replaceMedia(value, path, hints, framed, inheritedMedia, inheritedAudio, incomplete, ambiguousBase64, numbers?.payloadRole); if (clean !== undefined) return clean;
     // JSON tool arguments are independently framed. Share budgets across nested encodings.
     if (/^\s*[\[{"]/.test(value)) {
@@ -1134,7 +1149,7 @@ export function discoverProviderResponseSecrets(value: unknown, format: LogprobF
 // grants this exception; exact bytes and native SpanContext identity must match.
 // This shared leaf keeps the binding identical across CJS/ESM entry points.
 const sessionIdentities = new WeakMap<object, string>();
-/** @internal FITracer startActiveSpan handoff only; never infer from attributes. */
+/** @internal FITracer typed-context handoff only; never infer from attributes. */
 export function rememberSessionIdentity(context: object, value: string): void {
   if (context && typeof context === "object" && value.length <= catalog.limits.max_text_chars) sessionIdentities.set(context, value);
 }
