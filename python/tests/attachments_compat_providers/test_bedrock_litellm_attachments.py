@@ -291,7 +291,8 @@ def test_litellm_pdf_file_part_uploads_once_under_nested_openai(f01, media_provi
                            api_base=media_provider.url, api_key="sk-synthetic")
     except Exception as error:
         # Older LiteLLM releases (1.53.x) reject chat `file` parts before any request is sent.
-        if "invalid content type" not in str(error).lower():
+        text = str(error).lower()
+        if "invalid content type" not in text and "invalid user message" not in text:
             raise
         manager.shutdown(5)
         pytest.skip("this LiteLLM release rejects chat file parts")
