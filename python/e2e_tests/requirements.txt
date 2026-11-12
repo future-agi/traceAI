@@ -87,7 +87,6 @@ portkey-ai>=1.0.0
 # pip install -e ../frameworks/google-adk
 # pip install -e ../frameworks/agno
 # pip install -e ../frameworks/strands
-# pip install -e ../frameworks/beeai
 # pip install -e ../frameworks/claude-agent-sdk
 # pip install -e ../frameworks/chromadb
 # pip install -e ../frameworks/lancedb
