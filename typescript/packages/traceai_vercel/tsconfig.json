@@ -9,6 +9,7 @@
   "exclude": ["src/**/*.test.ts", "test/**/*.ts"],
   "references": [
     { "path": "../fi-core" },
-    { "path": "../fi-semantic-conventions" }
+    { "path": "../fi-semantic-conventions" },
+    { "path": "../framework_attachments" }
   ]
 }

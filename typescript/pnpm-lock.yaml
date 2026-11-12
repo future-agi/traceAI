@@ -268,6 +268,43 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  packages/framework_attachments:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.1
+      '@traceai/fi-core':
+        specifier: workspace:^
+        version: link:../fi-core
+    devDependencies:
+      '@opentelemetry/resources':
+        specifier: ^2.0.1
+        version: 2.7.1(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.7.1(@opentelemetry/api@1.9.1)
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: ^22.10.10
+        version: 22.15.33
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3))
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.2
+      ts-jest:
+        specifier: ^29.2.5
+        version: 29.4.6(@babel/core@7.27.1)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.27.1))(jest-util@29.7.0)(jest@29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3)))(typescript@5.8.3)
+      tsc-alias:
+        specifier: ^1.8.10
+        version: 1.8.16
+      typescript:
+        specifier: ^5.7.3
+        version: 5.8.3
+
   packages/traceai_agent_core:
     dependencies:
       '@opentelemetry/api':
@@ -1199,6 +1236,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/framework-attachments':
+        specifier: workspace:^
+        version: link:../framework_attachments
     devDependencies:
       '@opentelemetry/context-async-hooks':
         specifier: 2.7.1
@@ -1747,6 +1787,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/framework-attachments':
+        specifier: workspace:^
+        version: link:../framework_attachments
     devDependencies:
       '@langchain/openai':
         specifier: 0.3.16
@@ -1866,6 +1909,9 @@ importers:
       lodash:
         specifier: ^4.17.21
         version: 4.17.23
+      '@traceai/framework-attachments':
+        specifier: workspace:^
+        version: link:../framework_attachments
     devDependencies:
       '@llamaindex/openai':
         specifier: ^0.4.0
@@ -2912,6 +2958,9 @@ importers:
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
+      '@traceai/framework-attachments':
+        specifier: workspace:^
+        version: link:../framework_attachments
     devDependencies:
       '@ai-sdk/openai':
         specifier: ^3.0.0

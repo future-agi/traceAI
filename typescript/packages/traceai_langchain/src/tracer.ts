@@ -26,6 +26,7 @@ import {
 } from "./utils";
 import { FITracer, getErrorMessage } from "@traceai/fi-core";
 import { isStreamCancelled, registerStreamRun } from "./streamLifecycle";
+import { captureMediaMessages, mediaField, type FrameworkAttachmentOptions } from "@traceai/framework-attachments";
 
 type RunWithSpan = {
   run: Run;
@@ -128,7 +129,7 @@ export class LangChainTracer extends BaseTracer {
   private runs: Record<string, RunWithSpan | undefined> = {};
   /** The error objects passed to handle*Error, keyed by run id, until the run's trace ends */
   private runErrors: Record<string, unknown> = {};
-  constructor(tracer: FITracer, awaitHandlers?: boolean) {
+  constructor(tracer: FITracer, awaitHandlers?: boolean, private readonly media: FrameworkAttachmentOptions = {}) {
     super();
     this.tracer = tracer;
     if (awaitHandlers != null) this.awaitHandlers = awaitHandlers;
@@ -263,6 +264,12 @@ export class LangChainTracer extends BaseTracer {
       activeContext,
     );
 
+    // Only LLM messages are typed media. Chain/tool arbitrary objects are not scraped.
+    if (run.run_type === "llm") {
+      const batches = mediaField(run.inputs, "messages");
+      captureMediaMessages(this.media, span, mediaField(batches, "0"), "langchain", "input");
+    }
+
     const runWithSpan: RunWithSpan = {
       run, span, unregisterStream: () => {}, startedAt: performance.now(), firstTokenRecorded: false,
     };
@@ -314,6 +321,13 @@ export class LangChainTracer extends BaseTracer {
       recordRunError(span, error, error.message);
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
+    }
+
+    if (!cancelled && run.error == null && run.run_type === "llm") {
+      const generations = mediaField(mediaField(run.outputs, "generations"), "0");
+      if (Array.isArray(generations)) {
+        captureMediaMessages(this.media, span, generations.slice(0, 64).map(generation => mediaField(generation, "message")), "langchain", "output");
+      }
     }
 
     const attributes = safelyFlattenAttributes({

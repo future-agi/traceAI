@@ -199,6 +199,10 @@ The Jest regressions compare raw transport failures and unread streams across bo
 
 The auto-instrumentation regression configuration leaves content hiding off. The manual quick-start above deliberately disables input/output recording; enabling auto-instrumentation does not remove explicit recording opt-outs or FI hiding settings.
 
+## Attachments (opt-in)
+
+`VercelAIInstrumentation` accepts `attachments` (the provider's manager) and `capture` restrictions. With an enabled manager, inline `image` and `file` parts in prompt messages are attached on AI SDK 5, 6 and 7. On AI SDK 7 the model response's `file` content and typed tool `content` results (`image-data`, `file-data`) are attached too. AI SDK 5 and 6 only expose serialized output through native telemetry, so their outputs are not captured. A call's `recordInputs: false` / `recordOutputs: false` also denies the matching media. Streams are never read for media. See `@traceai/framework-attachments` for coverage and limits.
+
 ## Known limitations
 
 As of **2026-10-30**:

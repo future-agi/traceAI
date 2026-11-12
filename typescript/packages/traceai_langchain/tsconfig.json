@@ -7,5 +7,5 @@
   "files": [],
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
-  "references": []
+  "references": [{ "path": "../framework_attachments" }]
 }

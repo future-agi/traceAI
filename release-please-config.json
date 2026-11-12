@@ -689,6 +689,11 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/framework_attachments": {
+      "release-type": "node",
+      "component": "npm-traceai-framework-attachments",
+      "package-name": "@traceai/framework-attachments"
+    },
     "typescript/packages/traceai_genkit": {
       "release-type": "node",
       "component": "npm-traceai-genkit",

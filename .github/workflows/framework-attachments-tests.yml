@@ -1,0 +1,96 @@
+name: TypeScript framework attachments
+on:
+  pull_request:
+    paths:
+      - 'typescript/packages/framework_attachments/**'
+      - 'typescript/packages/traceai_langchain/**'
+      - 'typescript/packages/traceai_llamaindex/**'
+      - 'typescript/packages/traceai_vercel/**'
+      - 'typescript/packages/traceai_genkit/**'
+      - 'typescript/packages/traceai_mastra/**'
+      - 'typescript/packages/fi-core/src/attachments/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/framework-attachments-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frameworks:
+    name: Framework media / Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    defaults:
+      run:
+        shell: bash
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.1
+      - name: Install and build the framework packages
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts \
+            --filter '@traceai/framework-attachments...' --filter '@traceai/langchain...' --filter '@traceai/llamaindex...' \
+            --filter '@traceai/vercel...' --filter '@traceai/genkit...' --filter '@traceai/mastra...'
+          git diff --exit-code -- pnpm-lock.yaml
+          for package in fi-semantic-conventions fi-core framework-attachments langchain llamaindex vercel genkit mastra; do
+            pnpm --filter "@traceai/$package" run build
+          done
+      - name: Shared media normalizer, privacy and lifetime tests
+        run: pnpm --filter @traceai/framework-attachments test
+      - name: Real framework invocations at floor and latest versions
+        run: |
+          mkdir -p "$RUNNER_TEMP/framework-matrix"
+          cd "$RUNNER_TEMP/framework-matrix"
+          printf '{"private":true}' > package.json
+          pnpm add --ignore-scripts --config.auto-install-peers=false --save-exact \
+            langchain-floor@npm:@langchain/core@0.2.0 langchain-latest@npm:@langchain/core@latest \
+            llamaindex-floor@npm:llamaindex@0.1.0 llamaindex-latest@npm:llamaindex@latest \
+            llamaopenai-floor@npm:@llamaindex/openai@0.3.0 llamaopenai-latest@npm:@llamaindex/openai@latest \
+            ai-floor@npm:ai@5.0.0 ai-latest@npm:ai@latest \
+            genkit-floor@npm:genkit@1.42.0 genkit-latest@npm:genkit@latest zod@4.3.6
+          node -e 'const p=require("./package.json");console.log(JSON.stringify(p.dependencies))'
+          cd "$GITHUB_WORKSPACE/typescript"
+          export FRAMEWORK_MATRIX_DIR="$RUNNER_TEMP/framework-matrix"
+          for framework in langchain llamaindex ai genkit; do
+            for version in floor latest; do
+              echo "::group::$framework $version"
+              timeout 180 node packages/framework_attachments/test/integration.cjs "$framework" "$version"
+              echo "::endgroup::"
+            done
+          done
+      - name: Existing framework suites
+        run: |
+          # LangChain's own workflow runs its runtime suites against a packed
+          # consumer per core version; it is dispatched for this branch instead.
+          for package in llamaindex vercel genkit; do
+            echo "::group::$package"
+            NODE_OPTIONS=--experimental-vm-modules pnpm --filter "@traceai/$package" exec jest --runInBand --passWithNoTests --testPathIgnorePatterns e2e.test.ts
+            echo "::endgroup::"
+          done
+          pnpm --filter @traceai/mastra exec vitest run
+      - name: Mastra exporter attachment disposition (packed, real Agent over loopback)
+        run: |
+          mkdir -p "$RUNNER_TEMP/mastra-package" "$RUNNER_TEMP/mastra-consumer"
+          for package in fi-semantic-conventions fi-core framework_attachments traceai_vercel traceai_mastra; do
+            pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/mastra-package"
+          done
+          npm install --prefix "$RUNNER_TEMP/mastra-consumer" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP"/mastra-package/*.tgz @mastra/core@latest @mastra/observability@latest @mastra/otel-exporter@latest \
+            @opentelemetry/api@1.9.0 @opentelemetry/exporter-trace-otlp-proto@0.201.1 @opentelemetry/otlp-transformer@0.201.1 \
+            @ai-sdk/openai@2.0.0 zod@3.25.76
+          for entrypoint in src esm; do
+            MASTRA_TEST_DEPS="$RUNNER_TEMP/mastra-consumer" \
+            MASTRA_TEST_PACKAGE="$RUNNER_TEMP/mastra-consumer/node_modules/@traceai/mastra/dist/$entrypoint/index.js" \
+              node --test packages/traceai_mastra/contract/attachments.test.cjs
+          done

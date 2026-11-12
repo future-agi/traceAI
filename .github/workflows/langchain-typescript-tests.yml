@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
     paths:
       - 'typescript/packages/traceai_langchain/**'
+      - 'typescript/packages/framework_attachments/**'
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
@@ -15,6 +16,7 @@ on:
     branches: [main, dev]
     paths:
       - 'typescript/packages/traceai_langchain/**'
+      - 'typescript/packages/framework_attachments/**'
       - 'typescript/packages/fi-core/**'
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
@@ -58,9 +60,10 @@ jobs:
           corepack enable
           corepack pnpm --filter '@traceai/langchain...' install --frozen-lockfile --ignore-scripts
           corepack pnpm run build:deps
+          corepack pnpm --filter @traceai/framework-attachments run build
           corepack pnpm --filter @traceai/langchain run build
           mkdir -p "$RUNNER_TEMP/langchain-tarballs"
-          for package in fi-semantic-conventions fi-core traceai_langchain; do
+          for package in fi-semantic-conventions fi-core framework_attachments traceai_langchain; do
             corepack pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/langchain-tarballs"
           done
           git diff --exit-code -- pnpm-lock.yaml
@@ -175,6 +178,7 @@ jobs:
             const local = {
               "@traceai/fi-core": tarball("traceai-fi-core-"),
               "@traceai/fi-semantic-conventions": tarball("traceai-fi-semantic-conventions-"),
+              "@traceai/framework-attachments": tarball("traceai-framework-attachments-"),
             };
             fs.writeFileSync(consumer + "/package.json", JSON.stringify({
               private: true,
@@ -209,9 +213,10 @@ jobs:
           corepack enable
           corepack pnpm --filter '@traceai/langchain...' install --frozen-lockfile --ignore-scripts
           corepack pnpm run build:deps
+          corepack pnpm --filter @traceai/framework-attachments run build
           corepack pnpm --filter @traceai/langchain run build
           mkdir -p "$RUNNER_TEMP/remote-tarballs"
-          for package in fi-semantic-conventions fi-core traceai_langchain; do
+          for package in fi-semantic-conventions fi-core framework_attachments traceai_langchain; do
             corepack pnpm --dir "packages/$package" pack --pack-destination "$RUNNER_TEMP/remote-tarballs"
           done
           git diff --exit-code -- pnpm-lock.yaml
