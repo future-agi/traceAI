@@ -248,6 +248,7 @@ export default function futureAgi(api: OmpExtensionAPI): void {
       return;
     }
     if (e.type === "message_end" && e.message?.role === "user") {
+      (s.handle ?? w.turn).images?.(e.message.content, { direction: "input", purpose: "model_input", role: "user" });
       appendContext(s, "user", capture(messageText(e.message.content)));
       return;
     }
@@ -333,6 +334,10 @@ export default function futureAgi(api: OmpExtensionAPI): void {
         config?.hideOutputs || (config?.hideErrorDetails && e.isError)
           ? undefined
           : boundedJson(e.result);
+      s.tools.get(e.toolCallId)?.handle.images?.(e.result?.content, {
+        direction: "output", purpose: "tool_result", role: "tool", toolCallId: e.toolCallId,
+        capture: { modelInput: true, errorDetail: e.isError === true },
+      });
       s.tools.get(e.toolCallId)?.handle.end({
         output,
         outcome: e.isError ? "error" : "success",

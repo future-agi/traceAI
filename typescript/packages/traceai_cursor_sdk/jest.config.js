@@ -16,6 +16,7 @@ module.exports = {
   },
   moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',
+    '^@traceai/fi-core/attachments$': '<rootDir>/../fi-core/src/attachments',
     '^@traceai/fi-semantic-conventions$': '<rootDir>/../fi-semantic-conventions/src'
   },
   testTimeout: 15000

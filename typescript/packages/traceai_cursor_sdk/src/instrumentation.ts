@@ -5,6 +5,7 @@
  * close and flush spans before a short script exits.
  */
 import { TracerProvider, diag, trace } from "@opentelemetry/api";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
 import {
   InstrumentationBase,
   InstrumentationConfig,
@@ -55,6 +56,12 @@ export interface CursorSDKInstrumentationConfig {
    * closed). Default 30000. Open tool spans then end as incomplete.
    */
   streamDrainTimeoutMs?: number;
+  /**
+   * The tracer provider's attachment manager (`provider.attachments`). With it, and with
+   * attachments enabled, inline `{ data, mimeType }` prompt images upload as attachments of
+   * the run span. Prompt images are input: they also need `hideInputs: false`.
+   */
+  attachments?: AttachmentManager;
 }
 
 function nonNegative(value: unknown, fallback: number): number {
@@ -103,10 +110,12 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
   private readonly registry = new Set<RunWatcher>();
   private readonly undo = new Map<object, () => void>();
   private providerForFlush?: TracerProvider;
+  private readonly attachments?: AttachmentManager;
 
   constructor(config: CursorSDKInstrumentationConfig = {}) {
     super(INSTRUMENTATION_NAME, VERSION, Object.assign({}, config.instrumentationConfig));
     this.traceConfig = config.traceConfig;
+    this.attachments = config.attachments;
     this.graceMs = nonNegative(config.runEndGraceMs, DEFAULT_GRACE_MS);
     this.drainMs = nonNegative(config.streamDrainTimeoutMs, DEFAULT_DRAIN_MS);
     if (config.tracerProvider) this.setTracerProvider(config.tracerProvider);
@@ -221,7 +230,7 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
     const traceConfig = generateTraceConfig({ ...this.traceConfig, ...policy });
     policy.hideErrorDetails = traceConfig.hideErrorDetails;
     const tracer = new FITracer({ tracer: this.tracer, traceConfig });
-    return { tracer, policy, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry };
+    return { tracer, policy, traceConfig, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry, attachments: this.attachments };
   }
 }
 

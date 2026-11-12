@@ -3,7 +3,7 @@ import { dirname, resolve, sep, basename } from "node:path";
 import { safeParents, contentHash } from "@traceai/agent-core/files";
 import { redact, redactValue } from "@traceai/agent-core/privacy";
 import type { ResolvedConfig } from "@traceai/agent-core/config";
-import type { UsageInput } from "@traceai/agent-core/tracer";
+import type { AgentAttachmentRuntimeOptions, UsageInput } from "@traceai/agent-core/tracer";
 export const VERSION = "0.1.0"; // x-release-please-version
 export const TESTED_HOST = "2.1.318";
 // Updates within the qualified major line retain the hook/transcript contract.
@@ -82,6 +82,8 @@ interface Block {
   content?: unknown;
   tool_use_id?: string;
   is_error?: boolean;
+  /** Inline base64 image source; read only inside attachment admission. */
+  source?: unknown;
 }
 interface Row {
   byteOffset?: number;
@@ -347,6 +349,8 @@ export async function exportTranscriptTurn(
     terminalText?: string;
     terminalPromptId?: string;
     final?: boolean;
+    /** The provider-owned attachment runtime (transport injection for qualification). */
+    attachments?: AgentAttachmentRuntimeOptions;
     beforeExport?: (
       checkpoint: string[],
       children: Record<string, ChildCursor>,
@@ -610,7 +614,11 @@ export async function exportTranscriptTurn(
   if (planned.size > 240) throw new Error("TRANSCRIPT_LIMIT");
   await options.beforeExport?.([...planned], childCheckpoints);
   const { createTurnTracer } = await import("@traceai/agent-core/tracer");
-  const tracer = createTurnTracer({ config });
+  const tracer = createTurnTracer({ config, attachments: options.attachments });
+  // Opt-in only: this export runs after the turn, never on the inference path.
+  // Without a completed bootstrap the core admits nothing, so wait a bounded time.
+  if (/^(true|1|yes)$/i.test(process.env.FI_ATTACHMENTS_ENABLED?.trim() ?? ""))
+    await tracer.attachments?.ready(2000);
   const root = tracer.startTurn({
     sessionId,
     turnId: state.promptId!,
@@ -620,6 +628,13 @@ export async function exportTranscriptTurn(
     deferRoot: options.final === false,
     checkpoint: state.checkpoint,
   });
+  // The deferred root is emitted once, by the final export; capture its prompt images there.
+  if (options.final !== false && Array.isArray(current[0].message?.content))
+    root.images?.(current[0].message.content, {
+      direction: "input",
+      purpose: "model_input",
+      role: "user",
+    });
   let generations = 0,
     tools = 0,
     lastOutput: string | undefined;
@@ -739,6 +754,16 @@ export async function exportTranscriptTurn(
                 ? "success"
                 : "incomplete";
           if (outcome === "incomplete") incomplete = true;
+          // Tool-result images (for example an image file the host read) are model input
+          // for the next request. Only this prompt's results, never the history prefix.
+          if (contentAllowed && result && (endRow?.byteOffset ?? 0) >= contentFloor)
+            tool.images?.(result.content, {
+              direction: "output",
+              purpose: "tool_result",
+              role: "tool",
+              toolCallId: b.id,
+              capture: { modelInput: true, errorDetail: result.is_error === true },
+            });
           tool.end({
             output: contentAllowed
               ? text(resultContent(result?.content), config)

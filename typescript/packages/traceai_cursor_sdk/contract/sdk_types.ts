@@ -3,7 +3,7 @@
  * fit the structural types the wrapper reads. `pnpm run typecheck:contract`
  * fails when an SDK release changes a shape this package depends on.
  */
-import type { AgentOptions, Run, RunResult, SDKAgent, SDKMessage, SendOptions, TokenUsage } from "@cursor/sdk";
+import type { AgentOptions, Run, RunResult, SDKAgent, SDKMessage, SDKUserMessage, SendOptions, TokenUsage } from "@cursor/sdk";
 import { Agent } from "@cursor/sdk";
 import type {
   AgentClassLike,
@@ -33,3 +33,9 @@ type BaseMessages = "system" | "user" | "assistant" | "thinking" | "tool_call" |
 type Handled = BaseMessages | Extract<SDKMessage["type"], "summary">;
 export const handled: Handled[] = [] as SDKMessage["type"][];
 export const known: SDKMessage["type"][] = [] as Handled[];
+
+/** The inline image variant the attachment path reads keeps `{ data, mimeType }` as strings. */
+type SDKImageEntry = NonNullable<SDKUserMessage["images"]>[number];
+type InlineImage = Extract<SDKImageEntry, { data: unknown }>;
+export const inlineImage = (value: InlineImage): { data: string; mimeType: string } => value;
+export const inlineImageExists: InlineImage extends never ? never : true = true;

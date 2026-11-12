@@ -9,4 +9,6 @@ export * from "./lifecycle.js";
 export * from "./delivery.js";
 export * from "./tracer.js";
 export * from "./capture.js";
+export * from "./attachments.js";
+export * from "./attachment-status.js";
 export { VERSION } from "./version.js";

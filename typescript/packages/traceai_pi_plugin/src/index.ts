@@ -248,6 +248,7 @@ export default function futureAgi(pi: ExtensionAPI): void {
       input: config!.hideInputs ? undefined : messageText(entry.message.content),
       usagePlan: "attempt",
     });
+    turn.images?.(entry.message.content, { direction: "input", purpose: "model_input", role: "user" });
     // Pi can send several queued prompts in one model request. Each source user
     // entry keeps its identity; only the final root owns the shared model/tool
     // work. OTel links make the other roots navigable without duplicating usage.
@@ -261,6 +262,7 @@ export default function futureAgi(pi: ExtensionAPI): void {
         continuationOf: turn.context,
         gaps: ["COALESCED_PROMPT"],
       }));
+      coalesced.at(-1)?.images?.(earlier.message.content, { direction: "input", purpose: "model_input", role: "user" });
     }
     for (const entry of entries) observedUsers.add(entry.id);
     while (observedUsers.size > 4096) observedUsers.delete(observedUsers.values().next().value!);
@@ -421,6 +423,10 @@ export default function futureAgi(pi: ExtensionAPI): void {
         errorHistory = true;
         if (failedToolCalls.size < 4096) failedToolCalls.add(event.toolCallId);
       }
+      tools.get(event.toolCallId)?.images?.(event.result?.content, {
+        direction: "output", purpose: "tool_result", role: "tool", toolCallId: event.toolCallId,
+        capture: { modelInput: true, errorDetail: event.isError },
+      });
       tools.get(event.toolCallId)?.end({
         outcome: event.isError ? "error" : "success",
         output:

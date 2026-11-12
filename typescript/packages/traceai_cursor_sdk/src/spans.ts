@@ -16,7 +16,9 @@
  * Every public method swallows its own errors: tracing never fails the agent.
  */
 import { Attributes, Context, HrTime, Span, SpanKind, SpanStatusCode, Tracer, diag, trace } from "@opentelemetry/api";
-import { getAttributesFromContext } from "@traceai/fi-core";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { captureCursorImages } from "./attachments";
+import { getAttributesFromContext, type TraceConfigOptions } from "@traceai/fi-core";
 import { isTask, record, stepEvent } from "./events";
 import { MimeType } from "@traceai/fi-semantic-conventions";
 import {
@@ -250,6 +252,9 @@ interface TextBlockState {
 export interface RunTracerArgs {
   tracer: Tracer;
   policy: ContentPolicy;
+  attachments?: AttachmentManager;
+  /** The instrumentation's resolved trace config; its input hide flags and PII redaction deny media. */
+  traceConfig?: TraceConfigOptions;
   parentContext: Context;
   agent?: AgentLike;
   message?: unknown;
@@ -310,6 +315,8 @@ export class RunTracer {
     } catch (error) {
       diag.debug(`${LOG}: failed to set run attributes: ${error}`);
     }
+    // Inline prompt images, before the message is reduced to an image count.
+    if (args.operation === "send") captureCursorImages(args.attachments, this.span, args.message, this.policy, args.traceConfig);
   }
 
   get isFinished(): boolean {
