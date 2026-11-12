@@ -617,8 +617,11 @@ def create_audio_capture(session_context, *, manager, sample_rate=None, num_chan
     ``record_audio``. The returned ``binding.processor`` must be inserted into
     the pipeline by the application, which also starts it (for example with
     ``AudioBufferStartRecordingFrame``). Nothing is created when denied.
-    ``turn_audio`` (``TurnAudioCaps``) creates the processor with
-    ``enable_turn_audio=True`` and uploads turns as in ``bind_audio_processor``.
+    ``turn_audio`` (``TurnAudioCaps``) uploads turns as in
+    ``bind_audio_processor``. The ``turn_recording`` policy is checked BEFORE
+    the processor is built: only when at least one side is admitted is it
+    created with ``enable_turn_audio=True``. Otherwise Pipecat never buffers
+    turns, no turn handler is registered and ``turn_status`` is the reason.
     """
     capture = _validate_options(layout, finalization_timeout, capture_policy)
     turn_audio = _validate_turn_audio(turn_audio)
@@ -637,15 +640,25 @@ def create_audio_capture(session_context, *, manager, sample_rate=None, num_chan
         return AudioCaptureBinding(reason)
     if not isinstance(session_context, AudioSessionContext):
         return AudioCaptureBinding("correlation_unavailable")
+    # Turn policy before construction: a recorder built with enable_turn_audio
+    # keeps every turn in Pipecat memory, so build it that way only when at
+    # least one side may upload a turn_recording.
+    turn_reason = None
+    if turn_audio is not None:
+        turn_reason = _probe(manager, "create_recording", ("input", "output"), capture, purpose="turn_recording")
+    turns = turn_audio if turn_reason is None else None
     try:
         if version("pipecat-ai") not in _SUPPORTED:
             return AudioCaptureBinding("unsupported_version")
         from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
         processor = AudioBufferProcessor(sample_rate=sample_rate, num_channels=num_channels,
-                                         buffer_size=buffer_size, enable_turn_audio=turn_audio is not None)
+                                         buffer_size=buffer_size, enable_turn_audio=turns is not None)
     except PackageNotFoundError:
         return AudioCaptureBinding("unsupported_version")
     except Exception:
         return AudioCaptureBinding("source_unavailable")
-    return _bind(processor, session_context, manager, layout=layout, timeout=finalization_timeout,
-                 capture=capture, operation="create_recording", turn_audio=turn_audio)
+    binding = _bind(processor, session_context, manager, layout=layout, timeout=finalization_timeout,
+                    capture=capture, operation="create_recording", turn_audio=turns)
+    if turn_reason is not None and binding.status == "session_bound":
+        binding.turn_status = turn_reason
+    return binding

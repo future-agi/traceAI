@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from conftest import TransportDouble, make_manager
-from fi_instrumentation.attachments import AttachmentConfig, AttachmentManager, CorrelationHandle
+from fi_instrumentation.attachments import AttachmentConfig, AttachmentManager, CapturePolicy, CorrelationHandle
 from fi_instrumentation.attachments._disabled import DisabledAttachmentManager
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame, BotStoppedSpeakingFrame, EndFrame, InputAudioRawFrame, OutputAudioRawFrame,
@@ -671,13 +671,13 @@ async def test_real_pipeline_uploads_each_turn_bound_to_its_turn_span(manager, t
     assert manager.owned_bytes == 0
 
 
-async def turn_binding(manager, caps=CAPS, *, context=None, layout="auto"):
+async def turn_binding(manager, caps=CAPS, *, context=None, layout="auto", capture=None):
     processor = AudioBufferProcessor(sample_rate=RATE, num_channels=1, buffer_size=16000, enable_turn_audio=True)
     worker = await run_pipeline(processor, None)
     observer = worker.turn_trace_observer
     observer.start_conversation_tracing("conv-turns")
     binding = bind_audio_processor(processor, context or AudioSessionContext.from_pipeline(worker),
-                                   manager=manager, turn_audio=caps, layout=layout)
+                                   manager=manager, turn_audio=caps, layout=layout, capture_policy=capture)
     return processor, observer, binding
 
 
@@ -830,3 +830,94 @@ def test_create_capture_with_turn_audio_enables_pipecat_turns(transport):
     finally:
         manager.shutdown(1)
     span.end()
+
+
+# ------------------------------------------- per-turn audio: review follow-ups
+@pytest.mark.asyncio
+async def test_local_capture_policy_hiding_inputs_drops_only_user_turns(manager, transport):
+    # A LOCAL CapturePolicy (no env flag) reaches the per-turn preflight.
+    processor, observer, binding = await turn_binding(manager, layout="separate_tracks",
+                                                      capture=CapturePolicy(record_inputs=False))
+    assert binding.status == "session_bound" and binding.turn_status == "session_bound"
+    await run_turn(processor, observer, 1)
+    await binding.finish(10)
+    observer.end_conversation_tracing()
+    uploads = [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+    assert [(r["direction"], r["turn_id"]) for r in uploads] == [("output", "1")]
+    assert binding.turn_denials == {"policy_denied": 1}
+    assert [direction for _, direction, _ in binding.turn_handles] == ["output"]
+
+
+@pytest.mark.asyncio
+async def test_created_recorder_turns_stop_when_server_record_audio_is_revoked(transport):
+    # create_audio_capture's turns preflight as operation="create_recording":
+    # once the server turns record_audio off, the next turn is denied.
+    transport.policy = replace(transport.policy, record_audio=True)
+    manager = make_manager(transport, record_audio=True)
+    try:
+        worker = await run_pipeline(AudioBufferProcessor(sample_rate=RATE, buffer_size=16000), None)
+        observer = worker.turn_trace_observer
+        observer.start_conversation_tracing("conv-created")
+        binding = create_audio_capture(AudioSessionContext.from_pipeline(worker), manager=manager,
+                                       sample_rate=RATE, turn_audio=CAPS)
+        assert binding.status == "session_bound" and binding.turn_status == "session_bound"
+        processor = binding.processor
+        await run_turn(processor, observer, 1)
+        assert binding.turn_denials == {} and len(binding.turn_handles) == 2
+        # Let turn 1 finish first: a tightened policy also stops uploads that are still queued.
+        for _, _, handle in binding.turn_handles:
+            assert (await handle.wait(10)).status != "unfinished"
+        manager.update_policy(replace(transport.policy, record_audio=False))
+        await run_turn(processor, observer, 2)
+        await binding.finish(10)
+        observer.end_conversation_tracing()
+        uploads = [r for r in transport.requests if r.get("purpose") == "turn_recording"]
+        assert sorted((r["turn_id"], r["direction"]) for r in uploads) == [("1", "input"), ("1", "output")]
+        assert binding.turn_denials == {"recording_disabled": 2}
+        assert binding.turn_status == "recording_disabled" and len(binding.turn_handles) == 2
+        binding.close()
+    finally:
+        manager.shutdown(2)
+
+
+def test_created_recorder_has_no_pipecat_turn_buffer_when_turns_are_denied(transport):
+    # The server records whole calls (mixed) but admits no per-side turn: the
+    # recorder is built WITHOUT enable_turn_audio and no turn handler exists.
+    transport.policy = replace(transport.policy, record_audio=True, allowed_directions=frozenset(("mixed",)))
+    manager = make_manager(transport, record_audio=True)
+    span, context = explicit_context()
+    try:
+        binding = create_audio_capture(context, manager=manager, turn_audio=CAPS)
+        assert binding.status == "session_bound" and binding.turn_status == "policy_denied"
+        assert binding.processor._enable_turn_audio is False
+        events = {e for e, _ in binding._handlers}
+        assert "on_audio_data" in events and not events & {"on_user_turn_audio", "on_bot_turn_audio"}
+        binding.close()
+    finally:
+        manager.shutdown(1)
+        span.end()
+
+
+@pytest.mark.asyncio
+async def test_turn_upload_binds_on_parent_and_never_projects_refs(manager, transport):
+    # Even when the turn span is still live at upload time, the turn span gets
+    # no fi.attachment.* attribute; the upload names it in association.parent.
+    pairs = pair_uploads(transport)
+    processor, observer, binding = await turn_binding(manager)
+    await observer._turn_tracker._call_event_handler("on_turn_started", 1)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await dispatch(processor, "on_user_turn_audio", TurnAudioData(1, tone(300, 200), RATE, 1))
+    for _, _, handle in binding.turn_handles:
+        assert (await handle.wait(10)).status != "unfinished"
+    await observer._turn_tracker._call_event_handler("on_turn_ended", 1, 1.0, False)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await binding.finish(10)
+    observer.end_conversation_tracing()
+    turn = [s for s in EXPORTER.get_finished_spans() if s.name == "turn"]
+    assert len(turn) == 1
+    assert not [k for k in turn[0].attributes if k.startswith("fi.attachment")]
+    uploads = turn_pairs(pairs)
+    assert len(uploads) == 1
+    assert uploads[0][0]["association"]["parent"]["span_id"] == format(turn[0].context.span_id, "016x")
