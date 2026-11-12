@@ -196,10 +196,10 @@ function runWire(env: Record<string, string> = {}) {
       await auto.shutdown(); await manager.shutdown(); server.closeAllConnections(); server.close();
     })().catch(error => { process.stderr.write(String(error && error.stack || error)); process.exitCode = 1; });
   `;
-  return spawnSync(process.execPath, ["-e", code], {
-    cwd: root, encoding: "utf8", timeout: 30000,
-    env: { ...process.env, FI_ATTACHMENTS_ENABLED: "", FI_API_KEY: "", FI_SECRET_KEY: "", FI_CONFIG_FILE: "/nonexistent", FI_AUTO_DEBUG: "false", ...env },
-  });
+  // This manager reads process.env at each admission, so the switch must be UNSET (an empty value is a deny).
+  const childEnv: Record<string, string | undefined> = { ...process.env, FI_API_KEY: "", FI_SECRET_KEY: "", FI_CONFIG_FILE: "/nonexistent", FI_AUTO_DEBUG: "false", ...env };
+  delete childEnv.FI_ATTACHMENTS_ENABLED;
+  return spawnSync(process.execPath, ["-e", code], { cwd: root, encoding: "utf8", timeout: 30000, env: childEnv as NodeJS.ProcessEnv });
 }
 test("auto.init + enabled manager + allowlisted hosts: speech, wire-only FormData and wire-only reads each upload once, bound to their wire span", () => {
   const result = runWire();

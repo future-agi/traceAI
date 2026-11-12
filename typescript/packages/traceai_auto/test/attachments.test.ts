@@ -145,8 +145,10 @@ describe("A04 speech output", () => {
     const span = exporter.getFinishedSpans()[0];
     expect(requests[0].association.parent.span_id).toBe(span.spanContext().spanId);
     expect(requests[0]).toMatchObject({ direction: "output", purpose: "model_output", mime_type: "audio/wav", declared_bytes: audio.length });
-    // The upload commits after the wire span ended: the authoritative link is association.parent, never a late mutation (T-CH-03).
-    expect(span.attributes["fi.attachment.refs"]).toBeUndefined();
+    // The body is consumed through a reader the runtime opens, so the bytes arrive through a deferred target that binds
+    // inside the emitter, before the wire span ends: the reference is projected onto that span, once.
+    const refs = JSON.parse(String(span.attributes["fi.attachment.refs"]));
+    expect(refs).toEqual([expect.objectContaining({ occurrence_id: requests[0].occurrence_id, modality: "audio", direction: "output" })]);
     expect(manager.status()).toMatchObject({ openTickets: 0, openStreams: 0, ownedBytes: 0 });
   });
   test("native span + explicit policy: arrayBuffer is captured once from consumed chunks, with no second span", async () => {
