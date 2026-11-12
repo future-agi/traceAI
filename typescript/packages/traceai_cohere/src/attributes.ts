@@ -149,12 +149,18 @@ export function outputAttributes(operation: Operation, response: Data, config: T
   if (operation === "embed") {
     // raw.output would otherwise bypass hideEmbeddingVectors.
     if (!hideOutput(config) && !config.hideEmbeddingVectors) {
-      const vectors = Array.isArray(response.embeddings) ? response.embeddings : object(response.embeddings).float;
+      const embeddings = object(response.embeddings);
+      // Prefer float coordinates, then integer coordinates, then packed binary
+      // and ubinary values as returned (one value per eight dimensions);
+      // cohere.embedding_type tells readers which representation was recorded.
+      const embeddingType = ["float", "int8", "uint8", "binary", "ubinary"].find(type => Array.isArray(embeddings[type]));
+      const vectors = Array.isArray(response.embeddings) ? response.embeddings : embeddingType ? embeddings[embeddingType] : undefined;
       list(vectors).forEach((vector, index) => {
         if (Array.isArray(vector) && vector.every((n) => typeof n === "number")) {
           attrs[`${S.EMBEDDING_EMBEDDINGS}.${index}.${S.EMBEDDING_VECTOR}`] = vector;
         }
       });
+      if (embeddingType) attrs["cohere.embedding_type"] = embeddingType;
       attrs[S.RAW_OUTPUT] = json(response);
     }
   } else if (operation === "rerank") {

@@ -32,10 +32,7 @@ import { extractInvokeModelRequestAttributes } from "./attributes/invoke-model-r
 import { extractInvokeModelResponseAttributes } from "./attributes/invoke-model-response-attributes";
 import { extractConverseRequestAttributes } from "./attributes/converse-request-attributes";
 import { extractConverseResponseAttributes } from "./attributes/converse-response-attributes";
-import {
-  consumeBedrockStreamChunks,
-  safelySplitStream,
-} from "./attributes/invoke-model-streaming-response-attributes";
+import { observeBedrockStream } from "./attributes/invoke-model-streaming-response-attributes";
 import {
   getSystemFromModelId,
   setBasicSpanAttributes,
@@ -43,7 +40,7 @@ import {
 
 const MODULE_NAME = "@aws-sdk/client-bedrock-runtime";
 const INSTRUMENTATION_NAME = "@traceai/bedrock";
-const INSTRUMENTATION_VERSION = "0.1.3"; // x-release-please-version
+const INSTRUMENTATION_VERSION = "0.1.4"; // x-release-please-version
 
 /**
  * AWS SDK module interface for proper typing
@@ -199,12 +196,14 @@ export class BedrockInstrumentation extends InstrumentationBase {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (original: any) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return function patchedSend(this: unknown, command: any) {
+          return function patchedSend(this: unknown, ...args: any[]) {
+            const [command] = args;
             if (command?.constructor?.name === "InvokeModelCommand") {
               return instrumentation.handleInvokeModelCommand(
                 command as InvokeModelCommand,
                 original,
                 this,
+                args,
               );
             }
 
@@ -216,6 +215,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
                 command as InvokeModelWithResponseStreamCommand,
                 original,
                 this,
+                args,
               );
             }
 
@@ -224,11 +224,12 @@ export class BedrockInstrumentation extends InstrumentationBase {
                 command as ConverseCommand,
                 original,
                 this,
+                args,
               );
             }
 
             // Pass through other commands without instrumentation
-            return original.apply(this, [command]);
+            return original.apply(this, args);
           };
         },
       );
@@ -259,13 +260,70 @@ export class BedrockInstrumentation extends InstrumentationBase {
   }
 
   /**
+   * Observe either send overload without converting callback calls into promises.
+   * Only the callback is replaced; command, options, trailing arguments and receiver
+   * are forwarded unchanged. Response processing stays synchronous for callbacks.
+   */
+  private sendWithResponse<T>(
+    original: (...args: unknown[]) => Promise<T> | void,
+    client: unknown,
+    args: unknown[],
+    span: Span,
+    onResponse: (response: T) => T,
+  ): Promise<T> | void {
+    const callbackIndex = typeof args[1] === "function"
+      ? 1
+      : typeof args[2] === "function" ? 2 : -1;
+    const onError = (error: unknown) => {
+      recordBedrockError(span, error);
+      span.end();
+    };
+    let callbackInvoked = false;
+
+    try {
+      if (callbackIndex !== -1) {
+        const callback = args[callbackIndex] as (...args: unknown[]) => unknown;
+        args[callbackIndex] = function (this: unknown, ...callbackArgs: unknown[]) {
+          callbackInvoked = true;
+          try {
+            if (callbackArgs[0]) {
+              onError(callbackArgs[0]);
+            } else {
+              callbackArgs[1] = onResponse(callbackArgs[1] as T);
+            }
+          } catch (error) {
+            // Instrumentation failures must not prevent delivery to the application.
+            diag.warn("Error processing Bedrock callback response:", error);
+            span.end();
+          }
+          // Keep application exceptions outside the instrumentation error boundary.
+          return callback.apply(this, callbackArgs);
+        };
+        return original.apply(client, args);
+      }
+
+      const result = original.apply(client, args) as Promise<T>;
+      return result.then(onResponse).catch((error: unknown) => {
+        onError(error);
+        throw error;
+      });
+    } catch (error) {
+      // A synchronous application callback can throw through send(). Do not record
+      // it as an SDK failure or invoke the callback a second time.
+      if (!callbackInvoked) onError(error);
+      throw error;
+    }
+  }
+
+  /**
    * Handles instrumentation for synchronous InvokeModel commands
    * Creates a span, extracts request attributes, executes the command, and processes the response
    *
    * @param command The InvokeModelCommand to instrument
    * @param original The original send method from the Bedrock client
    * @param client The Bedrock client instance
-   * @returns {Promise<InvokeModelResponse>} The response from the InvokeModel call
+   * @param args The complete send argument list
+   * @returns A response promise, or void for the callback overload
    */
   private handleInvokeModelCommand(
     command: InvokeModelCommand,
@@ -273,7 +331,8 @@ export class BedrockInstrumentation extends InstrumentationBase {
     original: any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
-  ): Promise<InvokeModelResponse> {
+    args: unknown[],
+  ): Promise<InvokeModelResponse> | void {
     const span = this.fiTracer.startSpan("bedrock.invoke_model", {
       kind: SpanKind.INTERNAL,
     });
@@ -287,43 +346,31 @@ export class BedrockInstrumentation extends InstrumentationBase {
 
     extractInvokeModelRequestAttributes({ span, command, system });
 
-    try {
-      const result = original.apply(client, [
-        command,
-      ]) as Promise<InvokeModelResponse>;
-
-      // AWS SDK v3 send() method always returns a Promise
-          return result
-        .then((response: InvokeModelResponse) => {
-          extractInvokeModelResponseAttributes({ span, response, system });
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
-          return response;
-        })
-        .catch((error: unknown) => {
-          recordBedrockError(span, error);
-          span.end();
-          throw error;
-        });
-    } catch (error) {
-      // Handle errors that occur before the Promise is returned (e.g. invalid parameters)
-      recordBedrockError(span, error);
-      span.end();
-      throw error;
-    }
+    return this.sendWithResponse(
+      original,
+      client,
+      args,
+      span,
+      (response: InvokeModelResponse) => {
+        extractInvokeModelResponseAttributes({ span, response, system });
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.end();
+        return response;
+      },
+    );
   }
 
   /**
    * Handles instrumentation for streaming InvokeModel commands with guaranteed stream preservation
    *
-   * This method ensures the original user stream is preserved regardless of instrumentation
-   * success or failure. The user stream is returned immediately while instrumentation
-   * happens asynchronously in the background using stream splitting.
+   * Observes events as the application pulls them, without a background reader.
+   * Consumer cancellation and iterator control are forwarded to the original stream.
    *
    * @param command The InvokeModelWithResponseStreamCommand to instrument
    * @param original The original send method from the Bedrock client
    * @param client The Bedrock client instance
-   * @returns {Promise<{body: AsyncIterable<unknown>}>} Promise resolving to the response with preserved user stream
+   * @param args The complete send argument list
+   * @returns A response promise with preserved user stream, or void for callbacks
    */
   private handleInvokeModelWithResponseStreamCommand(
     command: InvokeModelWithResponseStreamCommand,
@@ -331,7 +378,9 @@ export class BedrockInstrumentation extends InstrumentationBase {
     original: any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
+    args: unknown[],
   ) {
+    const startedAt = performance.now();
     const span = this.fiTracer.startSpan("bedrock.invoke_model", {
       kind: SpanKind.INTERNAL,
     });
@@ -349,14 +398,12 @@ export class BedrockInstrumentation extends InstrumentationBase {
       system,
     });
 
-    // Execute AWS SDK call and handle stream splitting outside error boundaries
-    // This ensures the user stream is ALWAYS returned, regardless of instrumentation failures
-    const result = original.apply(client, [command]) as Promise<{
-      body: AsyncIterable<unknown>;
-    }>;
-
-    return result
-      .then((response: { body: AsyncIterable<unknown> }) => {
+    return this.sendWithResponse(
+      original,
+      client,
+      args,
+      span,
+      (response: { body: AsyncIterable<unknown> }) => {
         // Guard against missing response body - return original response
         if (!response.body) {
           span.recordException(new Error("Response body is undefined"));
@@ -368,42 +415,31 @@ export class BedrockInstrumentation extends InstrumentationBase {
           return response;
         }
 
-        const { instrumentationStream, userStream } = safelySplitStream({
-          originalStream: response.body,
+        const body = observeBedrockStream({
+          stream: response.body,
+          span,
+          modelType: system,
+          startedAt,
+          onEnd: (cancelled) => {
+            try {
+              if (cancelled) span.addEvent("stream.cancelled");
+              else span.setStatus({ code: SpanStatusCode.OK });
+            } finally {
+              span.end();
+            }
+          },
+          onError: (error) => {
+            try {
+              recordBedrockError(span, error);
+            } finally {
+              span.end();
+            }
+          },
         });
 
-        // Start background instrumentation processing (non-blocking)
-        // Only the instrumentation is wrapped in error handling - the user stream is protected
-        if (instrumentationStream) {
-          // @ts-expect-error - instrumentationStream is guaranteed non-null by the if check above
-          consumeBedrockStreamChunks({
-            stream: instrumentationStream,
-            span,
-            modelType: system,
-          })
-            .then(() => {
-              span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
-            })
-            .catch((error: unknown) => {
-              recordBedrockError(span, error);
-              span.end();
-            });
-        } else {
-          // No instrumentation stream available, end span cleanly
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
-        }
-
-        // Return user stream immediately - instrumentation cannot interfere
-        return { ...response, body: userStream };
-      })
-      .catch((error: unknown) => {
-        // If the AWS SDK call itself fails, record error but still try to return original response
-        recordBedrockError(span, error);
-        span.end();
-        throw error; // Re-throw since we have no stream to return
-      });
+        return { ...response, body };
+      },
+    );
   }
 
   /**
@@ -413,7 +449,8 @@ export class BedrockInstrumentation extends InstrumentationBase {
    * @param command The ConverseCommand to instrument
    * @param original The original send method from the Bedrock client
    * @param client The Bedrock client instance
-   * @returns {Promise<ConverseResponse>} The response from the Converse call
+   * @param args The complete send argument list
+   * @returns A response promise, or void for the callback overload
    */
   private handleConverseCommand(
     command: ConverseCommand,
@@ -421,7 +458,8 @@ export class BedrockInstrumentation extends InstrumentationBase {
     original: any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
-  ): Promise<ConverseResponse> {
+    args: unknown[],
+  ): Promise<ConverseResponse> | void {
     const span = this.fiTracer.startSpan("bedrock.converse", {
       kind: SpanKind.INTERNAL,
     });
@@ -435,29 +473,17 @@ export class BedrockInstrumentation extends InstrumentationBase {
 
     extractConverseRequestAttributes({ span, command });
 
-    try {
-      const result = original.apply(client, [
-        command,
-      ]) as Promise<ConverseResponse>;
-
-      // AWS SDK v3 send() method always returns a Promise
-      return result
-        .then((response: ConverseResponse) => {
-          extractConverseResponseAttributes({ span, response });
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
-          return response;
-        })
-        .catch((error: unknown) => {
-          recordBedrockError(span, error);
-          span.end();
-          throw error;
-        });
-    } catch (error) {
-      // Handle errors that occur before the Promise is returned (e.g. invalid parameters)
-      recordBedrockError(span, error);
-      span.end();
-      throw error;
-    }
+    return this.sendWithResponse(
+      original,
+      client,
+      args,
+      span,
+      (response: ConverseResponse) => {
+        extractConverseResponseAttributes({ span, response });
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.end();
+        return response;
+      },
+    );
   }
 }

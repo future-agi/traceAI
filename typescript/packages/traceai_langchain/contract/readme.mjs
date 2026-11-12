@@ -108,6 +108,7 @@ if (phase === "install") {
       assert.equal(code, 0, `README command failed (${signal}): ${stderr}`);
     } finally { clearTimeout(watchdog); }
     assert.ok(stdout.includes("Synthetic tracing example."));
+    assert.doesNotMatch(stdout + stderr, /TypeError/, "README run must not print instrumentation errors");
     assert.deepEqual(requests.sort(), ["/tracer/v1/traces", "/v1/chat/completions"]);
     assert.equal(spans.length, 1, "No missing or duplicate model span");
     assert.equal(spans[0].name, "ChatOpenAI");

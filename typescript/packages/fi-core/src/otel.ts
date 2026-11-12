@@ -393,39 +393,32 @@ function getEnvGrpcCollectorEndpoint(): string {
   return endpoint;
 }
 
-// This function now constructs the FULL endpoint URL
-// It prioritizes the endpoint passed directly to `register` (if any),
-// then checks FI_BASE_URL (or a more specific FI_COLLECTOR_ENDPOINT env var),
-// and finally falls back to a default base URL.
+// Explicit endpoints retain their base-or-full URL behavior. Environment collector
+// endpoints are full URLs; only FI_BASE_URL and the default are base origins.
 function constructFullEndpoint(customEndpoint?: string): string {
-  let baseUrlToUse: string;
-
   if (customEndpoint) {
     try {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
         diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
-        baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
         diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
         return customEndpoint;
       } else {
-        baseUrlToUse = `${parsedCustom.protocol}//${parsedCustom.host}`;
+        return `${parsedCustom.protocol}//${parsedCustom.host}${FI_COLLECTOR_PATH}`;
       }
     } catch (e) {
       diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
-  } else {
-    baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
-  }
-  
-  // Ensure no trailing slash from baseUrl before appending path
-  if (baseUrlToUse.endsWith('/')) {
-    baseUrlToUse = baseUrlToUse.slice(0, -1);
   }
 
-  return `${baseUrlToUse}${FI_COLLECTOR_PATH}`;
+  const baseUrl = getEnv("FI_BASE_URL");
+  const collectorEndpoint = getEnv("FI_COLLECTOR_ENDPOINT");
+  if (baseUrl === undefined && collectorEndpoint !== undefined) {
+    return collectorEndpoint;
+  }
+  const baseUrlToUse = baseUrl ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+  return `${baseUrlToUse.replace(/\/$/, "")}${FI_COLLECTOR_PATH}`;
 }
 
 
@@ -501,7 +494,8 @@ class FITracerProvider extends BasicTracerProvider {
     // Explicit lists, including [], never construct a hidden default exporter.
     let defaultProcessor: DefaultBatchSpanProcessor | DefaultSimpleSpanProcessor | undefined;
     if (config.spanProcessors === undefined) {
-      const exporter = createSpanExporter({ ...config, transport, endpoint, headers });
+      // Resolve the original options, not an already-resolved full environment URL.
+      const exporter = createSpanExporter({ ...config, transport, headers });
       defaultProcessor = config.batch
         ? new DefaultBatchSpanProcessor(exporter)
         : new DefaultSimpleSpanProcessor(exporter);

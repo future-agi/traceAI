@@ -1,3 +1,8 @@
+## [0.1.11] - pending release
+
+### Fixed
+- Tool calls and tool results from the 1.x Mistral SDK can be matched in traces by their tool-call IDs.
+
 ## [0.1.10](https://github.com/future-agi/traceAI/compare/traceai-mistralai-v0.1.9...traceai-mistralai-v0.1.10) (2026-11-05)
 
 

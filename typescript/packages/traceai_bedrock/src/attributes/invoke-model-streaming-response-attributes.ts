@@ -6,10 +6,10 @@
  * - Tool call extraction from streams
  * - Token usage accumulation
  * - Real-time span attribute setting
- * - Safe stream splitting with original stream preservation
+ * - Pull-driven observation with upstream iterator lifecycle preservation
  */
 
-import { Span, diag } from "@opentelemetry/api";
+import { Span, SpanStatusCode, diag } from "@opentelemetry/api";
 import {
   withSafety,
   isObjectWithStringKeys,
@@ -39,6 +39,7 @@ interface StreamChunk {
  */
 interface StreamEventData {
   type?: string;
+  index?: number;
   message?: {
     usage?: Record<string, unknown>;
   };
@@ -50,9 +51,16 @@ interface StreamEventData {
     input?: Record<string, unknown>;
   };
   delta?: {
+    type?: string;
     text?: string;
+    partial_json?: string;
+    stop_reason?: string;
   };
   usage?: Record<string, unknown>;
+
+  stop_reason?: string;
+  completionReason?: string;
+  messageStop?: { stopReason?: string };
 
   // Amazon-specific fields
   outputText?: string;
@@ -105,9 +113,30 @@ interface StreamProcessingState {
     text?: string;
     id?: string;
     name?: string;
-    input?: Record<string, unknown>;
+    input?: Record<string, unknown> | string;
+    partialJson?: string;
+    argumentsIncomplete?: boolean;
   }>;
+  toolBlocksByIndex: Map<number, StreamProcessingState["contentBlocks"][number]>;
   rawUsageData: Record<string, unknown>;
+  finishReason?: string;
+}
+
+/** Exported in place of tool arguments that never formed valid JSON. */
+const INCOMPLETE_TOOL_ARGUMENTS = "<omitted: incomplete tool arguments>";
+
+/** Parse complete tool input; never export an unparsed argument fragment. */
+function finalizeToolInput(
+  block: StreamProcessingState["contentBlocks"][number],
+): void {
+  if (block.partialJson === undefined) return;
+  try {
+    const input: unknown = JSON.parse(block.partialJson);
+    block.input = isObjectWithStringKeys(input) ? input : block.partialJson;
+  } catch {
+    block.input = INCOMPLETE_TOOL_ARGUMENTS;
+    block.argumentsIncomplete = true;
+  }
 }
 
 /**
@@ -132,15 +161,43 @@ function processAnthropicStreamChunk(
   }
 
   if (data.type === "content_block_start" && data.content_block) {
-    // Store tool use blocks for later processing, don't add duplicates
     if (data.content_block.type === "tool_use") {
-      state.contentBlocks.push(data.content_block);
+      // Accumulate into an owned block, never into the application's events.
+      const block = { ...data.content_block };
+      state.contentBlocks.push(block);
+      if (typeof data.index === "number") {
+        state.toolBlocksByIndex.set(data.index, block);
+      }
     }
   }
 
   if (data.type === "content_block_delta" && data.delta?.text) {
     // Accumulate all text into the main outputText string
     state.outputText += data.delta.text;
+  }
+
+  if (
+    data.type === "content_block_delta" &&
+    data.delta?.type === "input_json_delta" &&
+    typeof data.delta.partial_json === "string" &&
+    typeof data.index === "number"
+  ) {
+    const block = state.toolBlocksByIndex.get(data.index);
+    if (block) {
+      block.partialJson = (block.partialJson ?? "") + data.delta.partial_json;
+    }
+  }
+
+  if (data.type === "content_block_stop" && typeof data.index === "number") {
+    const block = state.toolBlocksByIndex.get(data.index);
+    if (block) {
+      finalizeToolInput(block);
+      state.toolBlocksByIndex.delete(data.index);
+    }
+  }
+
+  if (data.type === "message_delta" && typeof data.delta?.stop_reason === "string") {
+    state.finishReason = data.delta.stop_reason;
   }
 
   if (data.type === "message_delta" && data.usage) {
@@ -162,6 +219,8 @@ function processMetaStreamChunk(
   data: StreamEventData,
   state: StreamProcessingState,
 ): StreamProcessingState {
+  if (typeof data.stop_reason === "string") state.finishReason = data.stop_reason;
+
   // Meta text generation - accumulate all text
   if (typeof data.generation === "string") {
     state.outputText += data.generation;
@@ -186,6 +245,7 @@ function processMetaStreamChunk(
 function isTitanStreamChunk(data: StreamEventData): boolean {
   return !!(
     typeof data.outputText === "string" ||
+    typeof data.completionReason === "string" ||
     typeof data.tokenCount === "number" ||
     data["amazon-bedrock-invocationMetrics"]
   );
@@ -197,6 +257,7 @@ function isTitanStreamChunk(data: StreamEventData): boolean {
  */
 function isNovaStreamChunk(data: StreamEventData): boolean {
   return !!(
+    data.messageStop?.stopReason ||
     data.contentBlockDelta?.delta?.text ||
     data.metadata?.usage ||
     // Nova usage without type field - check for camelCase token names
@@ -222,6 +283,8 @@ function processTitanStreamChunk(
   data: StreamEventData,
   state: StreamProcessingState,
 ): StreamProcessingState {
+  if (typeof data.completionReason === "string") state.finishReason = data.completionReason;
+
   // Titan text output
   if (typeof data.outputText === "string") {
     state.outputText += data.outputText;
@@ -259,6 +322,8 @@ function processNovaStreamChunk(
   data: StreamEventData,
   state: StreamProcessingState,
 ): StreamProcessingState {
+  if (typeof data.messageStop?.stopReason === "string") state.finishReason = data.messageStop.stopReason;
+
   // Nova text output
   if (
     data.contentBlockDelta?.delta?.text &&
@@ -359,19 +424,32 @@ function setStreamingOutputAttributes({
   outputText,
   contentBlocks,
   usage,
+  finishReason,
 }: {
   span: Span;
   outputText: string;
   contentBlocks: StreamProcessingState["contentBlocks"];
   usage: UsageAttributes;
+  finishReason?: string;
 }): void {
+  const incompleteBlocks = contentBlocks.filter(block => block.argumentsIncomplete);
+  if (incompleteBlocks.length > 0) {
+    setSpanAttribute(span, "fi.tool_call.arguments_incomplete", true);
+    // Sum of UTF-16 code units received for incomplete calls; no argument text.
+    setSpanAttribute(span, "fi.tool_call.arguments_received_length",
+      incompleteBlocks.reduce((length, block) => length + (block.partialJson?.length ?? 0), 0));
+  }
+  if (finishReason) {
+    setSpanAttribute(span, SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS, [finishReason]);
+  }
+
   // Create the output value structure like the original streaming code
   const toolCalls = contentBlocks
     .filter((block) => block.type === "tool_use")
     .map((block) => ({
       id: block.id || "unknown",
       name: block.name || "unknown",
-      input: block.input || {},
+      input: block.input ?? {},
     }));
 
   const outputValue = {
@@ -407,7 +485,9 @@ function setStreamingOutputAttributes({
       id: block.id || "unknown",
       function: {
         name: block.name || "unknown",
-        arguments: JSON.stringify(block.input || {}),
+        arguments: block.argumentsIncomplete
+          ? INCOMPLETE_TOOL_ARGUMENTS
+          : block.partialJson ?? JSON.stringify(block.input || {}),
       },
     }));
   }
@@ -456,14 +536,7 @@ function setStreamingOutputAttributes({
   }
 }
 
-/**
- * Safely splits an async iterable stream into two streams for parallel consumption
- * Uses Node.js built-in PassThrough streams for reliable stream duplication
- * Creates separate streams for instrumentation and user consumption
- *
- * @param originalStream The original stream to split
- * @returns Object with instrumentation and user streams, or just user stream on fallback
- */
+/** Compatibility helper; send instrumentation uses pull-driven observation below. */
 export function safelySplitStream({
   originalStream,
 }: {
@@ -476,6 +549,11 @@ export function safelySplitStream({
     // Create two PassThrough streams in object mode
     const instrumentationStream = new PassThrough({ objectMode: true });
     const userStream = new PassThrough({ objectMode: true });
+
+    // Handle error events even before either consumer starts iterating. Node
+    // retains destroy(error) in the stream state, so later iteration still rejects.
+    instrumentationStream.on("error", () => {});
+    userStream.on("error", () => {});
 
     // Function to consume the original stream and write to both outputs
     const consumeAndDuplicate = async () => {
@@ -514,96 +592,185 @@ export function safelySplitStream({
   }
 }
 
+interface UnconsumedStreamSpan {
+  span: Span;
+  consumed: boolean;
+  ended: boolean;
+}
+
+// Holdings contain only span state, never the source, wrapper, iterator or a
+// callback closing over them. The weak token lives with the returned stream and
+// its iterators, so abandoning an unconsumed response can actually trigger GC.
+const unconsumedStreams = typeof FinalizationRegistry === "undefined"
+  ? undefined
+  : new FinalizationRegistry<UnconsumedStreamSpan>((state) => {
+    if (state.consumed || state.ended) return;
+    state.ended = true;
+    try {
+      try {
+        state.span.setAttribute("fi.stream.consumed", false);
+        state.span.setStatus({ code: SpanStatusCode.UNSET });
+      } finally {
+        state.span.end();
+      }
+    } catch (error) {
+      diag.warn("Error finalizing unconsumed Bedrock stream:", error);
+    }
+  });
+
 /**
- * Consumes AWS Bedrock streaming response chunks and extracts attributes for OpenTelemetry span.
- * Supports multiple providers: Anthropic, Amazon Titan, Meta Llama, and Amazon Nova.
+ * Observes Bedrock events only when the user requests them. No tee or background
+ * reader is created, so an idle/slow consumer cannot queue extra response data.
+ * Iterator control methods and upstream failures are forwarded unchanged, while
+ * telemetry failures are isolated from the application.
  *
- * This function processes different Bedrock streaming formats and accumulates response content,
- * setting appropriate semantic convention attributes on the provided span. It runs in the
- * background without blocking the user's stream consumption.
- *
- * @param stream - The Bedrock response stream (AsyncIterable), typically from splitStream()
- * @param span - The OpenTelemetry span to set attributes on
- * @param modelType - The LLM system type to determine parsing strategy
- * @throws {Error} If critical stream processing errors occur
- *
- * @example
- * ```typescript
- * // Background processing after stream splitting
- * const [instrumentationStream, userStream] = await splitStream(response.body);
- * consumeBedrockStreamChunks({ stream: instrumentationStream, span, modelType })
- *   .then(() => span.end())
- *   .catch(error => { span.recordException(error); span.end(); });
- * ```
+ * gen_ai.server.time_to_first_token is measured in milliseconds from send() until the
+ * first chunk the CALLER pulls, including caller delay (not network arrival).
+ * Never-iterated streams end best-effort on GC as UNSET with
+ * fi.stream.consumed=false; no timer or upstream pull is scheduled.
  */
-export const consumeBedrockStreamChunks = withSafety({
-  fn: async ({
-    stream,
-    span,
-    modelType,
-  }: {
-    stream: AsyncIterable<unknown>;
-    span: Span;
-    modelType: LLMSystem;
-  }): Promise<void> => {
-    // Initialize processing state
-    const state: StreamProcessingState = {
-      outputText: "",
-      contentBlocks: [],
-      rawUsageData: {},
-    };
+export function observeBedrockStream({
+  stream,
+  span,
+  modelType,
+  onEnd,
+  onError,
+  startedAt = performance.now(),
+}: {
+  stream: AsyncIterable<unknown>;
+  span: Span;
+  modelType: LLMSystem;
+  onEnd: (cancelled: boolean) => void;
+  onError: (error: unknown) => void;
+  startedAt?: number;
+}): AsyncIterable<unknown> {
+  const state: StreamProcessingState = {
+    outputText: "",
+    contentBlocks: [],
+    toolBlocksByIndex: new Map(),
+    rawUsageData: {},
+  };
+  const lifetime = {};
+  const lifecycle: UnconsumedStreamSpan = { span, consumed: false, ended: false };
+  unconsumedStreams?.register(lifetime, lifecycle, lifetime);
+  let receivedFirstChunk = false;
 
-    for await (const chunk of stream) {
-      // Type guard for chunk structure
-      if (isValidStreamChunk(chunk)) {
-        const text = new TextDecoder().decode(chunk.chunk.bytes);
-        const lines = text.split("\n").filter((line) => line.trim());
+  const consume = () => {
+    if (lifecycle.consumed) return;
+    lifecycle.consumed = true;
+    unconsumedStreams?.unregister(lifetime);
+  };
 
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const rawData = JSON.parse(line);
-              if (!isValidStreamEventData(rawData)) {
-                continue; // Skip invalid event data
-              }
-              const data: StreamEventData = rawData;
-
-              // Process based on provider format using dedicated helpers
-              if (modelType === LLMSystem.ANTHROPIC) {
-                processAnthropicStreamChunk(data, state);
-              } else if (modelType === LLMSystem.AMAZON) {
-                if (isTitanStreamChunk(data)) {
-                  processTitanStreamChunk(data, state);
-                } else if (isNovaStreamChunk(data)) {
-                  processNovaStreamChunk(data, state);
-                }
-              } else if (modelType === LLMSystem.META) {
-                processMetaStreamChunk(data, state);
-              }
-            } catch (parseError) {
-              // Skip malformed JSON lines silently
-              continue;
+  // These safety boundaries are synchronous and never wrap upstream operations.
+  const processChunk = withSafety({
+    fn: (chunk: unknown) => {
+      if (lifecycle.ended || !isValidStreamChunk(chunk)) return;
+      const text = new TextDecoder().decode(chunk.chunk.bytes);
+      const lines = text.split("\n").filter((line) => line.trim());
+      for (const line of lines) {
+        try {
+          const rawData = JSON.parse(line);
+          if (!isValidStreamEventData(rawData)) continue;
+          const data: StreamEventData = rawData;
+          if (modelType === LLMSystem.ANTHROPIC) {
+            processAnthropicStreamChunk(data, state);
+          } else if (modelType === LLMSystem.AMAZON) {
+            if (isTitanStreamChunk(data)) {
+              processTitanStreamChunk(data, state);
+            } else if (isNovaStreamChunk(data)) {
+              processNovaStreamChunk(data, state);
             }
+          } else if (modelType === LLMSystem.META) {
+            processMetaStreamChunk(data, state);
           }
+        } catch (parseError) {
+          // Malformed JSON must not prevent delivery of the original event.
+          continue;
         }
       }
+    },
+    onError: (error) => diag.warn("Error observing Bedrock stream chunk:", error),
+  });
+
+  const finish = withSafety({
+    fn: (notify: () => void) => {
+      if (lifecycle.ended) return;
+      lifecycle.ended = true;
+      unconsumedStreams?.unregister(lifetime);
+      try {
+        // Preserve complete or partial arguments on completion, failure or cancellation.
+        for (const block of state.toolBlocksByIndex.values()) {
+          finalizeToolInput(block);
+        }
+        setStreamingOutputAttributes({
+          span,
+          outputText: state.outputText,
+          contentBlocks: state.contentBlocks,
+          usage: normalizeStreamUsageData(state.rawUsageData, modelType),
+          finishReason: state.finishReason,
+        });
+      } finally {
+        // End even a cancelled span, including when attribute extraction fails.
+        notify();
+      }
+    },
+    onError: (error) => diag.warn("Error finalizing Bedrock stream attributes:", error),
+  });
+
+  const observe = async (
+    operation: () => Promise<IteratorResult<unknown>>,
+    control: "next" | "return" | "throw" = "next",
+    thrown?: unknown,
+  ): Promise<IteratorResult<unknown>> => {
+    if (control === "next") consume();
+    try {
+      const result = await operation();
+      if (!result.done) {
+        consume();
+        if (!receivedFirstChunk && !lifecycle.ended) {
+          receivedFirstChunk = true;
+          // Isolate telemetry, including the timing attribute, from delivery.
+          try {
+            setSpanAttribute(span, SemanticConventions.GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
+              Math.max(0, performance.now() - startedAt));
+          } catch (error) { diag.warn("Error recording Bedrock first chunk:", error); }
+        }
+        processChunk(result.value);
+      }
+      // A handled throw that yields another value is not a cancellation.
+      if (control === "return" || result.done) finish(() => onEnd(control !== "next"));
+      return result;
+    } catch (error) {
+      // The caller's own terminating throw is cancellation, not a provider
+      // failure. A different upstream error (including return failure) stays ERROR.
+      finish(() => control === "throw" && error === thrown ? onEnd(true) : onError(error));
+      throw error;
     }
+  };
 
-    // Normalize usage data once at the end
-    const normalizedUsage = normalizeStreamUsageData(
-      state.rawUsageData,
-      modelType,
-    );
-
-    setStreamingOutputAttributes({
-      span,
-      outputText: state.outputText,
-      contentBlocks: state.contentBlocks,
-      usage: normalizedUsage,
-    });
-  },
-  onError: (error) => {
-    diag.warn("Error consuming Bedrock stream chunks:", error);
-    throw error;
-  },
-});
+  return {
+    [Symbol.asyncIterator](): AsyncIterableIterator<unknown> {
+      let iterator: AsyncIterator<unknown>;
+      try {
+        iterator = stream[Symbol.asyncIterator]();
+      } catch (error) {
+        finish(() => onError(error));
+        throw error;
+      }
+      return {
+        next: (...args) => observe(() => iterator.next(...args)),
+        return: (...args) =>
+          observe(
+            () => iterator.return
+              ? iterator.return(...args)
+              : Promise.resolve({ done: true as const, value: args[0] }),
+            "return",
+          ),
+        throw: iterator.throw
+          ? (...args) => observe(() => iterator.throw!(...args), "throw", args[0])
+          : undefined,
+        [Symbol.asyncIterator]() { return this; },
+      };
+    },
+  };
+}

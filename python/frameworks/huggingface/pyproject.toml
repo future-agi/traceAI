@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-huggingface"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for HuggingFace Inference API - text generation, chat, and embeddings"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -28,7 +28,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.0.0"
 huggingface-hub = ">=0.20.0"
 
 [tool.poetry.urls]

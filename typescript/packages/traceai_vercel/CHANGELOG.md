@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.5] - pending release
+
+### Fixed
+- Embedding calls made with embed and embedMany keep their token usage in auto mode.
+
 ## [0.1.4] - pending release
 ### Feature
 - `enableVercelInstrumentation()` (also exported as `enable`) and `VercelAIInstrumentation` trace the AI SDK's `generateText`, `streamText`, `generateObject`, `streamObject`, `embed` and `embedMany` without `experimental_telemetry`. The zero-code agent `@traceai/auto` uses it.

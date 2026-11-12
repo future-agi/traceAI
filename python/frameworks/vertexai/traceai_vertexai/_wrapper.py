@@ -319,52 +319,55 @@ def _use_span(span: Span) -> Callable[[], ContextManager[Span]]:
 
 
 def _finish(span: Span, result: Any) -> None:
-    if isinstance(result, BaseException):
-        span.record_exception(result)
-        span.set_status(Status(StatusCode.ERROR, f"{type(result).__name__}: {result}"))
-        span.end()
-        return
-
-    if isinstance(result, proto.Message):
-        raw_output = result.__class__.to_dict(result)
-        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(raw_output))
-
-        if isinstance(result, v1.CountTokensResponse):
-            output = result.total_tokens
-        elif isinstance(result, v1.GenerateContentResponse):
-            output = result.candidates[0].content.parts[0].text
-            output = safe_json_dumps(output)
-        else:
-            output = result.__class__.to_dict(result)
-
-            predictions = output.get("predictions", [])
-            for idx, prediction in enumerate(predictions):
-                if (
-                    isinstance(prediction, dict)
-                    and "embeddings" in prediction
-                    and isinstance(prediction["embeddings"], dict)
-                ):
-                    output = prediction["embeddings"]
-                    vector = output.get("values")
-                    span.set_attribute(GEN_AI_SPAN_KIND, EMBEDDING)
-                    span.set_attribute(EMBEDDING_EMBEDDINGS, safe_json_dumps(output))
-                    span.set_attribute(
-                        f"{EMBEDDING_EMBEDDINGS}.{idx}.{EMBEDDING_VECTOR}",
-                        safe_json_dumps(vector),
-                    )
-
-        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
-        span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-
-    elif result is not None:
-        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
-        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
     try:
+        if isinstance(result, BaseException):
+            span.record_exception(result)
+            span.set_status(Status(StatusCode.ERROR, f"{type(result).__name__}: {result}"))
+            return
+
+        # The RPC succeeded even if response attribute extraction fails.
+        span.set_status(Status(StatusCode.OK))
+        if isinstance(result, proto.Message):
+            raw_output = result.__class__.to_dict(result)
+            span.set_attribute(OUTPUT_VALUE, safe_json_dumps(raw_output))
+            output = raw_output
+
+            if isinstance(result, v1.CountTokensResponse):
+                output = result.total_tokens
+            elif isinstance(result, v1.GenerateContentResponse):
+                # Safety blocks may omit candidates or parts. Keep the raw
+                # response for these cases and for non-text (e.g. tool) parts.
+                if result.candidates:
+                    parts = result.candidates[0].content.parts
+                    if parts and parts[0].text:
+                        output = safe_json_dumps(parts[0].text)
+            else:
+                predictions = output.get("predictions", [])
+                for idx, prediction in enumerate(predictions):
+                    if (
+                        isinstance(prediction, dict)
+                        and "embeddings" in prediction
+                        and isinstance(prediction["embeddings"], dict)
+                    ):
+                        output = prediction["embeddings"]
+                        vector = output.get("values")
+                        span.set_attribute(GEN_AI_SPAN_KIND, EMBEDDING)
+                        span.set_attribute(EMBEDDING_EMBEDDINGS, safe_json_dumps(output))
+                        span.set_attribute(
+                            f"{EMBEDDING_EMBEDDINGS}.{idx}.{EMBEDDING_VECTOR}",
+                            safe_json_dumps(vector),
+                        )
+
+            span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
+            span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+
+        elif result is not None:
+            span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
         _update_span(result, span)
     except BaseException as exc:
         logger.exception(str(exc))
-    span.set_status(Status(StatusCode.OK))
-    span.end()
+    finally:
+        span.end()
 
 
 def _get_prediction_service_request(args: Iterable[Any]) -> Optional[proto.Message]:

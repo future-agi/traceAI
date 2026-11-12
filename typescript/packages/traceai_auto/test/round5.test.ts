@@ -146,14 +146,14 @@ test.each(["clone", "released-reader"])("documented OTHER %s cancellation keeps 
     expect(actual.spans[0].attributes["traceai.wire.incomplete"]).toBe(true); expect(actual.spans[0].attributes["output.value"]).toBeUndefined();
   } finally { globalThis.fetch = original; }
 });
-test("documented OTHER HTTP-200 provider-failure stream preserves baseline bytes but retains HTTP-derived successful status", async () => {
+test("documented OTHER HTTP-200 provider-failure stream preserves baseline bytes and reports the provider failure", async () => {
   const original = globalThis.fetch, text = 'data: {"type":"response.failed","response":{"status":"failed","error":{"message":"provider failed"}}}\n\n';
   const baseline = await new Response(text).text(), spans: any[] = [];
   globalThis.fetch = () => Promise.resolve(new Response(text, { headers: { "content-type": "text/event-stream" } }));
   const hook = createFetchHook(4096, span => spans.push(span), { active: () => null, skip: () => false, run: (_p, work) => work() });
   try {
     expect(await (await fetch("https://api.openai.com/v1/responses", { method: "POST", body: '{"model":"fixture"}' })).text()).toBe(baseline);
-    expect(spans).toHaveLength(1); expect(spans[0].ok).toBe(true); expect(spans[0].description).toBeUndefined();
+    expect(spans).toHaveLength(1); expect(spans[0].ok).toBe(false); expect(spans[0].description).toBe("provider failed");
     expect(spans[0].attributes["gen_ai.response.finish_reasons"]).toEqual(["failed"]);
   } finally { hook.remove(); globalThis.fetch = original; }
 });

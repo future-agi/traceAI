@@ -1,14 +1,22 @@
 # OpenRouter TypeScript tracing
 
-Trace the official `@openrouter/sdk` 1.5.33+ inference calls through its supported custom HTTP client. Install `@traceai/openrouter`, `@openrouter/sdk`, and a configured OpenTelemetry SDK exporter. Configure Future AGI's OTLP HTTP endpoint `https://api.futureagi.com/tracer/v1/traces` with `FI_API_KEY` and `FI_SECRET_KEY` in your exporter; never embed secrets in trace attributes.
+Trace the official `@openrouter/sdk` 1.5.33+ inference calls through its supported custom HTTP client. Install the adapter, the SDK and `@traceai/fi-core`, which sets up the exporter to Future AGI:
+
+```sh
+npm install @traceai/openrouter @openrouter/sdk @traceai/fi-core
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY` and `OPENROUTER_API_KEY`, then:
 
 ```ts
+import { register, ProjectType } from "@traceai/fi-core";
 import { OpenRouter } from "@openrouter/sdk";
 import { createOpenRouterTracingClient } from "@traceai/openrouter";
 
+const tracerProvider = register({ projectName: "openrouter-demo", projectType: ProjectType.OBSERVE });
 const openrouter = new OpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
-  httpClient: createOpenRouterTracingClient(),
+  httpClient: createOpenRouterTracingClient({ tracer: tracerProvider.getTracer("@traceai/openrouter") }),
 });
 const result = await openrouter.chat.send({
   chatRequest: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Hello" }] },

@@ -1,3 +1,8 @@
+## [0.1.15] - pending release
+
+### Fixed
+- When input hiding is off, chat spans record the conversation's roles, tool calls and content parts as input messages, and the span's input text combines the messages' text. Cached input and reasoning token counts are recorded for regular and streamed calls when the response includes them.
+
 ## [0.1.14] - 2026-11-10
 ### Added
 - Add Azure client deployment, API version and endpoint host/explicit port span metadata through the existing OpenAI instrumentor, without recording full URLs or credentials (#154).

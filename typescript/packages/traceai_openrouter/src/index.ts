@@ -5,7 +5,7 @@ import { HTTPClient, type Fetcher } from "@openrouter/sdk";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sdkOperations = require("@openrouter/sdk/models/operations") as Record<string, { safeParse(value: unknown): { success: boolean } }>;
 
-export const VERSION = "0.1.0"; // x-release-please-version
+export const VERSION = "0.1.1"; // x-release-please-version
 
 /** Only official SDK inference endpoints are traced; unrelated OpenRouter APIs are left alone. */
 const operations: Readonly<Record<string, string>> = {
@@ -87,12 +87,13 @@ async function responseMetadata(response: Response): Promise<{ payload?: unknown
 }
 
 /** Observe complete bounded SSE frames, without retaining message content. */
-function observer(span: Span, markError: () => void) {
+function observer(span: Span, markError: () => void, markDone: () => void = () => {}, markUnobserved: () => void = () => {}) {
   const decoder = new TextDecoder();
   let pending = "";
   return (chunk: Uint8Array) => {
     pending += decoder.decode(chunk, { stream: true });
-    if (pending.length > 65536) { pending = ""; return; }
+    // An oversized frame is not observed, so the stream can no longer be shown to have succeeded.
+    if (pending.length > 65536) { pending = ""; markUnobserved(); return; }
     // Match the SDK's SSE boundary variants, including CRLF and LF-only frames.
     const boundary = /\r\n\r\n|\r\n\r|\r\n\n|\r\r\n|\n\r\n|\r\r|\n\r|\n\n/g;
     let start = 0;
@@ -100,10 +101,12 @@ function observer(span: Span, markError: () => void) {
       const frame = pending.slice(start, match.index);
       start = match.index! + match[0].length;
       const data = frame.split(/\r\n|\r|\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
-      if (!data || data === "[DONE]") continue;
+      if (!data) continue;
+      if (data === "[DONE]") { markDone(); continue; }
       try {
         const event = object(JSON.parse(data));
         if (event?.type === "error" || event?.type === "response.failed" || event?.type === "response.incomplete") markError();
+        else if (event?.type === "response.completed") markDone();
         // Chat chunks carry usage directly; Responses events carry the response in a nested object.
         setOutput(span, event?.response ?? event);
       } catch { markError(); /* The SDK will report the parsing failure to its caller. */ }
@@ -142,7 +145,17 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
     const model = await requestModel(request);
     if (model) span.setAttribute("gen_ai.request.model", model);
     let ended = false;
-    const end = (error = false) => { if (!ended) { ended = true; if (error) span.setStatus({ code: SpanStatusCode.ERROR }); span.end(); } };
+    let failed = false;
+    // OK needs positive evidence of a completed success, as in the other traceAI instrumentors: a
+    // validated JSON body, or a stream's final [DONE] or response.completed event. A provider failure
+    // seen in a stream stays ERROR; anything else keeps the default status.
+    const end = (error = false, succeeded = false) => {
+      if (ended) return;
+      ended = true;
+      if (error) span.setStatus({ code: SpanStatusCode.ERROR });
+      else if (succeeded && !failed) span.setStatus({ code: SpanStatusCode.OK });
+      span.end();
+    };
     try {
       // Keep only the SDK's transport in scope; do not wrap a separate HTTP span.
       const response = await context.with(trace.setSpan(context.active(), span), () => fetcher(input, init));
@@ -156,17 +169,23 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
       }
       if (type === "text/event-stream" && response.body) {
         const reader = response.body.getReader();
-        const observe = observer(span, () => span.setStatus({ code: SpanStatusCode.ERROR }));
+        let streamDone = false;
+        let unobserved = false;
+        let cancelling = false;
+        const observe = observer(span, () => { failed = true; span.setStatus({ code: SpanStatusCode.ERROR }); }, () => { streamDone = true; }, () => { unobserved = true; });
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
             try {
               const { done, value } = await reader.read();
-              if (done) { end(); controller.close(); return; }
+              // A cancel resolves a pending read as done; cancel() ends the span with its reason.
+              if (cancelling) return;
+              if (done) { end(false, streamDone && !unobserved); controller.close(); return; }
               observe(value);
               controller.enqueue(value);
             } catch (error) { end(true); controller.error(error); }
           },
-          async cancel(reason) { try { await reader.cancel(reason); } finally { end(reason instanceof Error); } },
+          // The SDK cancels the body after the final [DONE] or response.completed event; that is a completed stream.
+          async cancel(reason) { cancelling = true; try { await reader.cancel(reason); } finally { end(reason instanceof Error, streamDone && !unobserved); } },
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       }
@@ -177,7 +196,8 @@ export function createOpenRouterTracingClient(options: OpenRouterTracingOptions 
           end(true);
         } else {
           setOutput(span, metadata.payload);
-          end();
+          // An oversized body skips the bounded validation, so it is not evidence of success.
+          end(false, metadata.payload !== undefined);
         }
       } else end();
       return response;

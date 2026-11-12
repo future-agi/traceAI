@@ -45,3 +45,26 @@ test('uses provider trace ID and derives start from end and duration', async () 
   assert.deepEqual(exported[0].startTime, [1767225600, 500000000]);
   assert.deepEqual(exported[0].duration, [0, 500000000]);
 });
+
+test('every exported span names its Future AGI project, so the backend accepts the batch', async () => {
+  const run = async (options, env) => {
+    const saved = process.env.FI_PROJECT_NAME;
+    if (env === undefined) delete process.env.FI_PROJECT_NAME; else process.env.FI_PROJECT_NAME = env;
+    try {
+      let exported = [];
+      const reporter = new VitestEvalsReporter({ ...options, exporter: { export(spans, cb) { exported = spans; cb({ code: 0 }); }, shutdown: async () => {} } });
+      const module = { children: { *allTests() { yield { name: 'synthetic eval', meta: () => ({ eval: { scores: [{ name: 'accuracy', score: 1 }] } }), result: () => ({ state: 'passed' }) }; } } };
+      await reporter.onTestRunEnd([module]);
+      assert.ok(exported.length > 0);
+      return exported.map(span => span.resource.attributes);
+    } finally {
+      if (saved === undefined) delete process.env.FI_PROJECT_NAME; else process.env.FI_PROJECT_NAME = saved;
+    }
+  };
+  for (const attrs of await run({}, undefined)) {
+    assert.equal(attrs.project_name, 'vitest-evals');
+    assert.equal(attrs.project_type, 'observe');
+  }
+  for (const attrs of await run({}, 'synthetic-env-project')) assert.equal(attrs.project_name, 'synthetic-env-project');
+  for (const attrs of await run({ projectName: 'synthetic-option-project' }, 'synthetic-env-project')) assert.equal(attrs.project_name, 'synthetic-option-project');
+});

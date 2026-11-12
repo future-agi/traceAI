@@ -205,6 +205,16 @@ class _WithOpenAI(ABC):
         if isinstance(model := request_parameters.get("model"), str) and model:
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         try:
+            if (
+                cast_to is self._openai.types.chat.ChatCompletion
+                and isinstance(messages := request_parameters.get("messages"), list)
+                and not (
+                    self._config.hide_inputs or self._config.hide_input_messages
+                    or self._config.hide_input_text or self._config.hide_input_images
+                )
+            ):
+                # Keep the complete conversation primary so indexed details cannot evict it.
+                yield SpanAttributes.GEN_AI_INPUT_MESSAGES, safe_json_dumps(messages)
             yield from _as_input_attributes(
                 _io_value_and_type(request_parameters),
             )

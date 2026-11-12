@@ -1,10 +1,14 @@
 // Run with FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME and OPENAI_API_KEY set.
+// Spans go to {FI_BASE_URL}/tracer/v1/traces; FI_BASE_URL is optional and
+// defaults to https://api.futureagi.com.
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	traceailangchaingo "github.com/future-agi/traceAI/go/langchaingo"
 	"github.com/tmc/langchaingo/llms"
@@ -15,8 +19,16 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+const defaultBaseURL = "https://api.futureagi.com"
+
+// tracesEndpoint returns the OTLP/HTTP traces URL under FI_BASE_URL, ignoring
+// trailing slashes, or under the hosted Future AGI API when FI_BASE_URL is unset.
+func tracesEndpoint() string {
+	return cmp.Or(strings.TrimRight(os.Getenv("FI_BASE_URL"), "/"), defaultBaseURL) + "/tracer/v1/traces"
+}
+
 func run(ctx context.Context) error {
-	exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL("https://api.futureagi.com/tracer/v1/traces"), otlptracehttp.WithHeaders(map[string]string{"X-Api-Key": os.Getenv("FI_API_KEY"), "X-Secret-Key": os.Getenv("FI_SECRET_KEY")}), otlptracehttp.WithCompression(otlptracehttp.NoCompression))
+	exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(tracesEndpoint()), otlptracehttp.WithHeaders(map[string]string{"X-Api-Key": os.Getenv("FI_API_KEY"), "X-Secret-Key": os.Getenv("FI_SECRET_KEY")}), otlptracehttp.WithCompression(otlptracehttp.NoCompression))
 	if err != nil {
 		return err
 	}

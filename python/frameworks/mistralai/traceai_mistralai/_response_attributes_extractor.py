@@ -81,6 +81,12 @@ def _get_attributes_from_chat_completion_message(
         tool_calls, Iterable
     ):
         for index, tool_call in enumerate(tool_calls):
+            if tool_call_id := _get_attribute_or_value(tool_call, "id"):
+                yield (
+                    f"{MessageAttributes.MESSAGE_TOOL_CALLS}.{index}."
+                    f"{ToolCallAttributes.TOOL_CALL_ID}",
+                    tool_call_id,
+                )
             if function := _get_attribute_or_value(tool_call, "function"):
                 if name := _get_attribute_or_value(function, "name"):
                     yield (

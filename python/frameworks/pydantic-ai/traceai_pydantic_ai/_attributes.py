@@ -28,6 +28,15 @@ class PydanticAIAttributes:
     # Span Kind
     # =========================================================================
     SPAN_KIND = "pydantic_ai.span_kind"
+    GEN_AI_SPAN_KIND = "gen_ai.span.kind"
+
+    # =========================================================================
+    # Canonical Content Attributes
+    # =========================================================================
+    INPUT_VALUE = "input.value"
+    INPUT_MIME_TYPE = "input.mime_type"
+    OUTPUT_VALUE = "output.value"
+    OUTPUT_MIME_TYPE = "output.mime_type"
 
     # =========================================================================
     # Agent Attributes
