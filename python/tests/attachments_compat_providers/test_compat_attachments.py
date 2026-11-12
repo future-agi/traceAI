@@ -152,6 +152,99 @@ def test_binding_with_openai_instrumentor_uploads_once(f01, media_provider, inst
     manager.shutdown(5)
 
 
+def _compat_binding(package, monkeypatch):
+    """The binding instrumentor (client check forced on for the loopback URL) and its own span name."""
+    if package == "xai":
+        from traceai_xai import XAIInstrumentor
+        from traceai_xai import _wrappers
+        monkeypatch.setattr(_wrappers, "_is_xai_client", lambda instance: True)
+        return XAIInstrumentor(), "xAI Chat Completions"
+    from traceai_minimax import MiniMaxInstrumentor
+    from traceai_minimax import _wrappers
+    monkeypatch.setattr(_wrappers, "is_minimax_client", lambda instance: True)
+    return MiniMaxInstrumentor(), "minimax.chat.completions"
+
+
+def _openai_clients(openai, media_provider):
+    options = dict(api_key="sk-synthetic", base_url=media_provider.url + "/v1", max_retries=0)
+    return openai.OpenAI(**options), openai.AsyncOpenAI(**options)
+
+
+@pytest.mark.parametrize("order", ["openai_first", "binding_first"])
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_binding_without_attachments_keeps_its_span(media_provider, instrumented, monkeypatch, package, order):
+    """Attachments off: tracing is unchanged, so the binding span and the OpenAI span both stay."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from traceai_openai import OpenAIInstrumentor
+
+    binding, span_name = _compat_binding(package, monkeypatch)
+    pair = [OpenAIInstrumentor(), binding]
+    if order == "binding_first":
+        pair.reverse()
+    for instrumentor in pair:
+        exporter = instrumented(instrumentor, None)
+    client, async_client = _openai_clients(openai, media_provider)
+    client.chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}])
+    asyncio.run(async_client.chat.completions.create(model="m", messages=[{"role": "user", "content": "hi"}]))
+    names = sorted(span.name for span in exporter.get_finished_spans())
+    assert names == sorted([span_name, "ChatCompletion"] * 2), names
+
+
+@pytest.mark.parametrize("flag", [None, "hide_input_images", "hide_inputs", "pii_redaction"])
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_deferred_call_keeps_binding_local_deny(f01, media_provider, instrumented, monkeypatch, package, flag):
+    """Attachments on: the whole call goes to traceai_openai (default config), under the binding's deny."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from traceai_openai import OpenAIInstrumentor
+
+    manager = f01.manager()
+    exporter = instrumented(OpenAIInstrumentor(), manager)
+    binding, _ = _compat_binding(package, monkeypatch)
+    instrumented(binding, manager, TraceConfig(**({flag: True} if flag else {})))
+    client, async_client = _openai_clients(openai, media_provider)
+    client.chat.completions.create(model="m", messages=image_messages())
+    asyncio.run(async_client.chat.completions.create(model="m", messages=image_messages()))
+    flush(manager)
+    assert f01.payloads == ([] if flag else [IMAGE, IMAGE])
+    assert [span.name for span in exporter.get_finished_spans()] == ["ChatCompletion"] * 2
+    manager.shutdown(5)
+
+
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_deferred_call_keeps_context_policy_and_owner(f01, media_provider, instrumented, monkeypatch, package):
+    """A per-call deny and an outer owner mark already in the context survive the deferral."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from opentelemetry import context as otel_context
+    from fi_instrumentation.attachments import CapturePolicy
+    from fi_instrumentation.attachments import media_capture
+    from traceai_openai import OpenAIInstrumentor
+
+    manager = f01.manager()
+    binding, _ = _compat_binding(package, monkeypatch)
+    instrumented(binding, manager)
+    instrumented(OpenAIInstrumentor(), manager)
+    client, _ = _openai_clients(openai, media_provider)
+    for key, value in ((media_capture.CAPTURE_POLICY_KEY, CapturePolicy(record_inputs=False)),
+                       (media_capture.OWNER_KEY, True)):
+        token = otel_context.attach(otel_context.set_value(key, value))
+        try:
+            client.chat.completions.create(model="m", messages=image_messages())
+        finally:
+            otel_context.detach(token)
+    flush(manager)
+    assert f01.payloads == []
+    client.chat.completions.create(model="m", messages=image_messages())  # control
+    flush(manager)
+    assert f01.payloads == [IMAGE]
+    manager.shutdown(5)
+
+
 def test_minimax_chat_images(f01, media_provider, instrumented, monkeypatch):
     openai = pytest.importorskip("openai")
     pytest.importorskip("traceai_minimax")

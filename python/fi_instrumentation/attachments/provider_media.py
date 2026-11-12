@@ -35,6 +35,7 @@ from typing import Any, Callable, Mapping, Optional, Tuple
 from opentelemetry import context as otel_context
 
 from . import media_capture as mc
+from .policy import CapturePolicy
 from .types import Bytes
 
 KiB = 1024
@@ -115,6 +116,40 @@ def claim(context=None):
     context, so nested provider instrumentors (for example OpenAI under LiteLLM) skip it.
     """
     return otel_context.set_value(mc.OWNER_KEY, True, context)
+
+
+def deferral_policy(trace_config: Any) -> CapturePolicy:
+    """An instrumentor's local ``TraceConfig`` as a restriction-only ``CapturePolicy``.
+
+    ``pii_redaction`` denies all capture; an input hide flag or ``hide_input_images`` denies
+    every input part; an output hide flag denies every output part. The receiving layer
+    cannot tell an image from another input part through a ``CapturePolicy``, so
+    ``hide_input_images`` also denies input files and audio on the deferred call (deny wins).
+    An unreadable flag counts as set.
+    """
+    def restricted(names: Tuple[str, ...]) -> bool:
+        return any(mc._restricted(trace_config, name) for name in names)
+
+    return CapturePolicy(
+        capture_content=not restricted(("pii_redaction",)),
+        record_inputs=not restricted(mc._INPUT_HIDE + ("hide_input_images",)),
+        record_outputs=not restricted(mc._OUTPUT_HIDE),
+    )
+
+
+def deferred(trace_config: Any, context=None):
+    """The context for a call an instrumentor hands WHOLE to another one (xAI/MiniMax to traceai_openai).
+
+    The deferring instrumentor's local deny is merged (deny wins) into the per-call policy
+    (``media_capture.CAPTURE_POLICY_KEY``), so the receiving instrumentor cannot capture more
+    than either configuration allows, whatever its own ``TraceConfig``. A policy already in the
+    context and the owner mark are kept. Never raises: on any error the call is denied.
+    """
+    try:
+        policy = mc.merge_capture_policies(mc.context_capture_policy(context), deferral_policy(trace_config))
+    except Exception:
+        policy = CapturePolicy(capture_content=False, requested=False)
+    return otel_context.set_value(mc.CAPTURE_POLICY_KEY, policy, context)
 
 
 # ------------------------------------------------------------------ type checks

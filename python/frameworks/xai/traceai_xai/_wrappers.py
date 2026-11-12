@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterator, Tuple
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
@@ -17,6 +18,8 @@ logger.addHandler(logging.NullHandler())
 
 # xAI-specific base URL for detection
 XAI_BASE_URL = "api.x.ai"
+# Per-call capture policy key, shared by name (fi_instrumentation.attachments.media_capture).
+_CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 
 
 class _WithTracer(ABC):
@@ -50,6 +53,28 @@ class _WithTracer(ABC):
             ).compatible_messages(messages, self._media_dialect)
         except Exception:
             logger.debug("Attachment capture unavailable", exc_info=True)
+
+    def _defers(self) -> bool:
+        """Hand the whole call to an enabled traceai_openai, only while attachments are on.
+
+        With attachments off this binding traces exactly as before (its own span too).
+        """
+        return self._attachments is not None and _shared_instrumentor_enabled()
+
+    @contextmanager
+    def _deferred(self) -> Iterator[None]:
+        """Run the handed-over call under this binding's local deny (deny wins downstream)."""
+        try:
+            from fi_instrumentation.attachments.provider_media import deferred
+
+            token = context_api.attach(deferred(self._config))
+        except Exception:
+            # An unreadable restriction is a restriction: deny capture for this call.
+            token = context_api.attach(context_api.set_value(_CAPTURE_POLICY_KEY, False))
+        try:
+            yield
+        finally:
+            context_api.detach(token)
 
     @contextmanager
     def _start_span(
@@ -86,10 +111,11 @@ def _is_xai_client(instance: Any) -> bool:
 
 
 def _shared_instrumentor_enabled() -> bool:
-    """Let the request-level OpenAI instrumentor own the call when both are enabled.
+    """True while traceai_openai's OpenAIInstrumentor is enabled.
 
-    Same rule as the Fireworks route: one request has one owner (span and media),
-    whatever the setup order. Do not import the optional package; inspect live state.
+    With attachments on, the request-level OpenAI instrumentor then owns the call (span
+    and media), whatever the setup order. Do not import the optional package; inspect
+    live state on each call.
     """
     module = sys.modules.get("traceai_openai")
     instrumentor = getattr(module, "OpenAIInstrumentor", None)
@@ -240,9 +266,13 @@ class _CompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # One request must have one owner, regardless of setup order.
-        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
+        # Check if this is an xAI client
+        if not _is_xai_client(instance):
             return wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return wrapped(*args, **kwargs)
 
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")
@@ -312,9 +342,13 @@ class _AsyncCompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # One request must have one owner, regardless of setup order.
-        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
+        # Check if this is an xAI client
+        if not _is_xai_client(instance):
             return await wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return await wrapped(*args, **kwargs)
 
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")

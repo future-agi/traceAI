@@ -23,13 +23,16 @@ from traceai_minimax._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+# Per-call capture policy key, shared by name (fi_instrumentation.attachments.media_capture).
+_CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 
 
 def _shared_instrumentor_enabled() -> bool:
-    """True while traceai_openai's OpenAIInstrumentor is enabled (it then owns the call's media).
+    """True while traceai_openai's OpenAIInstrumentor is enabled.
 
-    Do not import the optional package; inspect live state on each call, so either
-    installation order works.
+    With attachments on, the request-level OpenAI instrumentor then owns the call (span
+    and media), whatever the setup order. Do not import the optional package; inspect
+    live state on each call.
     """
     module = sys.modules.get("traceai_openai")
     instrumentor = getattr(module, "OpenAIInstrumentor", None)
@@ -49,22 +52,38 @@ class _WithTracer(ABC):
         self._config = config
 
     def _capture_chat_media(self, span: _WithSpan, messages: Any) -> None:
-        """Typed chat media (data-URI images) through the shared manager; never raises.
-
-        The OpenAI instrumentor wraps the same SDK method; while it is enabled it captures this
-        call's media, so this binding uploads nothing (one upload per part, either order).
-        """
+        """Typed chat media (data-URI images) through the shared manager; never raises."""
         if self._attachments is None:
             return
         try:
-            if _shared_instrumentor_enabled():
-                return
             from fi_instrumentation.attachments.provider_media import ProviderMedia
 
             ProviderMedia(self._attachments, span._span, "minimax", trace_config=self._config).compatible_messages(
                 messages, "image")
         except Exception:
             logger.debug("Attachment capture unavailable", exc_info=True)
+
+    def _defers(self) -> bool:
+        """Hand the whole call to an enabled traceai_openai, only while attachments are on.
+
+        With attachments off this binding traces exactly as before (its own span too).
+        """
+        return self._attachments is not None and _shared_instrumentor_enabled()
+
+    @contextmanager
+    def _deferred(self) -> Iterator[None]:
+        """Run the handed-over call under this binding's local deny (deny wins downstream)."""
+        try:
+            from fi_instrumentation.attachments.provider_media import deferred
+
+            token = context_api.attach(deferred(self._config))
+        except Exception:
+            # An unreadable restriction is a restriction: deny capture for this call.
+            token = context_api.attach(context_api.set_value(_CAPTURE_POLICY_KEY, False))
+        try:
+            yield
+        finally:
+            context_api.detach(token)
 
     @contextmanager
     def _start_as_current_span(
@@ -122,6 +141,10 @@ class _ChatCompletionWrapper(_WithTracer):
 
         if not is_minimax_client(client) and not is_minimax_client(instance):
             return wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
         is_streaming = request_parameters.get("stream", False)
@@ -230,6 +253,10 @@ class _AsyncChatCompletionWrapper(_WithTracer):
 
         if not is_minimax_client(client) and not is_minimax_client(instance):
             return await wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return await wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
         is_streaming = request_parameters.get("stream", False)

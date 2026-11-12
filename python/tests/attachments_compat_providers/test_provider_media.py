@@ -450,3 +450,51 @@ def test_dataclass_policy_unchanged_by_helper():
     policy = media_capture.local_capture_policy(None, direction="input", image=True)
     assert dataclasses.asdict(policy) == dataclasses.asdict(
         dataclasses.replace(CapturePolicy(), model_input=True))
+
+
+class _Unreadable:
+    """A TraceConfig stand-in whose flags cannot be read."""
+
+    def __getattr__(self, name):
+        raise RuntimeError(name)
+
+
+@pytest.mark.parametrize("flags,expected", [
+    ({}, {}),
+    ({"hide_input_images": True}, {"record_inputs": False}),
+    ({"hide_inputs": True}, {"record_inputs": False}),
+    ({"hide_input_messages": True}, {"record_inputs": False}),
+    ({"hide_input_text": True}, {"record_inputs": False}),
+    ({"hide_outputs": True}, {"record_outputs": False}),
+    ({"hide_output_text": True}, {"record_outputs": False}),
+    ({"pii_redaction": True}, {"capture_content": False}),
+])
+def test_deferral_policy_folds_local_deny(flags, expected):
+    policy = provider_media.deferral_policy(TraceConfig(**flags))
+    assert dataclasses.asdict(policy) == dataclasses.asdict(dataclasses.replace(CapturePolicy(), **expected))
+
+
+def test_deferred_context_merges_and_fails_closed():
+    """A deferred call keeps the context policy and owner mark; local deny is added, never relaxed."""
+    key = media_capture.CAPTURE_POLICY_KEY
+    assert provider_media.deferral_policy(None) == CapturePolicy()
+    unreadable = provider_media.deferral_policy(_Unreadable())
+    assert not (unreadable.capture_content or unreadable.record_inputs or unreadable.record_outputs)
+
+    outer = otel_context.set_value(media_capture.OWNER_KEY, True,
+                                   otel_context.set_value(key, CapturePolicy(record_outputs=False)))
+    merged = provider_media.deferred(TraceConfig(hide_input_images=True), outer)
+    policy = otel_context.get_value(key, merged)
+    assert (policy.record_inputs, policy.record_outputs, policy.capture_content) == (False, False, True)
+    assert media_capture.owned_elsewhere(merged)
+
+    garbage = provider_media.deferred(TraceConfig(), otel_context.set_value(key, "not-a-policy"))
+    denied = otel_context.get_value(key, garbage)
+    assert denied.capture_content is False and denied.requested is False
+
+    token = otel_context.attach(provider_media.deferred(TraceConfig(pii_redaction=True)))
+    try:
+        assert media_capture.context_capture_policy().capture_content is False
+    finally:
+        otel_context.detach(token)
+    assert media_capture.context_capture_policy() is None
