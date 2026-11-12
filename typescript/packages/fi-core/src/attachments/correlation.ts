@@ -65,6 +65,8 @@ export class AttachmentCorrelation {
 export interface AttachmentDeferredHost {
   deferredBound(target: AttachmentDeferredCorrelation, spanOrContext: AttachmentSpan): void;
   deferredCancelled(target: AttachmentDeferredCorrelation): void;
+  /** True once the target's bind deadline has passed on the host's clock. Asked BEFORE the identity is bound. */
+  deferredExpired?(target: AttachmentDeferredCorrelation): boolean;
 }
 /**
  * A capture target whose span does not exist yet (late-bound wire spans). Captures admitted against it keep bounded
@@ -78,9 +80,17 @@ export class AttachmentDeferredCorrelation extends AttachmentCorrelation {
   constructor(/** @internal */ readonly host: AttachmentDeferredHost | undefined, /** @internal */ readonly expiresAt: number) { super(); }
   /** True while the target is unbound and still accepts captures (no timeout check; the manager checks that). */
   get pending(): boolean { return !this.cancelled && !this.snapshot(); }
-  /** Bind the emitted span. Pending captures are re-evaluated now and upload against it, or end with a reason. Never throws. */
+  /**
+   * Bind the emitted span. Pending captures are re-evaluated now and upload against it, or end with a reason. A bind
+   * after `bindTimeoutMs` binds nothing: the target is cancelled (captures end `correlation_unavailable`) and this
+   * returns false. Never throws.
+   */
   bind(spanOrContext: AttachmentSpan): boolean {
     if (this.cancelled) return false;
+    // The deadline is enforced BEFORE the identity exists, so no ticket or open stream can outlive it through a late bind.
+    let expired = false;
+    try { expired = !this.snapshot() && this.host?.deferredExpired?.(this) === true; } catch { expired = true; }
+    if (expired) { this.cancel(); return false; }
     const bound = super.bind(spanOrContext);
     if (bound) { try { this.host?.deferredBound(this, spanOrContext); } catch { /* host failures never reach the caller */ } }
     return bound;

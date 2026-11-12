@@ -242,6 +242,80 @@ test('T-DT-14 bind is synchronous and never throws; the transport runs only from
   await f.manager.shutdown();
 });
 
+// Sampling at bind covers every capture on the target, not only those parked before bind (design 1.4 step 10).
+test('T-DT-15 stream open at bind, bound to an unsampled or non-recording span: unsampled, budget returned, nothing uploaded', async () => {
+  const f = await managerV1();
+  for (const bindTo of [{ ...ctx2, traceFlags: 0 }, (() => { const ended = span(ctx2); ended.end(); return ended; })()]) {
+    const target = f.manager.deferredCorrelation();
+    const stream = f.manager.startAttachmentStream(target, { ...mp3, maxBytes: 64 }); assert.equal(stream.tryWrite(new Uint8Array([1, 2, 3])), true);
+    assert.equal(target.bind(bindTo), true);
+    assert.equal(stream.reason, 'unsampled', 'the open stream is refused at bind'); assert.equal(f.manager.status().ownedBytes, 0);
+    assert.equal(stream.tryWrite(new Uint8Array([4])), false);
+    assert.equal((await stream.finish().completion).status, 'unsampled');
+  }
+  await f.manager.flush(50); assert.equal(f.ops().includes('initialize'), false); assert.equal(f.manager.status().openStreams, 0);
+  await f.manager.shutdown();
+});
+test('T-DT-16 ticket preflighted before bind, committed after bind to an unsampled span: unsampled, source never read, nothing uploaded', async () => {
+  const f = await managerV1(); const target = f.manager.deferredCorrelation();
+  const ticket = f.manager.preflight(target, { ...wav, maxBytes: 4 }); assert.equal(ticket.reason, 'queued');
+  const blobTicket = f.manager.preflight(target, { ...wav, maxBytes: 5, sourceKind: 'Blob' }); assert.equal(blobTicket.reason, 'queued');
+  target.bind({ ...ctx2, traceFlags: 0 });
+  assert.equal(f.manager.status().openTickets, 0, 'reservations on the target are released at bind'); assert.equal(f.manager.status().ownedBytes, 0);
+  let read = false;
+  const h = ticket.attach({ kind: 'Bytes', get data() { read = true; return new Uint8Array([1, 2]); } });
+  assert.equal(h.admission, 'unsampled'); assert.equal((await h.completion).status, 'unsampled'); assert.equal(read, false);
+  const { blob, reads } = spyBlob(new Uint8Array([1, 2, 3, 4, 5]));
+  assert.equal(blobTicket.attach({ kind: 'Blob', data: blob }).admission, 'unsampled'); assert.equal(reads(), 0);
+  await f.manager.flush(50); assert.equal(f.ops().includes('initialize'), false);
+  await f.manager.shutdown();
+});
+test('T-DT-17 late bind with no entry point since the deadline: bind returns false, open streams and tickets end correlation_unavailable', async () => {
+  const c = clock(); const f = await managerV1({}, { clock: c });
+  const target = f.manager.deferredCorrelation({ bindTimeoutMs: 1000 });
+  const stream = f.manager.startAttachmentStream(target, { ...mp3, maxBytes: 64, idleTtlMs: 300000 }); stream.tryWrite(new Uint8Array([1, 2]));
+  const ticket = f.manager.preflight(target, { ...wav, maxBytes: 4, ttlMs: 30000 });
+  c.advance(5000); // nothing touches the manager between the deadline and the bind
+  const s = span(ctx2);
+  assert.equal(target.bind(s), false, 'a late bind binds nothing'); assert.equal(target.snapshot(), undefined); assert.equal(target.pending, false);
+  assert.equal(stream.reason, 'correlation_unavailable'); assert.equal(stream.tryWrite(new Uint8Array([3])), false);
+  assert.equal((await stream.finish().completion).status, 'correlation_unavailable');
+  let read = false;
+  assert.equal(ticket.attach({ kind: 'Bytes', get data() { read = true; return new Uint8Array([9]); } }).admission, 'correlation_unavailable'); assert.equal(read, false);
+  assert.equal(f.manager.status().ownedBytes, 0); assert.equal(s.writes, 0);
+  await f.manager.flush(50); assert.equal(f.ops().includes('initialize'), false);
+  // Control: a bind inside the deadline still uploads a ticket committed after it and a stream finished after it.
+  const t2 = f.manager.deferredCorrelation({ bindTimeoutMs: 1000 });
+  const s2 = f.manager.startAttachmentStream(t2, { ...mp3, maxBytes: 8, idleTtlMs: 300000 }); s2.tryWrite(new Uint8Array([5]));
+  const k2 = f.manager.preflight(t2, { ...wav, maxBytes: 4, ttlMs: 30000 });
+  c.advance(999); assert.equal(t2.bind(span(ctx2)), true);
+  assert.equal((await s2.finish().completion).status, 'validating');
+  assert.equal((await k2.attach({ kind: 'Bytes', data: new Uint8Array([6]) }).completion).status, 'validating');
+  await f.manager.shutdown(1);
+});
+test('T-DT-18 backstops: with the bind notification lost, commit and finish still refuse an unsampled span; deferredBound refuses a late target', async () => {
+  // (a) The sampled check also runs at ticket commit and stream finish, not only in deferredBound.
+  const f = await managerV1(); f.manager.deferredBound = () => undefined;
+  const target = f.manager.deferredCorrelation();
+  const stream = f.manager.startAttachmentStream(target, { ...mp3, maxBytes: 8 }); stream.tryWrite(new Uint8Array([1]));
+  const ticket = f.manager.preflight(target, { ...wav, maxBytes: 4 });
+  assert.equal(target.bind({ ...ctx2, traceFlags: 0 }), true);
+  assert.equal((await stream.finish().completion).status, 'unsampled');
+  assert.equal(ticket.attach({ kind: 'Bytes', data: new Uint8Array([1]) }).admission, 'unsampled');
+  await f.manager.flush(50); assert.equal(f.ops().includes('initialize'), false); assert.equal(f.manager.status().ownedBytes, 0);
+  await f.manager.shutdown(1);
+  // (b) deferredBound fails a late target's open streams and tickets even if the pre-bind deadline check is bypassed.
+  const c = clock(); const g = await managerV1({}, { clock: c }); g.manager.deferredExpired = () => false;
+  const late = g.manager.deferredCorrelation({ bindTimeoutMs: 1000 });
+  const ls = g.manager.startAttachmentStream(late, { ...mp3, maxBytes: 8, idleTtlMs: 300000 }); ls.tryWrite(new Uint8Array([1]));
+  const lt = g.manager.preflight(late, { ...wav, maxBytes: 4, ttlMs: 30000 });
+  c.advance(5000); late.bind(span(ctx2));
+  assert.equal(ls.reason, 'correlation_unavailable');
+  assert.equal((await lt.attach({ kind: 'Bytes', data: new Uint8Array([1]) }).completion).status, 'expired', 'its reservation was released at bind');
+  await g.manager.flush(50); assert.equal(g.ops().includes('initialize'), false); assert.equal(g.manager.status().ownedBytes, 0);
+  await g.manager.shutdown(1);
+});
+
 // ---- T-SR consumed-stream reservation = min(requested, negotiated single-upload cap) ---------------------------------
 test('T-SR-01 server max_upload_bytes below 4 MiB: a 4 MiB stream request is admitted at the server cap', async () => {
   const f = await managerV1({}, { limits: { max_upload_bytes: 1 * MiB } });
