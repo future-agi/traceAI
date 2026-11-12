@@ -1,4 +1,5 @@
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
@@ -24,12 +25,46 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
+def _shared_instrumentor_enabled() -> bool:
+    """True while traceai_openai's OpenAIInstrumentor is enabled (it then owns the call's media).
+
+    Do not import the optional package; inspect live state on each call, so either
+    installation order works.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
+
+
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, *args: Any, attachments: Any = None, config: Any = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: _WithSpan, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared manager; never raises.
+
+        The OpenAI instrumentor wraps the same SDK method; while it is enabled it captures this
+        call's media, so this binding uploads nothing (one upload per part, either order).
+        """
+        if self._attachments is None:
+            return
+        try:
+            if _shared_instrumentor_enabled():
+                return
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(self._attachments, span._span, "minimax", trace_config=self._config).compatible_messages(
+                messages, "image")
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     @contextmanager
     def _start_as_current_span(
@@ -99,6 +134,7 @@ class _ChatCompletionWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span, request_parameters.get("messages"))
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -206,6 +242,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span, request_parameters.get("messages"))
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:

@@ -349,7 +349,8 @@ def _media_capture(instrumentor: Any, span: trace_api.Span, arguments: Optional[
         if not media.usable:
             return None
         if arguments is not None:
-            media.compatible_messages(arguments.get("messages"), "openai")
+            # PDF file parts too: LiteLLM claims the call, so the nested OpenAI instrumentor skips them.
+            media.compatible_messages(arguments.get("messages"), "openai", documents=True)
         return media
     except Exception:
         logger.debug("Attachment capture unavailable", exc_info=True)

@@ -299,6 +299,100 @@ def test_sniff_and_consistent():
     assert consistent("audio/webm", b"\x1a\x45\xdf\xa3" + b"\x00" * 12)
 
 
+@pytest.mark.parametrize("brand,expected", [
+    (b"isom", "video/mp4"), (b"mp42", "video/mp4"), (b"avc1", "video/mp4"),
+    # HEIF/HEIC and AVIF still images, QuickTime and audio-only M4A share the ftyp box: never video/mp4.
+    (b"heic", None), (b"heix", None), (b"mif1", None), (b"msf1", None), (b"avif", None), (b"avis", None),
+    (b"qt  ", None), (b"M4A ", None), (b"zzzz", None),
+])
+def test_sniff_checks_iso_bmff_major_brand(brand, expected):
+    head = b"\x00\x00\x00\x18ftyp" + brand + b"\x00\x00\x02\x00" + b"\x00" * 16
+    assert sniff(head) == expected
+    assert consistent("video/mp4", head) is (expected == "video/mp4")
+
+
+def test_heic_labelled_video_mp4_is_never_uploaded(f01, spans):
+    """A HEIC still image declared as video/mp4 would dodge hide_input_images; the brand check refuses it."""
+    tracer_provider, _ = spans
+    f01.state["policy"] = {"allowed_modalities": ["audio", "image", "document", "file", "video"]}
+    manager = f01.manager()
+    heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 24
+    contents = [{"role": "user", "parts": [{"inline_data": {"mime_type": "video/mp4", "data": heic}},
+                                           {"inline_data": {"mime_type": "video/mp4", "data": MP4}}]}]
+    capture(manager, tracer_provider, lambda m: m.gemini_contents(contents),
+            trace_config=TraceConfig(hide_input_images=True))
+    flush(manager)
+    assert f01.payloads == [MP4]
+    manager.shutdown(5)
+
+
+def test_openai_dialect_file_parts_capture_pdf_once(f01, spans):
+    """Chat ``file`` (file.file_data) and Responses-style ``input_file`` PDF data URIs; IDs and URLs never read."""
+    tracer_provider, exporter = spans
+    manager = f01.manager()
+    other_pdf = PDF + b"%%second\n"
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "summarize"},
+        {"type": "file", "file": {"filename": "a.pdf", "file_data": data_uri(PDF, "application/pdf")}},
+        {"type": "input_file", "filename": "b.pdf", "file_data": data_uri(other_pdf, "application/pdf")},
+        {"type": "file", "file": {"file_id": "file-synthetic"}},
+        {"type": "file", "file": {"file_data": data_uri(IMAGE, "application/pdf")}},  # mislabelled: refused
+        {"type": "file", "file": {"file_data": data_uri(PDF, "text/plain")}},  # not a captured type
+    ]}]
+    # hide_input_images does not hide documents.
+    # Without documents=True (every route but LiteLLM) no file part is read.
+    capture(manager, tracer_provider, lambda m: m.compatible_messages(messages, "openai"))
+    flush(manager)
+    assert f01.payloads == []
+    media, span = capture(manager, tracer_provider,
+                          lambda m: m.compatible_messages(messages, "openai", documents=True),
+                          trace_config=TraceConfig(hide_input_images=True))
+    flush(manager)
+    assert sorted(f01.payloads) == sorted([PDF, other_pdf])
+    assert set(media.captured) == {"chat/0/1", "chat/0/2"}
+    span = exporter.get_finished_spans()[-1]
+    assert sorted((r["part_index"], r["purpose"], r["mime_type"]) for r in refs(span)) == [
+        (1, "document", "application/pdf"), (2, "document", "application/pdf")]
+    manager.shutdown(5)
+
+
+@pytest.mark.parametrize("dialect", ["groq", "mistral", "image"])
+def test_image_only_dialects_never_read_file_parts(f01, spans, dialect):
+    tracer_provider, _ = spans
+    manager = f01.manager()
+    messages = [{"role": "user", "content": [
+        {"type": "file", "file": {"file_data": data_uri(PDF, "application/pdf")}},
+        {"type": "input_file", "file_data": data_uri(PDF, "application/pdf")}]}]
+    capture(manager, tracer_provider, lambda m: m.compatible_messages(messages, dialect, documents=True))
+    flush(manager)
+    assert f01.payloads == []
+    manager.shutdown(5)
+
+
+def test_data_uri_length_is_bounded_before_slicing(f01, spans):
+    """An oversized data URI is refused from its length alone: the string is never sliced or copied."""
+    tracer_provider, _ = spans
+    manager = f01.manager()
+    slices = []
+
+    class Tracked(str):
+        def __getitem__(self, key):
+            slices.append(key)
+            return str.__getitem__(self, key)
+
+    oversized = Tracked("data:image/png;base64," + "A" * (4 * provider_media.MAX_DECODED_BYTES // 3 + 8))
+    exact = Tracked(data_uri(IMAGE))
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": oversized}}]}]
+    capture(manager, tracer_provider, lambda m: m.compatible_messages(messages, "openai"))
+    flush(manager)
+    assert f01.payloads == [] and slices == []
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": exact}}]}]
+    capture(manager, tracer_provider, lambda m: m.compatible_messages(messages, "openai"))
+    flush(manager)
+    assert f01.payloads == [IMAGE] and slices  # in-bound values are sliced once, after the bound check
+    manager.shutdown(5)
+
+
 def test_capability_matrix_is_explicit():
     for package in ("traceai_deepseek", "traceai_cerebras", "traceai_together"):
         assert PROVIDER_MEDIA_CAPABILITIES[package]["operations"] == ()
@@ -341,7 +435,8 @@ def test_disabled_path_never_imports_attachment_modules(tmp_path):
     script.write_text(PROBE)
     names = ["traceai_google_genai", "traceai_vertexai", "traceai_bedrock", "traceai_litellm", "traceai_groq",
              "traceai_together", "traceai_fireworks", "traceai_xai", "traceai_mistralai", "traceai_openrouter",
-             "traceai_ollama", "traceai_portkey", "traceai_deepseek", "traceai_cerebras"]
+             "traceai_ollama", "traceai_portkey", "traceai_deepseek", "traceai_cerebras", "traceai_vllm",
+             "traceai_minimax"]
     result = subprocess.run([sys.executable, str(script), *names], capture_output=True, text=True, timeout=120,
                             env=dict(os.environ, LITELLM_LOCAL_MODEL_COST_MAP="True"))
     assert result.returncode == 0, result.stderr[-2000:]

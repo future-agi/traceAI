@@ -44,11 +44,28 @@ class _WithTracer(ABC):
         tracer: trace_api.Tracer,
         vllm_base_urls: List[str],
         *args: Any,
+        attachments: Any = None,
+        config: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         self._vllm_base_urls = vllm_base_urls
+        # Shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: Any, messages: Any) -> None:
+        """Typed chat media (image_url and input_audio data) through the shared manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(self._attachments, span, "vllm", trace_config=self._config).compatible_messages(
+                messages, "openai")
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     def _is_vllm_client(self, instance: Any) -> bool:
         """Check if the client instance is configured for vLLM."""
@@ -268,6 +285,7 @@ class _CompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = wrapped(*args, **kwargs)
 
@@ -312,6 +330,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
 
         with self._start_span("vLLM Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = await wrapped(*args, **kwargs)
 

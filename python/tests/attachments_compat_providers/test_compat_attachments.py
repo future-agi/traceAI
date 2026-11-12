@@ -100,6 +100,8 @@ def test_openai_sdk_routes_capture_images(f01, media_provider, instrumented, mon
         from traceai_xai import XAIInstrumentor as Instrumentor
         from traceai_xai import _wrappers
         monkeypatch.setattr(_wrappers, "_is_xai_client", lambda instance: True)
+        if hasattr(_wrappers, "_shared_instrumentor_enabled"):
+            monkeypatch.setattr(_wrappers, "_shared_instrumentor_enabled", lambda: False)
 
     manager = f01.manager()
     exporter = instrumented(Instrumentor(), manager)
@@ -109,6 +111,119 @@ def test_openai_sdk_routes_capture_images(f01, media_provider, instrumented, mon
     flush(manager)
     assert f01.payloads == [IMAGE]
     assert len(media_refs(exporter)) == 1
+    manager.shutdown(5)
+
+
+def media_owners(exporter):
+    return [(s.name, r["purpose"]) for s in exporter.get_finished_spans() for r in refs(s)]
+
+
+@pytest.mark.parametrize("order", ["openai_first", "binding_first"])
+@pytest.mark.parametrize("package", ["xai", "minimax"])
+def test_binding_with_openai_instrumentor_uploads_once(f01, media_provider, instrumented, monkeypatch, package,
+                                                       order):
+    """The OpenAI instrumentor wraps the same SDK call; one image is uploaded once, whatever the order."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_" + package)
+    from traceai_openai import OpenAIInstrumentor
+
+    if package == "xai":
+        from traceai_xai import XAIInstrumentor as Instrumentor
+        from traceai_xai import _wrappers
+        monkeypatch.setattr(_wrappers, "_is_xai_client", lambda instance: True)
+    else:
+        from traceai_minimax import MiniMaxInstrumentor as Instrumentor
+        from traceai_minimax import _wrappers
+        monkeypatch.setattr(_wrappers, "is_minimax_client", lambda instance: True)
+
+    manager = f01.manager()
+    pair = [OpenAIInstrumentor(), Instrumentor()]
+    if order == "binding_first":
+        pair.reverse()
+    for instrumentor in pair:
+        exporter = instrumented(instrumentor, manager)
+    client = openai.OpenAI(api_key="sk-synthetic", base_url=media_provider.url + "/v1", max_retries=0)
+    client.chat.completions.create(model="m", messages=image_messages())
+    flush(manager)
+    assert f01.payloads == [IMAGE]
+    owners = media_owners(exporter)
+    assert len(owners) == 1 and owners[0][1] == "model_input", owners
+    manager.shutdown(5)
+
+
+def test_minimax_chat_images(f01, media_provider, instrumented, monkeypatch):
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_minimax")
+    from traceai_minimax import MiniMaxInstrumentor
+    from traceai_minimax import _wrappers
+
+    monkeypatch.setattr(_wrappers, "is_minimax_client", lambda instance: True)
+    manager = f01.manager()
+    exporter = instrumented(MiniMaxInstrumentor(), manager)
+    client = openai.OpenAI(api_key="sk-synthetic", base_url=media_provider.url + "/v1", max_retries=0)
+    client.chat.completions.create(model="MiniMax-M3", messages=image_messages())
+    client.chat.completions.create(model="MiniMax-M3", messages=audio_messages(wav()))  # no audio input
+    asyncio.run(openai.AsyncOpenAI(api_key="sk-synthetic", base_url=media_provider.url + "/v1", max_retries=0)
+                .chat.completions.create(model="MiniMax-M3", messages=image_messages()))
+    flush(manager)
+    assert f01.payloads == [IMAGE, IMAGE]
+    assert media_owners(exporter) == [("minimax.chat.completions", "model_input")] * 2
+    manager.shutdown(5)
+
+
+def test_minimax_hide_input_images(f01, media_provider, instrumented, monkeypatch):
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_minimax")
+    from traceai_minimax import MiniMaxInstrumentor
+    from traceai_minimax import _wrappers
+
+    monkeypatch.setattr(_wrappers, "is_minimax_client", lambda instance: True)
+    manager = f01.manager()
+    instrumented(MiniMaxInstrumentor(), manager, TraceConfig(hide_input_images=True))
+    client = openai.OpenAI(api_key="sk-synthetic", base_url=media_provider.url + "/v1", max_retries=0)
+    client.chat.completions.create(model="MiniMax-M3", messages=image_messages())
+    flush(manager)
+    assert f01.payloads == []
+    manager.shutdown(5)
+
+
+# ------------------------------------------------------------------ vllm (legacy OpenAI-dialect chat binding)
+def test_vllm_chat_images_and_audio(f01, media_provider, instrumented):
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_vllm")
+    from traceai_vllm import VLLMInstrumentor
+
+    manager = f01.manager()
+    sound = wav(seed=9)
+    exporter = instrumented(VLLMInstrumentor(vllm_base_urls=[media_provider.url]), manager)
+    client = openai.OpenAI(api_key="EMPTY", base_url=media_provider.url + "/v1", max_retries=0)
+    client.chat.completions.create(model="m", messages=image_messages() + audio_messages(sound))
+    asyncio.run(openai.AsyncOpenAI(api_key="EMPTY", base_url=media_provider.url + "/v1", max_retries=0)
+                .chat.completions.create(model="m", messages=image_messages()))
+    flush(manager)
+    assert sorted(f01.payloads) == sorted([IMAGE, sound, IMAGE])
+    assert sorted(media_owners(exporter)) == [("vLLM Chat Completions", "model_input")] * 3
+    manager.shutdown(5)
+
+
+def test_vllm_defers_to_openai_instrumentor(f01, media_provider, instrumented):
+    """VLLMInstrumentor already defers the whole call to traceai_openai while it is enabled: one upload."""
+    openai = pytest.importorskip("openai")
+    pytest.importorskip("traceai_openai")
+    pytest.importorskip("traceai_vllm")
+    from traceai_openai import OpenAIInstrumentor
+    from traceai_vllm import VLLMInstrumentor
+
+    manager = f01.manager()
+    instrumented(VLLMInstrumentor(vllm_base_urls=[media_provider.url]), manager)
+    exporter = instrumented(OpenAIInstrumentor(), manager)
+    client = openai.OpenAI(api_key="EMPTY", base_url=media_provider.url + "/v1", max_retries=0)
+    client.chat.completions.create(model="m", messages=image_messages())
+    flush(manager)
+    assert f01.payloads == [IMAGE]
+    owners = media_owners(exporter)
+    assert len(owners) == 1 and owners[0][0] != "vLLM Chat Completions", owners
     manager.shutdown(5)
 
 
@@ -275,6 +390,8 @@ def test_ollama_async_chat(f01, media_provider, instrumented):
     ("traceai_portkey", "portkey_attachment_capabilities"),
     ("traceai_deepseek", "deepseek_attachment_capabilities"),
     ("traceai_cerebras", "cerebras_attachment_capabilities"),
+    ("traceai_vllm", "vllm_attachment_capabilities"),
+    ("traceai_minimax", "minimax_attachment_capabilities"),
 ])
 def test_package_descriptor(module, name):
     package = pytest.importorskip(module)

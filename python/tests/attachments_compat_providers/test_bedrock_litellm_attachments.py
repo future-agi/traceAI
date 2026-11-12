@@ -130,7 +130,7 @@ def test_converse_hide_input_images_keeps_documents(f01, bedrock):
 
 def test_invoke_model_anthropic_body(f01, bedrock):
     manager = f01.manager()
-    client, _ = bedrock(manager)
+    client, exporter = bedrock(manager)
     body = {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8,
             "tools": [{"type": "computer_20250124", "name": "computer", "display_width_px": 800,
                        "display_height_px": 600}],
@@ -139,15 +139,22 @@ def test_invoke_model_anthropic_body(f01, bedrock):
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(IMAGE)}}]},
                 {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "computer",
                                                    "input": {"action": "screenshot"}}]},
-                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                 "data": b64(SHOT_2)}}]}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "result follows"},
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+                        {"type": "text", "text": "screenshot taken"},
+                        {"type": "text", "text": "below"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                     "data": b64(SHOT_2)}}]}]},
             ]}
     response = client.invoke_model(modelId="anthropic.claude-3-5-sonnet-20240620-v1:0", body=json.dumps(body))
     assert json.loads(response["body"].read())["content"][0]["text"] == "ok"
     flush(manager)
     assert sorted(f01.payloads) == sorted([IMAGE, SHOT_2])
     assert sorted(u["purpose"] for u in f01.uploads) == ["computer_screenshot", "model_input"]
+    # As for Converse, a tool_result child carries the tool_result block's index (1), not its own (2).
+    shot = [r for s in exporter.get_finished_spans() for r in refs(s) if r.get("purpose") == "computer_screenshot"]
+    assert [(r["message_index"], r["part_index"], r["tool_call_id"]) for r in shot] == [(2, 1, "toolu_1")]
     manager.shutdown(5)
 
 
@@ -267,6 +274,26 @@ def test_litellm_owns_media_under_nested_openai_instrumentor(f01, media_provider
     assert f01.payloads == [IMAGE]
     owners = [name for name, _ in ((s.name, r) for s in exporter.get_finished_spans() for r in refs(s))]
     assert owners == ["completion"], owners
+    manager.shutdown(5)
+
+
+def test_litellm_pdf_file_part_uploads_once_under_nested_openai(f01, media_provider, litellm_instrument):
+    """LiteLLM claims the call, so it captures PDF ``file`` parts itself: exactly one upload, on its span."""
+    pytest.importorskip("traceai_openai")
+    import litellm
+
+    manager = f01.manager()
+    exporter = litellm_instrument(manager, TraceConfig(hide_input_images=True), with_openai=True)
+    content = [{"type": "text", "text": "summarize"},
+               {"type": "file", "file": {"filename": "a.pdf", "file_data": data_uri(PDF, "application/pdf")}}]
+    litellm.completion(model="openai/gpt-synthetic", messages=[{"role": "user", "content": content}],
+                       api_base=media_provider.url, api_key="sk-synthetic")
+    flush(manager)
+    assert f01.payloads == [PDF]
+    owners = [(s.name, r["purpose"]) for s in exporter.get_finished_spans() for r in refs(s)]
+    assert owners == [("completion", "document")], owners
+    sent = [raw for path, _, raw in media_provider.requests if path.endswith("/chat/completions")]
+    assert sent and b"file_data" in sent[-1]  # the SDK request itself is unchanged
     manager.shutdown(5)
 
 

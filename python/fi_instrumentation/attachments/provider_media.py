@@ -73,6 +73,11 @@ _ANTHROPIC_MODELS = re.compile(
 _IMAGE_GENERATION_MODELS = re.compile(
     r"(?:arn:aws[\w-]*:bedrock:[\w-]+:\d*:(?:inference-profile|foundation-model)/)?"
     r"(?:(?:us|eu|apac|global)\.)?amazon\.(?:titan-image-generator-v[12]|nova-canvas-v1)", re.IGNORECASE)
+# ISO-BMFF major brands (``ftyp`` bytes 8-12) that name an MP4 video file. HEIF/HEIC and AVIF still
+# images, QuickTime, 3GPP and audio-only M4A share the box layout but are not video/mp4, so they are
+# not admitted under that label (fail closed: an unlisted brand is unknown).
+_MP4_BRANDS = frozenset((b"isom", b"iso2", b"iso3", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1",
+                         b"dash", b"M4V ", b"mmp4"))
 _COMPUTER_TOOL = re.compile(r"computer_\d{8}")
 # Vertex publisher image-generation models (Imagen). Other prediction endpoints are never read.
 _IMAGEN_ENDPOINT = re.compile(r"/models/(?:imagen-|imagegeneration)")
@@ -127,7 +132,7 @@ def sniff(head: Any) -> Optional[str]:
     if head[:5] == b"%PDF-":
         return "application/pdf"
     if len(head) >= 12 and head[4:8] == b"ftyp":
-        return "video/mp4"
+        return "video/mp4" if head[8:12] in _MP4_BRANDS else None
     return mc.sniff_audio(head)
 
 
@@ -193,14 +198,13 @@ def _base64_source(encoded: Any, mime: Optional[str]) -> Optional[_Source]:
     return _Source(mime, size, decode)
 
 
-def _data_uri_source(value: Any) -> Optional[_Source]:
-    if not isinstance(value, str):
+def _data_uri_source(value: Any, types: Tuple[str, ...] = DATA_URI_TYPES) -> Optional[_Source]:
+    # split_inline bounds the length before it slices, so an oversized string is never copied.
+    found = mc.split_inline(value, types, False, MAX_DECODED_BYTES)
+    if found is None:
         return None
-    for mime in DATA_URI_TYPES:
-        prefix = "data:%s;base64," % mime
-        if value.startswith(prefix):
-            return _base64_source(value[len(prefix):], mime)
-    return None
+    mime, encoded, _ = found
+    return _base64_source(encoded, mime)
 
 
 # ------------------------------------------------------------------ capture
@@ -311,10 +315,11 @@ class ProviderMedia:
             if size:
                 self._admit(position, "image/png", size, lambda: _image_only(_base64_source(data, None)), **fields)
 
-    def _data_uri(self, position: str, read: Callable[[], Any], **fields) -> None:
-        # Every candidate type is an image, so one image gate decides the part before the
+    def _data_uri(self, position: str, read: Callable[[], Any], types: Tuple[str, ...] = DATA_URI_TYPES,
+                  **fields) -> None:
+        # Every candidate type shares one modality, so one gate decides the part before the
         # string is parsed. A remote or signed URL is never kept as fallback metadata.
-        self._admit(position, DATA_URI_TYPES[0], MAX_DECODED_BYTES, lambda: _data_uri_source(read()), exact=False,
+        self._admit(position, types[0], MAX_DECODED_BYTES, lambda: _data_uri_source(read(), types), exact=False,
                     **fields)
 
     # -------------------------------------------------------------- Gemini
@@ -356,11 +361,14 @@ class ProviderMedia:
         return self
 
     # -------------------------------------------------------------- OpenAI-compatible chat
-    def compatible_messages(self, messages: Any, dialect: str = "openai") -> "ProviderMedia":
+    def compatible_messages(self, messages: Any, dialect: str = "openai", *,
+                            documents: bool = False) -> "ProviderMedia":
         """Chat ``image_url`` data URIs, plus ``input_audio`` (wav/mp3) for OpenAI-dialect routes.
 
         ``groq``, ``mistral`` and ``image`` dialects are image only; ``mistral`` also accepts
-        ``image_url`` as a plain string.
+        ``image_url`` as a plain string. ``documents=True`` (OpenAI dialect only, for a route whose
+        PDF parts are qualified) also captures PDF ``file`` (``file.file_data``) and ``input_file``
+        (``file_data``) data URIs. Provider file IDs and URLs are never resolved.
         """
         if not self.usable:
             return self
@@ -383,6 +391,12 @@ class ProviderMedia:
                         mime = _COMPAT_AUDIO.get(mc.get(audio, "format"))
                         if mime is not None:
                             self._typed("chat/%d/%d" % (m, p), mc.get(audio, "data"), mime, **fields)
+                    elif kind in ("file", "input_file") and documents and dialect == "openai":
+                        def read_file(part=part, kind=kind):
+                            return mc.get(mc.get(part, "file") if kind == "file" else part, "file_data")
+
+                        fields["purpose"] = "document"
+                        self._data_uri("chat/%d/%d" % (m, p), read_file, DOCUMENT_TYPES, **fields)
         except Exception:
             pass
         return self
@@ -493,8 +507,9 @@ class ProviderMedia:
                         if not isinstance(tool_id, str) or not mc.TOOL_ID.fullmatch(tool_id):
                             continue
                         for q, child in enumerate(_items(mc.get(block, "content"))[:MAX_PARTS]):
+                            # part_index is the tool_result block, as for Converse; q only keeps positions apart.
                             self._anthropic_block("anthropic/%d/%d/%d" % (m, p, q), child, role="tool",
-                                                  message_index=m, part_index=q, tool_call_id=tool_id,
+                                                  message_index=m, part_index=p, tool_call_id=tool_id,
                                                   screenshot=tool_id in computer,
                                                   error_detail=mc.get(block, "is_error") is True)
                     else:
@@ -655,12 +670,19 @@ PROVIDER_MEDIA_CAPABILITIES: Mapping[str, Mapping[str, Any]] = MappingProxyType(
         ("sdk_bytes", "inline_base64"),
         ("file_data_uri", "gs_uri", "provider_file", "pil_image", "streamed_output", "models.generate_images",
          "models.generate_videos", "live", "audio/L16")),
+    # Proven: the sync gapic PredictionServiceClient (REST and gRPC share the wrapped method). The
+    # high-level vertexai GenerativeModel / ImageGenerationModel routes run through the same client
+    # but have no fixture yet, so they are not claimed.
     "traceai_vertexai": _descriptor(
-        ("GenerativeModel.generate_content.input", "GenerativeModel.generate_content.output",
-         "ImageGenerationModel.generate_images.output"),
-        ("sdk_bytes",),
-        ("file_data_uri", "gs_uri", "streamed_output", "ImageGenerationModel.edit_image",
-         "prediction_service_raw", "audio/L16")),
+        ("PredictionServiceClient.generate_content.input", "PredictionServiceClient.generate_content.output",
+         "PredictionServiceClient.predict.imagen.output"),
+        ("sdk_bytes", "inline_base64"),
+        ("file_data_uri", "gs_uri", "streamed_output", "PredictionServiceAsyncClient",
+         "PredictionServiceClient.stream_generate_content", "PredictionServiceClient.predict.other_endpoints",
+         "GenerativeModel.generate_content", "ImageGenerationModel.generate_images",
+         "ImageGenerationModel.edit_image", "audio/L16"),
+        "GenerativeModel and ImageGenerationModel are not qualified yet; only the PredictionServiceClient "
+        "paths above are proven."),
     "traceai_bedrock": _descriptor(
         ("converse.input", "invoke_model.anthropic.input", "invoke_model.nova.input",
          "invoke_model.image_generation.input", "invoke_model.image_generation.output"),
@@ -670,8 +692,10 @@ PROVIDER_MEDIA_CAPABILITIES: Mapping[str, Mapping[str, Any]] = MappingProxyType(
     "traceai_litellm": _descriptor(
         ("completion.input", "acompletion.input", "image_generation.output", "aimage_generation.output"),
         ("data_uri", "inline_base64"),
-        ("remote_url", "provider_file", "streamed_output", "image_generation.url", "image_edit",
-         "speech", "transcription")),
+        ("remote_url", "provider_file", "file_id", "streamed_output", "image_generation.url", "image_edit",
+         "responses", "speech", "transcription"),
+        "Chat input covers image_url, input_audio and PDF file/input_file data URIs. LiteLLM claims the call, "
+        "so a nested OpenAI instrumentor uploads nothing more; application/octet-stream files stay uncaptured."),
     "traceai_groq": _descriptor(("chat.completions.create.input",), ("data_uri",), _COMPAT_UNSUPPORTED),
     # The binding is wired, but traceai_together installs no chat wrapper today (its install check looks
     # for `chat` on the Together class, where it is an instance attribute), so nothing is claimed.
@@ -686,6 +710,13 @@ PROVIDER_MEDIA_CAPABILITIES: Mapping[str, Mapping[str, Any]] = MappingProxyType(
                                   ("image_path", "streamed_output", "output_media")),
     "traceai_portkey": _descriptor(("chat.completions.create.input",), ("data_uri", "inline_base64"),
                                    _COMPAT_UNSUPPORTED),
+    # Legacy VLLMInstrumentor (OpenAI-dialect chat: image_url and input_audio). It already defers to
+    # traceai_openai while that is enabled, which then owns the call's media.
+    "traceai_vllm": _descriptor(("chat.completions.create.input",), ("data_uri", "inline_base64"),
+                                _COMPAT_UNSUPPORTED + ("video_url",)),
+    # MiniMax chat takes image_url (M3 / M3.1-Flash); no audio input. Native speech/image/video is separate.
+    "traceai_minimax": _descriptor(("chat.completions.create.input",), ("data_uri",),
+                                   _COMPAT_UNSUPPORTED + ("video_url", "input_audio", "native_media")),
     "traceai_deepseek": _descriptor((), (), ("chat.completions.create",),
                                     "DeepSeek chat has no qualified media input or output; tracing only."),
     "traceai_cerebras": _descriptor((), (), ("chat.completions.create",),

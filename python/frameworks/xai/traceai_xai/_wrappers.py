@@ -1,6 +1,7 @@
 """Wrapper classes for xAI (Grok) instrumentation."""
 
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Tuple
@@ -82,6 +83,17 @@ def _is_xai_client(instance: Any) -> bool:
     except Exception:
         pass
     return False
+
+
+def _shared_instrumentor_enabled() -> bool:
+    """Let the request-level OpenAI instrumentor own the call when both are enabled.
+
+    Same rule as the Fireworks route: one request has one owner (span and media),
+    whatever the setup order. Do not import the optional package; inspect live state.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    return bool(instrumentor and instrumentor().is_instrumented_by_opentelemetry)
 
 
 def _get_input_attributes(
@@ -228,8 +240,8 @@ class _CompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is an xAI client
-        if not _is_xai_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
             return wrapped(*args, **kwargs)
 
         # Extract parameters
@@ -300,8 +312,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> Any:
-        # Check if this is an xAI client
-        if not _is_xai_client(instance):
+        # One request must have one owner, regardless of setup order.
+        if _shared_instrumentor_enabled() or not _is_xai_client(instance):
             return await wrapped(*args, **kwargs)
 
         # Extract parameters
