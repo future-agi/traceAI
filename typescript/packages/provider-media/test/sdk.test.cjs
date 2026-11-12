@@ -47,6 +47,9 @@ before(async () => {
 after(async () => { await provider.shutdown(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
 
 // One tier per process: some instrumentations keep process-wide patch state.
+// Built together with the OpenAI chat adapter (`captureOpenAIAttachments`, stacked lanes), that adapter captures the
+// typed chat image once. This helper never adds a copy, so a chat call uploads exactly what that adapter uploads.
+const openAIChatCaptures = () => typeof require('../../traceai_openai/dist/src').captureOpenAIAttachments === 'function' ? 1 : 0;
 const tiers = process.env.MEDIA_SDK_TIER ? [process.env.MEDIA_SDK_TIER] : ['floor', 'latest'];
 for (const tier of tiers) {
   for (const privacy of ['enabled', 'disabled', 'hideInputs', 'piiRedaction']) test(`OpenAI ${tier}: speech ${privacy}; chat media stays with the OpenAI chat adapter`, async () => {
@@ -59,7 +62,7 @@ for (const tier of tiers) {
       const client = new sdk.OpenAI({ apiKey: 'synthetic', fetch: redirect });
       await client.chat.completions.create({ model: 'fixture', messages });
       // This lane does not own the chat hook; no duplicate chat capture is added here.
-      await f.manager.flush(); assert.equal(f.uploads.length, 0);
+      await f.manager.flush(); assert.equal(f.uploads.length, privacy === 'enabled' ? openAIChatCaptures() : 0);
       if (client.audio.speech) {
         const response = await client.audio.speech.create({ model: 'tts-1', input: 'fixture', voice: 'alloy', response_format: 'wav' });
         const before = f.uploads.length; await f.manager.flush(); assert.equal(f.uploads.length, before);
@@ -138,7 +141,7 @@ for (const tier of tiers) {
       assert.ok(claimed.length >= 2, JSON.stringify(seen));
       // Attachments OFF: audio calls are untouched, exactly as before (no span, no marker, no upload).
       for (const [, value] of claimed) assert.equal(value, mode === 'enabled' ? true : undefined, JSON.stringify(seen));
-      assert.deepEqual(result, { claimed: mode === 'enabled' ? claimed.length : 0, honoured: 0 });
+      assert.deepEqual(result, { claimed: mode === 'enabled' ? claimed.length + openAIChatCaptures() : 0, honoured: 0 });
     } finally { inst.disable(); await f.close(); exporter.reset(); }
   });
 
