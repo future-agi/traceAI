@@ -164,9 +164,15 @@ def test_real_sdk_interleaved_streams_leave_consumer_context_unchanged(tracing, 
     }
     (consumer,) = [span for span in spans if span.name == "unrelated-consumer-work"]
     assert consumer.parent.span_id == caller.get_span_context().span_id
-    assert all(
-        span.parent.span_id == caller.get_span_context().span_id for span in steps
-    )
+    runs = [span for span in spans if span.name == "ToolCallingAgent.run"]
+    assert len(runs) == 2
+    assert all(span.status.status_code.name == "OK" for span in runs)
+    assert all(span.parent.span_id == caller.get_span_context().span_id for span in runs)
+    assert {span.parent.span_id for span in steps} == {span.context.span_id for span in runs}
+    for run in runs:
+        children = [step for step in steps if step.parent.span_id == run.context.span_id]
+        assert {step.name for step in children} == {"Step 1", "Step 2"}
+        assert all(run.start_time <= step.start_time <= step.end_time <= run.end_time for step in children)
 
 
 @pytest.mark.parametrize("instrumented", [False, True])
