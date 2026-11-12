@@ -8,12 +8,19 @@ from weakref import ref
 from opentelemetry import context, propagate
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_mcp.package import _instruments
+from traceai_mcp._attachments import capture_mcp_result, mcp_attachment_capabilities, wrap_mcp_client
 from wrapt import ObjectProxy, register_post_import_hook, wrap_function_wrapper
+
+
+__all__ = ["MCPInstrumentor", "capture_mcp_result", "mcp_attachment_capabilities", "wrap_mcp_client"]
 
 
 class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     """
     An instrumenter for MCP.
+
+    It propagates trace context over MCP transports only and never captures
+    media. Use ``wrap_mcp_client(session)`` for tool and resource media.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:

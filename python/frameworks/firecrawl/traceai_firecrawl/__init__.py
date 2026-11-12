@@ -56,8 +56,30 @@ _OPERATIONS = {
 }
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    manager = kwargs.get("attachments")
+    if manager is None:
+        manager = kwargs.get("attachment_manager")
+    if manager is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.media_capture import active
+    except ImportError:
+        return None
+    return manager if active(manager) else None
+
+
 class FirecrawlInstrumentor(BaseInstrumentor):
-    """Instrument Firecrawl v2 scraping, extraction, agent and browser operations."""
+    """Instrument Firecrawl v2 scraping, extraction, agent and browser operations.
+
+    With an enabled shared attachment manager (``attachments=``), inline
+    ``data:`` screenshots and media of returned Documents are uploaded.
+    Hosted URLs are never fetched.
+    """
 
     __slots__ = ("_original_methods",)
 
@@ -73,7 +95,9 @@ class FirecrawlInstrumentor(BaseInstrumentor):
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(trace_api.get_tracer(__name__, __version__, tracer_provider), config=config)
         self._original_methods: Dict[Tuple[str, str, str], Any] = {}
-        self._state = _State()
+        # The provider-owned shared manager, passed as ``attachments`` (auto also passes
+        # ``attachment_manager``). Nothing is captured unless an enabled manager is supplied.
+        self._state = _State(_attachment_manager(kwargs), kwargs.get("attachment_capture"))
 
         for module_name, class_name, is_async in (
             (_SYNC_MODULE, _SYNC_CLASS, False),

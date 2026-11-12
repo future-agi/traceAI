@@ -107,8 +107,11 @@ class _State:
     instrumentor is removed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, attachments: Any = None, attachment_capture: Any = None) -> None:
         self.enabled = True
+        # The shared attachment manager (None unless an enabled one was passed).
+        self.attachments = attachments
+        self.attachment_capture = attachment_capture
 
 
 def _span_kind(method_name: str) -> str:
@@ -406,6 +409,13 @@ class _BaseWrapper:
     ) -> None:
         try:
             self._record_result(span, instance, result, kwargs)
+            if self._state.attachments is not None:
+                from traceai_firecrawl._attachments import capture_firecrawl_media
+
+                capture_firecrawl_media(
+                    self._state.attachments, span, self._method_name, result,
+                    trace_config=self._config, capture=self._state.attachment_capture,
+                )
         except Exception:
             logger.debug("Could not read %s result", self._span_name, exc_info=True)
         finally:

@@ -418,10 +418,20 @@ def _input_value_and_mime_type(
     yield INPUT_VALUE, safe_json_dumps(arguments)
 
 
+class _Media:
+    """The shared attachment manager and its local restrictions (None manager: capture off)."""
+
+    __slots__ = ("manager", "trace_config", "capture")
+
+    def __init__(self, manager: Any = None, trace_config: Any = None, capture: Any = None) -> None:
+        self.manager, self.trace_config, self.capture = manager, trace_config, capture
+
+
 class _ModelWrapper:
-    def __init__(self, tracer: trace_api.Tracer, method_name: str = "__call__") -> None:
+    def __init__(self, tracer: trace_api.Tracer, method_name: str = "__call__", media: Any = None) -> None:
         self._tracer = tracer
         self._method_name = method_name
+        self._media = media if media is not None else _Media()
 
     def __call__(
         self,
@@ -446,7 +456,20 @@ class _ModelWrapper:
                 **dict(_get_raw_input(args, **kwargs)),
             },
         ) as span:
-            output_message = wrapped(*args, **kwargs)
+            owner_token = None
+            if self._media.manager is not None:
+                from traceai_smolagents._attachments import capture_model_images, owner_context
+
+                if capture_model_images(self._media.manager, span, arguments.get("messages"),
+                                        trace_config=self._media.trace_config, capture=self._media.capture):
+                    # These images are captured here (now or on an earlier call); a provider
+                    # adapter below must not upload them again.
+                    owner_token = context_api.attach(owner_context())
+            try:
+                output_message = wrapped(*args, **kwargs)
+            finally:
+                if owner_token is not None:
+                    context_api.detach(owner_token)
             span.set_status(trace_api.StatusCode.OK)
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(output_message))
             # Modern SDKs return usage on ChatMessage; historical releases
@@ -473,8 +496,9 @@ class _ModelWrapper:
 
 
 class _ToolCallWrapper:
-    def __init__(self, tracer: trace_api.Tracer) -> None:
+    def __init__(self, tracer: trace_api.Tracer, media: Any = None) -> None:
         self._tracer = tracer
+        self._media = media if media is not None else _Media()
 
     def __call__(
         self,
@@ -501,6 +525,11 @@ class _ToolCallWrapper:
             },
         ) as span:
             response = wrapped(*args, **kwargs)
+            if self._media.manager is not None:
+                from traceai_smolagents._attachments import capture_tool_image
+
+                capture_tool_image(self._media.manager, span, response,
+                                   trace_config=self._media.trace_config, capture=self._media.capture)
             span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             span.set_status(trace_api.StatusCode.OK)
             span.set_attributes(

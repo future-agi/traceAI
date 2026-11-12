@@ -45,3 +45,49 @@ enabled is attached only if the reader is enabled when it consumes the item.
 An already-running request retains the context under which it started. Native
 MCP SDK tracing remains independent and can continue when this instrumentor is
 off, particularly with MCP 2.x.
+
+## Tool and resource media (attachments)
+
+`MCPInstrumentor` propagates context only and never captures media. To upload
+the images, audio and inline resource blobs a server returns, wrap the client
+session:
+
+```python
+from traceai_mcp import wrap_mcp_client
+
+session = wrap_mcp_client(session, tracer_provider=trace_provider)
+result = await session.call_tool("screenshot", {})   # unchanged SDK result
+```
+
+Each `call_tool` / `read_resource` gets an `mcp.tools/call` /
+`mcp.resources/read` CLIENT span. `ImageContent.data`, `AudioContent.data`
+and `BlobResourceContents.blob` (in an `EmbeddedResource` or a
+`resources/read` result) are uploaded as `tool_result` occurrences: at most 64
+parts and 256 KiB of decoded bytes per result. `resource_link` blocks,
+resource URIs and `structuredContent` are never read. A MIME of another
+modality than the block type, or outside the attachment MIME list, uploads
+nothing. So do bytes whose leading signature names another modality than the
+declared MIME, for example a PNG labelled `audio/wav`. The signatures checked
+are PNG, JPEG, GIF, WebP, BMP, TIFF, the HEIF/AVIF image brands of an ISO-BMFF
+`ftyp` box (`avif`, `heic`, `heix`, `mif1`, `msf1`), WAV, Ogg, FLAC, MP3 with
+an ID3 tag, and PDF. Other bytes, including MP4 and WebM containers and MP3
+without an ID3 tag, are judged by the declared MIME only.
+`application/octet-stream` is the generic file modality, so an octet-stream
+blob whose bytes carry one of those image, audio or PDF signatures is skipped
+rather than relabelled. `attachments=` overrides the provider's manager; `trace_config=` and
+`attachment_capture=` only add restrictions. Wrapping a wrapped session
+returns it unchanged. `capture_mcp_result(manager, span, result, operation)`
+is the same capture for an existing span.
+
+Attachments are off unless the provider's attachment manager is enabled
+(`fi_instrumentation.register(..., attachment_config=AttachmentConfig(enabled=True))`
+or `traceai.init(attachment_config=...)`). Tool media is tool output and
+potential model input, so every input and output hide flag
+(`hide_inputs`, `hide_outputs` and their message/text variants),
+`hide_input_images` for images, and `pii_redaction` deny the upload; they
+cannot be relaxed by the server or the core. Only typed inline bytes are
+read, and only after the manager admitted them; URLs, file IDs, resource URIs
+and local paths are never fetched or opened. Call the manager's `flush()`
+before a short process exits. Upload completion means "transferred for
+validation"; playback needs an authorized occurrence through the media
+gateway.
