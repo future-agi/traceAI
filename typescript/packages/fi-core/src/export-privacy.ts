@@ -169,8 +169,8 @@ function withheldMarker(key: string): string { return key === "session.id" ? "<r
 // their values, and SDK data loss still withholds them. Discovery reads their
 // values without their names, so an id never becomes a registered credential.
 const GROUPING_KEYS: ReadonlySet<string> = new Set(["session.id", "user.id", "session_name", "metadata.session_id", "metadata.user_id"]);
-// Integrations that also record the session id under their own attribute name,
-// with the same value as session.id, get the same name-only exemption. Exact
+// Integrations that also record a session id under their own attribute name (the
+// current session id, or a resumed or forked-from one) get the same name-only exemption. Exact
 // keys only: other session-named attributes, such as session tokens and
 // cookies, keep the credential name rule.
 const INTEGRATION_SESSION_ID_KEYS: ReadonlySet<string> = new Set([
