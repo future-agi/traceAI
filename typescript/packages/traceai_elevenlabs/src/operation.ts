@@ -1,6 +1,7 @@
 import { diag, Span, SpanStatusCode } from "@opentelemetry/api";
 import { SemanticConventions as S } from "@traceai/fi-semantic-conventions";
 import { TraceConfig } from "@traceai/fi-core";
+import type { SpeechAttachments } from "./attachments.js";
 
 let diagnosed = false;
 
@@ -58,6 +59,7 @@ export class Operation {
     private readonly policy: TraceConfig,
     timeoutMs: number,
     private readonly remove: (operation: Operation) => void,
+    private attachments?: SpeechAttachments,
   ) {
     this.span = span;
     this.timer = setTimeout(() => this.end("incomplete"), timeoutMs);
@@ -72,6 +74,20 @@ export class Operation {
       signal.addEventListener("abort", onAbort, { once: true });
       this.detachAbort = () => signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  timestampedAttachment(value: unknown): void {
+    if (this.span) this.attachments?.timestamped(value);
+  }
+
+  /** A chunk the application consumed from an instrumentation-owned stream. */
+  audioChunk(value: Uint8Array): void {
+    if (this.span) this.attachments?.chunk(value);
+  }
+
+  /** A timestamp chunk the application consumed; audio is decoded only after admission. */
+  timestampChunk(value: unknown): void {
+    if (this.span) this.attachments?.timestampChunk(value);
   }
 
   audio(value: unknown, timestamps = false): void {
@@ -151,6 +167,11 @@ export class Operation {
   end(completion: Completion): void {
     const span = this.span;
     if (!span) return;
+    // Finish or abort a consumed stream while the span still records, so a complete
+    // object projects its reference and anything else uploads nothing.
+    const attachments = this.attachments;
+    this.attachments = undefined;
+    safely(() => attachments?.close(completion === "complete" ? "complete" : "incomplete"));
     this.span = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;

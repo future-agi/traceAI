@@ -44,7 +44,8 @@ const attributes = (span) =>
     ]),
   );
 
-async function fixture(SDK, options = {}) {
+async function fixture(SDK, options = {}, media = {}) {
+  const speech = { ...timestamp, audio_base64: media.base64 ?? BASE64 };
   const requests = [],
     wire = [];
   const attempts = new Map();
@@ -122,25 +123,27 @@ async function fixture(SDK, options = {}) {
       if (req.url.includes("with-timestamps")) {
         res.setHeader("content-type", "application/json");
         if (req.url.includes("/stream/")) {
-          res.write(JSON.stringify(timestamp) + "\n");
+          res.write(JSON.stringify(speech) + "\n");
           await delay(15);
           res.end(
             mode === "bad-stream"
               ? "{bad-json}\n"
-              : JSON.stringify(timestamp) + "\n",
+              : JSON.stringify(speech) + "\n",
           );
-        } else res.end(JSON.stringify(timestamp));
+        } else res.end(JSON.stringify(speech));
         return;
       }
       res.setHeader("content-type", "audio/mpeg");
       res.flushHeaders();
       await delay(mode === "slow" ? 120 : 10);
       if (res.destroyed) return;
-      res.write(AUDIO.subarray(0, 4));
+      const audio = media.audio ?? AUDIO;
+      const split = Math.min(4, audio.length);
+      res.write(audio.subarray(0, split));
       await delay(mode === "slow" ? 120 : 10);
       if (res.destroyed) return;
       if (mode === "broken") res.destroy();
-      else res.end(AUDIO.subarray(4));
+      else res.end(audio.subarray(split));
     } catch {
       res.destroy();
     }

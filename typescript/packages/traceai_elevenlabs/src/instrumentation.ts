@@ -1,6 +1,7 @@
 import {
   Attributes,
   context,
+  createContextKey,
   SpanKind,
   trace,
   TracerProvider,
@@ -28,6 +29,11 @@ import {
   safely,
   TEXT_LIMIT,
 } from "./operation.js";
+import type { AttachmentManager } from "@traceai/fi-core/attachments";
+import { SpeechAttachments, ElevenLabsInputAudioMimeType } from "./attachments.js";
+
+/** Context marker read by `@traceai/auto` wire capture; `createContextKey` is `Symbol.for`. */
+const ATTACHMENT_OWNER = createContextKey("traceai.auto.attachment_owner.v1");
 import { observeResponse } from "./responses.js";
 import { VERSION } from "./version.js";
 
@@ -68,6 +74,10 @@ export interface ElevenLabsInstrumentationConfig {
   instrumentationConfig?: InstrumentationConfig;
   tracerProvider?: TracerProvider;
   traceConfig?: TraceConfigOptions;
+  /** The configured provider's shared manager. Omitted means no binary capture. */
+  attachments?: AttachmentManager;
+  /** Explicit MIME for STT Blob/File inputs; no sniffing or stream reads. */
+  attachmentInputMimeType?: ElevenLabsInputAudioMimeType;
   /** Absolute span lifetime, including request and consumption. Default 300000 ms. */
   maxSpanDurationMs?: number;
   /** Bound active telemetry, not SDK calls. Excess calls pass through. Default 1024. */
@@ -272,9 +282,8 @@ export class ElevenLabsInstrumentation extends InstrumentationBase {
         if (voice) attributes["elevenlabs.voice.id"] = voice;
         // Unlike JSON body overrides, the SDK skips nullish query values.
         const query = stt ? {} : record(options.queryParams);
-        const format = identifier(
-          bodyField(query, "output_format", undefined) ?? request.outputFormat,
-        );
+        const formatValue = bodyField(query, "output_format", undefined) ?? request.outputFormat;
+        const format = identifier(formatValue);
         if (format) attributes["elevenlabs.output_format"] = format;
         if (
           !stt &&
@@ -295,15 +304,26 @@ export class ElevenLabsInstrumentation extends InstrumentationBase {
           { kind: SpanKind.CLIENT, attributes },
           callContext,
         );
+        const attachments = this.options.attachments
+          ? new SpeechAttachments(this.options.attachments, span, policy,
+              formatValue === undefined ? undefined : format ?? "unsupported")
+          : undefined;
         operation = new Operation(
           span,
           policy,
           bounded(this.options.maxSpanDurationMs, 300_000, 86_400_000),
           (ended) => this.active.delete(ended),
+          attachments,
         );
+        if (stt && this.options.attachmentInputMimeType &&
+            !(options.abortSignal instanceof AbortSignal && options.abortSignal.aborted))
+          attachments?.input(request, this.options.attachmentInputMimeType);
         this.active.add(operation);
         operation.watchAbort(record(args[stt ? 1 : 2]).abortSignal);
         callContext = trace.setSpan(callContext, span);
+        // This adapter owns the call's media, so wire-level auto capture must not upload the
+        // same bytes again (shared key; no dependency on the auto package).
+        if (attachments) callContext = callContext.setValue(ATTACHMENT_OWNER, true);
       }
     } catch {
       diagnose();

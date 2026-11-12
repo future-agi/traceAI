@@ -8,3 +8,4 @@ export { PipecatInstrumentation, PipecatInstrumentationConfig } from "./instrume
 export { isPatched } from "./instrumentation";
 export { VERSION } from "./version";
 export { observePipecatClient, PipecatEventSource, PipecatClientTracingOptions } from "./client";
+export type { PipecatServerRecording } from "./recording";

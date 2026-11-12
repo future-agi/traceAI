@@ -107,9 +107,20 @@ The optional `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `ELEVENLABS_BASE_URL` over
 | `textToSpeech.streamWithTimestamps` | You finish or stop iterating timestamp chunks |
 | `speechToText.convert` | Synchronous transcription completes, including multi-channel output |
 
-Use these methods on the wrapped client as usual. `withRawResponse()`, `then`, `catch`, `finally`, byte-stream readers (including BYOB when the upstream stream supports it), iteration and piping remain available. Timestamp responses retain audio and alignment data in your application, but that data is not exported. Requests that set `webhook: true`, realtime/WebSocket APIs and other SDK namespaces pass through without integration spans.
+Use these methods on the wrapped client as usual. `withRawResponse()`, `then`, `catch`, `finally`, byte-stream readers (including BYOB when the upstream stream supports it), iteration and piping remain available. Timestamp responses retain audio and alignment data in your application. By default, neither is exported. Requests that set `webhook: true`, realtime/WebSocket APIs and other SDK namespaces pass through without integration spans.
 
-Hosted ElevenLabs Agents conversations are a separate integration. This package does not export conversation webhooks, audio attachments, usage tokens or estimated costs.
+Hosted ElevenLabs Agents conversations are a separate integration. This package does not export conversation webhooks, usage tokens or estimated costs.
+
+## Optional binary attachments
+
+Binary capture is off by default. If your destination supports the attachment service, explicitly enable your provider's attachment manager and pass that **same manager** as `attachments: provider.attachments` to `ElevenLabsInstrumentation`. Await `provider.attachments.ready()` at startup to avoid missing early calls; continue to use the provider's `shutdown()` for delivery. The adapter never creates another uploader or enables recording.
+
+- `textToSpeech.convertWithTimestamps` can attach a complete MP3 response up to 256 KiB. The output format must be the SDK default or a supported MP3 format. Generated audio is not proof of playback.
+- `speechToText.convert` can attach an existing `Blob`/`File` when you also set `attachmentInputMimeType` to its exact MIME type: `audio/wav`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/webm` or `audio/flac`. Filenames are not exported; mismatched or missing types are not sniffed.
+- `textToSpeech.convert`, `textToSpeech.stream` and `textToSpeech.streamWithTimestamps` can attach the MP3 your application **reads to the end**, up to 4 MiB per call (about 4 minutes at the default 128 kbit/s), or up to the server's single-upload limit when that is smaller. Tracing copies only the chunks you already read; it never reads ahead, tees or drains the stream. If you cancel, stop iterating, hit an error or exceed that cap, nothing is uploaded: a partial file is never stored as if complete. While a stream is being read, the manager reserves the whole cap for it (4 MiB, or the smaller server limit) out of its shared in-memory budget of about 31 MiB. With 4 MiB reservations about 7 streams can be captured at once on an otherwise idle manager; further concurrent streams report `queue_full` and pass through uncaptured.
+- PCM/ulaw output, local paths and remote URLs are not captured. Alignment data stays in your SDK response, not in attachment metadata.
+
+Attachments obey the manager's default-off, server, sampling and PII policies in addition to the instrumentation's directional hide settings. Without a qualified speech sanitizer, `piiRedaction` denies capture. Existing raw audio may contain embedded metadata; a policy requiring metadata removal also denies it. The span's `elevenlabs.attachment.input` / `elevenlabs.attachment.output` value is the admission result; `queued` means admitted for transfer, **not** validated or playable. Content is out of band, never base64 in OTLP. A call made through this bound instrumentation carries the shared media-owner context marker (`traceai.auto.attachment_owner.v1`), so wire-level capture that honours the marker does not upload the same audio again.
 
 ## Privacy
 
@@ -123,7 +134,7 @@ export FI_HIDE_ERROR_DETAILS=true
 
 `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_INPUT_TEXT` and their output equivalents also hide the corresponding speech text. You can pass core `traceConfig` options to the instrumentation instead. These settings affect traces, not SDK request or response values.
 
-The package never exports raw audio, base64, alignment text, upload paths, source URLs, request headers or provider error bodies. Errors record an error status, a fixed error type, and an HTTP status when available, not exception messages or stack traces—even if `FI_HIDE_ERROR_DETAILS` is false. Your application is responsible for content it adds to parent spans and context metadata.
+Trace attributes never contain raw audio, base64, alignment text, upload paths, source URLs, request headers or provider error bodies. Binary audio leaves the process only through the optional attachment manager described above. Errors record an error status, a fixed error type, and an HTTP status when available, not exception messages or stack traces—even if `FI_HIDE_ERROR_DETAILS` is false. Your application is responsible for content it adds to parent spans and context metadata.
 
 ## Stream lifecycle
 
@@ -139,5 +150,5 @@ For module-wide registration, call `instrumentation.manuallyInstrument(sdk)` wit
 
 - **No span after receiving audio:** consume or cancel the returned stream. Receiving headers is not successful completion. Use `shutdown()` before exiting a short script.
 - **Spans appear separately from your application trace:** initialize an async context manager once and call the wrapped client within the active application span.
-- **Text is missing:** check the `FI_HIDE_*` variables and the instrumentation's `traceConfig`. Audio and provider error text are intentionally never captured.
+- **Text is missing:** check the `FI_HIDE_*` variables and the instrumentation's `traceConfig`. Binary audio needs the separate attachment opt-in; provider error text is never captured.
 - **Transcription spans are missing:** `webhook: true` submits an asynchronous job; this package does not trace its later completion.

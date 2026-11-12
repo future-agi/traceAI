@@ -9,6 +9,7 @@ on:
       - 'typescript/packages/fi-semantic-conventions/**'
       - 'typescript/pnpm-lock.yaml'
       - '.github/workflows/livekit-typescript-tests.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -85,3 +86,40 @@ jobs:
             env "LIVEKIT_COMPAT_DIR=$RUNNER_TEMP/livekit-sdk" \
             "LIVEKIT_INSTRUMENTATION_DIR=$RUNNER_TEMP/livekit-sdk/node_modules/@traceai/fi-instrumentation-livekit" \
             "$(command -v node)" --test packages/traceai_livekit/test/readme-shutdown.cjs
+
+  agents-recording:
+    name: LiveKit Agents recording binding (${{ matrix.agents }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor and latest of the exact versions the binding supports.
+        agents: ['1.8.0', '1.9.5']
+    defaults:
+      run:
+        shell: bash
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install locked dependencies and the real Agents SDK
+        run: |
+          corepack enable
+          pnpm --filter @traceai/fi-instrumentation-livekit... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/livekit-agents" --ignore-scripts --no-audit --no-fund \
+            "@livekit/agents@${{ matrix.agents }}" "zod@^3.25.76"
+      - name: Build
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/fi-instrumentation-livekit build
+      - name: Real Agents session recording with loopback-only networking
+        run: |
+          sudo unshare --net -- sh -c 'ip link set lo up; exec "$@"' sh \
+            env "LIVEKIT_AGENTS_DIR=$RUNNER_TEMP/livekit-agents" "$(command -v node)" \
+            --test packages/traceai_livekit/test/agents-recording.cjs
+          git diff --exit-code -- pnpm-lock.yaml
