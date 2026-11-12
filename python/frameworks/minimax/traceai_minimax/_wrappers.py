@@ -1,4 +1,5 @@
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
@@ -22,14 +23,73 @@ from traceai_minimax._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+# Per-call capture policy key, shared by name (fi_instrumentation.attachments.media_capture).
+_CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
+
+
+def _shared_instrumentor_captures() -> bool:
+    """True while traceai_openai's OpenAIInstrumentor is enabled WITH an active attachment manager.
+
+    The request-level OpenAI instrumentor then owns the call (span and media), whatever
+    the setup order. Enabled without a manager, or an older traceai_openai without the
+    accessor, means it would capture nothing, so this binding keeps the call. Do not
+    import the optional package; inspect live state on each call.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    if instrumentor is None:
+        return False
+    captures = getattr(instrumentor(), "captures_attachments", None)
+    return bool(callable(captures) and captures())
 
 
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, tracer: trace_api.Tracer, *args: Any, attachments: Any = None, config: Any = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: _WithSpan, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(self._attachments, span._span, "minimax", trace_config=self._config).compatible_messages(
+                messages, "image")
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
+
+    def _defers(self) -> bool:
+        """Hand the whole call to traceai_openai only while both sides capture attachments.
+
+        With attachments off here this binding traces exactly as before (its own span too).
+        With traceai_openai enabled but without a manager, this binding keeps the call and
+        captures its media itself.
+        """
+        return self._attachments is not None and _shared_instrumentor_captures()
+
+    @contextmanager
+    def _deferred(self) -> Iterator[None]:
+        """Run the handed-over call under this binding's local deny (deny wins downstream)."""
+        try:
+            from fi_instrumentation.attachments.provider_media import deferred
+
+            token = context_api.attach(deferred(self._config))
+        except Exception:
+            # An unreadable restriction is a restriction: deny capture for this call.
+            token = context_api.attach(context_api.set_value(_CAPTURE_POLICY_KEY, False))
+        try:
+            yield
+        finally:
+            context_api.detach(token)
 
     @contextmanager
     def _start_as_current_span(
@@ -87,6 +147,10 @@ class _ChatCompletionWrapper(_WithTracer):
 
         if not is_minimax_client(client) and not is_minimax_client(instance):
             return wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
         is_streaming = request_parameters.get("stream", False)
@@ -99,6 +163,7 @@ class _ChatCompletionWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span, request_parameters.get("messages"))
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -194,6 +259,10 @@ class _AsyncChatCompletionWrapper(_WithTracer):
 
         if not is_minimax_client(client) and not is_minimax_client(instance):
             return await wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return await wrapped(*args, **kwargs)
 
         request_parameters = dict(kwargs)
         is_streaming = request_parameters.get("stream", False)
@@ -206,6 +275,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span, request_parameters.get("messages"))
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:

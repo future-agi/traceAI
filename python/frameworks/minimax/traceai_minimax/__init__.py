@@ -21,6 +21,20 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("openai >= 1.0.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class MiniMaxInstrumentor(BaseInstrumentor):
     """
     OpenTelemetry instrumentor for MiniMax.
@@ -78,7 +92,9 @@ class MiniMaxInstrumentor(BaseInstrumentor):
                 wrap_function_wrapper(
                     module="openai.resources.chat.completions",
                     name="Completions.create",
-                    wrapper=_ChatCompletionWrapper(tracer=self._tracer),
+                    wrapper=_ChatCompletionWrapper(
+                        tracer=self._tracer, attachments=_attachment_manager(kwargs), config=config
+                    ),
                 )
 
             # Async client
@@ -89,7 +105,9 @@ class MiniMaxInstrumentor(BaseInstrumentor):
                 wrap_function_wrapper(
                     module="openai.resources.chat.completions",
                     name="AsyncCompletions.create",
-                    wrapper=_AsyncChatCompletionWrapper(tracer=self._tracer),
+                    wrapper=_AsyncChatCompletionWrapper(
+                        tracer=self._tracer, attachments=_attachment_manager(kwargs), config=config
+                    ),
                 )
         except Exception as e:
             logger.warning(f"Failed to instrument OpenAI for MiniMax: {e}")
@@ -104,3 +122,12 @@ class MiniMaxInstrumentor(BaseInstrumentor):
                 completions.AsyncCompletions.create = self._original_async_chat_create
         except Exception as e:
             logger.warning(f"Failed to uninstrument: {e}")
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "minimax_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_minimax")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

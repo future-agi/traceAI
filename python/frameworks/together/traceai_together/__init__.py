@@ -32,6 +32,20 @@ logger.addHandler(logging.NullHandler())
 _instruments = ("together >= 1.0.0",)
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class TogetherInstrumentor(BaseInstrumentor):
     """OpenTelemetry instrumentor for Together AI."""
 
@@ -61,6 +75,7 @@ class TogetherInstrumentor(BaseInstrumentor):
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
+        media = dict(attachments=_attachment_manager(kwargs), config=config)
 
         # Import together client
         together_module = import_module("together")
@@ -88,7 +103,7 @@ class TogetherInstrumentor(BaseInstrumentor):
                         wrap_function_wrapper(
                             module="together.resources.chat",
                             name="ChatCompletions.create",
-                            wrapper=_ChatCompletionsWrapper(tracer=self._tracer),
+                            wrapper=_ChatCompletionsWrapper(tracer=self._tracer, **media),
                         )
                     except (ImportError, AttributeError) as e:
                         logger.debug(f"Could not wrap chat.completions.create: {e}")
@@ -130,7 +145,7 @@ class TogetherInstrumentor(BaseInstrumentor):
                     wrap_function_wrapper(
                         module="together.resources.chat",
                         name="AsyncChatCompletions.create",
-                        wrapper=_AsyncChatCompletionsWrapper(tracer=self._tracer),
+                        wrapper=_AsyncChatCompletionsWrapper(tracer=self._tracer, **media),
                     )
                 except (ImportError, AttributeError) as e:
                     logger.debug(f"Could not wrap async chat.completions.create: {e}")
@@ -222,3 +237,12 @@ class TogetherInstrumentor(BaseInstrumentor):
 
         except Exception as e:
             logger.exception(f"Error uninstrumenting Together client: {e}")
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "together_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_together")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

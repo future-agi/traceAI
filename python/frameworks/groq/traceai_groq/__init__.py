@@ -66,14 +66,18 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         wrap_function_wrapper(
             module="groq.resources.chat.completions",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
+            wrapper=_CompletionsWrapper(
+                tracer=self._tracer, attachments=_attachment_manager(kwargs), config=config
+            ),
         )
 
         self._original_async_completions_create = AsyncCompletions.create
         wrap_function_wrapper(
             module="groq.resources.chat.completions",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
+            wrapper=_AsyncCompletionsWrapper(
+                tracer=self._tracer, attachments=_attachment_manager(kwargs), config=config
+            ),
         )
 
         # Audio spans exist only with an enabled attachment manager: plain tracing is unchanged.

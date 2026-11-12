@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from contextlib import contextmanager
 from functools import wraps
 from inspect import Parameter, signature
 from typing import (
@@ -11,6 +12,7 @@ from typing import (
     Iterable,
     Iterator,
     Mapping,
+    Optional,
     Tuple,
     TypeVar,
 )
@@ -335,6 +337,68 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                 break
 
 
+def _media_capture(instrumentor: Any, span: trace_api.Span, arguments: Optional[Mapping[str, Any]] = None) -> Any:
+    """Capture typed chat media of this call; returns the capture (also for output), or None."""
+    attachments = getattr(instrumentor, "_attachments", None)
+    if attachments is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+        media = ProviderMedia(attachments, span, "litellm", trace_config=getattr(instrumentor, "_media_config", None))
+        if not media.usable:
+            return None
+        if arguments is not None:
+            # PDF file parts too: LiteLLM claims the call, so the nested OpenAI instrumentor skips them.
+            media.compatible_messages(arguments.get("messages"), "openai", documents=True)
+        return media
+    except Exception:
+        logger.debug("Attachment capture unavailable", exc_info=True)
+        return None
+
+
+@contextmanager
+def _media_owned(media: Any) -> Iterator[None]:
+    """Run LiteLLM's downstream SDK call as the owner of this call's media.
+
+    A nested provider instrumentor (for example OpenAI under LiteLLM) then
+    uploads nothing for the same call. Only set while this adapter captures.
+    """
+    if media is None:
+        yield
+        return
+    from fi_instrumentation.attachments.provider_media import claim
+
+    token = context_api.attach(claim())
+    try:
+        yield
+    finally:
+        context_api.detach(token)
+
+
+def _media_generated(media: Any, result: Any) -> None:
+    if media is None or not isinstance(result, ImageResponse):
+        return
+    try:
+        media.generated_images(result.data)
+    except Exception:
+        logger.debug("Attachment capture unavailable", exc_info=True)
+
+
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
     original_litellm_funcs: Dict[str, Callable[..., Any]] = (
         {}
@@ -354,6 +418,9 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = _attachment_manager(kwargs)
+        self._media_config = config
 
         functions_to_instrument = {
             "completion": self._completion_wrapper,
@@ -445,7 +512,9 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             ) as span:
                 try:
                     _instrument_func_type_completion(span, arguments)
-                    result = self.original_litellm_funcs["completion"](*args, **kwargs)
+                    media = _media_capture(self, span, arguments)
+                    with _media_owned(media):
+                        result = self.original_litellm_funcs["completion"](*args, **kwargs)
                     _finalize_span(span, result)
                     span.set_status(trace_api.StatusCode.OK)
                     return result
@@ -459,9 +528,11 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             span = span_cm.__enter__()
             try:
                 _instrument_func_type_completion(span, arguments)
-                original_iterator = self.original_litellm_funcs["completion"](
-                    *args, **kwargs
-                )
+                media = _media_capture(self, span, arguments)
+                with _media_owned(media):
+                    original_iterator = self.original_litellm_funcs["completion"](
+                        *args, **kwargs
+                    )
                 return StreamingIteratorWrapper(original_iterator, span, span_cm)
             except BaseException as e:
                 span_cm.__exit__(type(e), e, e.__traceback__)
@@ -479,9 +550,11 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             ) as span:
                 try:
                     _instrument_func_type_completion(span, arguments)
-                    result = await self.original_litellm_funcs["acompletion"](
-                        *args, **kwargs
-                    )
+                    media = _media_capture(self, span, arguments)
+                    with _media_owned(media):
+                        result = await self.original_litellm_funcs["acompletion"](
+                            *args, **kwargs
+                        )
                     _finalize_span(span, result)
                     span.set_status(trace_api.StatusCode.OK)
                     return result
@@ -495,9 +568,11 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             span = span_cm.__enter__()
             try:
                 _instrument_func_type_completion(span, arguments)
-                original_async_iterator = await self.original_litellm_funcs[
-                    "acompletion"
-                ](*args, **kwargs)
+                media = _media_capture(self, span, arguments)
+                with _media_owned(media):
+                    original_async_iterator = await self.original_litellm_funcs[
+                        "acompletion"
+                    ](*args, **kwargs)
                 return AsyncStreamingIteratorWrapper(
                     original_async_iterator, span, span_cm
                 )
@@ -521,9 +596,11 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) as span:
             try:
                 _instrument_func_type_completion(span, arguments)
-                result = self.original_litellm_funcs["completion_with_retries"](
-                    *args, **kwargs
-                )
+                media = _media_capture(self, span, arguments)
+                with _media_owned(media):
+                    result = self.original_litellm_funcs["completion_with_retries"](
+                        *args, **kwargs
+                    )
                 _finalize_span(span, result)
                 span.set_status(trace_api.StatusCode.OK)
                 return result  # type:ignore
@@ -546,9 +623,11 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) as span:
             try:
                 _instrument_func_type_completion(span, arguments)
-                result = await self.original_litellm_funcs[
-                    "acompletion_with_retries"
-                ](*args, **kwargs)
+                media = _media_capture(self, span, arguments)
+                with _media_owned(media):
+                    result = await self.original_litellm_funcs[
+                        "acompletion_with_retries"
+                    ](*args, **kwargs)
                 _finalize_span(span, result)
                 span.set_status(trace_api.StatusCode.OK)
                 return result  # type:ignore
@@ -610,9 +689,12 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) as span:
             try:
                 _instrument_func_type_image_generation(span, arguments, args)
-                result = self.original_litellm_funcs["image_generation"](
-                    *args, **kwargs
-                )
+                media = _media_capture(self, span)
+                with _media_owned(media):
+                    result = self.original_litellm_funcs["image_generation"](
+                        *args, **kwargs
+                    )
+                _media_generated(media, result)
                 _finalize_span(span, result)
                 span.set_status(trace_api.StatusCode.OK)
                 return result  # type:ignore
@@ -634,9 +716,12 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) as span:
             try:
                 _instrument_func_type_image_generation(span, arguments, args)
-                result = await self.original_litellm_funcs["aimage_generation"](
-                    *args, **kwargs
-                )
+                media = _media_capture(self, span)
+                with _media_owned(media):
+                    result = await self.original_litellm_funcs["aimage_generation"](
+                        *args, **kwargs
+                    )
+                _media_generated(media, result)
                 _finalize_span(span, result)
                 span.set_status(trace_api.StatusCode.OK)
                 return result  # type:ignore
@@ -856,3 +941,12 @@ def _process_messages(messages):
             "eval_input": None,
             "query": None,
         }
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "litellm_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_litellm")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

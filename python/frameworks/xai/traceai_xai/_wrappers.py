@@ -1,12 +1,14 @@
 """Wrapper classes for xAI (Grok) instrumentation."""
 
 import logging
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Tuple
 
 from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, MessageAttributes
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN, Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
@@ -16,14 +18,65 @@ logger.addHandler(logging.NullHandler())
 
 # xAI-specific base URL for detection
 XAI_BASE_URL = "api.x.ai"
+# Per-call capture policy key, shared by name (fi_instrumentation.attachments.media_capture).
+_CAPTURE_POLICY_KEY = "traceai.auto.attachment_policy.v1"
 
 
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    _media_dialect = "image"
+
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        attachments: Any = None,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: Any, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared attachment manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(
+                self._attachments, span, "xai", trace_config=self._config
+            ).compatible_messages(messages, self._media_dialect)
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
+
+    def _defers(self) -> bool:
+        """Hand the whole call to traceai_openai only while both sides capture attachments.
+
+        With attachments off here this binding traces exactly as before (its own span too).
+        With traceai_openai enabled but without a manager, this binding keeps the call and
+        captures its media itself.
+        """
+        return self._attachments is not None and _shared_instrumentor_captures()
+
+    @contextmanager
+    def _deferred(self) -> Iterator[None]:
+        """Run the handed-over call under this binding's local deny (deny wins downstream)."""
+        try:
+            from fi_instrumentation.attachments.provider_media import deferred
+
+            token = context_api.attach(deferred(self._config))
+        except Exception:
+            # An unreadable restriction is a restriction: deny capture for this call.
+            token = context_api.attach(context_api.set_value(_CAPTURE_POLICY_KEY, False))
+        try:
+            yield
+        finally:
+            context_api.detach(token)
 
     @contextmanager
     def _start_span(
@@ -57,6 +110,22 @@ def _is_xai_client(instance: Any) -> bool:
     except Exception:
         pass
     return False
+
+
+def _shared_instrumentor_captures() -> bool:
+    """True while traceai_openai's OpenAIInstrumentor is enabled WITH an active attachment manager.
+
+    The request-level OpenAI instrumentor then owns the call (span and media), whatever
+    the setup order. Enabled without a manager, or an older traceai_openai without the
+    accessor, means it would capture nothing, so this binding keeps the call. Do not
+    import the optional package; inspect live state on each call.
+    """
+    module = sys.modules.get("traceai_openai")
+    instrumentor = getattr(module, "OpenAIInstrumentor", None)
+    if instrumentor is None:
+        return False
+    captures = getattr(instrumentor(), "captures_attachments", None)
+    return bool(callable(captures) and captures())
 
 
 def _get_input_attributes(
@@ -206,6 +275,10 @@ class _CompletionsWrapper(_WithTracer):
         # Check if this is an xAI client
         if not _is_xai_client(instance):
             return wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return wrapped(*args, **kwargs)
 
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")
@@ -217,6 +290,7 @@ class _CompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
 
         with self._start_span("xAI Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = wrapped(*args, **kwargs)
 
@@ -277,6 +351,10 @@ class _AsyncCompletionsWrapper(_WithTracer):
         # Check if this is an xAI client
         if not _is_xai_client(instance):
             return await wrapped(*args, **kwargs)
+        # One request must have one owner, regardless of setup order.
+        if self._defers():
+            with self._deferred():
+                return await wrapped(*args, **kwargs)
 
         # Extract parameters
         model = kwargs.get("model", args[0] if args else "unknown")
@@ -288,6 +366,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
         input_attrs = _get_input_attributes(model, messages, **extra_kwargs)
 
         with self._start_span("xAI Chat Completions", input_attrs) as span:
+            self._capture_chat_media(span, messages)
             try:
                 response = await wrapped(*args, **kwargs)
 

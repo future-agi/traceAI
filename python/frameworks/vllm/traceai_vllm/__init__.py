@@ -33,6 +33,20 @@ __all__ = [
 ]
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class VLLMInstrumentor(BaseInstrumentor):
     """An instrumentor for vLLM (OpenAI-compatible API)."""
 
@@ -93,7 +107,10 @@ class VLLMInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer, vllm_base_urls=self._vllm_base_urls),
+            wrapper=_CompletionsWrapper(
+                tracer=self._tracer, vllm_base_urls=self._vllm_base_urls,
+                attachments=_attachment_manager(kwargs), config=config,
+            ),
         )
 
         # Wrap asynchronous completions
@@ -101,7 +118,10 @@ class VLLMInstrumentor(BaseInstrumentor):
         wrap_function_wrapper(
             module="openai.resources.chat",
             name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, vllm_base_urls=self._vllm_base_urls),
+            wrapper=_AsyncCompletionsWrapper(
+                tracer=self._tracer, vllm_base_urls=self._vllm_base_urls,
+                attachments=_attachment_manager(kwargs), config=config,
+            ),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -113,3 +133,12 @@ class VLLMInstrumentor(BaseInstrumentor):
                 openai_module.AsyncCompletions.create = self._original_async_completions_create
         except ImportError:
             pass
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "vllm_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_vllm")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

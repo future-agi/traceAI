@@ -32,9 +32,34 @@ logger.addHandler(logging.NullHandler())
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    _media_dialect = "image"
+
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        attachments: Any = None,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
+
+    def _capture_chat_media(self, span: Any, messages: Any) -> None:
+        """Typed chat media (data-URI images) through the shared attachment manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            ProviderMedia(
+                self._attachments, span, "together", trace_config=self._config
+            ).compatible_messages(messages, self._media_dialect)
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     @contextmanager
     def _start_as_current_span(
@@ -97,6 +122,7 @@ class _ChatCompletionsWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span._span, kwargs.get("messages"))
             span.set_attribute(SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters))
 
             try:
@@ -204,6 +230,7 @@ class _AsyncChatCompletionsWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_chat_media(span._span, kwargs.get("messages"))
             span.set_attribute(SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters))
 
             try:

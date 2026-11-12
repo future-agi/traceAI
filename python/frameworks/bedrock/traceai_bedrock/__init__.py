@@ -128,8 +128,21 @@ class BufferedStreamingBody(StreamingBody):  # type: ignore
             self._buffer.seek(0)
 
 
+def _bedrock_media(attachments: Any, config: Any, span: Any) -> Any:
+    """A typed media capture for this span, or None (no manager, owned elsewhere, unsampled)."""
+    if attachments is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+        media = ProviderMedia(attachments, span, "bedrock", trace_config=config)
+        return media if media.usable else None
+    except Exception:
+        return None
+
+
 def _client_creation_wrapper(
-    tracer: Tracer, module_version: str
+    tracer: Tracer, module_version: str, attachments: Any = None, config: Any = None
 ) -> Callable[[ClientCreator], ClientCreator]:
     def _client_wrapper(
         wrapped: ClientCreator,
@@ -167,14 +180,14 @@ def _client_creation_wrapper(
             client = cast(InstrumentedClient, client)
 
             client._unwrapped_invoke_model = client.invoke_model
-            client.invoke_model = _model_invocation_wrapper(tracer)(client)
+            client.invoke_model = _model_invocation_wrapper(tracer, attachments, config)(client)
             client.invoke_model_with_response_stream = _InvokeModelWithResponseStream(tracer)(
                 client.invoke_model_with_response_stream
             )
 
             if module_version >= _MINIMUM_CONVERSE_BOTOCORE_VERSION:
                 client._unwrapped_converse = client.converse
-                client.converse = _model_converse_wrapper(tracer)(client)
+                client.converse = _model_converse_wrapper(tracer, attachments, config)(client)
             # ConverseStream is an independent operation, not a call to converse.
             # Feature-detect it so older botocore service models remain supported.
             if hasattr(client, "converse_stream"):
@@ -185,7 +198,9 @@ def _client_creation_wrapper(
     return _client_wrapper  # type: ignore
 
 
-def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Callable[..., Any]]:
+def _model_invocation_wrapper(
+    tracer: Tracer, attachments: Any = None, config: Any = None
+) -> Callable[[InstrumentedClient], Callable[..., Any]]:
     def _invocation_wrapper(wrapped_client: InstrumentedClient) -> Callable[..., Any]:
         """Instruments a bedrock client's `invoke_model` or `converse` method."""
 
@@ -211,6 +226,11 @@ def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], 
                     model_id
                 )
 
+                # Typed media of named model families only (Anthropic, Nova, Titan/Nova Canvas).
+                media = _bedrock_media(attachments, config, span)
+                if media is not None:
+                    media.bedrock_invoke_request(model_id, request_body)
+
                 # Set input attributes only when the request can be captured.
                 if isinstance(request_body, dict):
                     if is_claude_message_api:
@@ -232,6 +252,9 @@ def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], 
                 )
                 response_body = json.loads(response.get("body").read())
                 response["body"].reset()
+                if media is not None:
+                    # Generated images from the body this wrapper already buffered; no extra read.
+                    media.bedrock_invoke_response(model_id, response_body)
 
                 # Set response attributes based on model type
                 if is_claude_message_api:
@@ -249,7 +272,9 @@ def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], 
     return _invocation_wrapper
 
 
-def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Callable[..., Any]]:
+def _model_converse_wrapper(
+    tracer: Tracer, attachments: Any = None, config: Any = None
+) -> Callable[[InstrumentedClient], Callable[..., Any]]:
     def _converse_wrapper(wrapped_client: InstrumentedClient) -> Callable[..., Any]:
         """Instruments a bedrock client's `converse` method."""
 
@@ -273,6 +298,14 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                     invocation_parameters = safe_json_dumps(inference_config)
                     _set_span_attribute(
                         span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, invocation_parameters
+                    )
+
+                media = _bedrock_media(attachments, config, span)
+                if media is not None:
+                    media.bedrock_converse(
+                        kwargs.get("modelId"),
+                        kwargs.get("messages"),
+                        kwargs.get("additionalModelRequestFields"),
                     )
 
                 aggregated_messages = []
@@ -357,6 +390,20 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
     return _converse_wrapper
 
 
+def _attachment_manager(kwargs: Any) -> Any:
+    """The shared manager passed as ``attachments`` (or auto's ``attachment_manager``), if it can admit.
+
+    A missing, disabled or pre-attachments core leaves tracing exactly as before.
+    """
+    if kwargs.get("attachments") is None and kwargs.get("attachment_manager") is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import manager_from_kwargs
+    except ImportError:
+        return None
+    return manager_from_kwargs(kwargs)
+
+
 class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
     __slots__ = (
         "_tracer",
@@ -386,7 +433,10 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
             module=_MODULE,
             name="ClientCreator.create_client",
             wrapper=_client_creation_wrapper(
-                tracer=self._tracer, module_version=botocore.__version__
+                tracer=self._tracer,
+                module_version=botocore.__version__,
+                attachments=_attachment_manager(kwargs),
+                config=config,
             ),
         )
 
@@ -467,3 +517,12 @@ T = TypeVar("T", bound=type)
 
 def is_iterable_of(lst: Iterable[object], tp: T) -> bool:
     return isinstance(lst, Iterable) and all(isinstance(x, tp) for x in lst)
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: the descriptor needs a fi-instrumentation-otel release with attachments.
+    if name == "bedrock_attachment_capabilities":
+        from fi_instrumentation.attachments.provider_media import capabilities
+
+        return capabilities("traceai_bedrock")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

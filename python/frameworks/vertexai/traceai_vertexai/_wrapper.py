@@ -112,9 +112,19 @@ class _Wrapper:
     variable `_instrumentation_status._IS_INSTRUMENTED` to False or True, respectively.
     """
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        tracer: trace_api.Tracer,
+        *args: Any,
+        attachments: Any = None,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+        self._config = config
 
     @wrapt.decorator  # type: ignore[misc]
     def __call__(
@@ -160,6 +170,7 @@ class _Wrapper:
             _update_span(request, span)
         except BaseException:
             pass
+        media = _media_input(self._attachments, self._config, span, request)
         try:
             with use_span(span, False, False, False):
                 result = wrapped(*args, **kwargs)
@@ -169,11 +180,42 @@ class _Wrapper:
             span.end()
             raise
         if isinstance(result, Awaitable):
-            return _proxy(result, _CallbackForAwaitable(request, span), _use_span(span))
+            return _proxy(result, _CallbackForAwaitable(request, span, media), _use_span(span))
         if isinstance(result, (Iterable, AsyncIterable)):
             return _proxy(result, _CallbackForIterable(request, span), _use_span(span))
+        _media_output(media, request, result)
         _finish(span, result)
         return result
+
+
+def _media_input(attachments: Any, config: Any, span: Span, request: Any) -> Any:
+    """Typed inline_data Parts of a GenerateContentRequest; returns the capture for the response."""
+    if attachments is None:
+        return None
+    try:
+        from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+        media = ProviderMedia(attachments, span, "vertexai", trace_config=config)
+        if not media.usable:
+            return None
+        if isinstance(request, (v1.GenerateContentRequest, v1beta1.GenerateContentRequest)):
+            media.gemini_contents(list(request.contents))
+        return media
+    except Exception:
+        return None
+
+
+def _media_output(media: Any, request: Any, result: Any) -> None:
+    """Completed responses only: Gemini candidate inline_data and Imagen predictions."""
+    if media is None:
+        return
+    try:
+        if isinstance(result, (v1.GenerateContentResponse, v1beta1.GenerateContentResponse)):
+            media.gemini_response(result)
+        elif isinstance(result, v1.PredictResponse) and isinstance(request, v1.PredictRequest):
+            media.imagen_predictions(request.endpoint, result.predictions)
+    except Exception:
+        pass
 
 
 class _CallbackForAwaitable:
@@ -183,9 +225,10 @@ class _CallbackForAwaitable:
     Awaitable or when an exception is raised.
     """
 
-    def __init__(self, request: proto.Message, span: Span) -> None:
+    def __init__(self, request: proto.Message, span: Span, media: Any = None) -> None:
         self._request = request
         self._span = span
+        self._media = media
 
     def __call__(self, obj: _AnyT) -> _AnyT:
         request, span = self._request, self._span
@@ -194,6 +237,8 @@ class _CallbackForAwaitable:
                 _AnyT, _proxy(obj, _CallbackForIterable(request, span), _use_span(span))
             )
         else:
+            if not isinstance(obj, BaseException):
+                _media_output(self._media, request, obj)
             _finish(span, obj)
         return obj
 

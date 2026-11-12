@@ -1,0 +1,151 @@
+name: Python provider media (Gemini, Vertex, Bedrock, LiteLLM, compatible chat)
+
+# Real provider SDKs (declared floor and latest) through the Python
+# instrumentors and fi_instrumentation.attachments.provider_media to a TLS
+# loopback F01 attachment server. Outbound network is disabled while the tests run.
+
+on:
+  pull_request:
+    paths:
+      - 'python/fi_instrumentation/attachments/**'
+      - 'python/frameworks/google-genai/**'
+      - 'python/frameworks/vertexai/**'
+      - 'python/frameworks/bedrock/**'
+      - 'python/frameworks/litellm/**'
+      - 'python/frameworks/groq/**'
+      - 'python/frameworks/together/**'
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/xai/**'
+      - 'python/frameworks/deepseek/**'
+      - 'python/frameworks/cerebras/**'
+      - 'python/frameworks/mistralai/**'
+      - 'python/frameworks/openrouter/**'
+      - 'python/frameworks/portkey/**'
+      - 'python/frameworks/ollama/**'
+      - 'python/frameworks/vllm/**'
+      - 'python/frameworks/minimax/**'
+      - 'python/frameworks/openai/**'
+      - 'python/tests/attachments_providers/conftest.py'
+      - 'python/tests/attachments_compat_providers/**'
+      - '.github/workflows/attachments-python-compat-providers-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/fi_instrumentation/attachments/**'
+      - 'python/frameworks/google-genai/**'
+      - 'python/frameworks/vertexai/**'
+      - 'python/frameworks/bedrock/**'
+      - 'python/frameworks/litellm/**'
+      - 'python/frameworks/groq/**'
+      - 'python/frameworks/together/**'
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/xai/**'
+      - 'python/frameworks/deepseek/**'
+      - 'python/frameworks/cerebras/**'
+      - 'python/frameworks/mistralai/**'
+      - 'python/frameworks/openrouter/**'
+      - 'python/frameworks/portkey/**'
+      - 'python/frameworks/ollama/**'
+      - 'python/frameworks/vllm/**'
+      - 'python/frameworks/minimax/**'
+      - 'python/frameworks/openai/**'
+      - 'python/tests/attachments_providers/conftest.py'
+      - 'python/tests/attachments_compat_providers/**'
+      - '.github/workflows/attachments-python-compat-providers-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  media:
+    name: Provider media (${{ matrix.package }} ${{ matrix.tier }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: core, tier: latest, python: '3.12', sdks: '', tests: core, min: 54}
+          - {package: google-genai, tier: floor, python: '3.10', sdks: 'google-genai==1.8.0', tests: google, min: 9}
+          - {package: google-genai, tier: latest, python: '3.12', sdks: 'google-genai==3.2.0', tests: google, min: 9}
+          - {package: vertexai, tier: floor, python: '3.10', sdks: 'google-cloud-aiplatform==1.61.0', tests: google, min: 5}
+          - {package: vertexai, tier: latest, python: '3.12', sdks: 'google-cloud-aiplatform==1.101.0', tests: google, min: 5}
+          - {package: bedrock, tier: floor, python: '3.10', sdks: 'boto3==1.38.17', tests: aws, min: 12}
+          - {package: bedrock, tier: latest, python: '3.12', sdks: 'boto3==1.44.1', tests: aws, min: 12}
+          - {package: litellm, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai litellm==1.53.1 openai==1.69.0', tests: aws, min: 9}
+          - {package: litellm, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai litellm==1.109.1', tests: aws, min: 10}
+          - {package: groq, tier: floor, python: '3.10', sdks: 'groq==0.9.0 httpx<0.28', tests: compat, min: 2}
+          - {package: groq, tier: latest, python: '3.12', sdks: 'groq==1.7.0', tests: compat, min: 2}
+          - {package: together, tier: floor, python: '3.10', sdks: 'together==1.3.0', tests: compat, min: 3}
+          - {package: together, tier: latest, python: '3.12', sdks: 'together==3.1.1', tests: compat, min: 3}
+          - {package: fireworks, tier: floor, python: '3.10', sdks: 'openai==1.69.0 httpx<0.28', tests: compat, min: 3}
+          - {package: fireworks, tier: latest, python: '3.12', sdks: 'openai==3.49.0', tests: compat, min: 3}
+          - {package: xai, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 17}
+          - {package: xai, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 17}
+          - {package: vllm, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 4}
+          - {package: vllm, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 4}
+          - {package: minimax, tier: floor, python: '3.10', sdks: '-e python/frameworks/openai openai==1.69.0 httpx<0.28', tests: compat, min: 18}
+          - {package: minimax, tier: latest, python: '3.12', sdks: '-e python/frameworks/openai openai==3.49.0', tests: compat, min: 18}
+          - {package: deepseek, tier: floor, python: '3.10', sdks: 'openai==1.69.0 httpx<0.28', tests: compat, min: 3}
+          - {package: deepseek, tier: latest, python: '3.12', sdks: 'openai==3.49.0', tests: compat, min: 3}
+          - {package: cerebras, tier: floor, python: '3.10', sdks: 'cerebras-cloud-sdk==1.0.0 httpx<0.28', tests: compat, min: 3}
+          - {package: cerebras, tier: latest, python: '3.12', sdks: 'cerebras-cloud-sdk==1.91.0', tests: compat, min: 3}
+          - {package: mistralai, tier: floor, python: '3.10', sdks: 'mistralai==1.1.0', tests: compat, min: 5}
+          - {package: mistralai, tier: latest, python: '3.12', sdks: 'mistralai==3.7.0', tests: compat, min: 5}
+          - {package: openrouter, tier: floor, python: '3.10', sdks: 'openrouter==1.3.0', tests: compat, min: 3}
+          - {package: openrouter, tier: latest, python: '3.12', sdks: 'openrouter==1.3.107', tests: compat, min: 3}
+          - {package: portkey, tier: floor, python: '3.10', sdks: 'portkey-ai==1.9.0 httpx<0.28', tests: compat, min: 3}
+          - {package: portkey, tier: latest, python: '3.12', sdks: 'portkey-ai==2.3.4', tests: compat, min: 3}
+          - {package: ollama, tier: floor, python: '3.10', sdks: 'ollama==0.3.0', tests: compat, min: 4}
+          - {package: ollama, tier: latest, python: '3.12', sdks: 'ollama==0.6.3', tests: compat, min: 4}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the core, the integration and the selected SDKs
+        env:
+          PACKAGE: ${{ matrix.package }}
+          SDKS: ${{ matrix.sdks }}
+        run: |
+          python -m venv .venv
+          integration=""
+          if [ "$PACKAGE" != core ]; then integration="-e python/frameworks/$PACKAGE"; fi
+          # shellcheck disable=SC2086
+          .venv/bin/pip install -e python $integration opentelemetry-sdk 'pytest>=8,<9' 'pytest-asyncio<0.25' $SDKS
+          .venv/bin/pip freeze | grep -iE '^(google-genai|google-cloud-aiplatform|boto3|litellm|openai|groq|together|cerebras-cloud-sdk|mistralai|openrouter|portkey-ai|ollama|httpx)==' || true
+      - name: Run with outbound network disabled
+        # bash -eo pipefail: a failing pytest is not hidden by tee.
+        shell: bash
+        env:
+          SUITE: ${{ matrix.tests }}
+          MIN: ${{ matrix.min }}
+        run: |
+          case "$SUITE" in
+            core) tests="tests/attachments_compat_providers/test_provider_media.py" ;;
+            google) tests="tests/attachments_compat_providers/test_google_attachments.py" ;;
+            aws) tests="tests/attachments_compat_providers/test_bedrock_litellm_attachments.py" ;;
+            compat) tests="tests/attachments_compat_providers/test_compat_attachments.py" ;;
+          esac
+          # A file and a node ID inside the same file would collapse to the node ID only,
+          # so the descriptor rows are added only where the compat file is not already selected.
+          case "$SUITE" in
+            google|aws) tests="$tests tests/attachments_compat_providers/test_compat_attachments.py::test_package_descriptor" ;;
+          esac
+          if [ "$SUITE" != core ]; then
+            tests="$tests tests/attachments_compat_providers/test_provider_media.py::test_disabled_path_never_imports_attachment_modules"
+          fi
+          sudo unshare --net -- bash -e -c '
+            ip link set lo up
+            cd "$2/python"
+            export FI_BASE_URL=http://127.0.0.1:9 FI_GRPC_URL=http://127.0.0.1:9
+            export LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true
+            # shellcheck disable=SC2086
+            PYTHONPATH=. "$1" -m pytest $3 -v -rs -p no:cacheprovider -o addopts="" -o faulthandler_timeout=180
+          ' _ "$PWD/.venv/bin/python" "$PWD" "$tests" | tee pytest.log
+          # A job whose SDK rows silently skipped must not pass: require the rows this package proves.
+          passed=$(grep -Eo '[0-9]+ passed' pytest.log | tail -1 | cut -d' ' -f1)
+          if [ "${passed:-0}" -lt "$MIN" ]; then echo "expected at least $MIN passed, got ${passed:-0}"; exit 1; fi

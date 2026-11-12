@@ -23,12 +23,29 @@ logger.addHandler(logging.NullHandler())
 class _WithTracer(ABC):
     """Base class for wrappers that need a tracer."""
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, tracer: trace_api.Tracer, *args: Any, attachments: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
         # Use the exact FITracer config: explicit options override environment values.
         config = getattr(tracer, "_self_config", None)
         self._config = config if isinstance(config, TraceConfig) else TraceConfig()
+        # Provider-owned shared attachment manager, or None (no capture, no imports).
+        self._attachments = attachments
+
+    def _capture_images(self, span: Any, request: Mapping[str, Any]) -> None:
+        """Ollama ``images`` (bytes or base64; never a path) through the shared manager; never raises."""
+        if self._attachments is None:
+            return
+        try:
+            from fi_instrumentation.attachments.provider_media import ProviderMedia
+
+            media = ProviderMedia(self._attachments, span, "ollama", trace_config=self._config)
+            if "messages" in request:
+                media.ollama_messages(request.get("messages"))
+            else:
+                media.ollama_images(request.get("images"))
+        except Exception:
+            logger.debug("Attachment capture unavailable", exc_info=True)
 
     @contextmanager
     def _start_as_current_span(
@@ -91,6 +108,7 @@ class _ChatWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_images(span._span, request_parameters)
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -222,6 +240,7 @@ class _AsyncChatWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_images(span._span, request_parameters)
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:
@@ -350,6 +369,7 @@ class _GenerateWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_images(span._span, request_parameters)
             try:
                 response = wrapped(*args, **kwargs)
             except Exception as exception:
@@ -475,6 +495,7 @@ class _AsyncGenerateWrapper(_WithTracer):
             context_attributes=get_attributes_from_context(),
             extra_attributes=self._request_extractor.get_extra_attributes_from_request(request_parameters),
         ) as span:
+            self._capture_images(span._span, request_parameters)
             try:
                 response = await wrapped(*args, **kwargs)
             except Exception as exception:
