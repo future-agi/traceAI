@@ -192,10 +192,15 @@ uploaded from the original SDK message, before any text flattening or
 truncation, as `tool_result` occurrences with the `tool_use_id`. They belong
 to the tool's span and are projected on it (`fi.attachment.refs`). The CLI
 usually runs the PostToolUse hook before it streams the tool result, so with
-attachments on the tool span stays recording until its result has been
-captured (at most 30 seconds, or until the conversation ends) and then ends
-at the time the hook recorded; its duration is unchanged. With attachments
-off, the hook ends the span immediately, as before.
+attachments on, while that client's `receive_response()` conversation is
+running, the tool span stays recording until its result has been captured (at
+most 30 seconds, until that conversation ends, or until `disconnect()`) and
+then ends at the time the hook recorded; its duration is unchanged. Each
+client keeps its own waiting spans, so one conversation ending never ends
+another client's. Tool media is captured from `receive_response()` only:
+with `receive_messages()`, or for a hook that fires before
+`receive_response()` starts, the hook ends the span immediately, as it
+always does with attachments off.
 Media bytes never reach `tool.output` or the conversation output text. The
 SDK drops top-level user image blocks while parsing, so prompt images are not
 captured. URL and file sources are never read.

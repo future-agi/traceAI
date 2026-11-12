@@ -1,5 +1,7 @@
 """The shared tool-media helper: deny-wins folding, preflight before read, budgets, dedup, ownership."""
 
+import struct
+
 import pytest
 
 from fi_instrumentation import TraceConfig
@@ -136,6 +138,68 @@ def test_signature_of_another_modality_is_denied_and_never_relabelled(f01, spans
     (b"RIFF\x00\x00\x00\x00WEBP", "image"), (b"RIFF\x00\x00\x00\x00WAVE", "audio"), (b"OggS\x00\x02", "audio"),
     (b"fLaC\x00\x00", "audio"), (b"ID3\x04\x00", "audio"), (b"%PDF-1.7\n", "document"),
     (b"\x00\x00\x00\x18ftypmp42", None), (b"\x1aE\xdf\xa3\x9fB\x86", None), (b"RIFF\x00\x00\x00\x00AVI ", None),
-    (b"plain text", None)])
+    (b"plain text", None), (b"BM6\x00\x00\x00\x00\x00\x00\x006\x00", "image"), (b"II*\x00\x08\x00\x00\x00", "image"),
+    (b"MM\x00*\x00\x00\x00\x08", "image"), (b"\x00\x00\x00\x18ftypavif", "image"),
+    (b"\x00\x00\x00\x18ftypheic", "image"), (b"\x00\x00\x00\x18ftypheix", "image"),
+    (b"\x00\x00\x00\x18ftypmif1", "image"), (b"\x00\x00\x00\x18ftypmsf1", "image"),
+    (b"\x00\x00\x00\x18ftypisom", None), (b"\x00\x00\x00\x18ftypM4A ", None), (b"\x00\x00\x00\x14ftypqt  ", None),
+    (b"\x00\x00\x00\x18avifftyp", None)])
 def test_signature_kind(head, kind):
     assert tool_media.signature_kind(head) == kind
+
+
+def _bmp():
+    pixels = b"\x00\x00\xff\x00" * 4
+    header = b"BM" + struct.pack("<IHHI", 54 + len(pixels), 0, 0, 54)
+    return header + struct.pack("<IiiHHIIiiII", 40, 2, 2, 1, 32, 0, len(pixels), 2835, 2835, 0, 0) + pixels
+
+
+def _tiff(order=b"II*\x00"):
+    return order + struct.pack("<I", 8) + b"\x00" * 40
+
+
+def _heif(brand):
+    return struct.pack(">I", 24) + b"ftyp" + brand + b"\x00\x00\x00\x00" + brand + b"mif1" + b"\x00" * 32
+
+
+_IMAGE_MISLABELS = [
+    ("bmp-as-audio/wav", "audio/wav", _bmp), ("bmp-as-audio/L16", "audio/L16", _bmp),
+    ("bmp-as-octet-stream", "application/octet-stream", _bmp), ("tiff-le-as-audio/L16", "audio/L16", _tiff),
+    ("tiff-be-as-audio/wav", "audio/wav", lambda: _tiff(b"MM\x00*")),
+    ("avif-as-video/mp4", "video/mp4", lambda: _heif(b"avif")), ("heic-as-audio/mp4", "audio/mp4", lambda: _heif(b"heic")),
+    ("heix-as-octet-stream", "application/octet-stream", lambda: _heif(b"heix")),
+    ("mif1-as-video/mp4", "video/mp4", lambda: _heif(b"mif1")), ("msf1-as-video/mp4", "video/mp4", lambda: _heif(b"msf1"))]
+
+
+@pytest.mark.parametrize("label,mime,make", _IMAGE_MISLABELS, ids=[case[0] for case in _IMAGE_MISLABELS])
+def test_bmp_tiff_and_heif_images_cannot_escape_hide_input_images(f01, spans, label, mime, make):
+    """Image bytes declared as audio, video or a generic file are not uploaded under hide_input_images."""
+    manager = f01.manager()
+    provider, _ = spans
+    data = make()
+    with provider.get_tracer("t").start_as_current_span("tool") as span:
+        media = tool_media.ToolMedia(manager, span, "test", trace_config=TraceConfig(hide_input_images=True))
+        assert media.base64("a", lambda: b64(data), mime, purpose="tool_result") is None
+        assert media.data_uri("b", lambda: "data:%s;base64,%s" % (mime, b64(data)), (mime,),
+                              purpose="tool_result") is None
+    flush(manager)
+    assert f01.uploads == [] and data not in f01.payloads
+    manager.shutdown(5)
+
+
+def test_octet_stream_with_a_recognised_signature_is_skipped(f01, spans):
+    """application/octet-stream is the file modality: image, audio or PDF bytes in it are skipped, never relabelled."""
+    from _harness import PDF, wav
+
+    manager = f01.manager()
+    provider, _ = spans
+    plain = b"opaque tool output, no known signature" * 4
+    with provider.get_tracer("t").start_as_current_span("tool") as span:
+        media = tool_media.ToolMedia(manager, span, "test")
+        for position, data in (("png", png(seed=31)), ("wav", wav()), ("pdf", PDF), ("bmp", _bmp())):
+            assert media.base64(position, lambda d=data: b64(d), "application/octet-stream",
+                                purpose="tool_result") is None, position
+        assert media.base64("plain", lambda: b64(plain), "application/octet-stream", purpose="tool_result")
+    flush(manager)
+    assert [(u["mime_type"], p) for u, p in zip(f01.uploads, f01.payloads)] == [("application/octet-stream", plain)]
+    manager.shutdown(5)

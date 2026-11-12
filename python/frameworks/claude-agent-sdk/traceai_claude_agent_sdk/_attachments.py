@@ -6,10 +6,13 @@ base64 ``image`` and PDF ``document`` blocks there are uploaded BEFORE any text
 flattening or truncation, at the tool's span (with ``tool_call_id``):
 
 - on the tool span, while it is still recording: before the PostToolUse hook
-  (result-first) or after it, because with capture on the hook defers the
-  span's end until its result has been captured (hooks-first, the CLI's
-  usual order); the span then ends at the time the hook recorded;
-- for a result with no traced tool, on the conversation span.
+  (result-first) or after it, because with capture on and the client's
+  ``receive_response()`` conversation live, the hook defers the span's end
+  until its result has been captured (hooks-first, the CLI's usual order);
+  the span then ends at the time the hook recorded. Each client has its own
+  deferral tables (``_hooks.ToolDeferrals``);
+- for a result with no traced or recording tool span (for example a hook that
+  ran before ``receive_response()`` started), on the conversation span.
 
 Every occurrence is projected (``fi.attachment.refs``) on the live span that
 is its upload parent.
