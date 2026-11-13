@@ -27,6 +27,8 @@ export interface PgVectorInstrumentationConfig extends InstrumentationConfig {
   captureQueryVectors?: boolean;
   captureResultVectors?: boolean;
   captureQueries?: boolean;
+  /** Trace only vector queries; every other query runs without a span. */
+  vectorOnly?: boolean;
 }
 
 export class PgVectorInstrumentation extends InstrumentationBase {
@@ -44,6 +46,11 @@ export class PgVectorInstrumentation extends InstrumentationBase {
     super("@traceai/pgvector", VERSION, Object.assign({}, instrumentationConfig));
     this._traceConfig = traceConfig;
     this._pgConfig = instrumentationConfig || {};
+  }
+
+  /** True when only vector queries are traced. */
+  public get vectorOnly(): boolean {
+    return this._pgConfig?.vectorOnly === true;
   }
 
   public override enable(): void {
@@ -102,6 +109,11 @@ export class PgVectorInstrumentation extends InstrumentationBase {
     const originalQuery = prototype.query;
 
     prototype.query = function (this: any, ...args: any[]) {
+      if (instrumentation.vectorOnly) {
+        const queryText = typeof args[0] === "string" ? args[0] : args[0]?.text;
+        // Non-vector queries keep the driver's own call and return value.
+        if (!instrumentation._isVectorSearchQuery(queryText)) return originalQuery.apply(this, args);
+      }
       return instrumentation._wrapQuery(this, originalQuery, args);
     };
   }
