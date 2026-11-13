@@ -19,12 +19,19 @@ module TraceAI
         record
       end
 
+      # Bookkeeping runs inside the application's own span calls: a failure
+      # here marks the record failed (its export then fails closed) and never
+      # stops the application's call.
       def add_event(name, attributes: nil, timestamp: nil)
         return super unless traceai_media_enabled?
         previous = Thread.current[:traceai_media_event]
-        evidence = Privacy.media_admission(attributes, count_limit: @span_limits.event_attribute_count_limit,
-                                           length_limit: @span_limits.event_attribute_length_limit)
-        Thread.current[:traceai_media_event] = [self, evidence]
+        begin
+          evidence = Privacy.media_admission(attributes, count_limit: @span_limits.event_attribute_count_limit,
+                                             length_limit: @span_limits.event_attribute_length_limit)
+          Thread.current[:traceai_media_event] = [self, evidence]
+        rescue StandardError
+          @traceai_media_failed = true
+        end
         begin
           super
         ensure
@@ -40,13 +47,19 @@ module TraceAI
 
       def trim_span_attributes(attributes)
         if traceai_media_enabled?
-          @traceai_attribute_media = Privacy.media_admission(attributes,
-            count_limit: @span_limits.attribute_count_limit, length_limit: @span_limits.attribute_length_limit,
-            previous: @traceai_attribute_media)
+          begin
+            @traceai_attribute_media = Privacy.media_admission(attributes,
+              count_limit: @span_limits.attribute_count_limit, length_limit: @span_limits.attribute_length_limit,
+              previous: @traceai_attribute_media)
+          rescue StandardError
+            @traceai_media_failed = true
+          end
         end
         result = super
-        if @traceai_attribute_media && attributes
-          @traceai_attribute_media.omitted.keep_if { |key, _| attributes.key?(key) }
+        begin
+          @traceai_attribute_media.omitted.keep_if { |key, _| attributes.key?(key) } if @traceai_attribute_media && attributes
+        rescue StandardError
+          @traceai_media_failed = true
         end
         result
       end
