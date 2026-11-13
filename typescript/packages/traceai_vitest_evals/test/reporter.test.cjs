@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const { VitestEvalsReporter } = require('../dist/index.js');
 
 test('exports one trace batch with normalized parentage, timing, scores, and safe attributes', async () => {
@@ -67,4 +68,106 @@ test('every exported span names its Future AGI project, so the backend accepts t
   }
   for (const attrs of await run({}, 'synthetic-env-project')) assert.equal(attrs.project_name, 'synthetic-env-project');
   for (const attrs of await run({ projectName: 'synthetic-option-project' }, 'synthetic-env-project')) assert.equal(attrs.project_name, 'synthetic-option-project');
+});
+
+// A vitest-evals harness trace: the root span carries the harness name, a child span the model call.
+const harnessTrace = (id, harness) => ({ id, name: harness, spans: [
+  { id: `${id}:run`, name: harness, kind: 'run', status: 'ok', attributes: { 'gen_ai.workflow.name': harness } },
+  { id: `${id}:model`, parentId: `${id}:run`, name: 'chat model-1', kind: 'model', status: 'ok' },
+] });
+const evalCase = (name, fullName, traces) => ({
+  name, fullName, result: () => ({ state: 'passed' }),
+  meta: () => ({ eval: { scores: [{ name: 'accuracy', score: 1 }] }, harness: { name: 'capital-app', run: { traces } } }),
+});
+const exportCases = async (...cases) => {
+  let exported = [];
+  const reporter = new VitestEvalsReporter({ exporter: { export(spans, cb) { exported = spans; cb({ code: 0 }); }, shutdown: async () => {} } });
+  await reporter.onTestRunEnd([{ children: { *allTests() { yield* cases; } } }]);
+  return exported;
+};
+const roots = spans => spans.filter(span => !span.parentSpanContext);
+
+test('names each trace root after its test, so tests sharing one harness can be told apart', async () => {
+  const spans = await exportCases(
+    evalCase('answers the capital of France', 'capital answers > answers the capital of France', [harnessTrace('trace_1', 'capital-app')]),
+    evalCase('does simple arithmetic', 'capital answers > does simple arithmetic', [harnessTrace('trace_2', 'capital-app')]),
+  );
+  assert.deepEqual(roots(spans).map(span => span.name), ['capital answers > answers the capital of France', 'capital answers > does simple arithmetic']);
+  for (const root of roots(spans)) assert.equal(root.attributes['vitest.evals.original_name'], 'capital-app');
+  const children = spans.filter(span => span.parentSpanContext);
+  assert.deepEqual(children.map(span => span.name), ['chat model-1', 'chat model-1']);
+  for (const child of children) assert.equal(child.attributes['vitest.evals.original_name'], undefined);
+});
+
+test('numbers the roots of a test with several traces and renames only the first root of a trace', async () => {
+  const flat = { id: 'trace_4', spans: [
+    { id: 'trace_4:run', name: 'capital-app', kind: 'run' },
+    { id: 'trace_4:tool', name: 'lookup tool', kind: 'tool' },
+  ] };
+  const spans = await exportCases(evalCase('answers the capital of France', 'capital answers > answers the capital of France', [harnessTrace('trace_3', 'capital-app'), flat]));
+  const exportedRoots = roots(spans);
+  assert.deepEqual(exportedRoots.map(span => span.name), [
+    'capital answers > answers the capital of France (1/2)',
+    'capital answers > answers the capital of France (2/2)',
+    'lookup tool',
+  ]);
+  assert.equal(exportedRoots[0].attributes['vitest.evals.original_name'], 'capital-app');
+  assert.equal(exportedRoots[1].attributes['vitest.evals.original_name'], 'capital-app');
+  assert.equal(exportedRoots[2].attributes['vitest.evals.original_name'], undefined);
+});
+
+test('a test without a name keeps the harness root name', async () => {
+  const spans = await exportCases(evalCase('', '', [harnessTrace('trace_9', 'capital-app')]));
+  assert.deepEqual(roots(spans).map(span => span.name), ['capital-app']);
+  assert.equal(roots(spans)[0].attributes['vitest.evals.original_name'], undefined);
+});
+
+test('a test without a harness trace is exported under its full test name, or its name when there is no full name', async () => {
+  const scored = () => ({ eval: { scores: [{ name: 'accuracy', score: 1 }] } });
+  const spans = await exportCases(
+    { name: 'case', fullName: 'suite > case', meta: scored, result: () => ({ state: 'passed' }) },
+    { name: 'bare case', meta: scored, result: () => ({ state: 'failed' }) },
+  );
+  assert.deepEqual(spans.map(span => span.name), ['suite > case', 'bare case']);
+  for (const span of spans) assert.equal(span.attributes['vitest.evals.original_name'], undefined);
+  assert.equal(spans[1].status.code, 2);
+});
+
+// A loopback OTLP/HTTP collector that records the path of every export request.
+const withCollector = async (send) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    requests.push({ path: req.url, headers: req.headers });
+    res.writeHead(200, { 'content-type': 'application/json', connection: 'close' }); res.end('{}');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try { await send(`http://127.0.0.1:${server.address().port}`); } finally { await new Promise(resolve => server.close(resolve)); }
+  return requests;
+};
+const exportWithBaseUrl = async (options, baseUrl) => {
+  const saved = process.env.FI_BASE_URL;
+  if (baseUrl === undefined) delete process.env.FI_BASE_URL; else process.env.FI_BASE_URL = baseUrl;
+  try {
+    const reporter = new VitestEvalsReporter({ apiKey: 'synthetic-key', secretKey: 'synthetic-secret', ...options });
+    try {
+      await reporter.onTestRunEnd([{ children: { *allTests() { yield { name: 'case', meta: () => ({ eval: { scores: [{ name: 'accuracy', score: 1 }] } }), result: () => ({ state: 'passed' }) }; } } }]);
+    } finally { await reporter.onClose(); }
+  } finally {
+    if (saved === undefined) delete process.env.FI_BASE_URL; else process.env.FI_BASE_URL = saved;
+  }
+};
+
+test('without an endpoint option, FI_BASE_URL sends traces to its collector path, as in fi-core', async () => {
+  for (const [suffix, expected] of [['/', '/tracer/v1/traces'], ['/self-hosted', '/self-hosted/tracer/v1/traces']]) {
+    const requests = await withCollector(origin => exportWithBaseUrl({}, `${origin}${suffix}`));
+    assert.deepEqual(requests.map(request => request.path), [expected]);
+    assert.equal(requests[0].headers['x-api-key'], 'synthetic-key');
+  }
+});
+
+test('an endpoint option takes precedence over FI_BASE_URL', async () => {
+  const requests = await withCollector(origin => exportWithBaseUrl({ endpoint: `${origin}/custom/v1/traces` }, `${origin}/from-env`));
+  assert.deepEqual(requests.map(request => request.path), ['/custom/v1/traces']);
 });
