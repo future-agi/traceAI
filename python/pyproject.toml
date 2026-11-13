@@ -7,6 +7,9 @@ readme = "README.md"
 
 packages = [
     { include = "fi_instrumentation" },
+    # Imported by fi_instrumentation_auto.pth, outside the package so a broken package install
+    # prints one line at interpreter start instead of a traceback.
+    { include = "fi_instrumentation_auto.py" },
 ]
 
 exclude = [

@@ -2,9 +2,9 @@
 
 Without code changes::
 
-    fi-instrument python app.py              # launcher
-    FI_AUTO_INSTRUMENT=true python app.py    # environment only
-    opentelemetry-instrument python app.py   # alongside an existing OpenTelemetry setup
+    fi-instrument python app.py                                 # launcher
+    FI_AUTO_INSTRUMENT=true python app.py                       # environment only
+    FI_AUTO_INSTRUMENT=true opentelemetry-instrument python app.py   # next to an OpenTelemetry setup
 
 With one line::
 
@@ -15,24 +15,32 @@ Every installed traceAI integration is enabled when its library is first importe
 without an installed traceAI package are not traced; ``fi-instrument doctor`` lists them.
 """
 
-from fi_instrumentation.auto._config import CONFIG_TEMPLATE, AutoConfig, ConfigError, resolve
-from fi_instrumentation.auto._manager import (
-    DISABLED,
-    FAILED,
-    INSTRUMENTED,
-    MISSING_INSTRUMENTOR,
-    NOT_INSTALLED,
-    PENDING,
-    STATUS_MANUAL,
-    IntegrationStatus,
-    auto_instrument,
-    flush,
-    format_report,
-    init,
-    plan,
-    report,
-    shutdown,
-)
+from importlib import import_module
+from typing import Any
+
+# Loaded on first use: the opentelemetry-instrument entry point and the start hooks live in this
+# package, and must not load the agent unless it starts.
+_EXPORTS = {
+    "init": "_manager",
+    "auto_instrument": "_manager",
+    "plan": "_manager",
+    "report": "_manager",
+    "format_report": "_manager",
+    "flush": "_manager",
+    "shutdown": "_manager",
+    "IntegrationStatus": "_manager",
+    "INSTRUMENTED": "_manager",
+    "PENDING": "_manager",
+    "NOT_INSTALLED": "_manager",
+    "MISSING_INSTRUMENTOR": "_manager",
+    "DISABLED": "_manager",
+    "STATUS_MANUAL": "_manager",
+    "FAILED": "_manager",
+    "resolve": "_config",
+    "AutoConfig": "_config",
+    "ConfigError": "_config",
+    "CONFIG_TEMPLATE": "_config",
+}
 
 __all__ = [
     "init",
@@ -55,3 +63,10 @@ __all__ = [
     "STATUS_MANUAL",
     "FAILED",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(import_module(f"{__name__}.{module}"), name)
