@@ -32,8 +32,12 @@ func TestPrivacyFixtures(t *testing.T) {
 	if err := json.Unmarshal(privacyFixturesJSON, &bundle); err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 1 || bundle.CatalogVersion != 1 || len(bundle.Cases) == 0 {
-		t.Fatal("unsupported/empty privacy fixtures")
+	var catalog struct{ Version int }
+	if err := json.Unmarshal(PrivacyCatalogJSON, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Version != 1 || catalog.Version != 3 || bundle.CatalogVersion != catalog.Version || len(bundle.Cases) == 0 {
+		t.Fatalf("unsupported/empty privacy fixtures: bundle %d for catalog %d, embedded catalog %d", bundle.Version, bundle.CatalogVersion, catalog.Version)
 	}
 	for _, fixture := range bundle.Cases {
 		t.Run(fixture.Name, func(t *testing.T) {
