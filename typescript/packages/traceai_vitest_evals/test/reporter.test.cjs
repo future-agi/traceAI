@@ -116,7 +116,13 @@ test('numbers the roots of a test with several traces and renames only the first
   assert.equal(exportedRoots[2].attributes['vitest.evals.original_name'], undefined);
 });
 
-test('a test without a harness trace is still exported under its test name', async () => {
+test('a test without a name keeps the harness root name', async () => {
+  const spans = await exportCases(evalCase('', '', [harnessTrace('trace_9', 'capital-app')]));
+  assert.deepEqual(roots(spans).map(span => span.name), ['capital-app']);
+  assert.equal(roots(spans)[0].attributes['vitest.evals.original_name'], undefined);
+});
+
+test('a test without a harness trace is exported under its full test name, or its name when there is no full name', async () => {
   const scored = () => ({ eval: { scores: [{ name: 'accuracy', score: 1 }] } });
   const spans = await exportCases(
     { name: 'case', fullName: 'suite > case', meta: scored, result: () => ({ state: 'passed' }) },
