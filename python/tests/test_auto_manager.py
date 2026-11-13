@@ -8,7 +8,7 @@ import sys
 import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.util._once import Once
@@ -744,6 +744,55 @@ def test_agent_shutdown_leaves_application_span_open(fresh_state):
     _manager.shutdown()
     assert active.is_recording()
     active.end()
+
+
+def test_shutdown_flushes_and_closes_processors_added_to_the_agent_provider(fresh_state):
+    calls = []
+
+    class SecondBackend(SpanProcessor):
+        def on_end(self, span):
+            calls.append(span.name)
+
+        def force_flush(self, timeout_millis=30000):
+            calls.append("flush")
+            return True
+
+        def shutdown(self):
+            calls.append("shutdown")
+
+    provider = _manager.init(span_exporter=InMemorySpanExporter(), batch=False)
+    provider.add_span_processor(SecondBackend())
+    with provider.get_tracer("app").start_as_current_span("one"):
+        pass
+    _manager.shutdown()
+    assert calls == ["one", "flush", "shutdown"]
+
+
+def test_libraries_and_packages_that_arrive_after_startup_are_enabled(fresh_state, monkeypatch, tmp_path_factory):
+    late = Integration("late", ("latelib",), "traceAI-late", "traceai_latelib", "FakeInstrumentor")
+    partial = Integration("partial", ("partiallib",), "traceAI-partial", "traceai_partiallib", "FakeInstrumentor")
+    monkeypatch.setattr(_registry, "ALL", (late, partial))
+    # At startup one library is missing entirely, the other has no traceAI package yet.
+    _write_packages(fresh_state, {"partiallib": FAKE_LIBRARY})
+    statuses = _manager.auto_instrument(tracer_provider=TracerProvider())
+    assert statuses == {"late": _manager.NOT_INSTALLED, "partial": _manager.MISSING_INSTRUMENTOR}
+    # Their path entries arrive later, as from a later-sorting .pth file or a sys.path change.
+    later = tmp_path_factory.mktemp("later")
+    _write_packages(later, {
+        "latelib": FAKE_LIBRARY,
+        "traceai_latelib": _instrumentor("latelib", fail=False),
+        "traceai_partiallib": _instrumentor("partiallib", fail=False),
+    })
+    monkeypatch.syspath_prepend(str(later))
+    import latelib
+    import partiallib
+    import traceai_latelib
+    import traceai_partiallib
+
+    assert {s.name: s.status for s in _manager.report()} == {"late": _manager.INSTRUMENTED,
+                                                            "partial": _manager.INSTRUMENTED}
+    assert latelib.complete("ping") == partiallib.complete("ping") == "pong"
+    assert traceai_latelib.CALLS and traceai_partiallib.CALLS
 
 
 def test_auto_instrument_cannot_rebind_enabled_instrumentor(fresh_state):

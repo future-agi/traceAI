@@ -161,6 +161,34 @@ def test_credentials_are_one_pair_per_source(tmp_path, caplog):
     assert settings.sources["api_key"] == "argument"
 
 
+def test_a_config_file_base_url_needs_the_keys_from_the_same_file(tmp_path, caplog):
+    # A futureagi.toml in a checkout must not send keys from the environment to a collector it names.
+    config = tmp_path / "futureagi.toml"
+    config.write_text('base_url = "http://127.0.0.1:1"\nproject_name = "checkout"\n')
+    environ = {"FI_API_KEY": "fi-api-PLACEHOLDER", "FI_SECRET_KEY": "fi-secret-PLACEHOLDER"}
+    with caplog.at_level(logging.WARNING, logger="fi_instrumentation.auto"):
+        settings = resolve(environ=environ, config_file=str(config))
+    assert settings.base_url is None
+    assert settings.project_name == "checkout"
+    assert caplog.text.count("ignoring base_url") == 1
+    assert str(config) in caplog.text
+    assert "PLACEHOLDER" not in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="fi_instrumentation.auto"):
+        assert resolve(environ={}, config_file=str(config)).base_url is None
+    assert caplog.text.count("ignoring base_url") == 1
+    # Keys and base_url from the same file belong together.
+    config.write_text('base_url = "http://127.0.0.1:1"\napi_key = "file-api-PLACEHOLDER"\n'
+                      'secret_key = "file-secret-PLACEHOLDER"\n')
+    settings = resolve(environ={}, config_file=str(config))
+    assert (settings.base_url, settings.api_key) == ("http://127.0.0.1:1", "file-api-PLACEHOLDER")
+    # A base URL from the environment or an argument is always used.
+    assert resolve(environ={**environ, "FI_BASE_URL": "http://127.0.0.1:2"},
+                   config_file=str(config)).base_url == "http://127.0.0.1:2"
+    assert resolve({"base_url": "http://127.0.0.1:3"}, environ=environ,
+                   config_file=str(config)).base_url == "http://127.0.0.1:3"
+
+
 def test_privacy_settings_come_from_the_config_file(tmp_path, monkeypatch):
     for key in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUT_TEXT", "FI_BASE64_IMAGE_MAX_LENGTH"):
         monkeypatch.delenv(key, raising=False)
