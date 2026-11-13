@@ -10,7 +10,4 @@ obj/
 .vs/
 TestResults/
 .dotnet/
-.downloads/
 artifacts/
-.nuget/
-.dotnet-home/
