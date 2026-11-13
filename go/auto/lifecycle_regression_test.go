@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -114,7 +115,8 @@ func TestExporterExplicitCredentialsOverrideEnvironment(t *testing.T) {
 	if _, err := InitForTest(context.Background(), WithCredentials("explicit-api-key", "explicit-secret-key")); err != nil {
 		t.Fatal(err)
 	}
-	_, span := p.Tracer("app").Start(context.Background(), "test-export")
+	// An AI span: the exporter on an application-owned provider forwards only those.
+	_, span := p.Tracer("app").Start(context.Background(), "test-export", trace.WithAttributes(attribute.String("gen_ai.span.kind", "LLM")))
 	span.End()
 	if err := ForceFlush(context.Background()); err != nil {
 		t.Fatal(err)

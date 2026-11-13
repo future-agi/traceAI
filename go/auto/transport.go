@@ -79,25 +79,53 @@ func (t *wireTransport) CloseIdleConnections() {
 }
 
 // Transport covers a custom client's transport. If the agent is disabled it
-// returns base unchanged. Build clients after Init; never mutate transports
-// concurrently with requests.
+// returns base unchanged. Build clients after Init, or after package
+// initialization has armed wire capture; never mutate transports concurrently
+// with requests.
 func Transport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	if t, ok := unwrapTransport(base).(*wireTransport); ok {
-		if t.state.active.Load() {
+		if t.state.active.Load() || t.state.armed.Load() {
 			return base
 		}
 		base = t.base
 	}
 	agent.Lock()
 	s := agent.current
+	if s == nil {
+		s = agent.armed // Activates with the first AI request, like the default transport.
+	}
+	capture := s != nil && s.config.WireCapture && allowed(s.config, "wire")
 	agent.Unlock()
-	if s == nil || !s.config.WireCapture || !allowed(s.config, "wire") {
+	if !capture {
 		return base
 	}
 	return wrapTransport(base, s)
+}
+
+// activateOn is lazy activation for an armed wrapper: the first request that
+// matches an AI endpoint activates the agent with its environment and config
+// file settings, unless an explicit Init came first. It reports whether the
+// agent is active. Activation fails open: any error leaves this wrapper
+// passing requests through, with one warning.
+func (s *agentState) activateOn(req *http.Request) (active bool) {
+	if !s.armed.Load() || suppressed(req.Context()) || wire.Find(req.Method, req.URL.String()) == nil {
+		return false
+	}
+	defer func() {
+		if recover() != nil {
+			warn()
+			active = false
+		}
+	}()
+	agent.Lock()
+	defer agent.Unlock()
+	if agent.armed == s && agent.first == nil {
+		_, _ = activate(context.Background(), settings{}, false)
+	}
+	return s.active.Load()
 }
 
 // The nested-capture marker has a lifetime, not a permanent boolean. A context
@@ -356,7 +384,7 @@ func (b *requestBody) Read(p []byte) (int, error) {
 func (b *requestBody) Close() error { err := b.ReadCloser.Close(); b.observer.finish(); return err }
 func (t *wireTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now() // Transport entry, before agent matching, copying or validation.
-	if !t.state.active.Load() || req == nil || req.URL == nil {
+	if req == nil || req.URL == nil || !t.state.active.Load() && !t.state.activateOn(req) {
 		return t.base.RoundTrip(req)
 	}
 	// Observation is independent of span capture: every nested hook must see

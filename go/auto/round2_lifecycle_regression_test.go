@@ -20,6 +20,7 @@ import (
 
 func exporterRegressionSetup(t *testing.T) *sdktrace.TracerProvider {
 	t.Helper()
+	exportEverySpanForTest(t)
 	_ = Shutdown(context.Background())
 	old := otel.GetTracerProvider()
 	p := sdktrace.NewTracerProvider()

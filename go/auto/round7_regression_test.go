@@ -23,6 +23,7 @@ import (
 
 func privacyCollector(t *testing.T) <-chan *collector.ExportTraceServiceRequest {
 	t.Helper()
+	exportEverySpanForTest(t)
 	received := make(chan *collector.ExportTraceServiceRequest, 32)
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, err := io.ReadAll(r.Body)

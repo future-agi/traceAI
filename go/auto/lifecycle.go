@@ -9,6 +9,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+// wireScope is the instrumentation scope of the agent's wire spans.
+const wireScope = "github.com/future-agi/traceAI/go/auto"
+
 // Registrations do not own processors. OTel unregisters with Background(); only
 // the agent's explicitly bounded Shutdown may shut down a real exporter.
 type processorRegistration struct {
@@ -19,6 +22,25 @@ type processorRegistration struct {
 	privacy   *spanPrivacy
 	queued    bool
 	limits    *exportLimits
+	// aiOnly is set when the FI exporter sits on an application-owned
+	// provider: it then forwards only aiSpan spans.
+	aiOnly atomic.Bool
+}
+
+// aiSpan reports a span the FI exporter forwards from an application-owned
+// provider: the agent's own wire spans, and spans that carry gen_ai.span.kind
+// or fi.span.kind (traceAI modules). Every other application span still
+// reaches the application's own exporters, never Future AGI.
+func aiSpan(span sdktrace.ReadOnlySpan) bool {
+	if span.InstrumentationScope().Name == wireScope {
+		return true
+	}
+	for _, kv := range span.Attributes() {
+		if kv.Key == "gen_ai.span.kind" || kv.Key == "fi.span.kind" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *processorRegistration) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
@@ -38,6 +60,9 @@ func (p *processorRegistration) OnEnd(span sdktrace.ReadOnlySpan) {
 			p.endPrivacy(span)
 			if p.processor == nil {
 				return nil // Host exporters receive the original application view.
+			}
+			if p.aiOnly.Load() && !aiSpan(span) {
+				return nil
 			}
 			if p.queued {
 				// The exporter snapshots the process registry after queueing, so a

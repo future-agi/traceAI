@@ -1,5 +1,6 @@
-// Package auto installs bounded HTTP wire capture through a blank import, or
-// Init. Go cannot patch compiled SDKs; dedicated middleware remains opt-in.
+// Package auto installs bounded HTTP wire capture through one import, or
+// Init. It never replaces the application's OpenTelemetry tracer provider. Go
+// cannot patch compiled SDKs; dedicated middleware remains opt-in.
 package auto
 
 import (
@@ -11,7 +12,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,6 +82,7 @@ var agent struct {
 	sync.Mutex
 	current  *agentState
 	first    *agentState // Retained after Shutdown: initialization never rewires a process.
+	armed    *agentState // Package initialization's wire wrapper, until activation.
 	last     AgentReport
 	repeated sync.Once
 }
@@ -97,27 +98,78 @@ func warn() {
 // program that returns from main right after its last AI call must flush.
 const ShutdownHint = "traceai auto: active; spans are exported in batches and Go has no exit hook, so call auto.Shutdown(ctx) (or auto.ForceFlush) before main returns"
 
+// Package initialization never changes the application's OpenTelemetry setup.
+// It only arms wire capture; see arm.
 func init() {
 	defer func() {
 		if recover() != nil {
 			warn()
 		}
 	}()
-	if _, err := Init(context.Background()); err == nil {
-		startupHint()
-	}
+	arm()
 }
 
-// startupHint prints ShutdownHint once, from package initialization only, when
-// the agent owns a batching FI exporter. Host-owned providers/processors flush
-// with the application's own provider shutdown.
-func startupHint() {
+// arm is package initialization. When the environment or config file enables
+// the agent with a complete FI pair and wire capture, it wraps
+// http.DefaultTransport and prints the startup hint once. No tracer provider,
+// processor or exporter exists until activation, which happens once: at the
+// first explicit Init or the first captured AI request, whichever comes first.
+// It runs the same network-free checks as Init, so an invalid configuration is
+// reported (and warned about once) here.
+func arm() {
 	agent.Lock()
-	s := agent.current
-	agent.Unlock()
-	if s != nil && s.registration.queued {
-		log.Print(ShutdownHint)
+	defer agent.Unlock()
+	c, err := readConfig()
+	switch {
+	case err != nil:
+		warn()
+		agent.last = makeReport(c, false, "failed")
+		return
+	case c.Disabled:
+		agent.last = makeReport(c, false, "disabled")
+		return
+	case c.APIKey == "" || c.SecretKey == "":
+		warn()
+		agent.last = makeReport(c, false, "disabled")
+		return
+	case !validConfig(c):
+		warn()
+		agent.last = makeReport(c, false, "failed")
+		return
 	}
+	if _, err := collectorEndpoint(c); err != nil {
+		warn()
+		agent.last = makeReport(c, false, "failed")
+		return
+	}
+	if !c.WireCapture || !allowed(c, "wire") {
+		// Nothing to arm: only an explicit Init activates the agent.
+		agent.last = makeReport(c, false, "")
+		return
+	}
+	state := &agentState{config: c, done: make(chan struct{})}
+	state.armed.Store(true)
+	state.transport = wrapTransport(http.DefaultTransport, state)
+	http.DefaultTransport = state.transport
+	agent.armed = state
+	agent.last = makeReport(c, true, "")
+	log.Print(ShutdownHint)
+}
+
+// validConfig is the configuration check shared by arm and activate.
+func validConfig(c Config) bool {
+	return (c.ProjectType == "observe" || c.ProjectType == "experiment") && c.WireMaxBodyBytes > 0 && !math.IsNaN(c.SampleRate) && c.SampleRate >= 0 && c.SampleRate <= 1
+}
+
+// collectorEndpoint is the FI trace endpoint for a valid FI_BASE_URL.
+func collectorEndpoint(c Config) (*url.URL, error) {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return nil, fmt.Errorf("invalid FI_BASE_URL")
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/tracer/v1/traces"
+	u.RawPath, u.Fragment, u.RawFragment = "", "", ""
+	return u, nil
 }
 
 type agentState struct {
@@ -131,16 +183,31 @@ type agentState struct {
 	done           chan struct{}
 	err            error
 	active         atomic.Bool
+	armed          atomic.Bool
 	registration   *processorRegistration
 	flushing       atomic.Bool
 	nativeHooks    nativeCredentialHooks
 	attributeLimit int
 }
 
-// Init configures the agent once per process. Later calls ignore options and
-// return the original shutdown function, including after shutdown. A disabled
-// blank import (for example without credentials) leaves explicit Init available.
-// Initialization never contacts the collector.
+// retire stops an armed wrapper that will not be activated. Inside an
+// explicit Init or Shutdown the default transport is restored; after a
+// failed activation on the request path the wrapper stays in place and passes
+// every request through, because requests may be running.
+func (s *agentState) retire(restore bool) {
+	s.armed.Store(false)
+	if restore && s.transport != nil && http.DefaultTransport == s.transport {
+		http.DefaultTransport = unwrapTransport(s.transport).(*wireTransport).base
+	}
+}
+
+// Init configures the agent once per process. Later calls, and calls after
+// the first captured AI request has activated the agent, ignore options and
+// return the original shutdown function, including after shutdown. Call Init
+// before the first AI call for its options to apply. A disabled package
+// initialization (for example without credentials) leaves explicit Init
+// available. Initialization never contacts the collector and never replaces
+// the OpenTelemetry global tracer provider.
 // Errors are returned to explicit callers; the blank import logs one warning.
 // Call Shutdown before short-lived programs exit; there is no Go atexit hook.
 func Init(ctx context.Context, opts ...Option) (shutdown func(context.Context) error, err error) {
@@ -163,6 +230,27 @@ func Init(ctx context.Context, opts ...Option) (shutdown func(context.Context) e
 			o(&s)
 		}
 	}
+	return activate(ctx, s, true)
+}
+
+// activate configures the agent, with the agent lock held. The tracer
+// provider is WithTracerProvider's, else the application's global SDK
+// provider if one is installed by now, else a private provider that only the
+// agent's wire spans use. An armed wrapper is reused when wire capture stays
+// on, so http.DefaultTransport is not replaced again; otherwise it is retired.
+func activate(ctx context.Context, s settings, explicit bool) (shutdown func(context.Context) error, err error) {
+	shutdown = func(context.Context) error { return nil }
+	armed := agent.armed
+	agent.armed = nil
+	var state *agentState
+	if armed != nil {
+		armed.armed.Store(false)
+		defer func() {
+			if state != armed {
+				armed.retire(explicit)
+			}
+		}()
+	}
 	c, err := readConfigWithOverrides(s.ignoreInherited, s.config...)
 	if err != nil {
 		warn()
@@ -173,7 +261,7 @@ func Init(ctx context.Context, opts ...Option) (shutdown func(context.Context) e
 		agent.last = makeReport(c, false, "disabled")
 		return shutdown, nil
 	}
-	if c.ProjectType != "observe" && c.ProjectType != "experiment" || c.WireMaxBodyBytes <= 0 || math.IsNaN(c.SampleRate) || c.SampleRate < 0 || c.SampleRate > 1 {
+	if !validConfig(c) {
 		warn()
 		agent.last = makeReport(c, false, "failed")
 		return shutdown, fmt.Errorf("traceai auto invalid configuration")
@@ -212,19 +300,16 @@ func Init(ctx context.Context, opts ...Option) (shutdown func(context.Context) e
 	// construct an unauthenticated FI exporter or take ownership of host processors.
 	queued := processor == nil && hasCredentials
 	if queued {
-		u, parseErr := url.Parse(c.BaseURL)
-		if parseErr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		u, urlErr := collectorEndpoint(c)
+		if urlErr != nil {
 			warn()
 			agent.last = makeReport(c, false, "failed")
-			return shutdown, fmt.Errorf("invalid FI_BASE_URL")
+			return shutdown, urlErr
 		}
-		u.Path = strings.TrimRight(u.Path, "/") + "/tracer/v1/traces"
-		u.RawPath, u.Fragment, u.RawFragment = "", "", ""
-		endpoint := u.String()
 		// Export traffic must never traverse application instrumentation. Merely
 		// removing our wire wrapper leaves arbitrary HTTP instrumentors in place.
 		client := exporterClient(u.RawQuery, u.ForceQuery)
-		exp, e := otlptracehttp.New(SuppressInstrumentation(ctx), otlptracehttp.WithEndpointURL(endpoint), otlptracehttp.WithHeaders(map[string]string{"X-Api-Key": c.APIKey, "X-Secret-Key": c.SecretKey}), otlptracehttp.WithCompression(otlptracehttp.NoCompression), otlptracehttp.WithHTTPClient(client), otlptracehttp.WithTimeout(5*time.Second))
+		exp, e := otlptracehttp.New(SuppressInstrumentation(ctx), otlptracehttp.WithEndpointURL(u.String()), otlptracehttp.WithHeaders(map[string]string{"X-Api-Key": c.APIKey, "X-Secret-Key": c.SecretKey}), otlptracehttp.WithCompression(otlptracehttp.NoCompression), otlptracehttp.WithHTTPClient(client), otlptracehttp.WithTimeout(5*time.Second))
 		if e != nil {
 			warn()
 			agent.last = makeReport(c, false, "failed")
@@ -232,33 +317,43 @@ func Init(ctx context.Context, opts ...Option) (shutdown func(context.Context) e
 		}
 		processor = sdktrace.NewBatchSpanProcessor(&resourceExporter{SpanExporter: exp, client: client, config: c, res: res, limits: limits}, sdktrace.WithBatchTimeout(200*time.Millisecond), sdktrace.WithExportTimeout(5*time.Second))
 	}
-	state := &agentState{config: c, processor: processor, res: res, done: make(chan struct{})}
+	capture := c.WireCapture && allowed(c, "wire")
+	if armed != nil && capture {
+		// Fields are published by active.Store below; the armed wrapper reads
+		// none of them before that.
+		state = armed
+	} else {
+		state = &agentState{done: make(chan struct{})}
+	}
+	state.config, state.processor, state.res = c, processor, res
 	state.registration = &processorRegistration{processor: processor, config: c, res: res, privacy: &spanPrivacy{}, queued: queued, limits: limits}
 	if provider != nil {
 		provider.RegisterSpanProcessor(state.registration)
 		state.provider = provider
+		// Future AGI receives only AI spans from an application-owned provider;
+		// its other spans stay with the application's own exporters.
+		state.registration.aiOnly.Store(queued)
 	} else {
-		// Do not replace a third-party API provider whose processors cannot be
-		// extended. A private provider can still parent wire spans to its context.
+		// Never install a global provider: the application's own setup, now or
+		// later, stays in charge of its spans. This private provider carries only
+		// the agent's wire spans, which still take their parent from the request
+		// context, so they join the application's trace.
 		owned, _ := resource.Merge(otelResource(), res)
 		if owned == nil {
 			owned = res
 		}
 		state.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(owned), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.SampleRate))), sdktrace.WithSpanProcessor(state.registration))
 		state.owned = true
-		if reflect.TypeOf(otel.GetTracerProvider()).String() == "*global.tracerProvider" {
-			otel.SetTracerProvider(state.provider)
-		}
 	}
 	state.attributeLimit = providerAttributeLimit(state.provider)
 	// Before activation: the export boundary detects value truncation with it.
 	limits.valueLength.Store(int64(providerValueLengthLimit(state.provider)))
-	if c.WireCapture && allowed(c, "wire") {
+	if capture && state.transport == nil {
 		state.transport = wrapTransport(http.DefaultTransport, state)
 		http.DefaultTransport = state.transport
 	}
-	state.active.Store(true)
 	state.registration.active.Store(true)
+	state.active.Store(true)
 	agent.current, agent.first = state, state
 	agent.last = makeReport(c, state.transport != nil, "")
 	if c.Debug {
@@ -310,6 +405,11 @@ func (s *agentState) shutdown(ctx context.Context) error {
 func Shutdown(ctx context.Context) error {
 	agent.Lock()
 	s := agent.current
+	if s == nil && agent.armed != nil {
+		// Before the first AI call there is nothing to flush; stop arming.
+		agent.armed.retire(true)
+		agent.armed = nil
+	}
 	agent.Unlock()
 	if s == nil {
 		return nil
@@ -382,5 +482,5 @@ func (e *resourceExporter) Shutdown(ctx context.Context) error {
 	return e.SpanExporter.Shutdown(SuppressInstrumentation(ctx))
 }
 func (s *agentState) tracer() trace.Tracer {
-	return s.provider.Tracer("github.com/future-agi/traceAI/go/auto")
+	return s.provider.Tracer(wireScope)
 }
