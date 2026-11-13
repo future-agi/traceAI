@@ -481,6 +481,8 @@ def format_report(statuses: Optional[List[IntegrationStatus]] = None, include_ab
 
 #: Instrumentation scopes whose spans are AI spans by construction: traceAI packages and the core.
 AI_SCOPES = ("traceai", "fi_instrumentation")
+#: Attributes that mark a span from any scope as an AI span, such as a manual FITracer span.
+AI_SPAN_KINDS = ("gen_ai.span.kind", "fi.span.kind")
 # Traces with an AI span whose request root span has not ended yet. Bounded: a trace whose root
 # never ends must not hold memory, and a root that ends after eviction is simply not sent.
 _AI_TRACES_LIMIT = 4096
@@ -499,9 +501,10 @@ def _masked(attributes: Mapping[str, Any], config: Any) -> Dict[str, Any]:
 class _ResourceOverlayProcessor(SpanProcessor):
     """The agent's Future AGI export route on a tracer provider.
 
-    Future AGI receives AI spans only: spans from traceAI instrumentation scopes and the library
-    spans of integrations the agent enabled, plus the request root span of a web server the agent
-    enabled when that request led to an AI span. Every other span the provider ends goes to the
+    Future AGI receives AI spans only: spans from traceAI instrumentation scopes, spans from any
+    scope that carry an AI span kind, and the library spans of integrations the agent enabled,
+    plus the request root span of a web server the agent enabled when that request led to an AI
+    span. Every other span the provider ends goes to the
     application's own processors and exporters only. The copy sent to Future AGI is masked with
     the agent's TraceConfig, mapped by the integrations' mappers and, on a provider the application
     configured, tagged with the project resource Future AGI needs for routing. The application's
@@ -576,7 +579,8 @@ class _ResourceOverlayProcessor(SpanProcessor):
         """Whether a span is an AI span, or the request root of a trace that had one."""
         name = (getattr(getattr(span, "instrumentation_scope", None), "name", None) or "").lower()
         trace_id = span.context.trace_id
-        if name.startswith(self.scopes):
+        attributes = span.attributes or {}
+        if name.startswith(self.scopes) or any(key in attributes for key in AI_SPAN_KINDS):
             with self._ai_traces_lock:
                 self._ai_traces[trace_id] = None
                 self._ai_traces.move_to_end(trace_id)

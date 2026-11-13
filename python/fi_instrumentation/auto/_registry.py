@@ -5,7 +5,8 @@ and how to enable it. ``instrumentor`` entries are BaseInstrumentor-style classe
 entries call a function from ``SETUPS`` below; ``manual``, ``plugin`` and ``service`` entries
 cannot be enabled from inside the process and are reported with ``note``, which says what to do.
 
-The Future AGI route carries spans from traceAI instrumentation scopes. ``scopes`` adds the
+The Future AGI route carries spans from traceAI instrumentation scopes, and spans from any scope
+that carry an AI span kind (``gen_ai.span.kind`` or ``fi.span.kind``). ``scopes`` adds the
 instrumentation scope prefixes of spans an integration routes but does not create itself: the
 library's own spans, which its traceAI package maps. For ``web`` entries they are the server
 instrumentation's scopes, and only request root spans of traces with an AI span are carried.
