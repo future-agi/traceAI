@@ -7,16 +7,34 @@ module TraceAI
       DEFAULTS = {'base_url' => 'https://api.futureagi.com', 'project_type' => 'observe', 'wire_capture' => true,
                   'wire_max_body_bytes' => 4_194_304, 'sample_rate' => 1.0, 'auto_debug' => false}.freeze
       attr_reader :values, :warnings, :credential_values
+      # Config values are UTF-8 whatever the process locale. Under LANG=C, Ruby
+      # tags environment values and paths as US-ASCII even when they hold UTF-8.
+      def self.utf8(value)
+        return value unless value.instance_of?(String)
+        encoding = value.encoding
+        return value if encoding == Encoding::UTF_8 && value.valid_encoding?
+        if [Encoding::UTF_8, Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(encoding) || !value.valid_encoding?
+          text = value.b.force_encoding(Encoding::UTF_8)
+          text.valid_encoding? ? text : text.scrub
+        else
+          value.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+        end
+      rescue EncodingError
+        value.b.force_encoding(Encoding::UTF_8).scrub
+      end
       def initialize(arguments = {}, env: ENV, cwd: Dir.pwd)
         file = arguments[:config_file] || arguments['config_file'] || env['FI_CONFIG_FILE'] || File.join(cwd, 'futureagi.toml')
         file_values = read_file(file)
-        environment = env.each_with_object({}) { |(k, v), out| out[k.delete_prefix('FI_').downcase] = v if k.start_with?('FI_') }
-        explicit = arguments.to_h { |k, v| [k.to_s, v] }
+        environment = env.each_with_object({}) do |(k, v), out|
+          name = Config.utf8(k)
+          out[name.delete_prefix('FI_').downcase] = Config.utf8(v) if name.start_with?('FI_')
+        end
+        explicit = arguments.to_h { |k, v| [Config.utf8(k.to_s), v] }
         @values = DEFAULTS.merge(file_values).merge(environment).merge(explicit)
         # Credentials are one atomic pair per source, never independently merged.
         @warnings = []
         @credential_values = [explicit, environment, file_values].flat_map do |source|
-          %w[api_key secret_key].filter_map { |key| source[key].dup.freeze if source[key].instance_of?(String) }
+          %w[api_key secret_key].filter_map { |key| Config.utf8(source[key]).dup.freeze if source[key].instance_of?(String) }
         end.freeze
         @values.delete('api_key'); @values.delete('secret_key')
         selected = nil
@@ -34,7 +52,7 @@ module TraceAI
         @warnings.freeze
         @warnings.each { |message| warn 'traceai-auto: ' + message }
         @values['auto_debug'] = @values.delete('debug') if @values.key?('debug')
-        @values['project_name'] ||= env['OTEL_SERVICE_NAME'] || File.basename(cwd)
+        @values['project_name'] ||= Config.utf8(env['OTEL_SERVICE_NAME'] || File.basename(cwd))
         @values['project_name'] = 'DEFAULT_PROJECT_NAME' if @values['project_name'].to_s.empty?
         @values['sdk_disabled'] = env['OTEL_SDK_DISABLED'].to_s.downcase == 'true'
         @values['wire_max_body_bytes'] = [[Integer(@values['wire_max_body_bytes']), 1].max, 64 * 1024 * 1024].min
@@ -43,9 +61,9 @@ module TraceAI
         # strings/lists. There is no live configuration/reconfiguration path.
         @values = @values.transform_values do |value|
           if value.instance_of?(String)
-            value.dup.freeze
+            Config.utf8(value).dup.freeze
           elsif value.instance_of?(Array)
-            value.map { |item| item.instance_of?(String) ? item.dup.freeze : item }.freeze
+            value.map { |item| item.instance_of?(String) ? Config.utf8(item).dup.freeze : item }.freeze
           else
             value
           end
@@ -111,7 +129,11 @@ module TraceAI
       end
       def read_file(path)
         return {} unless File.file?(path) && File.size(path) <= 65_536
-        File.foreach(path).each_with_object({}) do |line, out|
+        # TOML is UTF-8. Never decode it in the locale encoding (US-ASCII under
+        # LANG=C); a line that is not valid UTF-8 is skipped like a malformed one.
+        text = File.binread(path).force_encoding(Encoding::UTF_8).delete_prefix("﻿")
+        text.each_line.each_with_object({}) do |line, out|
+          next unless line.valid_encoding?
           # Remove comments outside quoted strings, respecting JSON/TOML escapes.
           quote = false; escape = false; clean = +''
           line.each_char do |c|
